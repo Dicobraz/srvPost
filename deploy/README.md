@@ -205,7 +205,8 @@ thepost admin policy get                            # заданное и дей
 | Enterprise-K8s (З.4) | S3, `s3://thepost-blob` | `config.blob` в `helm/thepost/values.yaml` + `config.blob.s3` |
 | edge (DMZ) | писем ящиков нет; локальная очередь `file:///var/lib/thepost/edge` | пресет `config/edge.yaml` |
 
-Для S3 нужна секция `blob.s3`. В пресете `mailbox` и в значениях чарта её нет — задаёт администратор:
+Для S3 нужна секция `blob.s3`. В пресете `mailbox` её нет, в значениях чарта (`config.blob`) она — закомментированный
+пример: задаёт администратор, иначе узел обратится к AWS с ключами из окружения.
 ```yaml
 blob:
   url: s3://thepost-blob
@@ -591,8 +592,10 @@ helm install thepost deploy/helm/thepost -n thepost --set 'imagePullSecrets[0].n
 подписан cosign без ключей (проверка — комментарий в `helm/thepost/values.yaml`).
 
 В своих значениях обязательно: `config.domain`, `config.smtp.hostname`, `config.database.url` (или `cnpg.enabled`),
-`config.secrets.url` и хранилище писем `config.blob.s3` (раздел «Хранилище писем (BLOB)»; секрет `thepost/s3`
-`bootstrap.sh` не создаёт). Чарт шину сигналов не задаёт (умолчание `bus.kind: local` — в процессе одного пода); для
+`config.secrets.url` и хранилище писем `config.blob.s3` — `endpoint` и `credentials` (пример — в `values.yaml`,
+раздел «Хранилище писем (BLOB)»). Секрет `thepost/s3` заведите в OpenBao сами, `bootstrap.sh` его не создаёт: в поде
+OpenBao (`kubectl -n openbao exec -it openbao-0 -- sh`, `BAO_TOKEN` администратора) —
+`bao kv put -mount=thepost s3 access_key_id=… secret_access_key=…`. Чарт шину сигналов не задаёт (умолчание `bus.kind: local` — в процессе одного пода); для
 нескольких подов — `config.bus.kind: postgres`.
 
 | Значение | По умолчанию | Назначение |

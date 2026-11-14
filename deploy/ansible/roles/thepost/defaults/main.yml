@@ -4,7 +4,7 @@
 ---
 # Основной домен и имя узла (SMTP banner/HELO, сертификат клиентских протоколов). Локальные домены SMTP — принятые
 # домены организации в БД (решение 96): `thepost admin init` заводит домен адреса администратора, другие —
-# `thepost admin domain add <домен>`.
+# `thepost admin transport domain create <домен>`.
 thepost_domain: example.ru
 thepost_hostname: "mail.{{ thepost_domain }}"
 
