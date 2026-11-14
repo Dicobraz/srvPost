@@ -2,7 +2,7 @@
 
 | Путь | Содержание |
 |---|---|
-| `docker/Dockerfile` | OCI-образ: сборка на `rust:<ver>-bookworm`, запуск на `distroless/cc-debian12:nonroot` |
+| `docker/Dockerfile` | OCI-образ: веб-консоль — стадия `node:<ver>-bookworm-slim`, сборка на `rust:<ver>-bookworm` с фичами `gssapi` и `console`, запуск на `distroless/cc-debian12:nonroot` |
 | `compose/dev.yml` | Зависимости: только TLS (профиль `tls`, по умолчанию) и открытые для тестов (`dev`); эталон SMB (`smb`) |
 | `compose/tls/` | Генерация самоподписанного CA (`gen-certs.sh`), `pg_hba.conf` (только `hostssl`) |
 | `compose/openbao/` | OpenBao в compose: конфигурация (Raft, TLS, seal `static`), запуск, начальная настройка (`init.sh`) |
@@ -11,7 +11,7 @@
 | `helm/openbao/` | Значения чарта `openbao/openbao` и настройка Kubernetes auth (`bootstrap.sh`) |
 | `helm/thepost/` | Чарт узла: не root, корневая ФС только для чтения, без capabilities, seccomp `RuntimeDefault`; HPA по CPU, по соединениям — опция (`autoscaling`), PodDisruptionBudget, VPA в режиме рекомендаций, anti-affinity по узлам; PostgreSQL — CloudNativePG (`cnpg.enabled`) |
 | `helm/prometheus-adapter/` | Значения чарта prometheus-adapter: метрика `tp_load_connections` для HPA по соединениям |
-| `ansible/` | Эталон SMB одной командой (`smb.yml`: роли `thepost_pki`, `openbao`, `postgresql`, `rspamd`, `clamav_milter`, `thepost`); OpenBao отдельно (`openbao.yml`); СУБД Enterprise-ВМ — pg_auto_failover (`pg-ha.yml`); «Малый Enterprise» — 2 узла mailbox и 3 ВМ данных: pg_auto_failover, OpenBao (Raft), SeaweedFS с метаданными filer в PostgreSQL (`small-enterprise.yml`, роль `seaweedfs`) |
+| `ansible/` | Эталон SMB одной командой (`smb.yml`: роли `chrony`, `thepost_pki`, `openbao`, `postgresql`, `rspamd`, `clamav_milter`, `thepost`, `pgbackrest`); восстановление из копий (`restore.yml`); OpenBao отдельно (`openbao.yml`); СУБД Enterprise-ВМ — pg_auto_failover (`pg-ha.yml`); «Малый Enterprise» — 2 узла mailbox и 3 ВМ данных: pg_auto_failover, OpenBao (Raft), SeaweedFS с метаданными filer в PostgreSQL (`small-enterprise.yml`, роль `seaweedfs`) |
 | `stand/` | Стенд SMB и базовая нагрузка (APP-D): ВМ SMB + генератор, imaptest, smtp-source, k6, отчёт |
 | `systemd/` | Юнит `thepost.service` с hardening, сокеты `thepost-*.socket` (порты ниже 1024), пользователь `thepost` (sysusers) |
 | `config/` | Примеры `config.yaml` для пресетов `all` (SMB), `mailbox` (Enterprise-ВМ), `edge` (DMZ) |
@@ -21,6 +21,7 @@
 2. Docker Engine с Compose v2 (`docker compose version`) или Docker Desktop с интеграцией WSL.
 3. Rust через rustup (тулчейн подхватится из `rust-toolchain.toml`), `cargo install cargo-nextest --locked`.
    Пакеты для сборки: `build-essential pkg-config`; с фичей `gssapi` (как выпуск и образ) — ещё `libkrb5-dev libclang-dev`;
+   с веб-консолью (фича `console`) — ещё Node 26: `npm ci && npm run build` в `console/` до `cargo build`;
    клиенты для проверок (необязательно): `postgresql-client`, `awscli`.
 4. `git clone https://github.com/Dicobraz421/ThePost && cd ThePost`.
 
@@ -71,8 +72,9 @@ docker compose -f deploy/compose/dev.yml run --rm --no-deps --entrypoint sh open
 docker compose -f deploy/compose/dev.yml --profile dev up -d --wait
 docker compose -f deploy/compose/dev.yml --profile dev ps   # postgres, seaweedfs, openbao — healthy
 ```
-Подключение к этим сервисам — открытый канал: в конфигурации `thepost` он допускается только явной настройкой
-`allow_plaintext: true` в секции канала с предупреждением в лог при каждом запуске (настройку вводят полосы каналов).
+Подключение к этим сервисам — открытый канал: в конфигурации `thepost` он допускается только с `profile: dev` и
+явной настройкой `tls.allow_plaintext: true` в секции канала (`database`, `blob.s3`, `secrets`), с предупреждением
+в лог при каждом запуске; с рабочим профилем (`prod`, по умолчанию) это ошибка конфигурации.
 Бакет `thepost-test` создаётся при старте SeaweedFS (`compose/seaweedfs-start.sh`, имя — `TP_S3_BUCKET`).
 Остановить с удалением данных: `docker compose -f deploy/compose/dev.yml --profile dev down -v`.
 
@@ -114,6 +116,8 @@ cargo nextest run -p <крейты> --no-tests=pass
 схемы `thepost_owner` (`database.owner`); пароли берёт из OpenBao (`thepost/db`, `thepost/db-owner`), в OpenBao входит
 по AppRole (том `openbao-approle` → `/etc/thepost/openbao`). Контейнер — nonroot 65532, `cap_drop: [ALL]`,
 `no-new-privileges`, корневая ФС только для чтения; Admin API — `127.0.0.1:8443` внутри контейнера (не публикуется).
+Rspamd в профиле запущен, но к узлу не подключён: в пресете и переменных `THEPOST_*` нет `smtp.milter.filters` —
+письма через фильтр не проходят (проверка спама — эталон Ansible).
 ```bash
 docker compose -f deploy/compose/dev.yml --profile smb up -d --build
 docker compose -f deploy/compose/dev.yml --profile smb run --rm thepost doctor   # без Fail (PLT-12, META-17)
@@ -121,7 +125,12 @@ docker compose -f deploy/compose/dev.yml --profile smb run --rm thepost doctor  
 Порты 25, 465, 587, 143, 993, 4190, 80, 443 публикуются на хост; переопределение — `TP_SMTP_PORT`,
 `TP_SUBMISSIONS_PORT`, `TP_SUBMISSION_PORT`, `TP_IMAP_PORT`, `TP_IMAPS_PORT`, `TP_MANAGESIEVE_PORT`, `TP_HTTP_PORT`,
 `TP_HTTPS_PORT`.
-Отдельная сборка образа: `docker build -f deploy/docker/Dockerfile -t thepost .` (`--build-arg RUST_VERSION=…`).
+Отдельная сборка образа: `docker build -f deploy/docker/Dockerfile -t thepost .` (`--build-arg RUST_VERSION=…`;
+без веб-консоли и Node — `--build-arg CONSOLE=0`). Готовый образ выпуска вместо сборки — `THEPOST_IMAGE`
+(образ в ghcr.io закрытый: сначала `docker login ghcr.io -u <логин GitHub>`, токен `read:packages`):
+```bash
+THEPOST_IMAGE=ghcr.io/dicobraz421/thepost:<версия> docker compose -f deploy/compose/dev.yml --profile smb up -d
+```
 
 Слушатели эталона: SMTP 25 (STARTTLS), submission 587 (STARTTLS) и 465 (неявный TLS), IMAP 143 (STARTTLS) и 993,
 ManageSieve 4190 (STARTTLS, `sieve.managesieve.listen`), JMAP — HTTPS 443 (`http.jmap`); порт 80 публикуется, но не
@@ -138,8 +147,10 @@ openssl s_client -connect localhost:993 -CAfile $CA -verify_return_error </dev/n
 openssl s_client -connect localhost:4190 -starttls sieve -CAfile $CA </dev/null       # "IMPLEMENTATION" … OK
 curl --cacert $CA -si https://localhost/.well-known/jmap | head -1                     # HTTP/1.1 401 без учётной записи
 ```
-Письмо между двумя пользователями: учётные записи `a@example.test`, `b@example.test` (способ — issue #193), отправка
-через 587 с AUTH, получение через IMAP или JMAP — шаги в `docs/manual-tests/CMP-01.md` (после CMP-04, CMP-05).
+Письмо между двумя пользователями: учётные записи `a@example.test`, `b@example.test` — `thepost admin init`, затем
+`thepost admin account create` и `app-password create` ([docs/INSTALL.md](../docs/INSTALL.md#учётные-записи); в
+compose — `docker compose -f deploy/compose/dev.yml --profile smb exec thepost thepost admin …`), отправка через 587
+с AUTH, получение через IMAP или JMAP — шаги в `docs/manual-tests/CMP-01.md`.
 
 ## Одна конфигурация SMB (решение 105)
 Конфигурация эталона SMB — только пресет `deploy/config/all.yaml`: роли, хранилище, сертификат, слушатели, секреты.
@@ -148,15 +159,17 @@ Compose и Ansible его не копируют, а подставляют зн�
 | Параметр | Пресет | Compose (`THEPOST_*`) | Ansible (инвентарь) |
 |---|---|---|---|
 | `domain` | `example.ru` | `example.test` | `thepost_domain` |
-| `database.url` | `localhost`, CA `/etc/thepost/pki` | `postgres-tls`, CA тома `tls` | `thepost_db_url` (+ `thepost_db_urls`) |
+| `database.url` | `localhost`, CA `/etc/thepost/pki` | `postgres-tls`, CA тома `tls` | `thepost_db_url` (+ `thepost_db_urls`, `thepost_db_failover` — `database.failover`) |
 | `database.owner.user` | `thepost_owner` | — | `thepost_db_owner_role` |
 | `smtp.hostname` | `mail.example.ru` | `mail.example.test` | `thepost_hostname` |
 | `smtp.milter` | — | — | `thepost_rspamd_milter_address`, `thepost_clamav`, `thepost_milter_submission` (адреса фильтров; профиль письма — политика) |
 | `http.admin.listen` | `127.0.0.1:8443` | — | `thepost_admin_listen` |
 | `secrets.url`, `secrets.tls.ca_file` | `localhost:8200`, `/etc/thepost/pki` | `openbao-tls:8200`, том `tls` | `thepost_secrets_url`, `thepost_internal_ca_file` |
 | `secrets.auth.approle` | `role_id` — `/etc/thepost/openbao`, `secret_id` — учётные данные systemd | `secret_id` — том `openbao-approle` | `thepost_secrets_role_id_file` |
-| `tls`, `acme` | цепочка `/etc/thepost/tls`, ключ — секрет `thepost/tls#key` | том `tls` | `thepost_tls_mode` (`acme` — секция `acme`, цепочка `/var/lib/thepost/tls`), `thepost_tls_names`, `thepost_acme_email` |
-| `blob.gc.window` | по умолчанию | — | `thepost_blob_gc_window` |
+| `tls`, `acme` | цепочка `/etc/thepost/tls`, ключ — секрет `thepost/tls#key` | том `tls` | `thepost_tls_mode` (`acme` — секция `acme`, цепочка `/var/lib/thepost/tls`), `thepost_tls_names`, `thepost_acme_email`, `thepost_acme_directory_url` (пусто — Let's Encrypt); `files` — `thepost_tls_cert_src`, `thepost_tls_key_src` |
+| `auth.gssapi` | — | — | `thepost_gssapi_keytab_src`, `thepost_gssapi` |
+| `blob.url` | `file:///var/lib/thepost/blob` | — | — (см. «Хранилище писем (BLOB)») |
+| `blob.gc.window` | по умолчанию (7 суток) | — | `thepost_blob_gc_window` |
 | `maintenance` | очистка по сроку, книга GAL, проверка BLOB `verify` (03:00 UTC, раз в сутки) | — | `thepost_maintenance` |
 | `cli.oidc` | вход с устройства выключен (`client_id` не задан) | — | `thepost_cli_oidc` |
 | `dav`, `http.dav` | лимиты DAV | — | `thepost_dav`, `thepost_dav_listen` |
@@ -180,27 +193,71 @@ thepost admin policy get                            # заданное и дей
 `policy set` заменяет политику уровня целиком: поля, которых нет в файле, на уровне не заданы. Селектор — из
 `smtp.dkim.domains.<домен>.keys`, профиль (`"milter_profile": "<имя>"`) — из `smtp.milter.profiles`.
 
+## Хранилище писем (BLOB)
+Тела писем, вложения и сегменты индексов лежат в хранилище `blob.url`, метаданные — в PostgreSQL. Два вида:
+`file:///<каталог>` — локальный диск, `s3://<бакет>[/<префикс>]` — S3 (эталон — SeaweedFS). Смена `blob.url` — с перезапуском узла.
+
+| Схема (приложение З SRS) | Где письма | Чем задано |
+|---|---|---|
+| SMB: одна ВМ, compose `smb` (З.1) | локальный диск, `file:///var/lib/thepost/blob` | пресет `config/all.yaml` |
+| Малый Enterprise (З.2) | S3: SeaweedFS на трёх ВМ данных, шлюз S3 на каждом узле (`https://localhost:8333`) | `ansible/small-enterprise.yml`, бакет — `small_bucket` |
+| Enterprise-ВМ (З.3) | S3, `s3://thepost-blob` | пресет `config/mailbox.yaml` + секция `blob.s3` |
+| Enterprise-K8s (З.4) | S3, `s3://thepost-blob` | `config.blob` в `helm/thepost/values.yaml` + `config.blob.s3` |
+| edge (DMZ) | писем ящиков нет; локальная очередь `file:///var/lib/thepost/edge` | пресет `config/edge.yaml` |
+
+Для S3 нужна секция `blob.s3`. В пресете `mailbox` и в значениях чарта её нет — задаёт администратор:
+```yaml
+blob:
+  url: s3://thepost-blob
+  s3:
+    endpoint: https://s3.example.ru:8333   # не задан — AWS по region (us-east-1)
+    path_style: true                        # SeaweedFS, MinIO; по умолчанию true
+    credentials:
+      access_key_id: { secret: "thepost/s3#access_key_id" }
+      secret_access_key: { secret: "thepost/s3#secret_access_key" }
+    tls: { ca_file: /etc/thepost/pki/ca.pem }   # свой CA; не задан — системные корни
+```
+- Канал — только HTTPS с проверкой сертификата. `http://` — ошибка конфигурации (кроме `profile: dev` с
+  `tls.allow_plaintext`). Клиентский сертификат (mTLS) клиент S3 не поддерживает.
+- Ключи — только ссылки на секрет OpenBao `thepost/s3` (поля `access_key_id`, `secret_access_key`); ключ открытым
+  текстом — ошибка разбора. Завести: `bao kv put -mount=thepost s3 access_key_id=… secret_access_key=…`.
+  `small-enterprise.yml` создаёт секрет сам, compose — ключи стенда; роль `openbao` и `helm/openbao/bootstrap.sh`
+  его не создают. Без `credentials` ключи берутся из окружения (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`).
+- Бакет заводит администратор хранилища; `small-enterprise.yml` создаёт его сам.
+- Переключить: Ansible — `thepost_config_extra: { blob: { url: …, s3: { … } } }`, Helm — `config.blob`, вручную —
+  секция `blob` в `config.yaml`. Записанные объекты узел сам не переносит: переход с диска на S3 — плановое окно или
+  модуль «Миграция бэкенда» (`docs/spec/APP-Z.md`, З.1).
+- В Kubernetes локальный диск не годится: том данных пода — `emptyDir`, письма пропадут вместе с подом.
+- Каталог вне `/var/lib/thepost` под systemd — drop-in с `ReadWritePaths=` («Установка под systemd»).
+- Резервная копия: локальный каталог — роль `pgbackrest` (restic или rsync, эталон SMB); для S3 роли в поставке нет.
+
 ## Эталон SMB одной командой (Ansible)
-Чистая ВМ → PostgreSQL 16 (PGDG), OpenBao, Rspamd (clamav-milter — `thepost_clamav: true`) и `thepost` (все роли) под
-systemd (SRS 1.2, 5.6). ОС (решения 2026-11-11 №28, 51, 52; семейство — по менеджеру пакетов):
-- apt — Debian 13 (основа) и 12, Ubuntu 26.04 и 24.04, Astra Linux SE 1.8 (наборы PGDG и Rspamd — `bookworm`);
+Чистая ВМ → chrony, PostgreSQL 16 (PGDG), OpenBao, Rspamd (clamav-milter — `thepost_clamav: true`), `thepost` (все
+роли) под systemd и резервное копирование (SRS 1.2, 5.6). ОС (решения 2026-11-11 №28, 51, 52; семейство — по
+менеджеру пакетов):
+- apt — Debian 13 (основа) и 12, Ubuntu 26.04 и 24.04, Astra Linux SE 1.8 (наборы PGDG и Rspamd — `bookworm`,
+  пакеты PGDG — с приоритетом над репозиториями Astra, `postgresql_pgdg_pin`; ClamAV и restic в её репозиториях
+  нет: `thepost_clamav: false`, копия каталога писем — rsync);
 - dnf — AlmaLinux 10 и 9 (совместимость с RHEL 9 и 10): PGDG yum, Rspamd `rspamd.com/rpm-stable`, restic —
   EPEL (на самом RHEL EPEL подключает администратор); РЕД ОС 8 — PostgreSQL, Rspamd, pgBackRest и restic из
   репозиториев дистрибутива, ClamAV в них нет. Включённый firewalld — роль `thepost` открывает порты клиентских
   протоколов (ACME — и 80); SELinux — контексты каталогов pgBackRest (роль `pgbackrest`, `tasks/selinux.yml`).
+
+Только Debian и Ubuntu — плейбуки `pg-ha.yml` и `small-enterprise.yml` (роль `pg_auto_failover`).
 ```bash
 cargo build --release                                   # или thepost_binary_url + thepost_binary_checksum
 ansible-galaxy collection install -r deploy/ansible/requirements.yml
 cp deploy/ansible/inventory.example.yml inventory.yml   # адрес ВМ, домен, способ сертификата
 ansible-playbook -i inventory.yml deploy/ansible/smb.yml
 ```
-Порядок: внутренний CA (`thepost_pki`, `/etc/thepost/pki`: внутренние каналы PostgreSQL и OpenBao — только TLS, на
+Порядок: синхронизация времени (`chrony`; свои серверы NTP — `thepost_ntp_servers`, пусто — пул дистрибутива) →
+внутренний CA (`thepost_pki`, `/etc/thepost/pki`: внутренние каналы PostgreSQL и OpenBao — только TLS, на
 loopback) → OpenBao (`https://localhost:8200`, пароли `thepost/db`, `thepost/db-owner`, `thepost/db-readonly`, AppRole)
-→ PostgreSQL (`hostssl` только для учётных записей The Post, без SUPERUSER и BYPASSRLS; `postgres` запускается
-юнитом напрямую, без `pg_ctlcluster` на Perl) → Rspamd (Milter `127.0.0.1:11332`) → clamav-milter (`127.0.0.1:7357`) →
+→ PostgreSQL (`hostssl` только для учётных записей The Post, без SUPERUSER и BYPASSRLS; в семействе apt `postgres`
+запускается юнитом напрямую, без `pg_ctlcluster` на Perl) → Rspamd (Milter `127.0.0.1:11332`) → clamav-milter (`127.0.0.1:7357`) →
 `thepost` (sysusers, юнит и сокеты, `config.yaml` — пресет `deploy/config/all.yaml` со значениями инвентаря, с
 проверкой `thepost config check`, ожидание
-`/healthz/ready`). Порты ниже 1024 — только сокеты systemd (`thepost-*.socket`, решение 102), у процесса нет
+`/healthz/ready`) → резервное копирование (`pgbackrest`, раздел ниже). Порты ниже 1024 — только сокеты systemd (`thepost-*.socket`, решение 102), у процесса нет
 capabilities.
 Admin API — `thepost_admin_listen` (`127.0.0.1:8443`).
 Сертификат клиентских протоколов (решение 101) — `thepost_tls_mode`: `acme` (по умолчанию для публичного имени:
@@ -219,22 +276,48 @@ Admin API — `thepost_admin_listen` (`127.0.0.1:8443`).
 `thepost_gssapi_keytab_src` (раздел «Вход по Kerberos (GSSAPI)» ниже).
 Повторный прогон ничего не меняет. Ключи восстановления и root-токен OpenBao — `/root/openbao-init.json` (см. ниже).
 
+Переменные инвентаря помимо таблицы «Одна конфигурация SMB» (все — `ansible/roles/*/defaults/main.yml`):
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `thepost_binary_src` | `target/release/thepost` репозитория | бинарный файл с управляющей машины |
+| `thepost_binary_url`, `thepost_binary_checksum` | — | загрузка бинарного файла; сумма `sha256:…` обязательна |
+| `thepost_ntp_servers` | `[]` | серверы NTP для chrony; пусто — пул дистрибутива |
+| `thepost_clamav` | `false` | антивирус clamav-milter; заражённое письмо — `clamav_milter_on_infected` (`Reject`) |
+| `thepost_milter_submission` | `false` | проверять фильтрами и почту пользователей (submission) |
+| `thepost_sockets` | `smtp`, `submissions`, `submission`, `imap`, `imaps`, `https`, `managesieve` | включаемые юниты `thepost-*.socket` |
+| `thepost_firewall_ports` | `25, 465, 587, 143, 993, 443, 4190` | порты в firewalld, если он включён |
+| `thepost_backup` | `true` | резервное копирование (роль `pgbackrest`) |
+| `thepost_wait_ready` | `true` | ждать `/healthz/ready` (`thepost_ready_retries` × `thepost_ready_delay` — 30 × 2 с) |
+| `postgresql_settings` | `{}` | параметры `postgresql.conf` (`shared_buffers` и т. п.) |
+| `openbao_seal`, `openbao_seal_options` | `static`, `{}` | распечатывание OpenBao (раздел «OpenBao») |
+| `openbao_version` | `2.7.2` | версия пакета OpenBao |
+
 ### Резервное копирование и восстановление (роль `pgbackrest`, DEP-15)
-`thepost_backup: true` (по умолчанию) — последняя роль `smb.yml`, готовые средства из пакетов дистрибутива и PGDG:
+`thepost_backup: true` (по умолчанию) — последняя роль `smb.yml`, готовые средства из пакетов дистрибутива и PGDG.
+Только эталон SMB: `small-enterprise.yml` и чарт резервное копирование не ставят. Каталоги копий по умолчанию — на
+той же ВМ (`/var/lib/pgbackrest`, `/var/backups/thepost`): нужен отдельный диск, сетевой том или S3, иначе копия
+погибнет вместе с диском данных. Таблица переменных —
+[docs/INSTALL.md](../docs/INSTALL.md#резервное-копирование-и-восстановление). Состав:
 - pgBackRest: `archive_command` (`conf.d/pgbackrest.conf`, `archive_timeout = 60`), stanza `thepost`, хранилище
   `thepost_backup_repo` — `posix` (`/var/lib/pgbackrest`) или `s3` (HTTPS, свой CA — `thepost_backup_s3_ca_file`),
-  шифрование `aes-256-cbc`, срок `repo1-retention-full-type=time` (`thepost_backup_retention_days`); таймеры
-  `thepost-backup-full.timer` и `thepost-backup-diff.timer` → `thepost-backup@full|diff.service` (от `postgres`);
+  шифрование `aes-256-cbc`, срок `repo1-retention-full-type=time` (`thepost_backup_retention_days`, 7 суток); таймеры
+  `thepost-backup-full.timer` (воскресенье, 01:30) и `thepost-backup-diff.timer` (остальные дни, 01:30;
+  `thepost_backup_full_schedule`, `thepost_backup_diff_schedule`) → `thepost-backup@full|diff.service` (от `postgres`);
 - каталог BLOB — `thepost-backup-blob.service` после каждой копии СУБД (`Wants=` + `Before=`) и по
-  `thepost-backup-blob.timer` (`thepost_backup_blob_schedule`): restic (`backup`, `forget --keep-within --prune`)
-  или rsync (зеркало без `--delete`: объекты неизменяемы и удаляются после окна W — надмножество любого момента);
+  `thepost-backup-blob.timer` (`thepost_backup_blob_schedule`, по умолчанию `hourly`). Средство —
+  `thepost_backup_blob_tool`: restic (по умолчанию; `backup`, `forget --keep-within --prune`; репозиторий —
+  `thepost_backup_restic_repo`: каталог или `s3:https://…`) или rsync (по умолчанию в Astra Linux SE 1.8;
+  `thepost_backup_rsync_dest`; зеркало без `--delete`: объекты неизменяемы и удаляются после окна W — надмножество
+  любого момента);
 - инвариант W (SRS 3.5): роль `thepost` пишет `blob.gc.window` = глубина PITR + 8 суток (`thepost_blob_gc_window`),
   роль `pgbackrest` проверяет, что W не меньше глубины PITR;
 - секреты — KV `thepost-backup` в OpenBao (политика узла `thepost` его не видит): `pgbackrest#cipher_pass`,
   `restic#password` (случайные при первом прогоне), `s3#access_key_id,secret_access_key` (заводит администратор).
   На ВМ — только `systemd-creds encrypt` (`/etc/thepost/credentials/*.cred`; ключ ВМ и TPM2, если есть) и
-  `LoadCredentialEncrypted=` юнитов копий и drop-in `postgresql@16-main.service.d/pgbackrest.conf` (для
-  `archive_command` и `restore_command`). pgBackRest читает их через `--config-include-path=/run/credentials/<юнит>`,
+  `LoadCredentialEncrypted=` юнитов копий и drop-in `pgbackrest.conf` юнита кластера (apt —
+  `postgresql@16-main.service`, семейство RHEL — `postgresql-16.service`; для `archive_command` и
+  `restore_command`). pgBackRest читает их через `--config-include-path=/run/credentials/<юнит>`,
   restic — через `RESTIC_PASSWORD_FILE` и `AWS_SHARED_CREDENTIALS_FILE`. Вручную — `thepost-pgbackrest …` и
   `thepost-restic …` от root (обёртки `systemd-run` с теми же учётными данными); через `sudo` в семействе RHEL —
   полным путём `/usr/local/sbin/thepost-…`: `secure_path` sudo там без `/usr/local/sbin` (так их вызывают роль и
@@ -265,6 +348,37 @@ Admin API — `thepost_admin_listen` (`127.0.0.1:8443`).
 (или rsync) поверх каталога → `thepost` → `thepost verify --json` (повреждённых и ошибок — 0, иначе отказ) →
 `thepost verify --fix` при «сиротах» → таймеры и новая полная копия. Подтверждение — `-e thepost_restore_confirm=true`.
 Порядок для администратора и для новой ВМ — [docs/INSTALL.md](../docs/INSTALL.md#резервное-копирование-и-восстановление).
+
+## Малый Enterprise (Ansible)
+Два узла `thepost` (`roles: [mailbox]`; Rspamd и шлюз S3 SeaweedFS на каждом) и три ВМ данных: на двух — PostgreSQL
+primary и standby, на третьей — монитор pg_auto_failover; на всех трёх — OpenBao (Raft, кворум 2 из 3) и SeaweedFS
+(master, volume, filer; две копии объекта на разных ВМ, метаданные filer — схема `seaweedfs` БД `thepost`).
+Схема — `docs/spec/APP-Z.md`, З.2. ОС — Debian или Ubuntu.
+```bash
+ansible-galaxy collection install -r deploy/ansible/requirements.yml
+cp deploy/ansible/inventory-small.example.yml inventory-small.yml   # ВМ, сети, каталог сертификатов, адрес
+ansible-playbook -i inventory-small.yml deploy/ansible/small-enterprise.yml
+```
+
+| Инвентарь | Назначение |
+|---|---|
+| группы `small_data` (3 ВМ), `pgaf_nodes` (2 из них), `pgaf_monitor` (третья), `mailbox` (≥ 2) | ВМ данных и узлы `thepost` |
+| `small_pki_dir` | каталог на управляющей машине: `ca.pem`, `<узел>.pem`, `<узел>.key` — сертификаты CA заказчика с `serverAuth` и `clientAuth`; SAN — имя узла в инвентаре, у ВМ данных — и имя из `small_openbao_url`, у узлов mailbox — и `localhost` |
+| `small_data_networks`, `small_mail_networks` | сети ВМ данных и узлов mailbox (CIDR) |
+| `small_openbao_url` | адрес OpenBao для узлов: DNS-имя с A-записями трёх ВМ данных |
+| `small_bucket` | бакет писем (`blob.url: s3://<бакет>`); создаёт плейбук |
+| `small_vip_address`, `small_vip_interface`, `small_vip_router_id` | виртуальный адрес узлов mailbox (keepalived, VRRP); без `small_vip_address` — балансировщик заказчика |
+| `thepost_tls_mode: files`, `thepost_tls_cert_src`, `thepost_tls_key_src` | общий сертификат клиентских протоколов узлов |
+| `small_thepost_config_extra` | свои секции `config.yaml` поверх эталона |
+
+Паролей и ключей в инвентаре нет — их создаёт и хранит OpenBao: KV `thepost` — узлам (`db`, `db-owner`,
+`db-readonly`, `s3`, `tls`), KV `infra` — службам (`pgaf`, `seaweedfs`; политике `thepost` недоступен). Внутренние
+каналы — только TLS, gRPC SeaweedFS — взаимный. `config.yaml` узлов — пресет `all.yaml` с `roles: [mailbox]`,
+`blob` (S3 через шлюз `https://localhost:8333`) и адресами двух узлов PostgreSQL (`database.url` + `urls`). СУБД —
+`db_durability: preferred`: синхронная реплика одна, при её отказе запись продолжается без неё. Шину сигналов
+плейбук не задаёт (умолчание `bus.kind: local` — в процессе одного узла); для нескольких узлов —
+`bus: { kind: postgres }` в `small_thepost_config_extra`. Резервное копирование плейбук не ставит. Проверка отказа
+ВМ — `docs/manual-tests/DEP-10.md`.
 
 ## Установка под systemd (SMB, Enterprise-ВМ)
 ```bash
@@ -298,6 +412,7 @@ tls:
 ```
 Первый выпуск — до запуска протоколов: если порт 80 недоступен снаружи или DNS имени не указывает на ВМ, узел не
 стартует (`acme: сертификат … не выпущен`).
+POP3 (`imap.pop3`: `enabled`, `listeners`) в пресетах выключен; юнитов сокетов для портов 110 и 995 в поставке нет.
 Узел берёт сокет systemd по адресу слушателя (`0.0.0.0:<порт>` или `[::]:<порт>` совпадает с `ListenStream=<порт>`),
 иначе открывает свой (порт ниже 1024 без сокета не откроется — capabilities у процесса нет); перезапуск `thepost` не
 закрывает сокеты: соединения ждут в очереди.
@@ -386,7 +501,8 @@ ansible-galaxy collection install -r deploy/ansible/requirements.yml
 cp deploy/ansible/inventory-ha.example.yml inventory-ha.yml   # монитор, узлы, сети, файлы TLS; пароли — ansible-vault
 ansible-playbook -i inventory-ha.yml deploy/ansible/pg-ha.yml --ask-vault-pass
 ```
-Роль `pg_auto_failover`: PostgreSQL 16 и pg_auto_failover из PGDG, кластер Debian `main` не создаётся; `pg_autoctl`
+Роль `pg_auto_failover` (только Debian и Ubuntu): PostgreSQL 16 и pg_auto_failover из PGDG, кластер Debian `main`
+не создаётся; `pg_autoctl`
 и `postgres` — бинарные файлы, юнит `pgautofailover.service` (без `pg_wrapper`/`pg_ctlcluster` на Perl). Узлы данных
 ставятся по одному: первый — primary, следующие — реплики; при `db_durability: required` — `number_sync_standbys: 1`
 (фиксация ждёт одну из двух реплик), при `preferred` — `0` (см. «Режим сохранности»). Сроки переключения — `pgaf_monitor_settings`, `pgaf_network_partition_timeout` (RTO ≈ 10 с + 15 с; значения
@@ -451,7 +567,9 @@ ansible-playbook -i <инвентарь> deploy/ansible/openbao.yml \
 `-e openbao_admin_token=…`), настраивает KV, политику и AppRole `thepost`, кладёт `role_id` и `secret_id` для
 `thepost.service`, создаёт случайные пароли `thepost/db`, `thepost/db-owner`, `thepost/db-readonly` и отдаёт их
 фактами `thepost_db_password`, `thepost_db_owner_password`, `thepost_db_readonly_password` роли PostgreSQL.
-Повторный прогон ничего не меняет.
+Повторный прогон ничего не меняет. Кластер Raft из нескольких ВМ — `openbao_raft_peers` (адреса других узлов),
+`openbao_init_node` (инициализирует один узел), `openbao_static_key_from` (общий ключ seal `static`); узлы `thepost`
+на других ВМ — `openbao_thepost_local: false` и `tasks_from: approle`. Так ставит `small-enterprise.yml`.
 
 ### Kubernetes (Helm)
 ```bash
@@ -469,7 +587,31 @@ kubectl -n thepost create secret docker-registry ghcr --docker-server=ghcr.io   
 helm install thepost deploy/helm/thepost -n thepost --set 'imagePullSecrets[0].name=ghcr' -f <свои значения>
 ```
 Образ в ghcr.io закрытый: без `imagePullSecrets` чарт не рендерится (ошибка с подсказкой). Тег по умолчанию —
-`appVersion` чарта (версия выпуска, `beta.yml` публикует его вместе с `beta-<дата>`).
+`appVersion` чарта (версия выпуска, `beta.yml` публикует его вместе с `beta-<дата>`). Образ — `linux/amd64`,
+подписан cosign без ключей (проверка — комментарий в `helm/thepost/values.yaml`).
+
+В своих значениях обязательно: `config.domain`, `config.smtp.hostname`, `config.database.url` (или `cnpg.enabled`),
+`config.secrets.url` и хранилище писем `config.blob.s3` (раздел «Хранилище писем (BLOB)»; секрет `thepost/s3`
+`bootstrap.sh` не создаёт). Чарт шину сигналов не задаёт (умолчание `bus.kind: local` — в процессе одного пода); для
+нескольких подов — `config.bus.kind: postgres`.
+
+| Значение | По умолчанию | Назначение |
+|---|---|---|
+| `image.repository`, `image.tag` | `ghcr.io/dicobraz421/thepost`, пусто — `appVersion` | образ; свой реестр — `repository` |
+| `imagePullSecrets` | `[]` — задать обязательно | секреты входа в реестр образа |
+| `replicaCount` | `1` | число подов без HPA |
+| `tls.secretName` | `thepost-tls` | секрет с `tls.crt` и `ca.crt` |
+| `gssapi.keytabSecret` | пусто | секрет с keytab Kerberos |
+| `ports.<имя>` | `container`/`service`: 2525/25, 4465/465, 5587/587, 1143/143, 1993/993, 4190/4190, 4443/443 | порты пода и Service |
+| `service.type`, `service.annotations` | `LoadBalancer`, `{}` | Service клиентских протоколов |
+| `resources` | `{}` | requests и limits; с HPA по CPU `requests.cpu` обязателен |
+| `podAntiAffinity` | `soft` | `soft`, `hard` или пусто; своё `affinity` его заменяет |
+| `autoscaling.enabled` | `false` | HPA: `minReplicas` 2, `maxReplicas` 10, `cpu.targetUtilization` 70; `connections.enabled` — по `tp_load_connections` (нужны `helm/prometheus-adapter` и `metrics.podMonitor.enabled`) |
+| `pdb.enabled`, `pdb.maxUnavailable` | `true`, `1` | PodDisruptionBudget; создаётся при двух и более подах |
+| `vpa.enabled` | `false` | VPA, только рекомендации (`updateMode: Off`) |
+| `metrics.podMonitor.enabled` | `false` | PodMonitor Prometheus Operator: `/metrics` по HTTPS |
+| `cnpg.enabled` | `false` | PostgreSQL CloudNativePG: `instances` 3, `storage.size` 500Gi, `db_durability`, `pooler.enabled` |
+| `config` | значения узла `mailbox` | `config.yaml` целиком; полный перечень — `thepost config schema` |
 Под — `runAsNonRoot` (65532), `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
 seccomp `RuntimeDefault` (свой профиль узла — `containerSecurityContext.seccompProfile` типа `Localhost`) и профили ролей
 процесса (секция `confine`). Слушатели — на портах выше 1024, стандартные порты (25, 465, 587, 143, 993, 443) — у Service;
