@@ -1,6 +1,12 @@
 //! Загрузка config.yaml (SRS 5.5, CONTRACTS.md#Config): дерево секций крейтов, переопределение `THEPOST_*`,
 //! обязательные параметры, роли (SRS 2.1), секции модулей `modules.<имя>` (SRS 2.5), JSON Schema.
 //!
+//! Переменная `THEPOST_<A>__<B>` переопределяет параметр, только если `<a>` — известный ключ верхнего уровня
+//! (параметр платформы или секция реестра). Окружение — общее пространство имён: переменные с тем же префиксом
+//! читают и другие части программы (путь к файлу, клиент Admin API), поэтому переменная вне схемы конфигурации
+//! не касается — не применяется и ошибкой не считается (PLT-36). Строгость относится к файлу и к полям известных
+//! секций: опечатка внутри секции (`THEPOST_SMTP__LIMTS__X`) — неизвестный параметр.
+//!
 //! Центрального перечня секций нет: каждый крейт регистрирует свою секцию в [`SectionRegistry`]
 //! (`add_section::<XxxConfig>("xxx")`), приложение собирает реестр и вызывает [`SectionRegistry::load`].
 //! Секция разбирается из исходного текста по своему пути, поэтому ошибка содержит путь параметра
@@ -85,9 +91,10 @@ pub fn required_params(roles: &RoleSet) -> Vec<RequiredParam> {
 }
 
 /// Префикс переменных окружения, переопределяющих параметры: `THEPOST_SMTP__LIMITS__MAX_SIZE=10` → `smtp.limits.max_size`.
+/// Переменная с префиксом, первый ключ которой не из схемы, — не параметр конфигурации.
 pub const ENV_PREFIX: &str = "THEPOST_";
 
-/// Переменная с путём к config.yaml; не переопределяет параметр.
+/// Переменная с путём к config.yaml; параметр не переопределяет: ключа верхнего уровня `config` в схеме нет.
 pub const ENV_CONFIG_PATH: &str = "THEPOST_CONFIG";
 
 /// Имена параметров со значением-секретом: допустима только ссылка `{ secret: "<путь>#<поле>" }` (регистр не важен).
@@ -326,7 +333,7 @@ impl SectionRegistry {
         if empty {
             tree = Value::Mapping(Mapping::new());
         }
-        let overridden = apply_env(&mut tree, env)?;
+        let overridden = apply_env(&mut tree, env, |key| self.known_key(key))?;
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
 
@@ -520,6 +527,14 @@ impl SectionRegistry {
         }
     }
 
+    /// Известен ли ключ верхнего уровня: параметр платформы, зарегистрированная секция или секция слоя данных.
+    /// Один источник для проверки файла ([`Self::unknown_params`]) и отбора переменных окружения ([`apply_env`]).
+    fn known_key(&self, name: &str) -> bool {
+        CORE_KEYS.contains(&name)
+            || URL_SECTIONS.contains(&name)
+            || self.sections.contains_key(name)
+    }
+
     /// Неизвестные параметры: ключи верхнего уровня вне платформы и реестра, поля зарегистрированных секций
     /// и модулей, которых нет в их JSON Schema. Незарегистрированные `database`/`blob` и модули не проверяются.
     fn unknown_params(&self, tree: &Value) -> Vec<Vec<Seg>> {
@@ -534,7 +549,9 @@ impl SectionRegistry {
         for (key, value) in root {
             let name = key.as_str().unwrap_or_default();
             let mut path = vec![Seg::Key(key.clone())];
-            if self.sections.contains_key(name) {
+            if !self.known_key(name) {
+                out.push(path);
+            } else if self.sections.contains_key(name) {
                 let Some(s) = props(&[name]) else {
                     continue;
                 };
@@ -554,8 +571,6 @@ impl SectionRegistry {
                         path.pop();
                     }
                 }
-            } else if !CORE_KEYS.contains(&name) && !URL_SECTIONS.contains(&name) {
-                out.push(path);
             }
         }
         out
@@ -1257,24 +1272,28 @@ fn yaml_key(v: &Value) -> String {
     }
 }
 
-/// Применяет `THEPOST_A__B=v` как `a.b: v` (значение — YAML-скаляр или строка). Возвращает, было ли изменение.
+/// Применяет `THEPOST_A__B=v` как `a.b: v` (значение — YAML-скаляр или строка), если `a` — известный ключ верхнего
+/// уровня (`known`). Прочие переменные с префиксом — не параметры конфигурации: окружение общее с другими частями
+/// программы, такая переменная не применяется и ошибкой не считается. Возвращает, было ли изменение.
 fn apply_env(
     tree: &mut Value,
     env: impl IntoIterator<Item = (String, String)>,
+    known: impl Fn(&str) -> bool,
 ) -> Result<bool, ConfigError> {
-    let mut vars: Vec<(String, String)> = env
+    let mut vars: Vec<(String, Vec<String>, String)> = env
         .into_iter()
-        .filter(|(k, _)| k.starts_with(ENV_PREFIX) && k != ENV_CONFIG_PATH)
+        .filter_map(|(var, raw)| {
+            let keys: Vec<String> = var
+                .strip_prefix(ENV_PREFIX)?
+                .split("__")
+                .map(str::to_lowercase)
+                .collect();
+            let applies = known(keys.first()?) && !keys.iter().any(String::is_empty);
+            applies.then_some((var, keys, raw))
+        })
         .collect();
     vars.sort();
-    for (var, raw) in &vars {
-        let keys: Vec<String> = var[ENV_PREFIX.len()..]
-            .split("__")
-            .map(str::to_lowercase)
-            .collect();
-        if keys.iter().any(String::is_empty) {
-            continue;
-        }
+    for (var, keys, raw) in &vars {
         let value = serde_yaml_ng::from_str::<Value>(raw).unwrap_or(Value::String(raw.clone()));
         let mut node = &mut *tree;
         for (i, key) in keys.iter().enumerate() {
@@ -1691,6 +1710,81 @@ mod tests {
         registry()
             .parse_with("", env, CheckMode::Lenient)
             .expect("env only");
+    }
+
+    /// PLT-36: переменная с префиксом, первый ключ которой не из схемы, конфигурации не касается.
+    #[test]
+    fn env_outside_schema_is_not_config() {
+        let foreign = [
+            ("THEPOST_ADMIN_URL", "https://127.0.0.1:8443"),
+            ("THEPOST_ADMIN_TOKEN", "tps_test"),
+            ("THEPOST_ADMIN_ORG", "0190a8a4-0000-7000-8000-000000000001"),
+            ("THEPOST_TUI_THEME", "dark"),
+            ("THEPOST_CONFIG", "/etc/thepost/config.yaml"),
+            ("THEPOST_SMTPP__HOSTNAME", "mx.example.com"),
+        ]
+        .map(|(k, v)| (k.to_owned(), v.to_owned()));
+        let r = registry();
+
+        // Дерево не изменено: ни одного ключа не добавлено, объединённый текст не нужен.
+        let mut tree: Value = serde_yaml_ng::from_str(MINIMAL).expect("yaml");
+        let before = tree.clone();
+        let changed = apply_env(&mut tree, foreign.clone(), |k| r.known_key(k)).expect("env");
+        assert!(!changed);
+        assert_eq!(tree, before);
+
+        // Строгая проверка: ошибок нет; в мягком режиме нет и предупреждений.
+        let cfg = r
+            .parse_with(MINIMAL, foreign.clone(), CheckMode::Strict)
+            .expect("strict");
+        assert_eq!(cfg.domain(), "example.com");
+        let soft = r
+            .parse_with(MINIMAL, foreign, CheckMode::Lenient)
+            .expect("lenient");
+        assert!(
+            soft.warnings()
+                .iter()
+                .all(|w| !w.contains("unknown parameter")),
+            "{:?}",
+            soft.warnings()
+        );
+
+        // Известная секция и скалярный параметр верхнего уровня применяются и рядом с чужой переменной.
+        let env = [
+            ("THEPOST_SMTP__LIMITS__MAX_SIZE", "2048"),
+            ("THEPOST_DOMAIN", "corp.example"),
+            ("THEPOST_TUI_THEME", "dark"),
+        ]
+        .map(|(k, v)| (k.to_owned(), v.to_owned()));
+        let cfg = r
+            .parse_with(MINIMAL, env, CheckMode::Strict)
+            .expect("known");
+        assert_eq!(cfg.domain(), "corp.example");
+        assert_eq!(
+            cfg.section::<SmtpConfig>("smtp")
+                .expect("smtp")
+                .limits
+                .max_size,
+            2048
+        );
+
+        // Опечатка внутри известной секции — по-прежнему неизвестный параметр: ошибка строгого режима,
+        // предупреждение мягкого.
+        let typo = [("THEPOST_SMTP__LIMTS__MAX_SIZE".to_owned(), "1".to_owned())];
+        let e = r
+            .parse_with(MINIMAL, typo.clone(), CheckMode::Strict)
+            .expect_err("typo");
+        assert_eq!(lines(e), ["smtp.limts: unknown parameter"]);
+        let soft = r
+            .parse_with(MINIMAL, typo, CheckMode::Lenient)
+            .expect("lenient typo");
+        assert!(
+            soft.warnings()
+                .iter()
+                .any(|w| w == "smtp.limts: unknown parameter"),
+            "{:?}",
+            soft.warnings()
+        );
     }
 
     #[test]
