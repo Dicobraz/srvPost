@@ -7,10 +7,11 @@
 
 - **Linux** x86_64 или AArch64 с glibc 2.18 и новее. Для рабочего сервера — Debian 13 (основа) или 12, Ubuntu 26.04
   или 24.04, Astra Linux SE 1.8, РЕД ОС 8, AlmaLinux 10 или 9 (совместимость с RHEL 9 и 10), от 4 vCPU и 8 ГБ памяти
-  (целевой размер для 1 000 пользователей), диск — под письма.
+  (целевой размер для 1 000 пользователей), диск — под письма (или S3 —
+  [где лежат письма](#где-лежат-письма-диск-или-s3)).
 - **Имя сервера** (например, `mail.example.ru`) и **почтовый домен** (`example.ru`), доступ к их DNS.
 - **Открытые порты**: 25 (приём почты), 465 и 587 (отправка), 993 и 143 (IMAP), 4190 (ManageSieve — правила
-  фильтрации), 443 (JMAP, автонастройка), 80 (только для выпуска сертификата Let's Encrypt).
+  фильтрации), 443 (JMAP, календари и контакты, автонастройка), 80 (только для выпуска сертификата Let's Encrypt).
 - Все требования к окружению и тонкости настройки (кодировка базы UTF-8 и др.) — [PREREQUISITES.md](PREREQUISITES.md).
 
 Все внутренние компоненты ставятся вместе с сервером: PostgreSQL (метаданные), OpenBao (секреты), Rspamd (антиспам).
@@ -103,6 +104,46 @@ PostgreSQL 16, OpenBao, Rspamd (по желанию — антивирус ClamA
 Сертификат — встроенный ACME (секция `acme`, порт 80 — `thepost-http.socket`) или свой: цепочка — файл
 `tls.cert_file`, ключ — в OpenBao (`bao kv put -mount=thepost tls key=@privkey.pem`, затем удалите файл ключа с сервера).
 
+## Где лежат письма: диск или S3
+
+Тела писем и вложения хранятся отдельно от базы. Где — задаёт один параметр `config.yaml`, `blob.url` (читается при
+запуске узла):
+
+| `blob.url` | Хранилище | Где задано по умолчанию |
+|---|---|---|
+| `file:///var/lib/thepost/blob` | каталог на диске сервера | одна ВМ: `smb.yml`, Docker Compose (пресет `deploy/config/all.yaml`) |
+| `s3://<бакет>[/<префикс>]` | объектное хранилище S3 (эталон — SeaweedFS) | несколько узлов: чарт Helm, пресет `deploy/config/mailbox.yaml`, `deploy/ansible/small-enterprise.yml` |
+
+**На одной ВМ по умолчанию — диск**, настраивать нечего: каталог создаёт узел, копии снимает
+[резервное копирование](#резервное-копирование-и-восстановление). Каталог вне `/var/lib/thepost` — ещё и
+`ReadWritePaths=` юнита (`systemctl edit thepost`).
+
+**S3** — когда узлов несколько или у узла нет своего диска (в Kubernetes том пода временный). Рядом с `blob.url` —
+секция `blob.s3`:
+
+```yaml
+blob:
+  url: s3://thepost-blob
+  s3:
+    endpoint: https://s3.example.ru:8333          # только https://; не задан — AWS по region
+    path_style: true                              # по умолчанию; нужен SeaweedFS и MinIO
+    credentials:
+      access_key_id: { secret: "thepost/s3#access_key_id" }
+      secret_access_key: { secret: "thepost/s3#secret_access_key" }
+    tls: { ca_file: /etc/thepost/pki/ca.pem }     # свой CA; не задан — системные корневые сертификаты
+```
+
+- Бакет и префикс — только в `blob.url`; `blob.s3.bucket` и `blob.s3.prefix` — ошибка `thepost config check`.
+- Ключи доступа — только в OpenBao, в `config.yaml` — ссылки: `bao kv put -mount=thepost s3 access_key_id=…
+  secret_access_key=…` (`small-enterprise.yml` создаёт секрет сам). Нет секрета — узел не запускается.
+- Канал — только HTTPS с проверкой сертификата; `http://` отклоняется (кроме профиля `dev`).
+- Ansible — `thepost_config_extra: { blob: { url: …, s3: { … } } }`, Helm — `config.blob`.
+- Проверка — `thepost doctor`: `blob.open`, `blob.write`, `blob.read`, `blob.delete`.
+
+Выбирайте при установке: при смене `blob.url` уже записанные письма узел сам не переносит. Копии каталога на диске
+делает эталон SMB; копии S3 — средствами самого хранилища. Требования —
+[PREREQUISITES.md](PREREQUISITES.md#хранилище-писем).
+
 ## Первый администратор
 
 На сервере, от root или от учётной записи службы:
@@ -164,6 +205,11 @@ thepost admin transport domain list --insecure
 `transport domain list|create|delete` (`create <домен> --relay host[:port]` — пересылка на другой узел вместо
 собственного домена). Вывод — таблица или `--json`.
 
+То же — в веб-консоли (`https://127.0.0.1:8443/console/`, с рабочего места — через SSH-туннель) и в текстовой
+консоли `thepost admin tui` (ключи `--url`, `--token`, `--ca-file`, `--insecure`, `--timeout`, `--theme`). На узле
+она ещё и правит `config.yaml`; файл, который ведёт Ansible или Helm, открывает только на чтение. Все команды и
+экраны — [руководство администратора](ADMIN-GUIDE.md#текстовая-консоль-thepost-admin-tui).
+
 В Docker Compose те же команды выполняются в контейнере узла:
 
 ```bash
@@ -216,14 +262,29 @@ Ansible — `thepost_cli_oidc` (например `{ client_id: thepost-cli }`), 
 | `maintenance.verify.interval` | `24h` | период проходов; не в целых сутках — сетка проходов отсчитывается от `at` после полуночи UTC 1970-01-01 |
 | `maintenance.verify.lease_name` | `blob-verify` | имя лизы: в кластере проход выполняет один узел — её держатель |
 | `maintenance.verify.lease_ttl` | `2m` | срок лизы; продлевается во время прохода и держится после него — должен покрывать расхождение часов узлов |
+
+`thepost config check` отклоняет нулевые `purge_interval`, `gal_interval`, `verify.interval`, `verify.lease_ttl`,
+пустой `verify.lease_name` и `verify.at` не в виде `ЧЧ:ММ`. Удалённые ключи `smtp.queue.poll_interval` и
+`mailstore.disabled.max_wait` — в [несовместимых изменениях 0.2.0](releases/0.2.0.md#несовместимые-изменения-для-администратора).
+
+## Календари и контакты: секция `dav`
+
+Роль `dav` (входит в пресеты) отдаёт CalDAV и CardDAV на том же порту 443, что и JMAP (путь `/dav/`); отдельный
+порт — `http.dav` (Ansible — `thepost_dav_listen`). Ключи секции читаются при запуске узла. Ansible — `thepost_dav`,
+Helm — `config.dav`; остальные лимиты (размеры запросов и объектов, развёртка повторов) — `thepost config schema`.
+
+| Ключ | Умолчание | Что задаёт |
+|---|---|---|
 | `dav.schedule_keep_processed` | `true` | хранить применённые сервером сообщения iTIP для ленты уведомлений JMAP (`CalendarEventNotification`); во входящих планирования CalDAV они не видны, их удаляет очистка по сроку (роль maintenance). `false` — не хранить, лента пуста |
 | `dav.schedule_processed_ttl` | `30d` | срок хранения этих сообщений при `dav.schedule_keep_processed: true` |
 | `dav.principal_search_scan` | `10000` | сколько учётных записей организации просматривает один поиск принципалов (`principal-property-search`, `calendarserver-principal-search`: выбор участников и переговорных в клиенте); остальные не ищутся. Целое число. Если в организации записей больше, часть сотрудников и переговорных не находится — увеличьте значение |
 | `dav.principal_search_results` | `50` | сколько найденных принципалов отдаётся в одном ответе поиска. В `calendarserver-principal-search` клиент может запросить меньше (`cs:nresults`), больше этого значения — не получит; при превышении ответ содержит найденное и статус `507` (`number-of-matches-within-limits`). Целое число |
 
-`thepost config check` отклоняет нулевые `purge_interval`, `gal_interval`, `verify.interval`, `verify.lease_ttl`,
-пустой `verify.lease_name` и `verify.at` не в виде `ЧЧ:ММ`. Удалённые ключи `smtp.queue.poll_interval` и
-`mailstore.disabled.max_wait` — в [несовместимых изменениях 0.2.0](releases/0.2.0.md#несовместимые-изменения-для-администратора).
+Общий доступ к календарям и адресным книгам, представители и ресурсы (переговорные, оборудование) ключей в
+`config.yaml` не имеют. Права на свой календарь выдаёт владелец в клиенте; политику общего доступа организации,
+представителей и ресурсы с правилами бронирования ведёт администратор — веб-консоль, текстовая консоль или Admin API
+(`/api/v1/orgs/{org}/calendar-sharing`, `…/accounts/{account}/delegates`, `…/resources`). Переговорную клиент находит
+поиском принципалов — его пределы в таблице выше.
 
 ## Настройка клиентов
 
@@ -235,11 +296,18 @@ Ansible — `thepost_cli_oidc` (например `{ client_id: thepost-cli }`), 
 | | | 587 | STARTTLS |
 | Правила фильтрации (ManageSieve) | `mail.example.ru` | 4190 | STARTTLS |
 | JMAP | `https://mail.example.ru/.well-known/jmap` | 443 | HTTPS |
+| Календари и контакты (CalDAV, CardDAV) | `https://mail.example.ru/dav/` | 443 | HTTPS |
 
 Имя входа — адрес целиком (`ivanov@example.ru`), пароль — пароль приложения. Подходит любой клиент IMAP и SMTP
 (например, Thunderbird), правила фильтрации — клиент ManageSieve (дополнение Thunderbird Sieve, `sieve-connect`),
-по JMAP — [Postman](https://github.com/Dicobraz421/Postman). В тестовом варианте с `example.test` клиент попросит принять
-сертификат: его выпустил тестовый центр (`deploy/compose/tls/ca.pem`).
+по JMAP — [Postman](https://github.com/Dicobraz421/Postman), календари и контакты — клиент CalDAV и CardDAV
+(Thunderbird, iOS и macOS, DAVx5): адрес сервера он находит сам по `/.well-known/caldav` и `/.well-known/carddav`,
+а по адресу почты — по записям SRV ([DNS домена](#dns-домена)). В тестовом варианте с `example.test` клиент
+попросит принять сертификат: его выпустил тестовый центр (`deploy/compose/tls/ca.pem`).
+
+Вход по Kerberos (SASL GSSAPI) вместо пароля — для SMTP, IMAP, POP3 и ManageSieve: keytab служб узла и секция
+`auth.gssapi` (Ansible — `thepost_gssapi_keytab_src` и `thepost_gssapi`). Что завести в области Kerberos и как
+проверить — [PREREQUISITES.md](PREREQUISITES.md#kerberos-gssapi).
 
 ## DNS домена
 
@@ -252,8 +320,16 @@ Ansible — `thepost_cli_oidc` (например `{ client_id: thepost-cli }`), 
 | `TXT` домена (SPF) | `v=spf1 mx -all` |
 | `TXT _dmarc` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@example.ru` |
 | `TXT <селектор>._domainkey` (DKIM) | открытый ключ подписи, см. ниже |
+| `SRV _caldavs._tcp`, `SRV _carddavs._tcp` домена | `0 1 443 mail.example.ru.` — клиент находит календари и контакты по адресу почты |
+| `TXT _caldavs._tcp`, `TXT _carddavs._tcp` домена | `"path=/dav/"` |
 
-**Подпись DKIM.** Закрытый ключ хранится в OpenBao, в `config.yaml` — только ссылка на него. Каким селектором подписывать, задаёт политика организации или домена (Admin API, поле `dkim_selector`); без неё письмо подписывается всеми ключами домена:
+**Подпись DKIM.** Закрытый ключ (PEM) хранится в OpenBao, в `config.yaml` — только ссылка на него:
+
+```bash
+openssl genrsa -out dkim.pem 2048
+openssl rsa -in dkim.pem -pubout -outform DER | base64 -w0     # запись TXT: "v=DKIM1; k=rsa; p=<эта строка>"
+bao kv put -mount=thepost dkim example.ru=@dkim.pem            # затем удалите dkim.pem с сервера
+```
 
 ```yaml
 smtp:
@@ -264,7 +340,15 @@ smtp:
           s2026: { algorithm: rsa-sha256, key: { secret: "thepost/dkim#example.ru" } }
 ```
 
-`thepost doctor` проверяет MX, SPF, DKIM, DMARC, MTA-STS и PTR по публичному DNS и подсказывает, чего не хватает.
+Каким селектором подписывать, задаёт не `config.yaml`, а политика организации или домена (поле `dkim_selector`);
+без неё письмо подписывается всеми ключами домена. Там же — лимиты отправки (`send_per_hour`, `rcpts_per_hour`,
+`max_recipients`; без политики — 1000 писем и 2000 адресатов в час, 100 получателей в письме) и набор фильтров Milter
+(`milter_profile`): `thepost admin policy set` — [руководство администратора](ADMIN-GUIDE.md#политики--policy). В
+`config.yaml` остаются только ключи DKIM (`smtp.dkim.domains`) и адреса фильтров (`smtp.milter.filters`, наборы —
+`smtp.milter.profiles`).
+
+`thepost doctor` проверяет MX, SPF, DKIM, DMARC, MTA-STS, PTR и записи SRV календарей и контактов по публичному DNS
+и подсказывает, чего не хватает.
 
 ### Входящая почта через шлюз
 
@@ -290,6 +374,10 @@ helm install thepost deploy/helm/thepost -n thepost --set 'imagePullSecrets[0].n
 ```
 
 Тег образа по умолчанию — `appVersion` чарта: установка закреплена за выпуском. Другой тег — `--set image.tag=…`.
+
+Письма в Kubernetes хранятся в S3: чарт задаёт `config.blob.url: s3://thepost-blob`, том пода — временный. В своих
+значениях укажите `config.blob.s3` (адрес, ссылки на ключи, CA) и положите ключи в секрет `thepost/s3` —
+[где лежат письма](#где-лежат-письма-диск-или-s3).
 
 ## Обновление
 
@@ -365,7 +453,8 @@ ansible-playbook -i inventory.yml deploy/ansible/restore.yml -e thepost_restore_
 ```
 
 Плейбук останавливает узел и таймеры копий, возвращает базу на момент `T`, кладёт каталог писем из первой копии,
-сделанной после `T` (без `T` — из последней; другой снимок — `-e thepost_restore_blob_snapshot=<ID>`), поверх текущего, выставляет пароли учётных записей СУБД из OpenBao, запускает узел и проверяет `thepost verify`:
+сделанной после `T` (без `T` — из последней; другой снимок — `-e thepost_restore_blob_snapshot=<ID>`), поверх
+текущего, выставляет пароли учётных записей СУБД из OpenBao, запускает узел и проверяет `thepost verify`:
 если у какого-то письма нет тела, плейбук остановится с ошибкой. Лишние тела (письма, пришедшие после `T`) удалит
 `thepost verify --fix` в том же прогоне, если им больше суток, иначе — позже сам узел (поиск «сирот»). В конце —
 новая полная копия.
@@ -376,26 +465,11 @@ SRS 3.5). Поэтому потерять можно только письма, 
 за последний час), и только при потере самого диска: `thepost verify` покажет их как повреждённые. Пустой или
 пропавший каталог писем таймер не копирует. При потере диска указывайте `T` — момент перед потерей.
 
-**Новый сервер вместо потерянного:**
-
-1. Установите The Post без копирования: `ansible-playbook … smb.yml -e thepost_backup=false`.
-2. Сделайте копии доступными по тем же путям (подключите диск с копиями) или укажите тот же S3.
-3. Положите сохранённые ключи в OpenBao нового сервера:
-
-   ```bash
-   bao secrets enable -path=thepost-backup -version=2 kv
-   bao kv put -mount=thepost-backup pgbackrest cipher_pass=…
-   bao kv put -mount=thepost-backup restic password=…
-   # S3 — как выше: bao kv put -mount=thepost-backup s3 …
-   ```
-
-4. Запустите `restore.yml`, как выше: он сам поставит средства копирования, восстановит базу и письма и включит
-   таймеры; дальше `smb.yml` — как обычно.
-
 ### Новый сервер вместо потерянного
 
 Копия OpenBao (секреты узла, в том числе ключи DKIM) снимается вместе с копией базы — снимок Raft в то же
-хранилище копий. Заранее храните **вне сервера**: `/root/openbao-init.json`, `/etc/openbao/unseal.key` и пароль restic.
+хранилище копий (`thepost_backup_openbao: true`, по умолчанию). Заранее храните **вне сервера**:
+`/root/openbao-init.json`, `/etc/openbao/unseal.key` и пароль restic.
 
 1. Установите новый сервер без копирования и без ожидания готовности узла:
    `ansible-playbook … deploy/ansible/smb.yml -e thepost_backup=false -e thepost_wait_ready=false`. Прогон завершится
@@ -404,7 +478,8 @@ SRS 3.5). Поэтому потерять можно только письма, 
 2. Верните копии по тем же путям и выполните `chown -R postgres:postgres /var/lib/pgbackrest`.
 3. В новом OpenBao заведите только хранилище пароля копий:
    `bao secrets enable -path=thepost-backup -version=2 kv` и
-   `bao kv put -mount=thepost-backup restic password=…` (для S3 — и его ключи). Ключ шифрования pgBackRest вернётся из снимка.
+   `bao kv put -mount=thepost-backup restic password=…` (для S3 — и его ключи). Ключ шифрования pgBackRest
+   вернётся из снимка.
 4. Восстановите: `ansible-playbook … deploy/ansible/restore.yml -e thepost_restore_confirm=true
    -e thepost_restore_openbao=true -e thepost_restore_openbao_init_src=<openbao-init.json>
    -e thepost_restore_openbao_static_key_src=<unseal.key>` (при распечатывании ключами Шамира —
@@ -412,6 +487,11 @@ SRS 3.5). Поэтому потерять можно только письма, 
 5. Обычный прогон `smb.yml` — узел стартует, DKIM подписывает тем же ключом, `thepost verify` — без потерь; ключ TLS
    из снимка прогон сводит с сертификатом сервера (`internal` — новый сертификат к ключу, `files` — свой
    ключ новой версией секрета, `acme` — узел выпускает новый сам).
+
+Без снимка OpenBao (`thepost_backup_openbao: false`) шаг 4 — без переменных `thepost_restore_openbao*`, а на шаге 3 в
+новый OpenBao кладутся оба сохранённых ключа копий: `bao kv put -mount=thepost-backup pgbackrest cipher_pass=…` и
+`bao kv put -mount=thepost-backup restic password=…`. Секреты узла (ключи DKIM и другие) при этом не возвращаются —
+их заводят заново.
 
 ## Проверка подписи
 
