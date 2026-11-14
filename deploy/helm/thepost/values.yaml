@@ -208,6 +208,17 @@ config:
       password: { secret: "thepost/db-owner#password" }
   blob:
     url: s3://thepost-blob
+    # Параметры S3 задайте в своих значениях: без endpoint узел обращается к AWS (region us-east-1), без credentials
+    # берёт ключи из окружения. Канал — только HTTPS. Ключи — только ссылками на секрет OpenBao thepost/s3 (поля
+    # access_key_id, secret_access_key); bootstrap.sh его не создаёт — заведите сами:
+    #   bao kv put -mount=thepost s3 access_key_id=… secret_access_key=…
+    # s3:
+    #   endpoint: https://s3.example.ru:8333
+    #   path_style: true                            # SeaweedFS, MinIO (по умолчанию true)
+    #   credentials:
+    #     access_key_id: { secret: "thepost/s3#access_key_id" }
+    #     secret_access_key: { secret: "thepost/s3#secret_access_key" }
+    #   tls: { ca_file: /etc/thepost/tls/ca.crt }   # свой CA — ca.crt секрета tls.secretName; не задан — системные корни
   tls:
     cert_file: /etc/thepost/tls/tls.crt
     # Ключ — только из OpenBao (решение 100); новая версия секрета подхватывается без перезапуска.
