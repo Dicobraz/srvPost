@@ -49,7 +49,7 @@
 | 465, 587 | отправка с входом (TLS, STARTTLS) | `openssl s_client -connect <сервер>:465` | клиенты не отправляют | [INSTALL](INSTALL.md#настройка-клиентов) |
 | 993, 143 | IMAP (TLS, STARTTLS) | `openssl s_client -connect <сервер>:993` | клиенты не читают почту | [INSTALL](INSTALL.md#настройка-клиентов) |
 | 4190 | ManageSieve — правила фильтрации (STARTTLS) | `openssl s_client -connect <сервер>:4190 -starttls sieve` | клиенты не меняют правила фильтрации | [INSTALL](INSTALL.md#настройка-клиентов) |
-| 443 | JMAP, автонастройка | `curl -si https://<сервер>/.well-known/jmap` → `401` | JMAP-клиенты не подключаются | [deploy/README](../deploy/README.md#эталон-smb-в-контейнерах-профиль-smb) |
+| 443 | JMAP, календари и контакты (CalDAV, CardDAV, путь `/dav/`), автонастройка | `curl -si https://<сервер>/.well-known/jmap` → `401`; `dav.listener` | клиенты JMAP, календарей и контактов не подключаются | [deploy/README](../deploy/README.md#эталон-smb-в-контейнерах-профиль-smb) |
 | 80 | только выпуск и продление сертификата Let's Encrypt (встроенный ACME, HTTP-01, `http.acme.listen`; `thepost_tls_mode: acme`) | `curl -I http://<сервер>/` во время выпуска | сертификат не выпускается: при первом запуске узел не стартует («acme: сертификат … не выпущен»), позже — сертификат не продлевается | [INSTALL](INSTALL.md#рабочий-сервер-ansible), [`acme.rs`](../crates/thepost/src/acme.rs) |
 
 Порты ниже 1024 слушает только systemd (юниты `thepost-*.socket`, решение 102) и передаёт узлу готовые сокеты — у
@@ -85,6 +85,7 @@
 | DKIM: `smtp.dkim.domains` и `TXT <селектор>._domainkey` | `dns.dkim.<домен>` | подпись не настроена — `WARN`; ключ не опубликован — `FAIL`: подписанные письма не пройдут проверку | там же |
 | `TXT _dmarc` | `dns.dmarc` | нет — `WARN`: подделку адреса не отклонят | там же |
 | MTA-STS | `dns.mta_sts` | нет — `WARN` | там же |
+| Календари и контакты (роль `dav`): `SRV _caldavs._tcp` и `_carddavs._tcp` домена → узел и порт DAV, `TXT "path=/dav/"` (RFC 6764); то же для доменов `smtp.dkim.domains` | `dns.caldavs.<домен>`, `dns.carddavs.<домен>` | нет SRV или TXT — `WARN` с готовыми строками зоны: клиент не найдёт сервер по адресу почты | там же, [INSTALL](INSTALL.md#dns-домена) |
 | `smtp.hostname` задан, у него есть `A`/`AAAA` | `dns.ptr` | нет имени — `WARN`: приветствие и PTR не совпадут | там же |
 | PTR исходящего адреса (`smtp.queue.source_ip` или адрес `smtp.hostname`) = `smtp.hostname` | `dns.ptr`, `dig -x <адрес>` | нет PTR или другое имя — `WARN`: получатели отклоняют или считают спамом | там же |
 | Enterprise: адреса egress — в SPF и PTR | `dns.spf`, `dns.ptr` | письма с этих адресов не пройдут SPF | [APP-Z З.3](spec/APP-Z.md) |
@@ -112,7 +113,7 @@ PTR задаёт владелец адреса (провайдер, хостин
 | Способ выпуска — `thepost_tls_mode`: `acme` (по умолчанию; встроенный клиент, порт 80, DNS на ВМ), `files` (свои PEM: цепочка — файл, ключ плейбук загружает в OpenBao), `internal` (только стенд) | прогон плейбука | плейбук отклоняет неверный режим или пустой `thepost_acme_email` | [роль `thepost`](../deploy/ansible/roles/thepost/defaults/main.yml) |
 | Клиенты — TLS 1.3; TLS 1.2 только настройкой `tls.min_version: "1.2"` | `openssl s_client -tls1_2 -connect <сервер>:993` | старые клиенты без TLS 1.3 не подключатся | [S6 п. 6.2](spec/S6.md), [`tls.rs`](../crates/tp-platform/src/tls.rs) |
 | Внутренние каналы (PostgreSQL, S3, OpenBao, служебный HTTP) — только TLS с проверкой имени | `database.tls`, `secrets.config` | открытый канал — только профиль `dev` (`allow_plaintext`) с `WARN` | [S6 п. 6.2](spec/S6.md), [решение 2026-10-30](decisions/2026-10-30-owner-answers.md) |
-| Эталон SMB: внутренний CA `thepost_pki` (CA — 10 лет, сертификат служб — 825 сут.). Прогон плейбука перевыпускает сертификат тем же CA, если до конца срока < 90 сут. (`thepost_pki_renew_before`); CA сам не перевыпускается: истёк — плейбук останавливается с инструкцией (удалить `/etc/thepost/pki`, повторить прогон, раздать новый `ca.pem` клиентам вне ВМ) | `openssl x509 -enddate -noout -in /etc/thepost/pki/internal.pem` | по истечении — внутренние каналы не установятся (проверка в `doctor` — APP-25) | [роль `thepost_pki`](../deploy/ansible/roles/thepost_pki/defaults/main.yml), [решение 27](decisions/2026-11-11-stage2-followups.md) |
+| Эталон SMB: внутренний CA `thepost_pki` (CA — 10 лет, сертификат служб — 825 сут.). Прогон плейбука перевыпускает сертификат тем же CA, если до конца срока < 90 сут. (`thepost_pki_renew_before`); CA сам не перевыпускается: истёк — плейбук останавливается с инструкцией (удалить `/etc/thepost/pki`, повторить прогон, раздать новый `ca.pem` клиентам вне ВМ) | `pki.database_ca`, `pki.secrets_ca`, `pki.node`; `openssl x509 -enddate -noout -in /etc/thepost/pki/internal.pem` | осталось < 60 сут. — `WARN`, истёк — `FAIL`: внутренние каналы не установятся | [роль `thepost_pki`](../deploy/ansible/roles/thepost_pki/defaults/main.yml), [`doctor.rs`](../crates/thepost/src/doctor.rs), [решение 27](decisions/2026-11-11-stage2-followups.md) |
 
 ## Kerberos (GSSAPI)
 
@@ -127,6 +128,7 @@ ManageSieve. JMAP, DAV и Admin API по Kerberos не входят — прин
 | Ключи этих принципалов — в одном keytab узла: `ipa-getkeytab -p imap/mail.corp.example -k /etc/thepost/thepost.keytab` (так же `smtp/…`, `sieve/…`); MIT — `kadmin -q 'ktadd -k thepost.keytab …'`; AD — `ktpass` или `msktutil`. Билет одной службы для другой не принимается, в том числе без `hostname` в конфигурации | `klist -k /etc/thepost/thepost.keytab` → три принципала (`smtp/`, `imap/`, `sieve/`; с POP3 — четыре) | нет ключа службы — отказ входа в ней (IMAP `NO [AUTHENTICATIONFAILED]`, SMTP `535 5.7.8`, ManageSieve `NO`), хотя билет другой службы есть; в журнале (уровень debug) — `GSSAPI: security context rejected` | [AUTH-05](manual-tests/AUTH-05.md), [`gssapi.rs`](../crates/tp-auth/src/gssapi.rs) |
 | Keytab читает только служба. ВМ — `/etc/thepost/thepost.keytab`, `0640 root:thepost` (Ansible — из `thepost_gssapi_keytab_src` на управляющей машине; вручную — `install -m 0640 -o root -g thepost`; вариант AUTH-05 — `0600`, владелец `thepost` — тоже годится). Kubernetes — секрет с ключом `keytab` в `gssapi.keytabSecret`: чарт монтирует его в `/etc/thepost/krb5/thepost.keytab` (`0440`, только чтение) | `stat -c '%a %U:%G' /etc/thepost/thepost.keytab` | keytab доступен другим учётным записям — ими можно выдать себя за почтовые службы; служба его не читает — отказ входа GSSAPI | [роль `thepost`](../deploy/ansible/roles/thepost/tasks/main.yml), [чарт](../deploy/helm/thepost/values.yaml), [deploy/README](../deploy/README.md#вход-по-kerberos-gssapi) |
 | MIT Kerberos берёт keytab только из `KRB5_KTNAME`: в окружении службы `KRB5_KTNAME=FILE:/etc/thepost/thepost.keytab` (Ansible — drop-in `thepost.service.d/gssapi.conf`; вручную — `systemctl edit thepost`; Helm задаёт сам), `auth.gssapi.keytab` — тот же путь: поле только сверяется с переменной | `systemctl show thepost -p Environment` | `auth.gssapi.keytab` задан, а переменная другая — запуск останавливается: `gssapi.keytab: set KRB5_KTNAME=FILE:… for the process`; файла нет — `gssapi.keytab: … is not a file` | [`gssapi.rs`](../crates/tp-auth/src/gssapi.rs), [`sections.rs`](../crates/thepost/src/sections.rs) |
+| Кэш повторов Kerberos — в каталоге узла: в окружении службы `KRB5RCACHEDIR=/var/lib/thepost/krb5rcache` (Ansible — тот же drop-in `gssapi.conf`; вручную — `systemctl edit thepost`; Helm задаёт сам). Каталог узел создаёт сам при `auth.gssapi` | `systemctl show thepost -p Environment` | без переменной MIT Kerberos пишет кэш в `/var/tmp`, а Landlock разрешает узлу только свой каталог | [`confine/mod.rs`](../crates/tp-sys/src/confine/mod.rs), [`startup.rs`](../crates/thepost/src/startup.rs), [deploy/README](../deploy/README.md#вход-по-kerberos-gssapi) |
 | Области Kerberos сопоставлены почтовым доменам: `auth.gssapi.realms` (`CORP.EXAMPLE: corp.example`); области нет в списке — домен входа — её имя в нижнем регистре | `kinit alice@CORP.EXAMPLE`, затем `imtest -m GSSAPI -a alice@corp.example mail.corp.example` → `Authenticated` ([AUTH-05](manual-tests/AUTH-05.md) «Вход») | имя входа не совпало с учётной записью — отказ входа | [`gssapi.rs`](../crates/tp-auth/src/gssapi.rs) |
 | Часы узла, KDC и клиентов синхронизированы ([Время](#время)) | `time.clock_skew`; `chronyc tracking` | расхождение больше допуска Kerberos (MIT по умолчанию — 5 мин) — билеты отклоняются | MIT Kerberos, `clockskew` в `krb5.conf` |
 
@@ -135,7 +137,7 @@ ManageSieve. JMAP, DAV и Admin API по Kerberos не входят — прин
 | Требование | Проверка | При нарушении | Источник |
 |---|---|---|---|
 | PostgreSQL 16+ (или совместимая по протоколу и диалекту СУБД) | `database.server_version` (порог `meta.doctor.min_server_version`, 160000) | `FAIL` | [S3 п. 3.1](spec/S3.md) |
-| Кодировка базы UTF8, `LC_CTYPE` UTF-8 (`C.UTF-8` или `<язык>.UTF-8`, не `C`/`POSIX`) | `psql -d thepost -Atc "SELECT pg_encoding_to_char(encoding), datctype FROM pg_database WHERE datname = current_database()"` → `UTF8\|C.UTF-8`; проверка в `doctor` — APP-24 | `lower()` не переводит кириллицу: порядок и уникальность имён входа расходятся. Кодировку базы после создания не сменить — только [пересоздание](#пересоздать-базу-в-utf-8); эталоны останавливаются с ошибкой «Пересоздайте базу в UTF-8» | [решения 23, 29](decisions/2026-11-11-stage2-followups.md) |
+| Кодировка базы UTF8, `LC_CTYPE` UTF-8 (`C.UTF-8` или `<язык>.UTF-8`, не `C`/`POSIX`) | `psql -d thepost -Atc "SELECT pg_encoding_to_char(encoding), datctype FROM pg_database WHERE datname = current_database()"` → `UTF8\|C.UTF-8`; `database.locale` | `FAIL`; `lower()` не переводит кириллицу: порядок и уникальность имён входа расходятся. Кодировку базы после создания не сменить — только [пересоздание](#пересоздать-базу-в-utf-8); эталоны останавливаются с ошибкой «Пересоздайте базу в UTF-8» | [`doctor.rs`](../crates/thepost/src/doctor.rs), [решения 23, 29](decisions/2026-11-11-stage2-followups.md) |
 | Без сторонних расширений | `database.extensions` | `WARN`: продукт их не использует; HA и перенос базы не должны от них зависеть | [решение 1](decisions/2026-11-11-stage2-followups.md), [S3 п. 3.1](spec/S3.md) |
 | Канал — TLS с проверкой сервера: `sslmode=verify-full`, `pg_hba` — только `hostssl`, `scram-sha-256` | `database.tls` | `verify-full` без TLS на сервере — `FAIL` (участок PgBouncer → PostgreSQL открыт); другой `sslmode` — `WARN` | [`tp-meta/src/doctor.rs`](../crates/tp-meta/src/doctor.rs), [роль `postgresql`](../deploy/ansible/roles/postgresql/templates/pg_hba.conf.j2) |
 | Раздельные учётные записи: `thepost_owner` (миграции), `thepost` (член `thepost_app`), `thepost_readonly`; все без SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE, REPLICATION | `database.rls`, `database.node_role` | SUPERUSER или BYPASSRLS — `FAIL`: RLS не изолирует организации; узел от владельца схемы — `FAIL`; права вручную — `WARN` | [deploy/README](../deploy/README.md#postgresql-учётные-записи), [DEP-08](manual-tests/DEP-08.md) |
@@ -170,21 +172,28 @@ ManageSieve. JMAP, DAV и Admin API по Kerberos не входят — прин
 | Политика `thepost`: чтение `thepost/*`, кроме `db-readonly`; запись — только `thepost/tls` (ключ TLS от встроенного ACME); продление своего токена | `bao policy read thepost`; [DEP-08](manual-tests/DEP-08.md) шаг 4 | лишние права — узел читает пароль только чтения | [`thepost-policy.hcl`](../deploy/openbao/thepost-policy.hcl) |
 | Вход узла — AppRole (`role_id`, `secret_id` через `LoadCredential=`) или Kubernetes auth | `secrets.login` | `FAIL`: секреты не читаются | [deploy/README](../deploy/README.md#установка-под-systemd-smb-enterprise-вм) |
 | Токен узла — с продлением или сроком ≥ 1 ч (`secrets.doctor.min_token_ttl`); эталон — TTL 1 ч, максимум 24 ч | `secrets.token` | бессрочный или короткий без продления — `WARN` | [`secrets.rs`](../crates/tp-platform/src/secrets.rs) |
-| Секреты: `thepost/db`, `thepost/db-owner`, `thepost/db-readonly`, `thepost/tls` (ключ TLS; при `acme` его пишет узел) и `thepost/s3` для S3 | `secrets.refs` | ссылка на отсутствующий секрет — `FAIL` | [deploy/README](../deploy/README.md#профиль-tls-по-умолчанию) |
+| Секреты: `thepost/db`, `thepost/db-owner`, `thepost/db-readonly`, `thepost/tls` (ключ TLS; при `acme` его пишет узел); при письмах в S3 — `thepost/s3` (`access_key_id`, `secret_access_key`) | `secrets.refs` | ссылка на отсутствующий секрет — `FAIL` | [deploy/README](../deploy/README.md#профиль-tls-по-умолчанию) |
 | Распечатывание после перезапуска — автоматическое (PKCS#11/TPM, KMS); ключ в файле — по умолчанию | `secrets.seal` | `static` — `WARN` (ключ на сервере, риск 16); `shamir` — `WARN`: почта стоит до ручного `bao operator unseal` | [решение 2026-10-30](decisions/2026-10-30-config-events-secrets.md), [APP-Z З.1](spec/APP-Z.md) |
 | Ключи восстановления и root-токен из `/root/openbao-init.json` перенесены в надёжное место и удалены с сервера | `ls /root/openbao-init.json` — нет файла | компрометация сервера раскрывает root-токен | [INSTALL](INSTALL.md#рабочий-сервер-ansible) |
 | Enterprise: кластер Raft из 3 узлов | `bao operator raft list-peers` | кворум 2 из 3: потеря двух — секреты недоступны | [APP-Z З.2, З.3](spec/APP-Z.md) |
 
 ## Хранилище писем
 
+Тела писем лежат на локальном диске или в S3 — выбирает `blob.url`. На одной ВМ (SMB: `smb.yml`, Compose, пресет
+`all.yaml`) по умолчанию диск — `file:///var/lib/thepost/blob`; на нескольких узлах (чарт Helm, пресет
+`mailbox.yaml`, `small-enterprise.yml`) — S3, эталон — SeaweedFS. Как настроить —
+[INSTALL](INSTALL.md#где-лежат-письма-диск-или-s3).
+
 | Требование | Проверка | При нарушении | Источник |
 |---|---|---|---|
-| `blob.url`: `file:///<каталог>` (SMB) или `s3://<бакет>` (Enterprise) | `blob.open` | `FAIL` | [`sections.rs`](../crates/thepost/src/sections.rs) |
+| `blob.url`: `file:///<каталог>` (абсолютный путь) или `s3://<бакет>[/<префикс>]`; каталог, бакет и префикс — только в нём | `thepost config check`; `blob.open`: `local <каталог>` или `s3 <бакет>` | другой вид адреса, `blob.local.root`, `blob.s3.bucket` или `blob.s3.prefix` — ошибка проверки конфигурации; хранилище не открылось — `FAIL` | [`sections.rs`](../crates/thepost/src/sections.rs), [`infra.rs`](../crates/thepost/src/infra.rs) |
 | Запись, чтение и удаление пробного объекта | `blob.write`, `blob.read`, `blob.delete` (по 10 с, `doctor.blob_timeout`) | `FAIL`: письма не принимаются | [`doctor.rs`](../crates/thepost/src/doctor.rs) |
 | Локально: POSIX-каталог (может быть общим для узлов), атомарный `rename`, `fsync` (`blob.local.fsync: true`) | `blob.write` | без `fsync` — потеря объектов при сбое питания | [`tp-blob/src/local.rs`](../crates/tp-blob/src/local.rs) |
 | Каталог вне `/var/lib/thepost` — в `ReadWritePaths=` юнита (`systemctl edit thepost`) | `blob.write` в окружении службы | запись запрещена `ProtectSystem=strict` | [deploy/README](../deploy/README.md#установка-под-systemd-smb-enterprise-вм) |
 | Место: NVMe, объём почты × 1,3 (SMB) | `df -h /var/lib/thepost` | при заполнении письма не принимаются | [S8](spec/S8.md) |
-| S3: `s3.endpoint` по `https://` с `s3.tls.ca_file`; `path_style: true` для SeaweedFS и MinIO; ключи — из OpenBao (`thepost/s3`) | `blob.open`, `blob.write` | `FAIL` | [`tp-blob/src/s3.rs`](../crates/tp-blob/src/s3.rs) |
+| S3: `blob.s3.endpoint` — только `https://` (`http://` — лишь профиль `dev` с `blob.s3.tls.allow_plaintext`); свой CA — `blob.s3.tls.ca_file`, без него — системные корни; `path_style: true` (по умолчанию) для SeaweedFS и MinIO | `thepost config check`; `blob.open`, `blob.write` | `http://` — ошибка проверки конфигурации; сертификат не проверен — `FAIL` | [`tp-blob/src/s3.rs`](../crates/tp-blob/src/s3.rs) |
+| S3: ключи доступа — ссылки `blob.s3.credentials` на секрет OpenBao `thepost/s3#access_key_id` и `thepost/s3#secret_access_key` (`bao kv put -mount=thepost s3 …`; `small-enterprise.yml` создаёт сам) | `secrets.refs`; `blob.open` | секрета нет — `FAIL`, узел не запускается: `S3: credentials.<поле>: secret … not found` | [`tp-blob/src/s3.rs`](../crates/tp-blob/src/s3.rs), [`small-enterprise.yml`](../deploy/ansible/small-enterprise.yml) |
+| Kubernetes: только S3 — том `/var/lib/thepost` пода временный (`emptyDir`); чарт задаёт `config.blob.url: s3://thepost-blob`, адрес и ключи (`config.blob.s3`) — в своих значениях | `kubectl exec … -- thepost doctor`: `blob.open` — `s3 <бакет>` | с `file://` письма пропадут при пересоздании пода | [чарт](../deploy/helm/thepost/values.yaml) |
 | Enterprise: SeaweedFS — 3 master, ≥ 3 volume, ≥ 2 filer; малый Enterprise — две копии объекта на трёх ВМ | средства SeaweedFS | потеря объектов при отказе узла хранилища | [APP-Z](spec/APP-Z.md) |
 
 ## Rspamd и антивирус
@@ -202,7 +211,8 @@ ManageSieve. JMAP, DAV и Admin API по Kerberos не входят — прин
 | Требование | Проверка | При нарушении | Источник |
 |---|---|---|---|
 | Открытых файлов — `LimitNOFILE=1048576` (юнит) | `systemctl show thepost -p LimitNOFILE`, `cat /proc/$(pidof thepost)/limits` | отказ новых соединений при исчерпании | [`thepost.service`](../deploy/systemd/thepost.service) |
-| Размер письма — `smtp.max_message_size` (по умолчанию 10 МиБ) | `config.yaml` | письма больше отклоняются | [`tp-smtp/src/config.rs`](../crates/tp-smtp/src/config.rs) |
+| Размер письма — `smtp.limits.max_message_size` (по умолчанию 50 МиБ) | `config.yaml` | письма больше отклоняются | [`tp-smtp/src/config.rs`](../crates/tp-smtp/src/config.rs) |
+| Лимиты отправки — не `config.yaml`, а политика организации, домена или ящика: `send_per_hour` (без политики — 1000 писем в час), `rcpts_per_hour` (2000 адресатов в час), `max_recipients` (100 получателей в письме); там же селектор DKIM и набор фильтров Milter | `thepost admin policy get` | сверх лимита отправка отклоняется | [deploy/README](../deploy/README.md#одна-конфигурация-smb-решение-105), [ADMIN-GUIDE](ADMIN-GUIDE.md#политики--policy) |
 
 Для Compose и Helm лимит открытых файлов не задан — действует значение среды.
 
@@ -222,7 +232,9 @@ ManageSieve. JMAP, DAV и Admin API по Kerberos не входят — прин
 
 ## Резервное копирование
 
-Продукт копий не делает — их делает СРК заказчика ([S5 п. 5.3](spec/S5.md)).
+Продукт копий не делает — их делает СРК заказчика ([S5 п. 5.3](spec/S5.md)). Эталон SMB (`smb.yml`) настраивает
+копии готовыми средствами сам (pgBackRest, restic или rsync, снимок OpenBao; `thepost_backup: true`) —
+[INSTALL](INSTALL.md#резервное-копирование-и-восстановление).
 
 | Требование | Проверка | При нарушении | Источник |
 |---|---|---|---|
@@ -272,7 +284,8 @@ Dr.Web для почтовых серверов его поддерживают)
            - { name: antivirus, address: "127.0.0.1:7358", direction: inbound }
    ```
 3. Повторите `ansible-playbook … smb.yml`.
-4. Проверка: `sudo -u thepost thepost doctor` — фильтр `antivirus` доступен; тестовое письмо с EICAR отклоняется.
+4. Проверка: `ss -ltn | grep 7358` — антивирус слушает; тестовое письмо с EICAR отклоняется; в принятых письмах нет
+   заголовка `X-ThePost-Milter: antivirus; unavailable` (`doctor` фильтры Milter не проверяет).
 
 Без антивируса почта работает, вложения проверяет только Rspamd (без сигнатур вирусов).
 
