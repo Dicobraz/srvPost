@@ -1,5 +1,6 @@
 //! META-21: группы рассылки на PostgreSQL — общий набор `tp_testkit::suite::group_store` (вложенность, циклы,
 //! изоляция организаций) и раскрытие глубокой вложенности одним запросом.
+//! META-44 (CTR-43): очередь модерации правил потока — общий набор `tp_testkit::suite::rule_moderation`.
 
 mod common;
 
@@ -7,7 +8,11 @@ use tp_contracts::groups::{DistributionGroup, GroupMember, GroupStore, SenderRes
 use tp_contracts::meta::{AccountKind, AccountStore, AccountUpsert};
 use tp_contracts::{AccountId, Error, GroupId, TenantId};
 use tp_meta::PgMeta;
-use tp_testkit::suite::{ExternalIdFixture, GroupFixture, account_external_id, group_store};
+use tp_testkit::suite::{
+    ExternalIdFixture, GroupFixture, RuleModerationFixture, account_external_id, group_store,
+    rule_moderation,
+};
+use tp_testkit::{MemModeration, ModerationDecision};
 
 async fn accounts(meta: &PgMeta, tenant: TenantId) -> [AccountId; 4] {
     let (domain, name) = common::domain(meta.pool(), tenant).await;
@@ -47,6 +52,29 @@ async fn passes_contract_suite() {
         foreign_tenant: common::tenant(meta.pool()).await,
     };
     group_store(&meta, &fx).await;
+}
+
+/// CTR-43 (META-44): письма правил потока в очереди модерации на PostgreSQL — общий набор; решение без группы
+/// доставляет исходным получателям, отказ — DSN отправителю.
+#[tokio::test]
+async fn rule_moderation_suite() {
+    let Some(meta) = common::meta().await else {
+        return;
+    };
+    let m = MemModeration::new();
+    let fx = RuleModerationFixture {
+        tenant: common::tenant(meta.pool()).await,
+        moderator: AccountId::new(),
+        recipients: vec!["a@example.org".into(), "b@example.net".into()],
+    };
+    let (approved, declined) = rule_moderation(&meta, &m, &fx).await;
+    assert_eq!(
+        m.decisions(),
+        [
+            ModerationDecision::Deliver(approved, None),
+            ModerationDecision::Reject(declined, "not allowed".into()),
+        ]
+    );
 }
 
 /// CTR-32: учётная запись по `external_id`; переименование входа не теряет членство в группе.

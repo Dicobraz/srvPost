@@ -204,6 +204,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "branding",
         include_str!("../migrations/0043_branding.sql"),
     ),
+    (
+        44,
+        "flow moderation",
+        include_str!("../migrations/0044_flow_moderation.sql"),
+    ),
 ];
 
 /// Мигратор схемы ядра.
