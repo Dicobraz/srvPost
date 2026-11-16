@@ -664,6 +664,13 @@
 | [APP-56](APP-56.md) | узел: OIDC с ключом из хранилища секретов | app | A | app-50 | done | AUTH-17 |
 | [CTR-72](CTR-72.md) | `AccountStore::by_external_id` — обязательный метод | contracts | B | contracts-48 | done | — |
 
+## Ф1 · Находки беты `beta-20261114.4` на стенде school-99 (16.11) — этап 2 (FIX — срочно)
+
+| Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
+|---|---|---|---|---|---|---|
+| [FIX-09](FIX-09.md) | systemd-юнит openbao не переживает нечистую остановку: drop-in в роли | deploy | A | deploy-45 | ready | — |
+| [FIX-10](FIX-10.md) | doctor — ретрай и явные причины при медленном secret store; без ложного каскада | app | A | app-77 | ready | — |
+
 ## Ф2. Совместная работа (≈5 мес.)
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
@@ -918,16 +925,23 @@
 | [ADM-42](ADM-42.md) | псевдонимы и скрытие из книги «Организация» учётной записи без LDAP — Admin API, CLI, консоль | admin | B | — |
 | [ADM-43](ADM-43.md) | организация должна существовать; ошибки разбора запроса — 400 problem+json | admin | B | — |
 | [APP-74](APP-74.md) | узел — очередь исходящей почты подключена к Admin API | app | A | META-82,ADM-45 |
+| [APP-80](APP-80.md) | `thepost admin tui` правит config.yaml узла; ключ `--theme` | app | A | TUI-04,PLT-35,TUI-11 |
 | [AUTH-09](AUTH-09.md) | пароли приложений на контракте AppPasswordStore | auth | A | CTR-22 |
 | [CTR-22](CTR-22.md) | контракт AppPasswordStore (пароли приложений) | contracts | B | CTR-19,AUTH-02 |
 | [CTR-84](CTR-84.md) | контракт проверки прав на коллекции — `SharingAuthorizer` | contracts | B | CTR-48 |
+| [CTR-92](CTR-92.md) | матрица «кто — что» приёма iTIP — тип отправителя вместо источника | contracts | B | CTR-47 |
 | [DAV-36](DAV-36.md) | `dav.schedule_keep_processed` по умолчанию включён | dav | A | DAV-32,APP-53 |
 | [DAV-37](DAV-37.md) | GAL: почтовые контакты в книге «Организация» | dav | B | META-80,DAV-27 |
 | [DAV-40](DAV-40.md) | бронь ресурса не снимается приглашением с чужим UID | dav | A | — |
 | [DAV-41](DAV-41.md) | приглашение — только получателю из `ATTENDEE` | dav | A | — |
 | [DAV-42](DAV-42.md) | организатор письма извне с адресом организации — внешний для бронирования | dav | A | — |
+| [DAV-43](DAV-43.md) | приём iTIP по матрице решения 123, бронирование — только внутри организации | dav | B | CTR-92,DAV-19,DAV-41,DAV-42 |
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
+| [PLT-35](PLT-35.md) | YAML ↔ JSON для правки config.yaml вне загрузчика | platform | A | — |
+| [PLT-36](PLT-36.md) | переменные THEPOST_* вне схемы не ломают проверку конфигурации | platform | A | — |
 | [SMTP-47](SMTP-47.md) | результаты шлюза — печать ARC домена шлюза и `header.from` письма | smtp | A | SMTP-20,SMTP-33 |
 | [SMTP-48](SMTP-48.md) | iTIP — письмо с несколькими заголовками `From` не применяется | smtp | A | SMTP-33 |
+| [SMTP-49](SMTP-49.md) | тип отправителя письма с iTIP — по пути и домену `From` | smtp | B | CTR-92,SMTP-33,SMTP-36 |
+| [TUI-11](TUI-11.md) | атомарная запись config.yaml из текстового интерфейса | tui | A | TUI-04 |
