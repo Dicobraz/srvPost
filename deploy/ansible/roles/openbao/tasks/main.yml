@@ -116,6 +116,17 @@
   when: openbao_seal == 'pkcs11'
   notify: Restart openbao
 
+# FIX-09 (issue #4): дистрибутивный юнит (KillMode=process) не переживает нечистую остановку — детали в шаблоне.
+# Без условия по дистрибутиву: deb и rpm ставят один и тот же пакетный юнит, семантика systemd не зависит от ОС.
+- name: Drop-in for openbao.service (survive unclean shutdown, FIX-09)
+  ansible.builtin.template:
+    src: override.conf.j2
+    dest: "/etc/systemd/system/{{ openbao_service }}.service.d/override.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart openbao
+
 - name: Write OpenBao configuration
   ansible.builtin.template:
     src: openbao.hcl.j2
@@ -202,3 +213,39 @@
 - name: Configure OpenBao for The Post
   ansible.builtin.include_tasks: configure.yml
   when: openbao_init_node
+
+# FIX-09 (issue #4, DEP-44): проверка KillMode=control-group — после остановки юнита в контрольной группе не должно
+# остаться процессов (иначе переживший bao держит flock bolt-файла raft). По умолчанию выключено: остановка и запуск
+# меняют состояние. Прогон на стенде — с -e openbao_stop_check=true.
+- name: Check openbao stop leaves no processes in the control group
+  when: openbao_stop_check
+  block:
+    - name: Stop OpenBao (stop check)
+      ansible.builtin.systemd_service:
+        name: "{{ openbao_service }}"
+        state: stopped
+
+    # systemd-cgls печатает заголовок юнита (строка начинается с буквы: «Unit openbao.service …»); строки-процессы
+    # начинаются с PID после символов дерева и отступов. У остановленного юнита контрольная группа исчезает целиком —
+    # systemd-cgls тогда завершается с ошибкой, это тоже «процессов нет».
+    - name: List processes left in the openbao control group
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          systemd-cgls --no-pager --unit {{ (openbao_service ~ '.service') | quote }} 2>/dev/null \
+            | grep -E '^[^A-Za-z]*[0-9]+' || true
+        executable: /bin/bash
+      register: openbao_stop_leftover
+      changed_when: false
+
+    - name: Assert no bao processes remain in the control group
+      ansible.builtin.assert:
+        that: openbao_stop_leftover.stdout | trim | length == 0
+        fail_msg: >-
+          После остановки {{ openbao_service }} в контрольной группе остались процессы
+          (KillMode не control-group?): {{ openbao_stop_leftover.stdout | trim }}
+  always:
+    - name: Start OpenBao (stop check)
+      ansible.builtin.systemd_service:
+        name: "{{ openbao_service }}"
+        state: started

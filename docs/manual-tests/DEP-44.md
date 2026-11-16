@@ -34,3 +34,18 @@ Ansible в отдельном контейнере (`community.docker`); узе�
 | 8 | как ожидается |
 | 9 | как ожидается (`current_version 1` после второго запуска) |
 | 10 | как ожидается |
+
+## FIX-09: openbao переживает нечистую остановку (drop-in systemd, issue #4)
+
+Воспроизведено на этом стенде (school-99, бета `beta-20261114.4`): после жёсткого рестарта контейнера узла
+`openbao.service` не стартует — оставшийся процесс `bao` (дистрибутивный `KillMode=process`) держит flock
+bolt-файла raft, старты падают `failed to open bolt file: timeout`, после `StartLimitBurst=3` юнит в `failed`,
+`thepost` не поднимается. Нужно: роль `openbao` с drop-in `/etc/systemd/system/openbao.service.d/override.conf`
+(`KillMode=control-group`, `TimeoutStartSec=5min`, `StartLimitIntervalSec=0`). Шаги 1–8 выше пройдены.
+
+| # | Шаг | Ожидание |
+|---|---|---|
+| 11 | `smb.yml` (после обновления роли) | `failed=0`; файл drop-in на месте, содержимое — три директивы |
+| 12 | `systemctl cat openbao`; `systemctl show openbao -p KillMode -p TimeoutStartUSec -p StartLimitIntervalUSec` | `KillMode=control-group`, `TimeoutStartUSec=5min`, `StartLimitIntervalUSec=0`; `systemctl is-active openbao thepost` — `active` |
+| 13 | `smb.yml -e openbao_stop_check=true`; затем ещё раз `smb.yml` | проверка: после остановки юнита в контрольной группе нет процессов (`systemd-cgls`), openbao снова `active`, `failed=0`; повторный прогон без флага — `changed=0` |
+| 14 | `docker restart <узел>` (жёсткий рестарт контейнера); дождаться подъёма | узел поднимается сам, без ручных `kill`/`reset-failed`; `systemctl is-active openbao thepost` — `active active`; в журнале нет «remains running after unit stopped» |

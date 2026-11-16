@@ -16,6 +16,10 @@ openbao_service: openbao
 openbao_user: openbao
 openbao_config_dir: /etc/openbao
 openbao_data_dir: /opt/openbao/data
+# Проверка остановки юнита (FIX-09, DEP-44): true — в конце прогона роль останавливает openbao, убеждается, что
+# в контрольной группе не осталось процессов (KillMode=control-group, systemd-cgls), и запускает его снова.
+# По умолчанию false — повторный прогон ничего не меняет (проверка останавливает и запускает службу).
+openbao_stop_check: false
 
 # Адрес API для узлов thepost и для самой роли; имя — в SAN сертификата.
 openbao_api_addr: "https://{{ ansible_fqdn }}:8200"
