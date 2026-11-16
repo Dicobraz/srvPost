@@ -4,14 +4,19 @@
 //! читается такой, какой записана; [`GroupStore::put`] заменяет её целиком одной транзакцией.
 //! Раскрытие — один запрос с рекурсивным CTE: `UNION` (без `ALL`) посещает каждую группу один раз, поэтому
 //! циклы не зацикливают; неизвестные вложенные группы не дают участников.
+//!
+//! Очередь модерации — одна для групп и правил потока (CTR-43, META-44): письмо правила — без группы, источник
+//! (имя правила), снимок модераторов и исходные получатели хранятся в колонках строки `group_held`.
 
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
+use sqlx::types::Json;
 use sqlx::{FromRow, PgConnection};
 use time::OffsetDateTime;
 use tp_contracts::groups::{
-    DistributionGroup, GroupMember, GroupStore, HeldCursor, HeldMessage, SenderRestriction,
+    DistributionGroup, GroupMember, GroupStore, HeldCursor, HeldMessage, HoldSource, Moderator,
+    SenderRestriction,
 };
 use tp_contracts::{AccountId, BlobHash, BlobKey, Error, Gen, GroupId, HeldId, Result, TenantId};
 use uuid::Uuid;
@@ -42,7 +47,8 @@ struct LinkRow {
 #[derive(FromRow)]
 struct HeldRow {
     held_id: Uuid,
-    group_id: Uuid,
+    group_id: Option<Uuid>,
+    rule: Option<String>,
     sender: String,
     sender_account: Option<Uuid>,
     message_id: Option<String>,
@@ -50,10 +56,12 @@ struct HeldRow {
     blob_gen: i64,
     size: i64,
     held_at: OffsetDateTime,
+    moderators: Json<Vec<Moderator>>,
+    recipients: Vec<String>,
 }
 
-const HELD_COLUMNS: &str =
-    "held_id, group_id, sender, sender_account, message_id, blob_hash, blob_gen, size, held_at";
+const HELD_COLUMNS: &str = "held_id, group_id, rule, sender, sender_account, message_id, blob_hash, \
+                           blob_gen, size, held_at, moderators, recipients";
 
 impl HeldRow {
     fn into_message(self, tenant: TenantId) -> Result<HeldMessage> {
@@ -63,10 +71,14 @@ impl HeldRow {
             .map_err(|_| Error::internal("длина хэша в group_held"))?;
         Ok(HeldMessage {
             id: HeldId::from_uuid(self.held_id),
-            group: Some(GroupId::from_uuid(self.group_id)),
-            source: Default::default(),
-            moderators: Vec::new(),
-            recipients: Vec::new(),
+            group: self.group_id.map(GroupId::from_uuid),
+            // Источник задержки (CTR-43): имя правила пусто — письмо группы.
+            source: match self.rule {
+                None => HoldSource::Group,
+                Some(rule) => HoldSource::FlowRule { rule },
+            },
+            moderators: self.moderators.0,
+            recipients: self.recipients,
             sender: self.sender,
             sender_account: self.sender_account.map(AccountId::from_uuid),
             message_id: self.message_id,
@@ -437,11 +449,12 @@ impl GroupStore for PgMeta {
             return Err(Error::invalid("объект письма другой организации"));
         }
         message.validate()?;
-        // Письмо правила потока (CTR-43) и снимок модераторов — колонки META-44.
-        let Some(group) = message.group else {
-            return Err(Error::internal(
-                "очередь модерации: письма правил потока в PostgreSQL — META-44",
-            ));
+        // Письмо группы — группа существует; письмо правила потока (CTR-43, без группы) — источник, снимок
+        // модераторов и исходные получатели в колонках письма (META-44).
+        let group = message.group.map(|g| *g.as_uuid());
+        let rule = match &message.source {
+            HoldSource::Group => None,
+            HoldSource::FlowRule { rule } => Some(rule.clone()),
         };
         let size = to_i64(message.size)?;
         let held = *message.id.as_uuid();
@@ -450,17 +463,20 @@ impl GroupStore for PgMeta {
             .keyed(
                 tenant,
                 |tx| {
-                    let message = message.clone();
+                    let (message, rule) = (message.clone(), rule.clone());
                     Box::pin(async move {
                         Ok(sqlx::query(
-                            "INSERT INTO group_held (tenant_id, held_id, group_id, sender, sender_account, message_id,
-                                                     blob_hash, blob_gen, size, held_at)
-                             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-                             WHERE EXISTS (SELECT 1 FROM groups WHERE tenant_id = $1 AND group_id = $3)",
+                            "INSERT INTO group_held (tenant_id, held_id, group_id, rule, sender, sender_account,
+                                                     message_id, blob_hash, blob_gen, size, held_at,
+                                                     moderators, recipients)
+                             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+                             WHERE $3::uuid IS NULL
+                                OR EXISTS (SELECT 1 FROM groups WHERE tenant_id = $1 AND group_id = $3)",
                         )
                         .bind(tenant.as_uuid())
                         .bind(message.id.as_uuid())
-                        .bind(group.as_uuid())
+                        .bind(group)
+                        .bind(&rule)
                         .bind(&message.sender)
                         .bind(message.sender_account.map(|a| *a.as_uuid()))
                         .bind(&message.message_id)
@@ -468,6 +484,8 @@ impl GroupStore for PgMeta {
                         .bind(i64::from(message.blob.generation.0))
                         .bind(size)
                         .bind(message.held_at)
+                        .bind(Json(message.moderators.clone()))
+                        .bind(&message.recipients)
                         .execute(&mut *tx)
                         .await
                         .map_err(db_err)?
