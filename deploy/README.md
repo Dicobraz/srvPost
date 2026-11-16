@@ -293,6 +293,7 @@ Admin API — `thepost_admin_listen` (`127.0.0.1:8443`).
 | `postgresql_settings` | `{}` | параметры `postgresql.conf` (`shared_buffers` и т. п.) |
 | `openbao_seal`, `openbao_seal_options` | `static`, `{}` | распечатывание OpenBao (раздел «OpenBao») |
 | `openbao_version` | `2.7.2` | версия пакета OpenBao |
+| `openbao_stop_check` | `false` | проверка остановки OpenBao: в контрольной группе нет процессов (FIX-09, DEP-44) |
 
 ### Резервное копирование и восстановление (роль `pgbackrest`, DEP-15)
 `thepost_backup: true` (по умолчанию) — последняя роль `smb.yml`, готовые средства из пакетов дистрибутива и PGDG.
@@ -571,6 +572,12 @@ ansible-playbook -i <инвентарь> deploy/ansible/openbao.yml \
 Повторный прогон ничего не меняет. Кластер Raft из нескольких ВМ — `openbao_raft_peers` (адреса других узлов),
 `openbao_init_node` (инициализирует один узел), `openbao_static_key_from` (общий ключ seal `static`); узлы `thepost`
 на других ВМ — `openbao_thepost_local: false` и `tasks_from: approle`. Так ставит `small-enterprise.yml`.
+Роль кладёт drop-in `/etc/systemd/system/openbao.service.d/override.conf` — `KillMode=control-group`,
+`TimeoutStartSec=5min`, `StartLimitIntervalSec=0`: дистрибутивный юнит (`KillMode=process`) не переживает нечистую
+остановку контейнера/ВМ — оставшийся процесс `bao` держит flock bolt-файла raft, и узел не стартует без ручных
+`kill` и `reset-failed` (FIX-09, issue #4; приёмка — DEP-44). Проверка на стенде: `-e openbao_stop_check=true` —
+роль останавливает юнит, убеждается, что в контрольной группе не осталось процессов (`systemd-cgls`), и запускает
+его снова.
 
 ### Kubernetes (Helm)
 ```bash

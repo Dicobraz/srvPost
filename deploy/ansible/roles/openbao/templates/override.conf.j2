@@ -1,0 +1,14 @@
+# FIX-09 (issue #4): дистрибутивный openbao.service — KillMode=process и TimeoutStartSec=90s — не переживает
+# нечистую остановку контейнера/ВМ: остаётся процесс bao (держит flock bolt-файла raft), каждый старт падает
+# «failed to open bolt file: timeout», после StartLimitBurst=3 юнит в failed — thepost не стартует.
+# Воспроизведение и приёмка — docs/manual-tests/DEP-44.md.
+[Unit]
+# Старт без ограничений частоты: подъём после нечистой остановки не требует systemctl reset-failed.
+# (StartLimitIntervalSec — опция [Unit], не [Service].)
+StartLimitIntervalSec=0
+
+[Service]
+# Убивать всю контрольную группу: процессы bao не переживают остановку юнита и не держат flock raft.
+KillMode=control-group
+# Type=notify: под CPU-нагрузкой (стенд под qemu-user) готовность приходит позже 90 с — не считать старт таймаутом.
+TimeoutStartSec=5min
