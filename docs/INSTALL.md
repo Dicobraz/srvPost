@@ -22,7 +22,7 @@
 варианте тестовый — `example.test`, сертификаты выпускает свой тестовый центр.
 
 ```bash
-git clone https://github.com/Dicobraz421/ThePost && cd ThePost
+git clone https://github.com/Dicobraz/srvPost && cd srvPost
 docker compose -f deploy/compose/dev.yml --profile smb up -d --build
 ```
 
@@ -58,9 +58,9 @@ PostgreSQL 16, OpenBao, Rspamd (по желанию — антивирус ClamA
 1. Скачайте выпуск и распакуйте бинарный файл:
 
    ```bash
-   git clone https://github.com/Dicobraz421/ThePost && cd ThePost
+   git clone https://github.com/Dicobraz/srvPost && cd srvPost
    V=v0.2.1-beta.1   # последний выпуск — на странице Releases
-   curl -LO https://github.com/Dicobraz421/ThePost/releases/download/$V/thepost-$V-x86_64-unknown-linux-gnu.tar.gz
+   curl -LO https://github.com/Dicobraz/srvPost/releases/download/$V/thepost-$V-x86_64-unknown-linux-gnu.tar.gz
    tar xzf thepost-$V-x86_64-unknown-linux-gnu.tar.gz
    ```
 
@@ -502,7 +502,7 @@ SRS 3.5). Поэтому потерять можно только письма, 
 ```bash
 f=thepost-$V-x86_64-unknown-linux-gnu.tar.gz
 cosign verify-blob "$f" --bundle "$f.sigstore.json" \
-  --certificate-identity 'https://github.com/Dicobraz421/ThePost/.github/workflows/beta.yml@refs/heads/main' \
+  --certificate-identity 'https://github.com/Dicobraz/srvPost/.github/workflows/beta.yml@refs/heads/main' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -510,4 +510,4 @@ cosign verify-blob "$f" --bundle "$f.sigstore.json" \
 
 - `thepost doctor` — первая проверка: что именно не так и как исправить.
 - Журнал узла — `journalctl -u thepost` (в Docker — `docker compose … logs thepost`); пароли и токены в него не пишутся.
-- Вопросы и ошибки — в [issues](https://github.com/Dicobraz421/ThePost/issues).
+- Вопросы и ошибки — в [issues](https://github.com/Dicobraz/srvPost/issues).

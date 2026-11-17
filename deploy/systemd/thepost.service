@@ -9,7 +9,7 @@
 
 [Unit]
 Description=The Post mail server
-Documentation=https://github.com/Dicobraz421/ThePost
+Documentation=https://github.com/Dicobraz/srvPost
 Wants=network-online.target
 After=network-online.target postgresql.service
 # Без предела числа попыток перезапуска (решение 85): узел ждёт СУБД, OpenBao и сеть сколько нужно.

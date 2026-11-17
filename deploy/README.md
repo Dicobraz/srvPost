@@ -23,7 +23,7 @@
    Пакеты для сборки: `build-essential pkg-config`; с фичей `gssapi` (как выпуск и образ) — ещё `libkrb5-dev libclang-dev`;
    с веб-консолью (фича `console`) — ещё Node 26: `npm ci && npm run build` в `console/` до `cargo build`;
    клиенты для проверок (необязательно): `postgresql-client`, `awscli`.
-4. `git clone https://github.com/Dicobraz421/ThePost && cd ThePost`.
+4. `git clone https://github.com/Dicobraz/srvPost && cd srvPost`.
 
 ## Зависимости
 Внутренние каналы — только TLS (решение 2026-10-30); открытые каналы — только профиль `dev`, явной настройкой.

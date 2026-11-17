@@ -5,7 +5,7 @@
 
 [Unit]
 Description=The Post submission/TLS socket (port 465)
-Documentation=https://github.com/Dicobraz421/ThePost
+Documentation=https://github.com/Dicobraz/srvPost
 
 [Socket]
 ListenStream=465
