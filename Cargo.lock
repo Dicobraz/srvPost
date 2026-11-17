@@ -3887,6 +3887,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
+
+[[package]]
 name = "psm"
 version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3894,6 +3900,16 @@ checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
 dependencies = [
  "ar_archive_writer",
  "cc",
+]
+
+[[package]]
+name = "publicsuffix"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f42ea446cab60335f76979ec15e12619a2165b5ae2c12166bef27d283a9fadf"
+dependencies = [
+ "idna",
+ "psl-types",
 ]
 
 [[package]]
@@ -5683,6 +5699,7 @@ dependencies = [
  "mail-parser 0.11.9",
  "prometheus-client",
  "reqwest",
+ "ring",
  "rpassword",
  "schemars",
  "serde",
@@ -5710,7 +5727,9 @@ dependencies = [
  "tp-testkit",
  "tp-tui",
  "tracing",
+ "winnow",
  "x509-parser",
+ "zip",
 ]
 
 [[package]]
@@ -6325,6 +6344,7 @@ dependencies = [
  "mail-builder 1.0.0",
  "mail-parser 0.11.9",
  "proptest",
+ "regex",
  "schemars",
  "serde",
  "serde_yaml_ng",
@@ -6346,12 +6366,16 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "futures",
+ "infer",
  "insta",
+ "ipnet",
  "mail-auth 0.15.1",
  "mail-builder 1.0.0",
  "mail-parser 0.11.9",
  "mail-send",
  "prometheus-client",
+ "publicsuffix",
+ "regex",
  "reqwest",
  "rustls-webpki",
  "schemars",
@@ -6367,6 +6391,7 @@ dependencies = [
  "tp-platform",
  "tp-testkit",
  "tracing",
+ "zip",
 ]
 
 [[package]]
