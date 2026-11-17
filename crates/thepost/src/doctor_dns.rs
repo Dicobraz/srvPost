@@ -19,7 +19,7 @@ use tp_platform::listen::EndpointConfig;
 use tp_platform::{AcmeConfig, Config, TlsCerts, TlsConfig};
 use tp_smtp::SmtpConfig;
 
-use crate::doctor::{Report, Status, message};
+use crate::doctor::{Report, Status};
 use crate::sections::{self, DoctorSection, IMAP, SMTP};
 
 /// Запись SRV (RFC 2782); узел — без точки в конце, пустой — «.» (служба недоступна).
