@@ -1006,6 +1006,14 @@ pub struct DoctorSection {
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]
     pub cert_warn_before: Duration,
+    /// Бюджет проверок хранилища секретов `secrets.store`/`secrets.login` (FIX-10): при транспортном таймауте
+    /// (`secrets.request_timeout`) проверка повторяется с таймаутом запроса не меньше остатка бюджета, пока он
+    /// не исчерпан. Больше транспортного таймаута: под CPU-нагрузкой узла ответ OpenBao требует больше времени
+    /// (`/v1/auth/approle/login`), хотя `/v1/sys/health` отвечает за миллисекунды; таймаут при живом хранилище —
+    /// `warn` «проверка не успела», не `fail` (мониторинг по `doctor` без ложных аварий).
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub secrets_login_budget: Duration,
 }
 
 impl Default for DoctorSection {
@@ -1016,6 +1024,7 @@ impl Default for DoctorSection {
             blob_timeout: Duration::from_secs(10),
             dns_timeout: Duration::from_secs(5),
             cert_warn_before: Duration::from_secs(21 * 86_400),
+            secrets_login_budget: Duration::from_secs(30),
         }
     }
 }
