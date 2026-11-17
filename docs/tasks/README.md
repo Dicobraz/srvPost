@@ -609,7 +609,7 @@
 | [DES-01](DES-01.md) | файл токенов фирменного стиля и проверка контраста в CI | design | B | design-01 | done | — |
 | [DEPS-15](DEPS-15.md) | зависимости картинок и мыши текстового интерфейса — `ratatui-image`, `evdev` | deps | B | deps-15 | done | DEPS-14 |
 | [TUI-06](TUI-06.md) | тема текстового интерфейса по токенам — пять режимов, палитра консоли Linux, знак IT TASK | tui | A | tui-03 | done | TUI-01,DES-01 |
-| [TUI-07](TUI-07.md) | мышь в текстовом интерфейсе — щелчки, прокрутка, граница панелей, плавный курсор | tui | A | tui-04 | ready | TUI-06,DEPS-15 |
+| [TUI-07](TUI-07.md) | мышь в текстовом интерфейсе — щелчки, прокрутка, граница панелей, плавный курсор | tui | A | tui-04 | done | TUI-06,DEPS-15 |
 | [UI-19](UI-19.md) | веб-консоль на токенах фирменного стиля — тема antd, шрифты в статике | console | A | console-10 | ready | DES-01 |
 | [CTR-85](CTR-85.md) | очередь исходящей почты — список записей и повтор доставки в контракте `QueueStore` | contracts | B | contracts-57 | done | — |
 | [ADM-45](ADM-45.md) | Admin API очереди — `GET /orgs/{org}/queue`, `POST /orgs/{org}/queue/{id}/retry` | admin | A | admin-31 | done | CTR-85 |
@@ -673,7 +673,7 @@
 | [FIX-11](FIX-11.md) | молча нерабочая запись /etc/hosts (имя вместо адреса) |  |  | deploy-46 | done | — |
 | [FIX-12](FIX-12.md) | адрес генератора в конфиге узла — ansible_host / факты / assert |  |  | deploy-47 | done | — |
 | [FIX-13](FIX-13.md) | чужой From в исходящей нагрузке, CRLF в файлах стенда, сэмплер без проверки старта |  |  | deploy-48 | done | — |
-| [FIX-14](FIX-14.md) | зонд доставки шлёт чужой From под AUTH (550) |  |  | deploy-49 | done | — |
+| [FIX-14](FIX-14.md) | — | — | — | deploy-49 | done | — |
 | [FIX-15](FIX-15.md) | условие сбора фактов FIX-12 падает; каталог drop-in openbao не создаётся |  |  | deploy-50 | ready | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
