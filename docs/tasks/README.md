@@ -751,8 +751,8 @@
 | [DAV-17](DAV-17.md) | общий доступ к календарям и адресным книгам | dav | A | dav-05 | todo | DAV-16,CTR-48,AUTH-12 |
 | [DAV-18](DAV-18.md) | представители — calendar-proxy | dav | A | dav-05 | todo | DAV-17 |
 | [DAV-19](DAV-19.md) | ресурсы — бронирование переговорных | dav | A | dav-05 | todo | DAV-17 |
-| [JMAP-32](JMAP-32.md) | JMAP — общий доступ к календарям и адресным книгам | jmap | A | jmap-19 | ready | JMAP-31,CTR-48 |
-| [JMAP-33](JMAP-33.md) | JMAP Tasks поверх VTODO | jmap | A | jmap-19 | ready | JMAP-29 |
+| [JMAP-32](JMAP-32.md) | JMAP — общий доступ к календарям и адресным книгам | jmap | A | jmap-19 | done | JMAP-31,CTR-48 |
+| [JMAP-33](JMAP-33.md) | JMAP Tasks поверх VTODO | jmap | A | jmap-19 | done | JMAP-29 |
 | [ADM-16](ADM-16.md) | Admin API — ресурсы, представители, общий доступ | admin | A | admin-11 | ready | CTR-48 |
 | [UI-10](UI-10.md) | ресурсы, представители, общий доступ | console | A | console-04 | todo | UI-09,ADM-16 |
 | [UI-11](UI-11.md) | массовые операции — импорт учётных записей из CSV | console | A | console-04 | todo | UI-09 |
