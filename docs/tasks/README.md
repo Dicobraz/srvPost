@@ -605,7 +605,7 @@
 | [TUI-04](TUI-04.md) | конфигурация узла в текстовом интерфейсе | tui | A | tui-02 | done | TUI-02,DEP-55 |
 | [TUI-05](TUI-05.md) | подкоманда `thepost admin tui` в узле | app | A | app-65 | done | TUI-01 |
 | [CI-16](CI-16.md) | покрытие Admin API тремя клиентами | ci | B | ci-14 | ready | TUI-02 |
-| [DOC-08](DOC-08.md) | руководство по текстовому интерфейсу | docs | A | docs-08 | ready | TUI-03,TUI-04 |
+| [DOC-08](DOC-08.md) | руководство по текстовому интерфейсу | docs | A | docs-08 | done | TUI-03,TUI-04 |
 | [DES-01](DES-01.md) | файл токенов фирменного стиля и проверка контраста в CI | design | B | design-01 | done | — |
 | [DEPS-15](DEPS-15.md) | зависимости картинок и мыши текстового интерфейса — `ratatui-image`, `evdev` | deps | B | deps-15 | done | DEPS-14 |
 | [TUI-06](TUI-06.md) | тема текстового интерфейса по токенам — пять режимов, палитра консоли Linux, знак IT TASK | tui | A | tui-03 | done | TUI-01,DES-01 |
@@ -616,7 +616,7 @@
 | [UI-20](UI-20.md) | консоль — экран «Очередь» | console | A | console-11 | ready | ADM-45 |
 | [CTR-86](CTR-86.md) | хранилище уведомлений о доступе (`ShareNotification`) в контракте | contracts | B | contracts-58 | done | — |
 | [CTR-87](CTR-87.md) | `Directory::contacts_since` без тела по умолчанию | contracts | B | contracts-58 | done | — |
-| [APP-69](APP-69.md) | представители (`DelegateStore`) в доставке — приглашения «от имени» по `schedule_on_behalf` | app | B | app-66 | ready | — |
+| [APP-69](APP-69.md) | представители (`DelegateStore`) в доставке — приглашения «от имени» по `schedule_on_behalf` | app | B | app-66 | done | — |
 | [DEPS-16](DEPS-16.md) | зависимости подсветки вывода CLI — `anstream`, `anstyle`, `toml` | deps | B | deps-16 | done | ADM-44 |
 | [ADM-46](ADM-46.md) | подсветка вывода `thepost admin` — таблицы, ошибки, изменения, JSON; модуль стилей `tp-admin-client::style` | admin | A | admin-32 | done | ADM-44,DES-01,DEPS-16 |
 | [APP-70](APP-70.md) | подсветка справки всех команд `thepost`, цветные `doctor` и `config check` | app | A | app-67 | done | ADM-46 |
