@@ -2483,7 +2483,10 @@ mod tests {
             "using": ["urn:ietf:params:jmap:core", MAIL],
             "methodCalls": [["Email/query", {"accountId": account}, "c0"]],
         });
-        let out = jmap.api(&p, body.to_string().as_bytes()).await.expect("api");
+        let out = jmap
+            .api(&p, body.to_string().as_bytes())
+            .await
+            .expect("api");
         let resp = serde_json::to_value(out).expect("json");
         assert_eq!(resp["methodResponses"][0][0], "Email/query", "{resp}");
         let s = cache.stats();
