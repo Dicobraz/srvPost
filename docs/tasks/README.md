@@ -673,6 +673,7 @@
 | [FIX-11](FIX-11.md) | молча нерабочая запись /etc/hosts (имя вместо адреса) |  |  | deploy-46 | done | — |
 | [FIX-12](FIX-12.md) | адрес генератора в конфиге узла — ansible_host / факты / assert |  |  | deploy-47 | done | — |
 | [FIX-13](FIX-13.md) | чужой From в исходящей нагрузке, CRLF в файлах стенда, сэмплер без проверки старта |  |  | deploy-48 | done | — |
+| [FIX-14](FIX-14.md) | зонд доставки шлёт чужой From под AUTH (550) |  |  | deploy-49 | done | — |
 | [FIX-15](FIX-15.md) | условие сбора фактов FIX-12 падает; каталог drop-in openbao не создаётся |  |  | deploy-50 | ready | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
@@ -935,7 +936,7 @@
 | [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-78 | todo | CTR-97,META-88,BLOB-18 |
 | [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-78 | todo | CTR-97 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
-| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-49 | todo | APP-83,BLOB-18 |
+| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-49 | done | APP-83,BLOB-18 |
 
 ## Вне волн
 
@@ -959,7 +960,6 @@
 | [DAV-43](DAV-43.md) | приём iTIP по матрице решения 123, бронирование — только внутри организации | dav | B | CTR-92,DAV-19,DAV-41,DAV-42 |
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
-| [FIX-14](FIX-14.md) | зонд доставки шлёт чужой From под AUTH (550) |  |  | — |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
 | [PLT-35](PLT-35.md) | YAML ↔ JSON для правки config.yaml вне загрузчика | platform | A | — |
 | [PLT-36](PLT-36.md) | переменные THEPOST_* вне схемы не ломают проверку конфигурации | platform | A | — |
