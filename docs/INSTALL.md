@@ -59,7 +59,7 @@ PostgreSQL 16, OpenBao, Rspamd (по желанию — антивирус ClamA
 
    ```bash
    git clone https://github.com/Dicobraz421/ThePost && cd ThePost
-   V=beta-20261111.2   # последний выпуск — на странице Releases
+   V=v0.2.1-beta.1   # последний выпуск — на странице Releases
    curl -LO https://github.com/Dicobraz421/ThePost/releases/download/$V/thepost-$V-x86_64-unknown-linux-gnu.tar.gz
    tar xzf thepost-$V-x86_64-unknown-linux-gnu.tar.gz
    ```

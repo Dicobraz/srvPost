@@ -1,5 +1,5 @@
 # CI The Post (процесс pets-dev). PR и merge queue ≤7 мин; docs-PR без сборки.
-# Required check в защите main — один: `gate`. Release — только main, бета (тег beta-*) и ручной запуск.
+# Required check в защите main — один: `gate`. Release — только main, бета и выпуск (теги v*) и ручной запуск.
 name: CI
 
 on:
@@ -9,7 +9,7 @@ on:
   merge_group:
   push:
     branches: [main]
-    tags: ['beta-*']
+    tags: ['v*']
   workflow_dispatch:
 
 concurrency:

@@ -63,7 +63,7 @@ PR только с `docs/`, `*.md` в корне и `*/README.md` идёт бе�
 | `deny` | изменены любой `Cargo.toml`, `Cargo.lock`, `deny.toml` | `cargo deny --locked check licenses bans sources`, `cargo audit` |
 | `console` | изменены `console/`, `design/` | типы, линтер, vitest, `npm audit`, лицензии, `npm run build` |
 | `design` | изменены `design/`, `scripts/design_contrast.py` | контраст ролей `design/tokens.toml` |
-| `release` | только main, `beta-*`, ручной запуск | release-сборка и артефакт |
+| `release` | только main, теги `v*` (бета, выпуск), ручной запуск | release-сборка и артефакт |
 
 Бета и образ — `.github/workflows/beta.yml`, ночной фаззинг (`crates/*/fuzz`) — `fuzz.yml`.
 

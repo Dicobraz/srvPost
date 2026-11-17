@@ -595,7 +595,7 @@ kubectl -n thepost create secret docker-registry ghcr --docker-server=ghcr.io   
 helm install thepost deploy/helm/thepost -n thepost --set 'imagePullSecrets[0].name=ghcr' -f <свои значения>
 ```
 Образ в ghcr.io закрытый: без `imagePullSecrets` чарт не рендерится (ошибка с подсказкой). Тег по умолчанию —
-`appVersion` чарта (версия выпуска, `beta.yml` публикует его вместе с `beta-<дата>`). Образ — `linux/amd64`,
+`appVersion` чарта (версия выпуска, `beta.yml` публикует его вместе с `v<версия>-beta.N`). Образ — `linux/amd64`,
 подписан cosign без ключей (проверка — комментарий в `helm/thepost/values.yaml`).
 
 В своих значениях обязательно: `config.domain`, `config.smtp.hostname`, `config.database.url` (или `cnpg.enabled`),
