@@ -38,7 +38,7 @@
 | smtpd_milters, non_smtpd_milters, milter_default_action, milter_*_timeout | Встроено | Цепочка Milter, политика при недоступности фильтра |
 | content_filter, receive_override_options (amavisd-new) | Milter, внешний MTA | amavisd-milter; фильтр после очереди — шлюз перед smtp-in |
 | header_checks, mime_header_checks, body_checks, smtp_header_checks | Правилом | Условия по заголовкам и тексту; сложная обработка — Milter |
-| always_bcc, sender_bcc_maps, recipient_bcc_maps | Правилом | Действие «копия»; журналирование — модуль «Соответствие требованиям» |
+| always_bcc, sender_bcc_maps, recipient_bcc_maps | Правилом | Действие «копия»; журналирование — п. 4.9 |
 | OpenDKIM, OpenDMARC (Milter) | Встроено | DKIM, DMARC, ARC в ядре |
 | postsrsd | Встроено | SRS и ARC при пересылке |
 | mailbox_command, mailbox_transport, home_mailbox, .forward, procmail | Встроено | Sieve (фильтры, перенаправление); внешние программы не запускаются |
