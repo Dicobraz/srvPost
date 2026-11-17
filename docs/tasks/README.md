@@ -671,12 +671,6 @@
 | [FIX-09](FIX-09.md) | systemd-юнит openbao не переживает нечистую остановку: drop-in в роли | deploy | A | deploy-45 | done | — |
 | [FIX-10](FIX-10.md) | doctor — ретрай и явные причины при медленном secret store; без ложного каскада | app | A | app-77 | done | — |
 
-## Ф1 · Нумерация бет по образцу Postman (решение 2026-11-17-beta-versioning)
-
-| Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
-|---|---|---|---|---|---|---|
-| [CI-17](CI-17.md) | нумерация бет по образцу Postman (v<версия>-beta.N) | ci | B | ci-15 | ready | CI-01,CI-13 |
-
 ## Ф2. Совместная работа (≈5 мес.)
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
@@ -753,10 +747,10 @@
 | [CMP-10](CMP-10.md) | приёмка Ф2 — календари, контакты, правила, консоль | deploy | A | deploy-18 | ready | APP-28,UI-09,DEP-21 |
 | [CTR-48](CTR-48.md) | общий доступ к календарям и контактам, представители, ресурсы | contracts | B | contracts-35 | done | CTR-45,CTR-47 |
 | [META-52](META-52.md) | права на коллекции, представители, правила ресурсов | meta | B | meta-33 | ready | CTR-48 |
-| [AUTH-12](AUTH-12.md) | Authorizer — права на календари и адресные книги | auth | A | auth-07 | ready | CTR-48,AUTH-07 |
-| [DAV-17](DAV-17.md) | общий доступ к календарям и адресным книгам | dav | A | dav-05 | todo | DAV-16,CTR-48,AUTH-12 |
-| [DAV-18](DAV-18.md) | представители — calendar-proxy | dav | A | dav-05 | todo | DAV-17 |
-| [DAV-19](DAV-19.md) | ресурсы — бронирование переговорных | dav | A | dav-05 | todo | DAV-17 |
+| [AUTH-12](AUTH-12.md) | Authorizer — права на календари и адресные книги | auth | A | auth-07 | done | CTR-48,AUTH-07 |
+| [DAV-17](DAV-17.md) | общий доступ к календарям и адресным книгам | dav | A | dav-05 | ready | DAV-16,CTR-48,AUTH-12 |
+| [DAV-18](DAV-18.md) | представители — calendar-proxy | dav | A | dav-05 | ready | DAV-17 |
+| [DAV-19](DAV-19.md) | ресурсы — бронирование переговорных | dav | A | dav-05 | ready | DAV-17 |
 | [JMAP-32](JMAP-32.md) | JMAP — общий доступ к календарям и адресным книгам | jmap | A | jmap-19 | ready | JMAP-31,CTR-48 |
 | [JMAP-33](JMAP-33.md) | JMAP Tasks поверх VTODO | jmap | A | jmap-19 | ready | JMAP-29 |
 | [ADM-16](ADM-16.md) | Admin API — ресурсы, представители, общий доступ | admin | A | admin-11 | ready | CTR-48 |
@@ -933,6 +927,7 @@
 | [APP-74](APP-74.md) | узел — очередь исходящей почты подключена к Admin API | app | A | META-82,ADM-45 |
 | [APP-80](APP-80.md) | `thepost admin tui` правит config.yaml узла; ключ `--theme` | app | A | TUI-04,PLT-35,TUI-11 |
 | [AUTH-09](AUTH-09.md) | пароли приложений на контракте AppPasswordStore | auth | A | CTR-22 |
+| [CI-17](CI-17.md) | нумерация бет по образцу Postman (v<версия>-beta.N) | ci | B | CI-01,CI-13 |
 | [CTR-22](CTR-22.md) | контракт AppPasswordStore (пароли приложений) | contracts | B | CTR-19,AUTH-02 |
 | [CTR-84](CTR-84.md) | контракт проверки прав на коллекции — `SharingAuthorizer` | contracts | B | CTR-48 |
 | [CTR-92](CTR-92.md) | матрица «кто — что» приёма iTIP — тип отправителя вместо источника | contracts | B | CTR-47 |
