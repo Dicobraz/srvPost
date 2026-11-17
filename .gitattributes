@@ -1,0 +1,4 @@
+# Скрипты и данные стенда исполняются на Linux-узлах как есть (shebang): только LF —
+# виндовые чекауты не должны отдавать CRLF в тарболлы/копии стенда (FIX-13: сэмплер умер на python3\r).
+deploy/stand/roles/*/files/* text eol=lf
+deploy/stand/*.yml text eol=lf
