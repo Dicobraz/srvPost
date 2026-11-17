@@ -14,11 +14,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use tp_contracts::meta::{Address, Message};
+use tp_contracts::meta::{Address, Message, MessageQuery};
 use tp_contracts::search::{SearchSort, Snippet, TextField, TextQuery};
-use tp_contracts::{Error, MailboxId, MessageId};
+use tp_contracts::{Error, MailboxId, MessageId, ModSeq};
 
 use crate::core::error::{MethodError, MethodResult, changes_error};
+use crate::core::query_cache::{QueryList, Token};
 use crate::core::request::{
     Comparator, QueryChangesArgs, QueryWindow, apply_window, map_changes, object, parse_args,
     parse_state, query_changes_response, state_string,
@@ -305,8 +306,69 @@ fn compare(c: &Comparator, x: &Message, y: &Message, ev: &Eval<'_>) -> Ordering 
     }
 }
 
+/// Числовые свойства сортировки, допускающие кэш: ключ — число, `receivedAt` и конверт не меняются
+/// после приёма (флаги и папка покрываются токеном версий папок; текстовые и цепочечные свойства —
+/// не кэшируются).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    ReceivedAt,
+    SentAt,
+    Size,
+}
+
+/// Сортировка `sort` как набор числовых ключей; есть нечисловое свойство — `None` (без кэша).
+fn numeric_sort(sort: &[Comparator]) -> Option<Vec<(Part, bool)>> {
+    sort.iter()
+        .map(|c| {
+            let p = match c.property.as_str() {
+                "receivedAt" => Part::ReceivedAt,
+                "sentAt" => Part::SentAt,
+                "size" => Part::Size,
+                _ => return None,
+            };
+            Some((p, c.is_ascending))
+        })
+        .collect()
+}
+
+/// Меньше любой реальной даты (`sentAt` без заголовка), по модулю безопасно отрицать.
+const NO_DATE: i128 = i128::MIN / 4;
+
+/// Ключ сортировки письма: части уже ориентированы (меньше — раньше в списке); при равенстве всех
+/// частей письма упорядочены по идентификатору — то же, что [`chain`] на тех же критериях.
+fn key_of(m: &Message, spec: &[(Part, bool)]) -> Box<[i128]> {
+    spec.iter()
+        .map(|(p, asc)| {
+            let raw = match p {
+                Part::ReceivedAt => m.received_at.unix_timestamp_nanos(),
+                Part::SentAt => m
+                    .meta
+                    .envelope
+                    .date
+                    .map_or(NO_DATE, |t| t.unix_timestamp_nanos()),
+                Part::Size => m.size as i128,
+            };
+            if *asc { raw } else { -raw }
+        })
+        .collect()
+}
+
+/// Ключ кэшируемого запроса: фильтр (как прислан) и сортировка (по ключам). Окно в ключ не входит —
+/// страница берётся из полного списка. Один ключ — одинаковый результат при том же наборе писем.
+fn query_key(filter: &Option<Value>, spec: &[(Part, bool)]) -> String {
+    format!("{filter:?}|{spec:?}")
+}
+
 /// Результаты запроса: идентификаторы писем по порядку; `threads` — условия или сортировка по цепочкам.
-async fn run(ctx: &Ctx<'_>, a: &QueryArgs) -> MethodResult<(Vec<String>, bool)> {
+/// Кэшируемые запросы ([`numeric_sort`], без текстовых термов, цепочек и свёртки) берут список из кэша
+/// ([`crate::core::query_cache`]), при изменениях — обновляют его по журналу ([`try_patch`]) вместо
+/// полной загрузки всех писем (PERF-02).
+async fn run(
+    ctx: &Ctx<'_>,
+    a: &QueryArgs,
+    token: &Token,
+    state: ModSeq,
+) -> MethodResult<(Vec<MessageId>, bool)> {
     let filter = a.filter.as_ref().map(parse_filter).transpose()?;
     let sort = sort_of(a)?;
     let mut conds = Vec::new();
@@ -327,7 +389,6 @@ async fn run(ctx: &Ctx<'_>, a: &QueryArgs) -> MethodResult<(Vec<String>, bool)> 
     if let Some(detail) = filter.as_ref().and_then(search_detail) {
         crate::audit::search(ctx, only, &detail).await?;
     }
-    let msgs = ctx.jmap.messages_in(ctx.scope, only).await?;
     let mut text = HashMap::new();
     for (field, value) in conds.iter().flat_map(|c| c.terms.iter()) {
         let key = (field.clone(), value.clone());
@@ -344,16 +405,239 @@ async fn run(ctx: &Ctx<'_>, a: &QueryArgs) -> MethodResult<(Vec<String>, bool)> 
             .await?;
         text.insert(key, hits.into_iter().collect::<HashSet<_>>());
     }
-    let ev = Eval {
-        text,
-        threads: if uses_threads || a.collapse_threads {
-            threads(&msgs)
-        } else {
-            HashMap::new()
-        },
+    let spec = numeric_sort(&sort).filter(|_| {
+        !uses_threads && !a.collapse_threads && conds.iter().all(|c| c.terms.is_empty())
+    });
+    let scope = (ctx.scope.tenant, ctx.scope.account);
+    let key = spec
+        .as_deref()
+        .filter(|_| ctx.jmap.cfg.query_cache.max_bytes > 0)
+        .map(|s| query_key(&a.filter, s));
+    let mut built: Option<QueryList> = None;
+    if let Some(k) = &key {
+        // Попадание — готовый список; блокировка без `await` — `Caches` не `Send`.
+        let hit = {
+            let mut caches = ctx.jmap.caches();
+            caches.lookup_query(scope, k, token)
+        };
+        if let Some(ids) = hit {
+            return Ok((ids, false));
+        }
+        // Устаревшая запись — база инкрементального обновления; не удалось — полная пересборка.
+        let stale = {
+            let mut caches = ctx.jmap.caches();
+            caches.stale_query(scope, k)
+        };
+        if let Some((base_state, list)) = stale {
+            let (ids, keys, boxes) = list;
+            built = try_patch(
+                ctx,
+                base_state,
+                ids,
+                keys,
+                boxes,
+                filter.as_ref(),
+                spec.as_deref().unwrap_or(&[]),
+            )
+            .await;
+        }
+    }
+    let (ids, keys, boxes) = match built {
+        Some(b) => b,
+        None => {
+            let msgs = ctx.jmap.messages_in(ctx.scope, only).await?;
+            let ev = Eval {
+                text,
+                threads: if uses_threads || a.collapse_threads {
+                    threads(&msgs)
+                } else {
+                    HashMap::new()
+                },
+            };
+            match &spec {
+                Some(s) => key_order(&msgs, filter.as_ref(), s, &ev),
+                None => (
+                    order(&msgs, filter.as_ref(), &sort, &ev, a.collapse_threads),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            }
+        }
     };
-    let ids = order(&msgs, filter.as_ref(), &sort, &ev, a.collapse_threads);
+    if let Some(k) = &key {
+        ctx.jmap.caches().store_query(
+            scope,
+            k,
+            token.clone(),
+            state,
+            (ids.clone(), keys.clone(), boxes.clone()),
+        );
+    }
     Ok((ids, uses_threads))
+}
+
+/// Инкрементальное обновление записи кэша по журналу: удалённые убрать (по фактическому
+/// существованию — журнал сворачивает скрытие с восстановлением в одно `destroyed`), созданные
+/// и изменённые перечитать и переоценить фильтр, порядок поддержать вставкой по ключу. `None` —
+/// журнал недоступен или изменений больше `patch_max` — полная пересборка. Каждый патч сворачивает
+/// журнал от своей базы, поэтому конкурентные обновления безопасны («последний записавший»
+/// несёт актуальный токен).
+async fn try_patch(
+    ctx: &Ctx<'_>,
+    base_state: ModSeq,
+    mut ids: Vec<MessageId>,
+    mut keys: Vec<Box<[i128]>>,
+    mut boxes: Vec<MailboxId>,
+    filter: Option<&Filter>,
+    spec: &[(Part, bool)],
+) -> Option<QueryList> {
+    let cap = ctx.jmap.cfg.query_cache.patch_max;
+    let c = ctx
+        .jmap
+        .d
+        .changes
+        .message_changes(ctx.scope, None, base_state, cap.saturating_add(1))
+        .await
+        .ok()?;
+    if c.has_more || c.created.len() + c.updated.len() + c.destroyed.len() > cap {
+        return None;
+    }
+    let ev = Eval {
+        text: HashMap::new(),
+        threads: HashMap::new(),
+    };
+    // «Удалённые» по журналу: журнал сворачивает «изменено, скрыто и восстановлено в интервале»
+    // в один `destroyed`, хотя письмо существует — проверяем фактическое существование каждого.
+    let mut gone: HashSet<MessageId> = HashSet::new();
+    for id in c.destroyed.iter().map(|m| m.id) {
+        match ctx.jmap.d.messages.get(ctx.scope, id).await.ok().flatten() {
+            Some(m) => upsert(&mut ids, &mut keys, &mut boxes, m, filter, spec, &ev),
+            None => {
+                gone.insert(id);
+            }
+        }
+    }
+    if !gone.is_empty() {
+        remove_gone(&mut ids, &mut keys, &mut boxes, &gone);
+    }
+    // Созданные и изменённые: свежие метаданные, по папкам из журнала — одним запросом на папку.
+    let mut fetch: HashMap<MailboxId, Vec<MessageId>> = HashMap::new();
+    for m in c.created.iter().chain(&c.updated) {
+        fetch.entry(m.mailbox).or_default().push(m.id);
+    }
+    let mut rest: HashSet<MessageId> = fetch.values().flatten().copied().collect();
+    for (mb, group) in fetch {
+        let n = group.len();
+        let found = ctx
+            .jmap
+            .d
+            .messages
+            .list(ctx.scope, mb, MessageQuery::Ids(group), n)
+            .await
+            .ok()?; // папка удалена между журналом и выборкой — пересборка
+        for m in found {
+            rest.remove(&m.id);
+            upsert(&mut ids, &mut keys, &mut boxes, m, filter, spec, &ev);
+        }
+    }
+    // Не найденные пакетно (перенесены между чтением журнала и выборкой) — по одному; нет — удалено.
+    for id in rest {
+        match ctx.jmap.d.messages.get(ctx.scope, id).await.ok().flatten() {
+            Some(m) => upsert(&mut ids, &mut keys, &mut boxes, m, filter, spec, &ev),
+            None => remove_gone(&mut ids, &mut keys, &mut boxes, &HashSet::from([id])),
+        }
+    }
+    Some((ids, keys, boxes))
+}
+
+/// Вставляет или обновляет письмо в списке, отсортированном по ключам; не под фильтром — убрать.
+fn upsert(
+    ids: &mut Vec<MessageId>,
+    keys: &mut Vec<Box<[i128]>>,
+    boxes: &mut Vec<MailboxId>,
+    m: Message,
+    filter: Option<&Filter>,
+    spec: &[(Part, bool)],
+    ev: &Eval<'_>,
+) {
+    let id = m.id;
+    let old = ids.iter().position(|x| *x == id);
+    if !filter.is_none_or(|f| ev.matches(f, &m)) {
+        if let Some(p) = old {
+            ids.remove(p);
+            keys.remove(p);
+            boxes.remove(p);
+        }
+        return;
+    }
+    let key = key_of(&m, spec);
+    if let Some(p) = old {
+        ids.remove(p);
+        keys.remove(p);
+        boxes.remove(p);
+    }
+    let at = insert_pos(keys, ids, &key, id);
+    ids.insert(at, id);
+    keys.insert(at, key);
+    boxes.insert(at, m.mailbox);
+}
+
+/// Первая позиция, где (ключ, идентификатор) ≥ заданного.
+fn insert_pos(keys: &[Box<[i128]>], ids: &[MessageId], key: &[i128], id: MessageId) -> usize {
+    let (mut lo, mut hi) = (0, keys.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if keys[mid].as_ref().cmp(key).then(ids[mid].cmp(&id)) == Ordering::Less {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Убирает письма `gone` из параллельных списков.
+fn remove_gone(
+    ids: &mut Vec<MessageId>,
+    keys: &mut Vec<Box<[i128]>>,
+    boxes: &mut Vec<MailboxId>,
+    gone: &HashSet<MessageId>,
+) {
+    let mut i = 0;
+    while i < ids.len() {
+        if gone.contains(&ids[i]) {
+            ids.remove(i);
+            keys.remove(i);
+            boxes.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Идентификаторы писем под фильтром в порядке (ключ сортировки, идентификатор); параллельно ключи
+/// и папки. Порядок совпадает с [`order`] на тех же критериях — проверено тестом.
+fn key_order(
+    msgs: &[Message],
+    filter: Option<&Filter>,
+    spec: &[(Part, bool)],
+    ev: &Eval<'_>,
+) -> QueryList {
+    let mut hits: Vec<(MessageId, Box<[i128]>, MailboxId)> = msgs
+        .iter()
+        .filter(|m| filter.is_none_or(|f| ev.matches(f, m)))
+        .map(|m| (m.id, key_of(m, spec), m.mailbox))
+        .collect();
+    hits.sort_by(|(x, kx, _), (y, ky, _)| kx.as_ref().cmp(ky.as_ref()).then(x.cmp(y)));
+    let mut ids = Vec::with_capacity(hits.len());
+    let mut keys = Vec::with_capacity(hits.len());
+    let mut boxes = Vec::with_capacity(hits.len());
+    for (id, key, mb) in hits {
+        ids.push(id);
+        keys.push(key);
+        boxes.push(mb);
+    }
+    (ids, keys, boxes)
 }
 
 /// Сортировка запроса (по умолчанию — новые первыми); неизвестное свойство — `unsupportedSort`.
@@ -396,7 +680,7 @@ fn order(
     sort: &[Comparator],
     ev: &Eval<'_>,
     collapse: bool,
-) -> Vec<String> {
+) -> Vec<MessageId> {
     let mut hits: Vec<&Message> = msgs
         .iter()
         .filter(|m| filter.is_none_or(|f| ev.matches(f, m)))
@@ -405,7 +689,7 @@ fn order(
     let mut seen = HashSet::new();
     hits.into_iter()
         .filter(|m| !collapse || seen.insert(thread_id(m)))
-        .map(|m| m.id.to_string())
+        .map(|m| m.id)
         .collect()
 }
 
@@ -416,8 +700,9 @@ pub(crate) async fn query(
 ) -> MethodResult<Map<String, Value>> {
     let a: QueryArgs = parse_args(args)?;
     ctx.check_account(&a.account_id)?;
-    let state = ctx.state().await?;
-    let (ids, uses_threads) = run(ctx, &a).await?;
+    let (state, token) = ctx.state_full().await?;
+    let (ids, uses_threads) = run(ctx, &a, &token, state).await?;
+    let ids = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
     let mut out = object(json!({
         "accountId": a.account_id,
         "queryState": state_string(state),
@@ -457,10 +742,12 @@ pub(crate) async fn query_changes(
         .await
         .map_err(changes_error)?;
     let c = map_changes(c, |m| m.id.to_string());
-    let (ids, uses_threads) = run(ctx, &a).await?;
+    let (state, token) = ctx.state_full().await?;
+    let (ids, uses_threads) = run(ctx, &a, &token, state).await?;
     if uses_threads {
         return Err(MethodError::new("cannotCalculateChanges"));
     }
+    let ids = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
     query_changes_response(&qc, &ids, &c, limit)
 }
 
@@ -599,7 +886,7 @@ pub(crate) fn fuzz(args: Map<String, Value>, msgs: &[Message], max_limit: u32) {
         }
     }
     let ids = order(msgs, filter.as_ref(), &sort, &ev, a.collapse_threads);
-    let by_id: HashMap<String, &Message> = msgs.iter().map(|m| (m.id.to_string(), m)).collect();
+    let by_id: HashMap<MessageId, &Message> = msgs.iter().map(|m| (m.id, m)).collect();
     let found: Vec<&Message> = ids
         .iter()
         .map(|id| *by_id.get(id).unwrap_or_else(|| panic!("чужое письмо {id}")))
@@ -630,7 +917,8 @@ pub(crate) fn fuzz(args: Map<String, Value>, msgs: &[Message], max_limit: u32) {
             "порядок"
         );
     }
-    window(&ids, &a.window, max_limit);
+    let strings = ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+    window(&strings, &a.window, max_limit);
 }
 
 /// Окно `/query` над `ids`: страница — отрезок результатов с нужной позиции, не длиннее `limit`.
@@ -684,7 +972,7 @@ fn window(ids: &[String], w: &QueryWindow, max_limit: u32) {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
     use time::{Duration, OffsetDateTime};
     use tp_contracts::mailstore::MailStore;
     use tp_contracts::meta::{Flag, FlagOp, SpecialUse};
@@ -1020,5 +1308,166 @@ mod tests {
         assert_eq!(r[0][1]["type"], "cannotCalculateChanges");
         assert_eq!(r[1][1]["type"], "tooManyChanges");
         assert_eq!(r[2][1]["type"], "cannotCalculateChanges");
+    }
+
+    /// Полное число результатов запроса без фильтра (`total`).
+    async fn total(env: &Env) -> Value {
+        env.call(
+            "Email/query",
+            json!({"accountId": env.account(), "calculateTotal": true}),
+            "Email/query",
+        )
+        .await["total"]
+            .clone()
+    }
+
+    /// Кэш `Email/query` прозрачен: приём, смена флагов, перенос и окончательное удаление отражаются
+    /// в результатах так же, как при полной пересборке (PERF-02: повтор запроса — из кэша,
+    /// изменения — инкрементально по журналу).
+    #[tokio::test]
+    async fn query_cache_transparent() {
+        let env = Env::new().await;
+        let m = fixture(&env).await;
+        let inbox = env.mailbox(SpecialUse::Inbox);
+        // Пересборка, затем попадание: тот же список и total.
+        assert_eq!(total(&env).await, json!(4));
+        assert_eq!(total(&env).await, json!(4));
+        // Приём — патч по журналу: новое письмо наверху.
+        let fresh = env
+            .deliver(
+                inbox,
+                &mail("Новые цифры", "cilia@x.org", "", "свежие цифры"),
+                [].into(),
+            )
+            .await
+            .to_string();
+        assert_eq!(total(&env).await, json!(5));
+        let first = env
+            .call(
+                "Email/query",
+                json!({"accountId": env.account(), "limit": 1}),
+                "Email/query",
+            )
+            .await["ids"]
+            .clone();
+        assert_eq!(first, json!([fresh]));
+        // Флаг — патч: до смены письма с `$flagged` — m[3] и m[2], после — добавляется m[0].
+        use tp_contracts::meta::MessageStore as _;
+        assert_eq!(
+            ids(&env, json!({"filter": {"hasKeyword": "$flagged"}})).await,
+            json!([m[3], m[2]])
+        );
+        let id0: tp_contracts::MessageId = m[0].parse().expect("id");
+        env.meta
+            .set_flags(env.scope, &[id0], FlagOp::Add([Flag::Flagged].into()), None)
+            .await
+            .expect("flags");
+        assert_eq!(
+            ids(&env, json!({"filter": {"hasKeyword": "$flagged"}})).await,
+            json!([m[3], m[2], m[0]])
+        );
+        // Перенос из папки — патч: письмо пропадает из фильтра по папке и появляется в архиве.
+        let archive = env.mailbox(SpecialUse::Archive);
+        let in_inbox = env
+            .call(
+                "Email/query",
+                json!({"accountId": env.account(), "filter": {"inMailbox": inbox.to_string()}, "calculateTotal": true}),
+                "Email/query",
+            )
+            .await;
+        assert_eq!(in_inbox["total"], json!(4));
+        env.meta
+            .move_to(env.scope, &[id0], archive)
+            .await
+            .expect("move");
+        let in_inbox = env
+            .call(
+                "Email/query",
+                json!({"accountId": env.account(), "filter": {"inMailbox": inbox.to_string()}, "calculateTotal": true}),
+                "Email/query",
+            )
+            .await;
+        assert_eq!(in_inbox["total"], json!(3));
+        assert!(
+            !in_inbox["ids"]
+                .as_array()
+                .expect("ids")
+                .contains(&json!(m[0]))
+        );
+        let in_archive = ids(&env, json!({"filter": {"inMailbox": archive.to_string()}})).await;
+        assert_eq!(in_archive, json!([m[0]]));
+        // Окончательное удаление (из корзины) — патч: письмо исчезает из запроса без фильтра.
+        let id2: tp_contracts::MessageId = m[2].parse().expect("id");
+        env.meta
+            .to_trash(env.scope, &[id2])
+            .await
+            .expect("to trash");
+        env.meta
+            .expunge_final(env.scope, &[id2])
+            .await
+            .expect("expunge");
+        assert_eq!(total(&env).await, json!(4));
+        let rest = env
+            .call(
+                "Email/query",
+                json!({"accountId": env.account(), "calculateTotal": true}),
+                "Email/query",
+            )
+            .await["ids"]
+            .clone();
+        assert!(!rest.as_array().expect("ids").contains(&json!(m[2])));
+        // Порядок и состав совпадают с полной пересборкой (кэш отключён).
+        use crate::JmapConfig;
+        use crate::core::config::QueryCacheConfig;
+        let off = JmapConfig {
+            query_cache: QueryCacheConfig {
+                max_bytes: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let env = Env::with(off, Vec::new()).await;
+        let m = fixture(&env).await;
+        assert_eq!(ids(&env, json!({})).await, json!([m[3], m[2], m[1], m[0]]));
+    }
+
+    /// Порядок по числовым ключам (кэш) совпадает с порядком по компаратору (`chain`) на тех же
+    /// критериях: направление, несколько критериев, `sentAt` без даты, равенство — по идентификатору.
+    #[tokio::test]
+    async fn cache_order_matches_comparator() {
+        use std::collections::HashMap;
+        use tp_contracts::meta::{MessageQuery, MessageStore as _};
+
+        use super::{Comparator, Eval, key_order, numeric_sort, order};
+        use crate::email_get::threads;
+
+        let env = Env::new().await;
+        fixture(&env).await;
+        let mut msgs = Vec::new();
+        for role in [SpecialUse::Inbox, SpecialUse::Junk] {
+            msgs.extend(
+                env.meta
+                    .list(env.scope, env.mailbox(role), MessageQuery::All, usize::MAX)
+                    .await
+                    .expect("list"),
+            );
+        }
+        let ev = Eval {
+            text: HashMap::new(),
+            threads: threads(&msgs),
+        };
+        let cases = [
+            json!([{"property": "receivedAt", "isAscending": false}]),
+            json!([{"property": "receivedAt", "isAscending": true}]),
+            json!([{"property": "size"}, {"property": "receivedAt", "isAscending": false}]),
+            json!([{"property": "sentAt"}, {"property": "size", "isAscending": false}]),
+            json!([{"property": "sentAt", "isAscending": true}, {"property": "size", "isAscending": true}]),
+        ];
+        for sort in cases {
+            let sort: Vec<Comparator> = serde_json::from_value(sort).expect("sort");
+            let spec = numeric_sort(&sort).expect("numeric");
+            let (key_ids, _, _) = key_order(&msgs, None, &spec, &ev);
+            assert_eq!(key_ids, order(&msgs, None, &sort, &ev, false));
+        }
     }
 }
