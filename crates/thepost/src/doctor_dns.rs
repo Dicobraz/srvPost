@@ -211,12 +211,14 @@ fn skip_reserved(id: &str, name: &str, report: &mut Report) -> bool {
 }
 
 /// Все проверки DNS, сертификатов и PROXY v2; `store` — хранилище секретов узла (ключ `tls.key`), `None` — не
-/// настроено.
+/// настроено; `cause` — причина отказавшего хранилища секретов (FIX-10): отказ чтения `tls.key` из хранилища —
+/// `warn` с ней, а не отдельный `fail`.
 pub async fn check(
     cfg: &Config,
     dns: &dyn Dns,
     store: Option<&Arc<dyn SecretStore>>,
     doctor: &DoctorSection,
+    cause: Option<&str>,
     report: &mut Report,
 ) {
     let smtp = cfg
@@ -232,7 +234,7 @@ pub async fn check(
     mta_sts(&domain, dns, t, report).await;
     ptr(&smtp, dns, t, report).await;
     dav_srv(cfg, &domain, &smtp, dns, t, report).await;
-    certificate(cfg, &smtp, store, doctor, SystemTime::now(), report).await;
+    certificate(cfg, &smtp, store, doctor, cause, SystemTime::now(), report).await;
     proxy(cfg, &smtp, report);
 }
 
@@ -657,6 +659,7 @@ async fn certificate(
     smtp: &SmtpConfig,
     store: Option<&Arc<dyn SecretStore>>,
     doctor: &DoctorSection,
+    cause: Option<&str>,
     now: SystemTime,
     report: &mut Report,
 ) {
@@ -708,7 +711,7 @@ async fn certificate(
         _ => format!("действителен ещё {days} сут."),
     };
     report.push(id, status, path.clone(), msg);
-    key(&tls, store, report).await;
+    key(&tls, store, cause, report).await;
     let host = smtp.hostname.trim_end_matches('.');
     if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
         if covers(&info.names, host) {
@@ -731,8 +734,14 @@ async fn certificate(
 
 /// Закрытый ключ секции `tls` (секрет `tls.key` в хранилище секретов, PLT-31) подходит к цепочке `cert_file` — та
 /// же загрузка, что при запуске узла; без хранилища проверка пропускается. В отчёте — ссылка на секрет, значение
-/// ключа не выводится.
-async fn key(tls: &TlsConfig, store: Option<&Arc<dyn SecretStore>>, report: &mut Report) {
+/// ключа не выводится. `cause` — причина отказавшего хранилища секретов (FIX-10, issue #5): секрет не прочитан —
+/// `warn` с исходной причиной вместо голого «unavailable» и отдельного `fail`.
+async fn key(
+    tls: &TlsConfig,
+    store: Option<&Arc<dyn SecretStore>>,
+    cause: Option<&str>,
+    report: &mut Report,
+) {
     let id = "tls.key";
     let value = format!("секрет {}", tls.key);
     let Some(store) = store else {
@@ -746,7 +755,10 @@ async fn key(tls: &TlsConfig, store: Option<&Arc<dyn SecretStore>>, report: &mut
     };
     match TlsCerts::load(tls, store.clone()).await {
         Ok(_) => report.push(id, Status::Ok, value, "ключ подходит к сертификату"),
-        Err(e) => report.push(id, Status::Fail, value, message(&e)),
+        Err(e) => {
+            let (status, msg) = crate::doctor::dependent(cause, &e, "загрузка ключа");
+            report.push(id, status, value, msg);
+        }
     }
 }
 
@@ -811,13 +823,14 @@ pub async fn check_with(
     dns: Option<&dyn Dns>,
     store: Option<&Arc<dyn SecretStore>>,
     doctor: &DoctorSection,
+    cause: Option<&str>,
     report: &mut Report,
 ) {
     if let Some(dns) = dns {
-        return check(cfg, dns, store, doctor, report).await;
+        return check(cfg, dns, store, doctor, cause, report).await;
     }
     match SystemDns::new() {
-        Ok(dns) => check(cfg, &dns, store, doctor, report).await,
+        Ok(dns) => check(cfg, &dns, store, doctor, cause, report).await,
         Err(e) => report.push("dns.resolver", Status::Fail, "", e.to_string()),
     }
 }
@@ -925,7 +938,15 @@ mod tests {
         store: Option<&Arc<dyn SecretStore>>,
     ) -> Report {
         let mut report = Report::default();
-        check(cfg, dns, store, &DoctorSection::default(), &mut report).await;
+        check(
+            cfg,
+            dns,
+            store,
+            &DoctorSection::default(),
+            None,
+            &mut report,
+        )
+        .await;
         report
     }
 

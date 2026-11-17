@@ -269,8 +269,13 @@ pub async fn check(
         .section::<DoctorSection>(DOCTOR)
         .map(|d| (*d).clone())
         .unwrap_or_default();
-    // Хранилище секретов (PLT-12): `secrets_store` → `secrets.store` и т. д.
-    for c in secrets::doctor(cfg).await.checks {
+    // Хранилище секретов (PLT-12): `secrets_store` → `secrets.store` и т. д. Медленному, но живому хранилищу
+    // даётся бюджет `doctor.secrets_login_budget`: таймаут попытки — повтор, а не `fail` (FIX-10, issue #5).
+    let secrets_report = secrets::doctor(cfg).await;
+    let secret_cause = secrets::unavailable_cause(&secrets_report);
+    let slow_store = secrets::slow_store(&secrets_report);
+    let cause = secret_cause.as_deref();
+    for c in secrets_report.checks {
         let id = c.id.replacen('_', ".", 1);
         report.push(&id, c.status.into(), c.value, c.message);
     }
@@ -283,7 +288,7 @@ pub async fn check(
         report.push(&id, c.status.into(), c.value, c.message);
     }
     let refs = secrets::references(cfg);
-    let store = match secrets::store(cfg, store).await {
+    let store = match secrets::doctor_store(cfg, store).await {
         Ok(store) => {
             let (status, msg) = if refs.is_empty() {
                 (Status::Skipped, "ссылок на секреты нет".to_owned())
@@ -300,7 +305,7 @@ pub async fn check(
     };
 
     match &store {
-        Some(store) => database(cfg, store.as_ref(), &doctor, report).await,
+        Some(store) => database(cfg, store.as_ref(), &doctor, cause, slow_store, report).await,
         None => report.push(
             "database.connect",
             Status::Skipped,
@@ -314,7 +319,10 @@ pub async fn check(
                 report.push("blob.open", Status::Ok, blob_kind(cfg), "хранилище открыто");
                 probe_blob(blob.as_ref(), &doctor, report).await;
             }
-            Err(e) => report.push("blob.open", Status::Fail, blob_kind(cfg), message(&e)),
+            Err(e) => {
+                let (status, msg) = dependent(cause, &e, "открытие BLOB");
+                report.push("blob.open", status, blob_kind(cfg), msg);
+            }
         },
         None => report.push(
             "blob.open",
@@ -323,11 +331,30 @@ pub async fn check(
             "хранилище секретов не настроено",
         ),
     }
-    doctor_dns::check_with(cfg, dns, store.as_ref(), &doctor, report).await;
-    internal_keys(cfg, store.as_ref(), report).await;
+    doctor_dns::check_with(cfg, dns, store.as_ref(), &doctor, cause, report).await;
+    internal_keys(cfg, store.as_ref(), cause, report).await;
     internal_pki(cfg, SystemTime::now(), report).await;
     dav_well_known(cfg, report);
-    admin_audit(cfg, store.as_ref(), report).await;
+    admin_audit(cfg, store.as_ref(), cause, report).await;
+}
+
+/// Отказ зависимой проверки, которой нужен секрет из хранилища (FIX-10, issue #5): если хранилище не
+/// обслуживает запросы (`cause` — непройденная проверка `secrets.store`/`secrets.login`), реальная причина
+/// отказа — оно, а не сама проверка: итог `warn` с исходной причиной в сообщении вместо голого
+/// «unavailable»/«нет ответа» и отдельного `fail` — узел может работать на прочитанных секретах, мониторинг
+/// по `doctor` не даёт ложных аварий на нагруженных узлах. Ошибка не из хранилища (нет секрета, нет прав,
+/// собственный сбой проверки) — как было: `fail` с сообщением ошибки.
+pub(crate) fn dependent(cause: Option<&str>, e: &Error, what: &str) -> (Status, String) {
+    match cause {
+        Some(cause) if e.is_retryable() => (
+            Status::Warn,
+            format!(
+                "{what} не выполнено: причина — хранилище секретов ({cause}); \
+                 узел может работать на прочитанных секретах"
+            ),
+        ),
+        _ => (Status::Fail, message(e)),
+    }
 }
 
 /// Таймаут подключения к приёмнику OTLP (у syslog — свой, `admin.audit.syslog.connect_timeout`).
@@ -351,8 +378,14 @@ async fn tcp_reachable(address: &str, timeout: Duration) -> Option<String> {
 /// `admin.audit.syslog` — приёмник собирается, как при выгрузке (проверка, ключ клиента `tls.key` из хранилища
 /// секретов, TLS), затем подключение к `address` с рукопожатием TLS и проверкой сертификата приёмника за
 /// `connect_timeout`; `admin.audit.otlp` — TCP-подключение к узлу и порту `endpoint`. Нет подсекции — нет проверки.
-/// Пока приёмник недоступен, записи ждут в журнале и уходят после его возврата.
-pub async fn admin_audit(cfg: &Config, store: Option<&Arc<dyn SecretStore>>, report: &mut Report) {
+/// Пока приёмник недоступен, записи ждут в журнале и уходят после его возврата. `cause` — причина отказавшего
+/// хранилища секретов (FIX-10): ключ клиента не получен из хранилища — `warn` с ней, не отдельный `fail`.
+pub async fn admin_audit(
+    cfg: &Config,
+    store: Option<&Arc<dyn SecretStore>>,
+    cause: Option<&str>,
+    report: &mut Report,
+) {
     if !cfg.roles().contains(tp_contracts::role::Role::Maintenance) {
         return;
     }
@@ -374,7 +407,10 @@ pub async fn admin_audit(cfg: &Config, store: Option<&Arc<dyn SecretStore>>, rep
                 match tp_admin::SyslogAudit::start(syslog.clone(), cfg.profile(), store.as_ref())
                     .await
                 {
-                    Err(e) => report.push(id, Status::Fail, value, message(&e)),
+                    Err(e) => {
+                        let (status, msg) = dependent(cause, &e, "подключение приёмника syslog");
+                        report.push(id, status, value, msg);
+                    }
                     Ok(sink) => match sink.probe().await {
                         Err(e) => report.push(
                             id,
@@ -528,11 +564,16 @@ fn blob_kind(cfg: &Config) -> String {
     }
 }
 
-/// СУБД: подключение, проверки `tp-meta` (версия, репликация, часовой пояс, RLS, TLS), часы.
+/// СУБД: подключение, проверки `tp-meta` (версия, репликация, часовой пояс, RLS, TLS), часы. `cause` —
+/// причина отказавшего хранилища секретов, `slow_store` — хранилище отвечает медленнее транспортного
+/// таймаута (FIX-10): подключение не получает пароль и не успевает в `meta.doctor.timeout` — это не
+/// самостоятельный отказ проверки БД, а `warn` с исходной причиной.
 async fn database(
     cfg: &Config,
     store: &dyn SecretStore,
     doctor: &DoctorSection,
+    cause: Option<&str>,
+    slow_store: bool,
     report: &mut Report,
 ) {
     let meta = cfg
@@ -542,19 +583,30 @@ async fn database(
     let pool = match tokio::time::timeout(meta.timeout, infra::connect_db(cfg, store)).await {
         Ok(Ok(pool)) => pool,
         Ok(Err(e)) => {
-            report.push("database.connect", Status::Fail, "", message(&e));
+            let (status, msg) = dependent(cause, &e, "подключение к СУБД");
+            report.push("database.connect", status, "", msg);
             return;
         }
         Err(_) => {
-            report.push(
-                "database.connect",
-                Status::Fail,
-                "",
-                format!(
-                    "нет ответа за {}",
-                    tp_contracts::config::duration::format(meta.timeout)
-                ),
+            let no_answer = format!(
+                "нет ответа за {}",
+                tp_contracts::config::duration::format(meta.timeout)
             );
+            let (status, msg) = match (cause, slow_store) {
+                (Some(cause), _) => (
+                    Status::Warn,
+                    format!("{no_answer}: причина — хранилище секретов ({cause})"),
+                ),
+                (None, true) => (
+                    Status::Warn,
+                    format!(
+                        "{no_answer}: проверка не успела — хранилище секретов отвечает медленнее \
+                         транспортного таймаута (secrets.login удался с повторной попытки), узел под нагрузкой"
+                    ),
+                ),
+                _ => (Status::Fail, no_answer),
+            };
+            report.push("database.connect", status, "", msg);
             return;
         }
     };
@@ -739,7 +791,12 @@ pub async fn probe_blob(store: &dyn BlobStore, doctor: &DoctorSection, report: &
     let timed = |what: &'static str| {
         move |r: std::result::Result<Result<()>, tokio::time::error::Elapsed>| match r {
             Ok(r) => r,
-            Err(_) => Err(Error::Invalid(format!("{what}: нет ответа"))),
+            // FIX-10 (issue #5): «нет ответа» без числа не говорило, что это таймаут зонда, а не сбой
+            // BLOB — в сообщении срок и имя настройки.
+            Err(_) => Err(Error::Invalid(format!(
+                "{what}: нет ответа за {} (doctor.blob_timeout)",
+                tp_contracts::config::duration::format(limit)
+            ))),
         }
     };
 
@@ -896,6 +953,7 @@ async fn internal_key<F, Fut>(
     id: &str,
     tls: &tp_contracts::tls::InternalTls,
     store: Option<&Arc<dyn SecretStore>>,
+    cause: Option<&str>,
     load: F,
     report: &mut Report,
 ) where
@@ -925,17 +983,22 @@ async fn internal_key<F, Fut>(
     };
     match loaded {
         Ok(()) => report.push(id, Status::Ok, value, "ключ подходит к сертификату"),
-        Err(e) => report.push(id, Status::Fail, value, message(&e)),
+        Err(e) => {
+            let (status, msg) = dependent(cause, &e, "загрузка ключа");
+            report.push(id, status, value, msg);
+        }
     }
 }
 
 /// Закрытые ключи внутренних каналов (APP-36) — по правилу `tls.key` (APP-35): ключ межузлового канала
 /// (`cluster.rpc.tls.key`; загрузка `NodeTls`, как при запуске) и ключ клиентского сертификата СУБД
 /// (`database.tls.key`) подходят к своим сертификатам. При ссылке на секрет файл `key_file` не читается; без
-/// хранилища секретов проверка пропускается. Канал без mTLS — проверка пропускается.
+/// хранилища секретов проверка пропускается. Канал без mTLS — проверка пропускается. `cause` — причина
+/// отказавшего хранилища секретов (FIX-10): отказ загрузки ключа из хранилища — `warn` с ней, не `fail`.
 pub async fn internal_keys(
     cfg: &Config,
     store: Option<&Arc<dyn SecretStore>>,
+    cause: Option<&str>,
     report: &mut Report,
 ) {
     let id = "cluster.rpc.tls.key";
@@ -949,7 +1012,7 @@ pub async fn internal_keys(
                 }
                 .map(drop)
             };
-            internal_key(id, tls, store, load, report).await;
+            internal_key(id, tls, store, cause, load, report).await;
         }
         _ => report.push(id, Status::Skipped, "", "запросы узел → узел не включены"),
     }
@@ -973,7 +1036,7 @@ pub async fn internal_keys(
                 };
                 tp_platform::tls::check_pair(&cert_file, &key).await
             };
-            internal_key(id, tls, store, load, report).await;
+            internal_key(id, tls, store, cause, load, report).await;
         }
         _ => report.push(
             id,
@@ -1195,6 +1258,197 @@ mod tests {
         assert_eq!(report.exit_code(), 1);
     }
 
+    /// HTTP-имитация OpenBao (profile dev) для FIX-10, как стенд school-99 (issue #5): `/v1/sys/health` и
+    /// `/v1/sys/seal-status` отвечают сразу, а `/v1/auth/approle/login` — с задержкой `login_delay`
+    /// (свежий TLS-хендшейк и approle-вход не укладываются в транспортный таймаут под CPU-нагрузкой). KV
+    /// отдаёт пароль СУБД `thepost/db#password` и ключ сертификата `thepost/tls#key`.
+    struct SlowVault {
+        addr: std::net::SocketAddr,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for SlowVault {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl SlowVault {
+        async fn start(login_delay: Duration, key: &'static str) -> Self {
+            use axum::Json;
+            use axum::routing::{get, post};
+            use serde_json::json;
+
+            let login = move || async move {
+                tokio::time::sleep(login_delay).await;
+                Json(json!({
+                    "auth": { "client_token": "s.mock", "lease_duration": 60, "renewable": true }
+                }))
+            };
+            let db = || async {
+                Json(
+                    json!({ "data": { "data": { "password": "pw" }, "metadata": { "version": 1 } } }),
+                )
+            };
+            let tls = move || async move {
+                Json(json!({ "data": { "data": { "key": key }, "metadata": { "version": 1 } } }))
+            };
+            let router = axum::Router::new()
+                .route(
+                    "/v1/sys/health",
+                    get(|| async {
+                        Json(json!({ "initialized": true, "sealed": false, "version": "2.7.2" }))
+                    }),
+                )
+                .route(
+                    "/v1/sys/seal-status",
+                    get(|| async { Json(json!({ "type": "auto", "sealed": false })) }),
+                )
+                .route("/v1/auth/approle/login", post(login))
+                .route(
+                    "/v1/auth/token/lookup-self",
+                    get(|| async { Json(json!({ "data": { "ttl": 60, "renewable": true } })) }),
+                )
+                .route("/v1/thepost/data/db", get(db))
+                .route("/v1/thepost/data/tls", get(tls));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let task = tokio::spawn(async move {
+                axum::serve(listener, router).await.expect("serve");
+            });
+            Self { addr, task }
+        }
+    }
+
+    /// Конфигурация узла с хранилищем `vault` на `addr`: пароль СУБД и ключ сертификата — секреты, СУБД
+    /// недоступна (отказ не связан с хранилищем), BLOB локальный.
+    fn slow_vault_config(
+        dir: &Path,
+        addr: &std::net::SocketAddr,
+        transport: &str,
+        budget: &str,
+    ) -> String {
+        let slash = |p: &Path| p.display().to_string().replace('\\', "/");
+        let cert = dir.join("cert.pem");
+        std::fs::write(&cert, include_bytes!("testdata/cert.pem")).expect("cert");
+        std::fs::write(dir.join("secret_id"), "secret-1\n").expect("secret_id");
+        format!(
+            "domain: example.org\nprofile: dev\n\
+             database:\n  url: postgres://thepost@127.0.0.1:1/thepost?sslmode=disable\n  \
+             password: {{ secret: \"thepost/db#password\" }}\n  acquire_timeout: 100ms\n\
+             meta:\n  doctor:\n    timeout: 2s\n\
+             blob:\n  url: file://{blob}\n\
+             tls:\n  cert_file: \"{cert}\"\n\
+             secrets:\n  url: http://{addr}\n  tls: {{ allow_plaintext: true }}\n  \
+             request_timeout: {transport}\n  auth:\n    approle:\n      role_id: role-1\n      \
+             secret_id_file: {secret}\n\
+             doctor:\n  secrets_login_budget: {budget}\n",
+            blob = slash(&dir.join("blob")),
+            cert = slash(&cert),
+            secret = slash(&dir.join("secret_id")),
+        )
+    }
+
+    /// Приёмка FIX-10: вход в хранилище дольше транспортного таймаута (`secrets.request_timeout`), но в
+    /// бюджете `doctor.secrets_login_budget` — `secrets.login` не `fail`, а повтор с попытки в сообщении;
+    /// зависимые проверки сами healthy: ключ `tls.key` читается, зонд BLOB пишется; `database.connect` —
+    /// отказ по своей причине (СУБД недоступна), не «unavailable» из-за секрета.
+    #[tokio::test]
+    async fn slow_secret_store_retries_login_within_budget() {
+        let vault =
+            SlowVault::start(Duration::from_millis(400), include_str!("testdata/key.pem")).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            &slow_vault_config(dir.path(), &vault.addr, "100ms", "2s"),
+        );
+        let report = run_with(&path, None, Some(&crate::doctor_dns::MockDns::default())).await;
+        let login = report.get("secrets.login").expect("secrets.login");
+        assert_eq!(login.status, Status::Ok, "{report:?}");
+        assert!(
+            login.message.contains("удалось с попытки 2"),
+            "{}",
+            login.message
+        );
+        assert_eq!(
+            report.get("tls.key").map(|c| c.status),
+            Some(Status::Ok),
+            "{report:?}"
+        );
+        for id in ["blob.open", "blob.write", "blob.read", "blob.delete"] {
+            assert_eq!(report.get(id).map(|c| c.status), Some(Status::Ok), "{id}");
+        }
+        let connect = report.get("database.connect").expect("database.connect");
+        assert_eq!(connect.status, Status::Fail, "{report:?}");
+        assert!(
+            !connect.message.contains("хранилище секретов"),
+            "отказ СУБД выдан за секрет: {}",
+            connect.message
+        );
+    }
+
+    /// Приёмка FIX-10: хранилище не отвечает и за бюджет — `secrets.login` не `fail`, а `warn` «проверка не
+    /// успела»; зависимые проверки (`database.connect`, `tls.key`) — `warn` с исходной причиной хранилища в
+    /// сообщении, а не голый `unavailable`/`fail`; BLOB от секрета не зависит и работает.
+    #[tokio::test]
+    async fn slow_secret_store_beyond_budget_warns_dependents() {
+        let vault =
+            SlowVault::start(Duration::from_secs(10), include_str!("testdata/key.pem")).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            &slow_vault_config(dir.path(), &vault.addr, "100ms", "400ms"),
+        );
+        let report = run_with(&path, None, Some(&crate::doctor_dns::MockDns::default())).await;
+        let login = report.get("secrets.login").expect("secrets.login");
+        assert_eq!(login.status, Status::Warn, "{report:?}");
+        assert!(
+            login.message.contains("проверка не успела"),
+            "{}",
+            login.message
+        );
+        assert!(
+            login.message.contains("doctor.secrets_login_budget"),
+            "{}",
+            login.message
+        );
+        for (id, what) in [("database.connect", "СУБД"), ("tls.key", "ключа")] {
+            let check = report.get(id).unwrap_or_else(|| panic!("{id}: {report:?}"));
+            assert_eq!(check.status, Status::Warn, "{id}: {report:?}");
+            assert!(
+                check.message.contains("хранилище секретов"),
+                "{id}: {}",
+                check.message
+            );
+            assert!(
+                check.message.contains("secrets.login"),
+                "{id} без исходной причины ({what}): {}",
+                check.message
+            );
+        }
+        for id in ["blob.open", "blob.write", "blob.read", "blob.delete"] {
+            assert_eq!(report.get(id).map(|c| c.status), Some(Status::Ok), "{id}");
+        }
+        // Ложного каскада `fail` нет: хранилище и зависимые от него проверки — не `fail` (на school-99
+        // оставался единственный ожидаемый FAIL `dns.mx`).
+        for id in [
+            "secrets.store",
+            "secrets.login",
+            "database.connect",
+            "tls.key",
+            "blob.open",
+            "blob.write",
+        ] {
+            assert_ne!(
+                report.get(id).map(|c| c.status),
+                Some(Status::Fail),
+                "{id}: {report:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn database_checks_with_test_database() {
         let Some(url) = tp_testkit::pg_url() else {
@@ -1379,19 +1633,19 @@ mod tests {
         // Ключ в файле: хранилище не нужно.
         let key_file = format!("key_file: {c}/node-b-key.pem");
         let mut report = Report::default();
-        internal_keys(&config(&key_file, &key_file), None, &mut report).await;
+        internal_keys(&config(&key_file, &key_file), None, None, &mut report).await;
         assert_eq!(statuses(&report), [Some(Status::Ok); 2], "{report:?}");
         // Чужой ключ в файле.
         let other = format!("key_file: {c}/node-a-key.pem");
         let mut report = Report::default();
-        internal_keys(&config(&other, &other), None, &mut report).await;
+        internal_keys(&config(&other, &other), None, None, &mut report).await;
         assert_eq!(statuses(&report), [Some(Status::Fail); 2], "{report:?}");
 
         // Ключ по ссылке на секрет.
         let by_secret = "key: { secret: \"thepost/node-b#key\" }";
         let cfg = config(by_secret, by_secret);
         let mut report = Report::default();
-        internal_keys(&cfg, None, &mut report).await;
+        internal_keys(&cfg, None, None, &mut report).await;
         assert_eq!(statuses(&report), [Some(Status::Skipped); 2], "{report:?}");
         let mem = Arc::new(tp_testkit::MemSecretStore::default());
         let key = "thepost/node-b#key".parse().expect("ref");
@@ -1399,7 +1653,7 @@ mod tests {
         mem.set(&key, pem.clone());
         let store: Arc<dyn SecretStore> = mem.clone();
         let mut report = Report::default();
-        internal_keys(&cfg, Some(&store), &mut report).await;
+        internal_keys(&cfg, Some(&store), None, &mut report).await;
         assert_eq!(statuses(&report), [Some(Status::Ok); 2], "{report:?}");
         for id in ids {
             let check = report.get(id).expect("check");
@@ -1409,7 +1663,7 @@ mod tests {
         let wrong = std::fs::read_to_string(certs.join("node-a-key.pem")).expect("key");
         mem.set(&key, wrong.clone());
         let mut report = Report::default();
-        internal_keys(&cfg, Some(&store), &mut report).await;
+        internal_keys(&cfg, Some(&store), None, &mut report).await;
         assert_eq!(statuses(&report), [Some(Status::Fail); 2], "{report:?}");
         let body = wrong.lines().nth(1).expect("key body");
         assert!(!format!("{report:?}").contains(body), "ключ в отчёте");
@@ -1424,7 +1678,7 @@ mod tests {
             )
             .expect("config");
         let mut report = Report::default();
-        internal_keys(&plain, None, &mut report).await;
+        internal_keys(&plain, None, None, &mut report).await;
         assert_eq!(statuses(&report), [Some(Status::Skipped); 2], "{report:?}");
     }
 

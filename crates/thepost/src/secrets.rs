@@ -13,10 +13,10 @@ use async_trait::async_trait;
 use tp_contracts::config::duration;
 use tp_contracts::secrets::{Secret, SecretRef, SecretStore};
 use tp_contracts::{Error, Result};
-use tp_platform::secrets::DoctorReport;
+use tp_platform::secrets::{DoctorReport, DoctorStatus};
 use tp_platform::{Config, SecretsConfig, VaultStore};
 
-use crate::sections::{STARTUP, StartupSection};
+use crate::sections::{DOCTOR, DoctorSection, STARTUP, StartupSection};
 
 /// Имя секции хранилища секретов (регистрирует платформа).
 pub const SECRETS: &str = "secrets";
@@ -41,11 +41,37 @@ pub async fn store(
     cfg: &Config,
     store: Option<Arc<dyn SecretStore>>,
 ) -> Result<Arc<dyn SecretStore>> {
+    store_with_timeout(cfg, store, Duration::ZERO).await
+}
+
+/// Хранилище для проверок `thepost doctor` (FIX-10): как [`store`], но таймаут одного запроса к хранилищу —
+/// не меньше бюджета [`login_budget`]: под нагрузкой узла и чтения секретов зависимыми проверками (пароль СУБД,
+/// ключи TLS, ключи S3) не должны падать из-за транспортного таймаута, пока бюджет не исчерпан.
+pub async fn doctor_store(
+    cfg: &Config,
+    store: Option<Arc<dyn SecretStore>>,
+) -> Result<Arc<dyn SecretStore>> {
+    store_with_timeout(cfg, store, login_budget(cfg)).await
+}
+
+/// [`store`] с таймаутом одного запроса не меньше `min_timeout`.
+async fn store_with_timeout(
+    cfg: &Config,
+    store: Option<Arc<dyn SecretStore>>,
+    min_timeout: Duration,
+) -> Result<Arc<dyn SecretStore>> {
     if let Some(store) = store {
         return Ok(store);
     }
     let section = cfg.section::<SecretsConfig>(SECRETS)?;
     if section.url.is_some() {
+        let section = if section.request_timeout < min_timeout {
+            let mut slow = (*section).clone();
+            slow.request_timeout = min_timeout;
+            slow
+        } else {
+            (*section).clone()
+        };
         let vault = VaultStore::new(&section, cfg.profile())
             .await
             .map_err(context)?;
@@ -154,13 +180,109 @@ async fn cause(cfg: &Config) -> String {
 }
 
 /// Проверки `thepost doctor` для хранилища секретов (PLT-12): секция, доступность, распечатывание, вход узла,
-/// срок токена узла.
+/// срок токена узла. Таймаут ответа при живом хранилище — не `fail`, а повтор в пределах бюджета
+/// [`login_budget`] и `warn` «проверка не успела» (FIX-10, issue #5).
 pub async fn doctor(cfg: &Config) -> DoctorReport {
     let section = cfg
         .section::<SecretsConfig>(SECRETS)
         .map(|s| (*s).clone())
         .unwrap_or_default();
-    tp_platform::secrets::doctor(&section, cfg.profile()).await
+    let mut report = tp_platform::secrets::doctor(&section, cfg.profile()).await;
+    retry_slow_store(cfg, &section, &mut report).await;
+    report
+}
+
+/// Бюджет doctor'а на проверки хранилища секретов `doctor.secrets_login_budget` (FIX-10).
+pub fn login_budget(cfg: &Config) -> Duration {
+    cfg.section::<DoctorSection>(DOCTOR)
+        .map(|d| d.secrets_login_budget)
+        .unwrap_or_default()
+}
+
+/// Проверка не прошла из-за транспортного таймаута: у reqwest — «operation timed out» в причине. Остальные
+/// отказы (нет соединения, запечатано, 4xx/5xx) — настоящая недоступность или ошибка настройки, повтор и
+/// «не успела» к ним не применяются.
+fn timed_out(c: &tp_platform::secrets::DoctorCheck) -> bool {
+    c.status == DoctorStatus::Fail && c.message.contains("timed out")
+}
+
+/// FIX-10 (issue #5): на нагруженном узле (load 20–70 при 8 vCPU) ответ `/v1/auth/approle/login` не укладывается
+/// в транспортный `secrets.request_timeout`, хотя `/v1/sys/health` OpenBao отвечает за единицы миллисекунд, а
+/// рабочий процесс узла секреты читает — `doctor` ронял `secrets.login` и каскадом зависимые проверки. Здесь
+/// проверки `secrets.store`/`secrets.login` с таймаутом повторяются, пока не исчерпан бюджет
+/// `doctor.secrets_login_budget` (таймаут запроса каждой попытки — не меньше остатка бюджета, но не меньше
+/// транспортного). Удалось — итог с попытки, отмеченной в сообщении; таймаут и после бюджета — `warn`
+/// «проверка не успела» с исходной причиной: «хранилище недоступно» (нет соединения, запечатано, 5xx) и
+/// «проверка не успела» (таймаут) различаются, ложных аварий мониторинга на работающих узлах нет.
+async fn retry_slow_store(cfg: &Config, section: &SecretsConfig, report: &mut DoctorReport) {
+    if !report.checks.iter().any(timed_out) {
+        return;
+    }
+    let budget = login_budget(cfg);
+    if budget.is_zero() {
+        return;
+    }
+    let transport = section.request_timeout;
+    let started = std::time::Instant::now();
+    let mut attempt = 2u32;
+    while let Some(left) = budget.checked_sub(started.elapsed()) {
+        let mut slow = section.clone();
+        slow.request_timeout = transport.max(left);
+        let retried = tp_platform::secrets::doctor(&slow, cfg.profile()).await;
+        let succeeded = !retried.checks.iter().any(timed_out);
+        *report = retried;
+        if succeeded {
+            if let Some(c) = report
+                .checks
+                .iter_mut()
+                .find(|c| c.id == "secrets_login" && c.status == DoctorStatus::Ok)
+            {
+                c.message = format!(
+                    "{} (удалось с попытки {attempt}: ответ дольше транспортного таймаута {})",
+                    c.message,
+                    duration::format(transport)
+                );
+            }
+            return;
+        }
+        attempt += 1;
+    }
+    for c in report.checks.iter_mut().filter(|c| timed_out(c)) {
+        c.status = DoctorStatus::Warn;
+        c.message = format!(
+            "проверка не успела за {} (бюджет doctor.secrets_login_budget): {}; транспортный таймаут {} \
+             исчерпан, но это не отказ хранилища: нет соединения или «запечатано» выглядели бы иначе; узел \
+             может работать на прочитанных секретах",
+            duration::format(budget),
+            c.message,
+            duration::format(transport)
+        );
+    }
+}
+
+/// Почему хранилище секретов сейчас не обслуживает запросы узла (FIX-10): непройденная (в том числе «не
+/// успела») проверка доступности или входа. Зависимые проверки `doctor` — `database.connect`, `tls.key`,
+/// `blob.write` и другие, которым нужен секрет, — тогда не самостоятельны: их реальная причина — хранилище,
+/// и она указывается в сообщении вместо голого «unavailable»/«нет ответа», отдельного `fail` не добавляется.
+pub fn unavailable_cause(report: &DoctorReport) -> Option<String> {
+    let bad = |id: &str| {
+        report
+            .get(id)
+            .filter(|c| matches!(c.status, DoctorStatus::Fail | DoctorStatus::Warn))
+            .map(|c| format!("{}: {}", id.replacen('_', ".", 1), c.message))
+    };
+    bad("secrets_store").or_else(|| bad("secrets_login"))
+}
+
+/// Хранилище живо, но отвечает медленнее транспортного таймаута — `secrets.login` удался только с повторной
+/// попытки в бюджете [`login_budget`] (FIX-10, issue #5). Зависимые проверки с собственным таймаутом
+/// (`database.connect` — `meta.doctor.timeout`) могут не успеть по той же причине — CPU-нагрузка узла, —
+/// это не самостоятельный отказ: их сообщения отмечают причину, итог — `warn`.
+pub fn slow_store(report: &DoctorReport) -> bool {
+    report
+        .checks
+        .iter()
+        .any(|c| c.message.contains("удалось с попытки"))
 }
 
 fn context(e: Error) -> Error {
