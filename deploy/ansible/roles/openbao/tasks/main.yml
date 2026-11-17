@@ -118,6 +118,14 @@
 
 # FIX-09 (issue #4): дистрибутивный юнит (KillMode=process) не переживает нечистую остановку — детали в шаблоне.
 # Без условия по дистрибутиву: deb и rpm ставят один и тот же пакетный юнит, семантика systemd не зависит от ОС.
+- name: Drop-in directory for openbao.service (FIX-15)
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ openbao_service }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Drop-in for openbao.service (survive unclean shutdown, FIX-09)
   ansible.builtin.template:
     src: override.conf.j2
