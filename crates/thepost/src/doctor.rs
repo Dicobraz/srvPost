@@ -1337,7 +1337,8 @@ mod tests {
         format!(
             "domain: example.org\nprofile: dev\n\
              database:\n  url: postgres://thepost@127.0.0.1:1/thepost?sslmode=disable\n  \
-             password: {{ secret: \"thepost/db#password\" }}\n  acquire_timeout: 100ms\n\
+             password: {{ secret: \"thepost/db#password\" }}\n  acquire_timeout: 100ms\n  \
+             tls: {{ allow_plaintext: true }}\n\
              meta:\n  doctor:\n    timeout: 2s\n\
              blob:\n  url: file://{blob}\n\
              tls:\n  cert_file: \"{cert}\"\n\
