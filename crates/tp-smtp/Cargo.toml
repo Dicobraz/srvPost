@@ -17,7 +17,9 @@ tp-platform.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
+chacha20poly1305.workspace = true
 futures.workspace = true
+hmac.workspace = true
 mail-auth = { workspace = true, features = ["arc"] }
 mail-builder.workspace = true
 mail-parser.workspace = true
@@ -27,6 +29,7 @@ reqwest.workspace = true
 rustls-webpki.workspace = true
 schemars.workspace = true
 serde.workspace = true
+sha1.workspace = true
 sha2.workspace = true
 smtp-proto.workspace = true
 thiserror.workspace = true
