@@ -1,6 +1,8 @@
 //! META-46…48: календари и контакты на PostgreSQL — общий набор `tp_testkit::suite::dav`, сигналы, RLS, миграция
 //! на базе прежней схемы, шард ящика, очистка надгробий, устаревшие токены синхронизации, пересчёт поисковых
 //! строк контактов (META-78) и книга GAL организации (META-63).
+//! META-60: миграция 0030 (свойства коллекций CTR-56) на базе с существующими учётной записью, коллекцией
+//! и объектом.
 
 mod common;
 
@@ -11,7 +13,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, Executor, PgPool};
 use time::OffsetDateTime;
 use tp_contracts::dav::{
-    CardSearch, Collection, CollectionKind, Component, DavStore, DeleteOutcome,
+    CardSearch, Collection, CollectionId, CollectionKind, Component, DavStore, DeleteOutcome,
     GAL_COLLECTION_NAME, GalCard, ObjectIndex, Precondition, PutOutcome,
 };
 use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert};
@@ -735,6 +737,147 @@ END:VCARD
     tx.commit().await.expect("commit");
     assert_eq!(pending, 0);
     assert_eq!(found("петров").await, ["old.vcf"]);
+
+    pool.close().await;
+    admin
+        .execute(AssertSqlSafe(format!("DROP DATABASE {name} WITH (FORCE)")))
+        .await
+        .expect("drop database");
+}
+
+/// META-60 (CTR-56): миграция 0030 применяется к базе с существующими учётной записью, коллекцией и объектом:
+/// новые столбцы коллекции — со значениями по умолчанию (не по умолчанию, подписана, видима, без оповещений),
+/// псевдонимы учётной записи — пусты, `placed_modseq` объекта — из `created_modseq`; единственная коллекция
+/// по умолчанию на вид учётной записи — ограничением СУБД, смена — обычной записью.
+#[tokio::test]
+async fn migration_0030_on_existing_collections() {
+    let Some(url) = common::pg_url() else { return };
+    let (admin, pool, name) = db_until(&url, 29).await;
+    let tenant = common::tenant(&pool).await;
+    let (domain, _) = common::domain(&pool, tenant).await;
+    let scope = AccountScope {
+        tenant,
+        account: AccountId::new(),
+    };
+    let book = CollectionId::new();
+    let mut tx = schema::begin(&pool, tenant).await.expect("begin");
+    // Учётная запись — строкой схемы до 0030 (без псевдонимов); вход — полный адрес (`account_addresses`
+    // пропускает строки без `@`).
+    sqlx::query(
+        "INSERT INTO accounts (tenant_id, account_id, domain_id, login) VALUES ($1, $2, $3, 'old@example.org')",
+    )
+    .bind(tenant.as_uuid())
+    .bind(scope.account.as_uuid())
+    .bind(domain.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("account");
+    sqlx::query("UPDATE mailbox_state SET modseq = 7 WHERE account_id = $1")
+        .bind(scope.account.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("modseq");
+    sqlx::query(
+        "INSERT INTO dav_collections (tenant_id, account_id, collection_id, kind, name, display_name,
+                                      components, created_modseq, props_modseq, modseq)
+         VALUES ($1, $2, $3, 'address_book', 'contacts', 'Contacts', '{VCARD}', 5, 5, 5)",
+    )
+    .bind(tenant.as_uuid())
+    .bind(scope.account.as_uuid())
+    .bind(book.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("collection");
+    sqlx::query(
+        "INSERT INTO dav_objects (tenant_id, account_id, object_id, collection_id, name, uid, etag,
+                                  component, body, created_modseq, modseq)
+         VALUES ($1, $2, $3, $4, 'a.vcf', 'a', '5', 'VCARD', 'BEGIN:VCARD\r\nUID:a\r\nEND:VCARD\r\n', 5, 5)",
+    )
+    .bind(tenant.as_uuid())
+    .bind(scope.account.as_uuid())
+    .bind(uuid::Uuid::now_v7())
+    .bind(book.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("object");
+    tx.commit().await.expect("commit");
+
+    schema::migrate(&pool).await.expect("migrate");
+    let meta = PgMeta::new(pool.clone(), config());
+
+    // Свойства прежней коллекции — по умолчанию; объект читается с пустыми поисковыми строками.
+    let got = meta
+        .get_collection(scope, book)
+        .await
+        .expect("get")
+        .expect("коллекция");
+    assert_eq!(
+        (got.kind, got.name.as_str()),
+        (CollectionKind::AddressBook, "contacts")
+    );
+    assert!(!got.is_default && got.subscribed && got.visible);
+    assert!(
+        got.alerts_with_time.is_none() && got.alerts_without_time.is_none(),
+        "оповещений по умолчанию нет"
+    );
+    let object = meta
+        .get_object(scope, book, "a.vcf")
+        .await
+        .expect("object")
+        .expect("a");
+    assert_eq!(object.etag, "5");
+    assert!(object.index.search.strings.is_empty());
+
+    // Псевдонимы прежней учётной записи — пусты: адреса — только основной (CTR-53).
+    let account = meta
+        .get(tenant, scope.account)
+        .await
+        .expect("account")
+        .expect("учётная запись");
+    assert_eq!(account.aliases, Vec::<String>::new());
+    assert_eq!(account.addresses().as_slice(), [account.login.as_str()]);
+
+    // placed_modseq — из created_modseq: объект виден в changes созданным (перенос его не меняет).
+    let ch = meta
+        .changes(scope, book, ModSeq::ZERO, 10)
+        .await
+        .expect("changes");
+    assert_eq!(ch.created, ["a.vcf"]);
+
+    // Единственная коллекция по умолчанию на вид учётной записи — ограничением СУБД.
+    let mut tx = schema::begin(&pool, tenant).await.expect("begin");
+    sqlx::query("UPDATE dav_collections SET is_default = true WHERE collection_id = $1")
+        .bind(book.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("default");
+    let err = sqlx::query(
+        "INSERT INTO dav_collections (tenant_id, account_id, collection_id, kind, name, display_name,
+                                      components, created_modseq, props_modseq, modseq, is_default)
+         VALUES ($1, $2, $3, 'address_book', 'other', 'Other', '{VCARD}', 6, 6, 6, true)",
+    )
+    .bind(tenant.as_uuid())
+    .bind(scope.account.as_uuid())
+    .bind(CollectionId::new().as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect_err("вторая коллекция по умолчанию");
+    assert!(matches!(schema::db_err(err), Error::Conflict));
+    tx.rollback().await.expect("rollback");
+
+    // Смена коллекции по умолчанию — обычной записью свойств после миграции.
+    let mut updated = got;
+    updated.is_default = true;
+    meta.update_collection(scope, updated)
+        .await
+        .expect("update");
+    assert!(
+        meta.get_collection(scope, book)
+            .await
+            .expect("get")
+            .expect("коллекция")
+            .is_default
+    );
 
     pool.close().await;
     admin
