@@ -58,6 +58,50 @@ pub struct JmapConfig {
     pub calendars: CalendarsConfig,
     /// Отправка: отложенная отправка и статус доставки (`EmailSubmission`).
     pub submission: SubmissionConfig,
+    /// Кэш списков идентификаторов `Email/query` и ответов `Email/get` (PERF-02).
+    pub query_cache: QueryCacheConfig,
+}
+
+/// Секция `jmap.query_cache`: кэш результатов `Email/query` (список идентификаторов) и `Email/get`
+/// (ответ без `state`). Инвалидация — по версиям папок учётной записи (любое изменение письма меняет
+/// его папку), `Email/query` при изменениях обновляется инкрементально по журналу; `ttl` — страховка.
+///
+/// ```yaml
+/// query_cache:
+///   max_bytes: 64MiB
+///   get_max_bytes: 8MiB
+///   patch_max: 200
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct QueryCacheConfig {
+    /// Бюджет кэша `Email/query`, байт по всем записям; `0` — кэш выключен.
+    pub max_bytes: usize,
+    /// Бюджет кэша `Email/get`, байт по всем записям; `0` — кэш выключен.
+    pub get_max_bytes: usize,
+    /// Записей в каждом из кэшей не больше (при превышении вытесняется самая старая по обращению).
+    pub max_entries: usize,
+    /// Сколько хранится запись; инвалидация по версиям папок — основная, это страховка.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub ttl: Duration,
+    /// Изменений писем в журнале для инкрементального обновления `Email/query`; больше — полная пересборка.
+    pub patch_max: usize,
+    /// Параллельных точных чтений писем в пересборке `Email/get`.
+    pub max_parallel_get: usize,
+}
+
+impl Default for QueryCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes: 64 * 1024 * 1024,
+            get_max_bytes: 8 * 1024 * 1024,
+            max_entries: 256,
+            ttl: Duration::from_secs(600),
+            patch_max: 200,
+            max_parallel_get: 8,
+        }
+    }
 }
 
 /// Секция `jmap.submission`: отложенная отправка и статус доставки `EmailSubmission` (SRS 4.1, 4.2).
@@ -158,6 +202,7 @@ impl Default for JmapConfig {
             autoconfig: AutoconfigConfig::default(),
             calendars: CalendarsConfig::default(),
             submission: SubmissionConfig::default(),
+            query_cache: QueryCacheConfig::default(),
         }
     }
 }
