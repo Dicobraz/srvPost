@@ -5,6 +5,9 @@ stand_dir: /var/lib/thepost-stand
 stand_etc_dir: /etc/thepost-stand
 
 # Узел SMB: адрес и имя (имя — в сертификате клиентских протоколов; на генераторе — запись /etc/hosts).
+# Адрес — первое поле /etc/hosts, только IP (hosts(5)): ansible_host; для docker-подключения роль возьмёт
+# адрес контейнера из фактов узла; имя — последний резерв: роль резолвит его с генератора (getent) и падает
+# до записи /etc/hosts, если адрес не IP и не резолвится (FIX-11: мусорная строка молча тормозила нагрузку).
 stand_smb_host: "{{ groups['smb'] | first }}"
 stand_smb_address: "{{ hostvars[stand_smb_host].ansible_host | default(stand_smb_host) }}"
 stand_smb_hostname: "{{ hostvars[stand_smb_host].thepost_hostname | default('mail.stand.test') }}"
