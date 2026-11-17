@@ -16,13 +16,13 @@
 //! получателю из `ATTENDEE` сообщения (DAV-41), `REPLY` — только от адреса участника события и только организатору;
 //! меньший `SEQUENCE` — устаревшее сообщение. Отказ — `Ok(Ignored)` с причиной без содержимого.
 //!
-//! Снаружи — только почта (решение 123, DAV-43): что применять, бронировать и на что отвечать, решает одно место —
-//! матрица [`inbound_allowed`] от типа отправителя ([`SenderKind`], определяет вызывающий) и действия
-//! ([`InboundAction::of`]: метод и получатель-ресурс). Не разрешено — `Ignored`: ни события, ни брони, ни ответа. По
-//! умолчанию своей организации — всё; извне (партнёр, соседняя организация установки, внешний) — только обновление,
-//! `REPLY` и `CANCEL` к существующему событию (RFC 5546 §6.1, RFC 6638 §11.2): обновление (`REQUEST`, тот же
-//! `ORGANIZER`, `SEQUENCE` строго больше) и отмена — от организатора события получателю из `ATTENDEE`, ответ — от
-//! участника события его организатору; новое приглашение, прочие методы и любое сообщение ресурсу — письмом. `REFRESH` — только от участника события, организатор которого — получатель (RFC 5546 §6.1.6).
+//! Снаружи — только почта (решение 123 → 124, DAV-43/CTR-93): что применять, бронировать и на что отвечать, решает
+//! одно место — матрица доверия [`TrustMatrix::inbound`] от типа отправителя ([`PeerKind`], определяет вызывающий)
+//! и действия ([`InboundAction::of`]: метод и получатель-ресурс). Не разрешено — `Ignored`: ни события, ни брони,
+//! ни ответа. По умолчанию (`TrustMatrix::default()`, до DAV-44 — без чтения политики) своей организации — всё;
+//! извне — только письмо: `ApplyIfExisting` (обновление, `REPLY` и `CANCEL` к существующему событию, RFC 5546 §6.1,
+//! RFC 6638 §11.2) исполняется как «только письмо» до DAV-44, новое приглашение, прочие методы и любое сообщение
+//! ресурсу — письмом. `REFRESH` — только от участника события, организатор которого — получатель (RFC 5546 §6.1.6).
 //! Повторная доставка ничего не меняет. Запись — с условием по ETag: одновременное изменение — повтор
 //! (`dav.schedule_write_attempts`), затем `Unavailable`.
 //!
@@ -44,10 +44,11 @@ use tp_contracts::dav::{
 };
 use tp_contracts::meta::AccountScope;
 use tp_contracts::schedule::{
-    InboundAction, InboxMessage, ItipDelivery, ItipMessage, ItipMethod, ItipOutcome, SenderKind,
-    inbound_allowed,
+    InboundAction, InboxMessage, ItipDelivery, ItipMessage, ItipMethod, ItipOutcome,
 };
 use tp_contracts::sharing::BookingDecision;
+use tp_contracts::trust::{InboundDecision, PeerKind, TrustMatrix};
+
 use tp_contracts::{Error, Result};
 
 use crate::booking::{self, Booking, BookingDeps, Verdict};
@@ -689,7 +690,7 @@ impl ItipDelivery for ItipInbox {
             return refuse("REFRESH не от участника события");
         }
         // Отмена не своей организации — тоже только участнику.
-        if msg.sender != SenderKind::Own
+        if msg.sender != PeerKind::Own
             && it.method == ItipMethod::Cancel
             && it.meeting.attendee(&to).is_none()
         {
@@ -700,9 +701,19 @@ impl ItipDelivery for ItipInbox {
             None => false,
         };
         let update = it.method == ItipMethod::Request && self.update_of(msg.recipient, &it).await?;
-        // Решение 123: «кто — что» — только здесь, по матрице.
-        if !inbound_allowed(msg.sender, InboundAction::of(it.method, resource, update)) {
-            return refuse("отправителю не разрешено (решение 123)");
+        // Решение 123 → 124: «кто — что» — только здесь, по матрице доверия. До DAV-44 — умолчания контракта;
+        // `ApplyIfExisting` (обновление, `REPLY`, `CANCEL` к существующему событию) исполняется как «только
+        // письмо».
+        let decision = TrustMatrix::default()
+            .inbound(msg.sender, InboundAction::of(it.method, resource, update));
+        match decision {
+            InboundDecision::Apply => {}
+            InboundDecision::ApplyIfExisting => {
+                return refuse("только к существующему событию (до DAV-44)");
+            }
+            InboundDecision::MailOnly => {
+                return refuse("отправителю не разрешено (решение 124)");
+            }
         }
         let booked = match &self.booking {
             Some(b) if resource && it.method == ItipMethod::Request => {
@@ -803,7 +814,7 @@ impl ItipInbox {
             from: to.to_owned(),
             method: ItipMethod::Reply,
             ics: reply.to_string(),
-            sender: SenderKind::Own,
+            sender: PeerKind::Own,
         };
         if let Err(e) = self.deliver(&m).await {
             tracing::warn!(error = %e, "iTIP: ответ ресурса организатору не отправлен");

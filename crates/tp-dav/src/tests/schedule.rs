@@ -15,8 +15,9 @@ use tp_contracts::dav::{CollectionKind, DavObject, DavStore};
 use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert};
 use tp_contracts::queue::Outbound;
 use tp_contracts::schedule::{
-    ItipDelivery, ItipMessage, ItipMethod, ItipOutcome, ItipOutgoing, ItipSender, SenderKind,
+    ItipDelivery, ItipMessage, ItipMethod, ItipOutcome, ItipOutgoing, ItipSender,
 };
+use tp_contracts::trust::PeerKind;
 use tp_contracts::{DomainId, TenantId};
 use tp_testkit::{
     FakeAuthenticator, ManualClock, MemDav, MemGroups, MemItipSender, MemMetadata, MemOutbound,
@@ -211,14 +212,13 @@ impl Sched {
 
     /// Доставка iTIP учётной записи `to` от `from` своей организации: механика приёма без матрицы решения 123.
     async fn deliver(&self, to: &str, from: &str, method: ItipMethod, ics: &str) -> ItipOutcome {
-        self.deliver_as(SenderKind::Own, to, from, method, ics)
-            .await
+        self.deliver_as(PeerKind::Own, to, from, method, ics).await
     }
 
     /// Доставка iTIP учётной записи `to` от `from` отправителя вида `sender`.
     async fn deliver_as(
         &self,
-        sender: SenderKind,
+        sender: PeerKind,
         to: &str,
         from: &str,
         method: ItipMethod,
@@ -837,18 +837,14 @@ async fn deliver_each_method_idempotent() {
     }
 }
 
-/// Решение 123 (DAV-43): извне — партнёр, соседняя организация установки, внешний — новое приглашение и прочие методы
-/// остаются письмом; обновление, `REPLY` и `CANCEL` к существующему событию применяются (RFC 5546 §6.1, RFC 6638
-/// §11.2): обновление — того же организатора со строго большим `SEQUENCE`, ответ — от участника события его
-/// организатору, отмена — от организатора получателю из `ATTENDEE`.
+/// Решение 123 → 124 (DAV-43, CTR-93): извне — партнёр, соседняя организация установки, внешний — любое
+/// сообщение iTIP остаётся письмом: новое приглашение и прочие методы — `MailOnly` (закреплено), а обновление,
+/// `REPLY` и `CANCEL` к существующему событию (`ApplyIfExisting`, RFC 5546 §6.1, RFC 6638 §11.2) до DAV-44
+/// исполняются как «только письмо»; своя организация (вошедший) — всё.
 #[tokio::test]
-async fn outside_reply_and_cancel_only_to_existing_event() {
+async fn outside_stays_mail_until_dav44() {
     let env = Sched::new().await;
-    let outside = [
-        SenderKind::Partner,
-        SenderKind::Neighbor,
-        SenderKind::External,
-    ];
+    let outside = [PeerKind::Partner, PeerKind::Neighbor, PeerKind::External];
     let request = itip_msg(
         "REQUEST",
         &meeting("m-43", ANNA, T10, 0, &attendee(PETR, "NEEDS-ACTION")),
@@ -863,108 +859,60 @@ async fn outside_reply_and_cancel_only_to_existing_event() {
         env.by_uid(PETR, "m-43").await.is_none(),
         "новое приглашение извне — письмом"
     );
-    // Сотрудник сам внёс встречу (клиент принял приглашение) — дальше отмена организатора извне применяется.
+    // Сотрудник сам внёс встречу (клиент принял приглашение).
     assert_eq!(
         env.deliver(PETR, ANNA, ItipMethod::Request, &request).await,
         ItipOutcome::Applied
     );
-    // Обновление извне (как у Exchange): тот же ORGANIZER и SEQUENCE строго больше; иначе — письмом.
-    let out = env
-        .deliver_as(
-            SenderKind::External,
-            PETR,
-            ANNA,
-            ItipMethod::Request,
-            &request,
-        )
-        .await;
-    assert!(
-        matches!(out, ItipOutcome::Ignored(_)),
-        "тот же SEQUENCE: {out:?}"
-    );
+    // Обновление извне (тот же ORGANIZER, SEQUENCE строго больше) — до DAV-44 письмом.
     let moved = itip_msg(
         "REQUEST",
         &meeting("m-43", ANNA, T14, 1, &attendee(PETR, "NEEDS-ACTION")),
     );
+    for kind in outside {
+        let out = env
+            .deliver_as(kind, PETR, ANNA, ItipMethod::Request, &moved)
+            .await;
+        assert!(matches!(out, ItipOutcome::Ignored(_)), "{kind:?}: {out:?}");
+    }
+    assert!(
+        !env.body(PETR, "m-43").await.contains(T14),
+        "время не переносится"
+    );
+    // Своя организация — обновление применяется.
     assert_eq!(
-        env.deliver_as(SenderKind::Partner, PETR, ANNA, ItipMethod::Request, &moved)
-            .await,
+        env.deliver(PETR, ANNA, ItipMethod::Request, &moved).await,
         ItipOutcome::Applied
     );
     assert!(
         env.body(PETR, "m-43").await.contains(T14),
         "время перенесено"
     );
-    let out = env
-        .deliver_as(
-            SenderKind::Neighbor,
-            PETR,
-            ANNA,
-            ItipMethod::Request,
-            &moved,
-        )
-        .await;
-    assert!(matches!(out, ItipOutcome::Ignored(_)), "повтор: {out:?}");
-    let eve = "eve@evil.example";
-    let hijack = itip_msg(
-        "REQUEST",
-        &meeting("m-43", eve, T10, 5, &attendee(PETR, "NEEDS-ACTION")),
-    );
-    let out = env
-        .deliver_as(
-            SenderKind::External,
-            PETR,
-            eve,
-            ItipMethod::Request,
-            &hijack,
-        )
-        .await;
-    assert!(
-        matches!(out, ItipOutcome::Ignored(_)),
-        "чужой ORGANIZER: {out:?}"
-    );
-    assert!(env.body(PETR, "m-43").await.contains(T14));
-    let foreign = itip_msg(
-        "CANCEL",
-        &meeting("m-43", ANNA, T10, 1, &attendee(OLGA, "NEEDS-ACTION")),
-    );
-    let out = env
-        .deliver_as(
-            SenderKind::External,
-            PETR,
-            ANNA,
-            ItipMethod::Cancel,
-            &foreign,
-        )
-        .await;
-    assert!(
-        matches!(out, ItipOutcome::Ignored(_)),
-        "отмена не участнику: {out:?}"
-    );
-    assert!(!env.body(PETR, "m-43").await.contains("STATUS:CANCELLED"));
+    // Отмена извне получателю из `ATTENDEE` — до DAV-44 письмом.
     let cancel = itip_msg(
         "CANCEL",
         &meeting("m-43", ANNA, T10, 1, &attendee(PETR, "NEEDS-ACTION")),
     );
+    for kind in outside {
+        let out = env
+            .deliver_as(kind, PETR, ANNA, ItipMethod::Cancel, &cancel)
+            .await;
+        assert!(matches!(out, ItipOutcome::Ignored(_)), "{kind:?}: {out:?}");
+    }
+    assert!(!env.body(PETR, "m-43").await.contains("STATUS:CANCELLED"));
     assert_eq!(
-        env.deliver_as(
-            SenderKind::External,
-            PETR,
-            ANNA,
-            ItipMethod::Cancel,
-            &cancel
-        )
-        .await,
+        env.deliver(PETR, ANNA, ItipMethod::Cancel, &cancel).await,
         ItipOutcome::Applied
     );
     assert!(env.body(PETR, "m-43").await.contains("STATUS:CANCELLED"));
-    // Встреча нашего организатора: ответ участника извне — применяется; ADD, COUNTER и REFRESH извне — письмом.
+    // Встреча нашего организатора: ответ участника извне — до DAV-44 письмом; ADD, COUNTER и REFRESH — тоже.
     let mine = meeting("m-44", PETR, T10, 0, &attendee(ANNA, "NEEDS-ACTION"));
     assert_eq!(env.put(PETR, "m44.ics", &[], &mine).await.status, 201);
     for (method, ics) in [
         (ItipMethod::Add, itip_msg("ADD", &mine)),
         (ItipMethod::Counter, itip_msg("COUNTER", &mine)),
         (ItipMethod::Refresh, itip_msg("REFRESH", &mine)),
+        (ItipMethod::Reply, itip_msg("REPLY", &mine)),
     ] {
         for kind in outside {
             let out = env.deliver_as(kind, PETR, ANNA, method, &ics).await;
@@ -979,28 +927,16 @@ async fn outside_reply_and_cancel_only_to_existing_event() {
         0,
         "во входящих планирования пусто"
     );
+    // Свой участник отвечает — применяется.
     let reply = itip_msg(
         "REPLY",
         &meeting("m-44", PETR, T10, 0, &attendee(ANNA, "ACCEPTED")),
     );
-    for kind in outside {
-        assert_eq!(
-            env.deliver_as(kind, PETR, ANNA, ItipMethod::Reply, &reply)
-                .await,
-            ItipOutcome::Applied,
-            "{kind:?}"
-        );
-    }
-    assert!(env.body(PETR, "m-44").await.contains("PARTSTAT=ACCEPTED"));
-    // Ответ на событие, которого у получателя нет, — письмом.
-    let stray = itip_msg(
-        "REPLY",
-        &meeting("m-45", PETR, T10, 0, &attendee(ANNA, "ACCEPTED")),
+    assert_eq!(
+        env.deliver(PETR, ANNA, ItipMethod::Reply, &reply).await,
+        ItipOutcome::Applied
     );
-    let out = env
-        .deliver_as(SenderKind::External, PETR, ANNA, ItipMethod::Reply, &stray)
-        .await;
-    assert!(matches!(out, ItipOutcome::Ignored(_)), "{out:?}");
+    assert!(env.body(PETR, "m-44").await.contains("PARTSTAT=ACCEPTED"));
 }
 
 /// RFC 5546 §6.1.6: `REFRESH` — только от участника существующего события, организатор которого — получатель.

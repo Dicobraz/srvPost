@@ -13,11 +13,12 @@ use time::Time;
 use tp_contracts::auth::Principal;
 use tp_contracts::dav::{Collection, CollectionKind, DavStore};
 use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert};
-use tp_contracts::schedule::{ItipDelivery, ItipMessage, ItipMethod, ItipOutcome, SenderKind};
+use tp_contracts::schedule::{ItipDelivery, ItipMessage, ItipMethod, ItipOutcome};
 use tp_contracts::sharing::{
     Bookers, BookingPolicy, CollectionAcl, CollectionRights, DayOfWeek, DelegateLevel,
     DelegateStore, Delegation, ResourceStore, WorkingHours,
 };
+use tp_contracts::trust::PeerKind;
 use tp_contracts::{DomainId, TenantId};
 use tp_testkit::{
     FakeAuthenticator, FakeSharingAuthorizer, ManualClock, MemDav, MemGroups, MemItipSender,
@@ -760,7 +761,7 @@ async fn room_imip_from_partner_stays_mail() {
     let partner = "anna@partner.example";
     let out = env
         .imip_to_room(
-            SenderKind::Partner,
+            PeerKind::Partner,
             "x1",
             partner,
             "20260107T100000Z",
@@ -787,7 +788,7 @@ async fn room_imip_from_partner_stays_mail() {
             from: partner.into(),
             method: ItipMethod::Cancel,
             ics: cancel,
-            sender: SenderKind::Partner,
+            sender: PeerKind::Partner,
         })
         .await
         .expect("приём");
@@ -822,7 +823,7 @@ async fn room_internal_foreign_organizer_stays_mail() {
                 from: organizer.into(),
                 method: ItipMethod::Request,
                 ics,
-                sender: SenderKind::Own,
+                sender: PeerKind::Own,
             })
             .await
             .expect("приём");
@@ -839,7 +840,7 @@ impl Share {
     /// Приглашение ресурсу письмом iMIP от `from` (он же организатор) отправителя вида `sender`.
     async fn imip_to_room(
         &self,
-        sender: SenderKind,
+        sender: PeerKind,
         uid: &str,
         from: &str,
         start: &str,
@@ -888,7 +889,7 @@ async fn room_booking_not_taken_by_foreign_uid() {
     let ext = "mallory@example.net";
     let out = env
         .imip_to_room(
-            SenderKind::External,
+            PeerKind::External,
             "b1",
             ext,
             "20260105T100000Z",
@@ -940,7 +941,7 @@ async fn room_imip_from_own_domain_is_external() {
     .await;
     let out = env
         .imip_to_room(
-            SenderKind::External,
+            PeerKind::External,
             "i1",
             ALICE,
             "20260105T100000Z",

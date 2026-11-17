@@ -744,16 +744,18 @@ iMIP (RFC 6047), занятость. iCalendar контракты не разб�
 с JMAP (`sendSchedulingMessages`, JMAP-31; JMAP Calendars — по черновику IETF, решение 35). Адрес календарного пользователя —
 без `mailto:`, `valid_address` (1–320 байт, без пробелов и управляющих; нормализует вызывающий).
 - `ItipMethod::{Publish, Request, Reply, Add, Cancel, Refresh, Counter, DeclineCounter}` (`as_str`, `FromStr` без регистра, `from_organizer`).
-- `ItipDelivery::deliver(&ItipMessage { recipient: AccountScope, to, from, method, ics, sender: SenderKind }) ->
+- `ItipDelivery::deliver(&ItipMessage { recipient: AccountScope, to, from, method, ics, sender: PeerKind }) ->
   ItipOutcome::{Applied, Ignored(reason)}` — приём iTIP учётной записью: `REQUEST`, `ADD` — событие в календаре по умолчанию
   (`PARTSTAT=NEEDS-ACTION`), `REPLY` — статус участника у организатора, `CANCEL` — `STATUS:CANCELLED`, все — во входящие планирования.
   `from` проверен вызывающим (iMIP — `From`, прошедший DMARC; внутри — адрес учётной записи). CTR-59 (решение 78): своя организация — также
   приглашение из почтового клиента (submission, JMAP `EmailSubmission`; SMTP-36), если `From` письма принадлежит вошедшей учётной записи
-  (свой адрес, псевдоним, право Send As); иначе — письмо без доставки iTIP. CTR-92 (решение 123): `sender` — тип отправителя
-  относительно организации получателя `SenderKind::{Own, Partner, Neighbor, External}` (определяет вызывающий по пути и домену `From`);
-  что можно — только `inbound_allowed(sender, InboundAction::of(method, resource, update))`, действия `InboundAction::{Invite, Update, Reply,
-  Cancel, Other, Booking}`; по умолчанию своей организации (вошедшему) — всё, извне (партнёр, соседняя организация, внешний) — только `Update`,
-  `Reply` и `Cancel` к существующему событию (не разрешено — `Ok(Ignored)`, ни события, ни брони, ни ответа). Недопустимое (`ItipMessage::validate`),
+  (свой адрес, псевдоним, право Send As); иначе — письмо без доставки iTIP. CTR-92 → CTR-93 (решения 123 → 124): `sender` — тип отправителя
+  относительно организации получателя `trust::PeerKind::{Own, Partner, Neighbor, External}` (определяет вызывающий по пути и домену `From`);
+  что можно — только `trust::TrustMatrix::inbound(sender, InboundAction::of(method, resource, update))` (раздел Trust), действия
+  `InboundAction::{Invite, Update, Reply, Cancel, Other, Booking}`, итог `InboundDecision::{Apply, ApplyIfExisting, MailOnly}`; по умолчанию
+  (`TrustMatrix::default()`, до чтения политики) своей организации (вошедшему) — всё, извне — только письмо: `ApplyIfExisting` (`Update`,
+  `Reply` и `Cancel` к существующему событию) до DAV-44 исполняется как «только письмо», не разрешено — `Ok(Ignored)`, ни события, ни брони,
+  ни ответа. Недопустимое (`ItipMessage::validate`),
   подделанный отправитель, устаревший `SEQUENCE`, чужой `UID` организатора — `Ok(Ignored)`; `Err` — сбой хранилища (идемпотентно,
   повтор безопасен); письмо iMIP при любом итоге остаётся в ящике. Реализация — `tp-dav` (DAV-15); вызывают `tp-smtp` (SMTP-33,
   `Delivery::with_itip`), `tp-dav` (DAV-13), `tp-jmap` (JMAP-31). Заглушка — `FakeItip` (`set(to, outcome)`, `fail_next`, `calls`).
@@ -889,17 +891,64 @@ size, active }>` (по имени), `get(name)`, `active() -> Option<ActiveScrip
 RFC 5804; замена сохраняет активность), `rename(from, to)` (занято — `Conflict`, активность переходит), `delete` (активный — `Conflict`),
 `activate(Option<name>)` (активный не больше одного; `None` — снять), `org_script(tenant)` / `set_org_script(tenant, Option<text>)` (скрипт
 организации, выполняется до скрипта пользователя; без сигнала), `vacation()` / `set_vacation(Vacation { enabled, from, to, subject,
-text_body, html_body })` (JMAP `VacationResponse`, RFC 8621 §8; `validate()`, `is_active(now)`: `from ≤ now < to`), `state()` — растёт при
+text_body, html_body, external_subject, external_text_body, external_html_body })` (JMAP `VacationResponse`, RFC 8621 §8; `validate()`,
+`is_active(now)`: `from ≤ now < to`); внешний текст (CTR-93, решение 124 г, RFC 3834; Exchange `ExternalMessage`) — чужим (`PeerKind` не
+`Own`) ответ идёт только им и только если задан (`has_external()`); все внешние поля `None` — наружу ничего не уходит. `state()` — растёт при
 каждом изменении скриптов и автоответа (JMAP `state`, версия для кэша программ). Изменяющие методы возвращают новое состояние.
 `VacationLog::seen(scope, sender, handle, period) -> bool` — атомарно «уже отвечали за период» или отметка (RFC 5230 `:days`).
-Точка правил доставки `DeliveryRules::evaluate(&RulesInput { scope, recipient (с подадресом), mail_from, message: Bytes, mailboxes })
--> RulesOutcome { keep: Vec<KeepTo { mailbox: MailboxRef::{Inbox, Id, Name { name, create }}, flags }>, redirect, discard,
-vacation: Option<AutoReply { to, from, subject, body: ReplyBody::{Text, Html, Mime}, in_reply_to, references }>, errors }`;
+Точка правил доставки `DeliveryRules::evaluate(&RulesInput { scope, recipient (с подадресом), mail_from, message: Bytes, mailboxes,
+peer: PeerKind, matrix: TrustMatrix }) -> RulesOutcome { keep: Vec<KeepTo { mailbox: MailboxRef::{Inbox, Id, Name { name, create }},
+flags }>, redirect, discard, vacation: Option<AutoReply { to, from, subject, body: ReplyBody::{Text, Html, Mime}, in_reply_to,
+references }>, calendar: Option<ProcessCalendar>, errors }`; `peer` и `matrix` (CTR-93, решение 124) вычисляет вызывающий (`tp-smtp`):
+тип абонента — от пути письма, заголовкам не доверяем; матрица ограничивает `processcalendar`, автоответ и `redirect` чужим (шире
+матрицы действия не выполняются). `ProcessCalendar { allow_public, addresses, updates_only, calendar_id, delete_cancelled }` — действие
+`processcalendar` (RFC 9671 §3): вносит только новое приглашение типа абонента с `invite_new = auto` (расширить матрицу нельзя); до
+подключения хранилища политик — `TrustMatrix::default()`;
 порядок — скрипт организации, автоответ, активный скрипт; ошибка скрипта — implicit keep (`RulesOutcome::failed`) и `errors` для журнала;
 `Err` — сбой хранилища: вызывающий доставляет во «Входящие». Нет правил — `RulesOutcome::implicit_keep()`. Письмо автоответа собирает
 `tp-smtp` (RFC 3834). Сигнал `SieveChanged` (`sieve_changed`, учётная запись) — после изменения скриптов и автоответа. In-memory — `MemSieve`
 (`with_limits`, `with_bus`), `MemVacationLog`, фейк `FakeRules` (итог по получателю, `fail_next`, `calls`); наборы `suite::sieve`
 (лимиты `suite::sieve::LIMITS`, `SieveFixture`), `suite::sieve::{vacation_log, signals}`. PostgreSQL — `tp-meta` (META-49, META-50).
+
+## Trust
+SRS 4; CTR-93; решение 124 (исследование `docs/research/2026-11-14-trust-matrix.md`; таблица «Матрица по умолчанию» —
+`docs/ADMIN-GUIDE.md#кто-с-кем-и-что-может`). Код — `trust.rs`. Матрица доверия — «кто — кому — что»: тип абонента × функция;
+типизированная политика уровней установка → организация → группа с потолком сверху и безопасными умолчаниями, а не правила
+почтового потока (проверка схемой, закреплённые клетки — одной строкой не открыть всё).
+- `PeerKind::{Own, Partner, Neighbor, External}` — тип абонента для обоих направлений (отправитель входящего, получатель
+  исходящего); свои — вошедшие в систему, не «наш» домен в `From` (RFC 9989 §2.2, §4.1; RFC 8601 §5); сосед по установке (MSSP) —
+  как интернет, пока его домен не заведён партнёром. Заменил `schedule::SenderKind` CTR-92 (поле `ItipMessage::sender`).
+- Значения функций (serde `snake_case`, от узкого к широкому, `Ord`; `Default` — узкое): `invite_new` —
+  `InviteMode::{Button, Auto}`; `itip_updates` (`REPLY`, `CANCEL`, обновление `REQUEST` к существующим событиям), `auto_reply`,
+  `mdn`, `auto_forward` — `Toggle::{Off, On}`; `freebusy`, `sharing` — `Detail::{None, FreeBusy, Limited, Details, All}`;
+  `group_post` — `GroupPost::{Closed, Moderated, Open}`. `TrustFunction` — восемь функций (`ALL`, `as_str`), `CellValue` — значение
+  клетки для ошибок и адресации, `PerPeer<T> { own, partner, neighbor, external }` — колонки матрицы (`get(peer)`, `set`, `narrow_with`).
+- `TrustMatrix` — по клетке на функцию и тип (`get(function, peer)`, `narrow`): `default()` — таблица «Матрица по умолчанию»
+  ADMIN-GUIDE (чужим — только почта, `REPLY`/`CANCEL` к существующим событиям и автоответ внешним текстом; `All` — только своим);
+  `closed()` — ошибка чтения политики: все клетки чужих в самом узком значении, почта доставляется. Приём iTIP —
+  `inbound(peer, InboundAction) -> InboundDecision::{Apply, ApplyIfExisting, MailOnly}` (решение 123 → 124): своя организация — всё,
+  `Invite` чужих — по клетке `invite_new`, `Update`/`Reply`/`Cancel` — по `itip_updates` (только к существующему событию),
+  бронирование и прочие методы чужих — только письмо при любой политике. Заменяет `schedule::inbound_allowed`; единственный
+  вызывающий — `ItipDelivery::deliver` (DAV-43), до DAV-44 — `TrustMatrix::default()`, `ApplyIfExisting` исполняет как «только письмо».
+- Закреплённые клетки — константы контракта, не поля политики: `HARD_CEILING` — потолок самой установки (`All` — только свои;
+  `invite_new` соседям и интернету — не выше кнопки, партнёру — до `auto`; `freebusy` соседям и интернету — `none`, партнёру — до
+  `Limited`; `sharing` чужим — до `Details`), `booking_allowed`, `gal_allowed`, `delegation_allowed`, `dsn_diagnostics` — только `Own`.
+- Уровни `TrustLevel::{Installation, Org(TenantId), Group(TenantId, GroupId)}`; `TrustPolicy` уровня — частичная (клетки `Option`,
+  незаданное наследует уровень выше), у организации ещё `partners` и `auto_forward_domains` — домены-партнёры и домены
+  автопересылки (канонические имена: нижний регистр, A-label IDN; свой принятый домен в `partners` — `Invalid`).
+  `validate(ceiling, accepted)` — клетки выше потолка `Invalid` с перечнем `OverCeiling { function, peer, value, ceiling, level }`.
+- `effective(installation, org, groups) -> Effective { matrix, ceiling, source, over_ceiling }` — действующая матрица уровней:
+  значение клетки — ближайший заданный уровень (установка → организация → группа), не задан ни одним — умолчание; шире потолка —
+  обрезано до потолка и помечено `over_ceiling` (источник обрезанной клетки — уровень потолка); из нескольких групп — самое узкое
+  по каждой клетке (запрет побеждает); `ceiling` — действующий потолок групп, `source` — уровень, давший значение.
+- `TrustStore`: `policy(level)`, `set_policy(level, &TrustPolicy)` (проверяет `validate` по действующему потолку уровня: у
+  установки — `HARD_CEILING`, у организации — действующее значение установки, у группы — организации; `partners` и
+  `auto_forward_domains` задаёт только организация), `reset_policy(level)` (нет — не ошибка), `effective_for(tenant, account)`
+  (группы учётной записи — через членство), `partner_of(tenant, domain)` (недопустимый домен — `Invalid`). Реализация — `tp-meta`
+  (META-85), Admin API — ADM-49, точки решения узла — SMTP-50, DAV-44, SIEVE-14, JMAP-47. Сигнал `TrustChanged { level }`
+  (`trust_changed(level)`, системный) — после фиксации `set_policy` и `reset_policy`: узлы сбрасывают кэш действующей матрицы.
+- In-memory — `MemTrust` (`with_groups` — членство через `GroupStore`, `with_accepted` — принятые домены для проверки `partners`);
+  набор `suite::trust(store, groups, tenant, foreign, account)`: уровни, потолки, группы, сброс, разделение организаций, `partner_of`.
 
 ## Extension points
 SRS 2.5, 1.3. Модуль — cargo feature + `modules.<имя>.enabled`. `Module { name(), schema() -> "mod_<имя>", migrations() -> &[Migration { version, name, sql }],
@@ -1243,3 +1292,13 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   брендинг заказчика: все роли `design/tokens.toml`, обязательных полей нет, незаданное — с уровня выше (организация → установка →
   IT TASK), вывод ролей из основного цвета, контраст без исключений, проверка смены установки по организациям, страховка отрисовки;
   раздел «Branding». In-memory — `MemBranding`; набор `suite::branding`. PostgreSQL — META-84, Admin API — ADM-48.
+- 2026-11-17 — CTR-93 (волна contracts-64, решение 124 «Матрица доверия — политика администратора»): модуль `trust::{PeerKind,
+  InviteMode, Toggle, Detail, GroupPost, CellValue, TrustFunction, PerPeer, TrustMatrix, InboundDecision, HARD_CEILING,
+  booking_allowed, gal_allowed, delegation_allowed, dsn_diagnostics, TrustLevel, TrustPolicy, OverCeiling, TrustSources, Ceiling,
+  Effective, effective, trust_changed, TrustStore}` — матрица доверия «кто — кому — что» с уровнями установка → организация →
+  группа, потолком сверху, закреплёнными клетками и безопасными умолчаниями; `schedule::SenderKind` и `schedule::inbound_allowed`
+  заменены (`ItipMessage::sender` — `trust::PeerKind`, решение iTIP — `TrustMatrix::inbound`); `EventKind::TrustChanged`. Sieve:
+  `RulesInput { peer, matrix }`, `RulesOutcome::calendar: Option<ProcessCalendar>` (`processcalendar`, RFC 9671 §3), внешний текст
+  автоответа `Vacation::{external_subject, external_text_body, external_html_body}`. Несовместимо: `ItipMessage::sender`,
+  `RulesInput` (вызывающие — `tp-smtp`, `tp-dav`, `tp-sieve`, `tp-testkit` — в той же волне). In-memory — `MemTrust`; набор
+  `suite::trust`. PostgreSQL — META-85, Admin API — ADM-49.

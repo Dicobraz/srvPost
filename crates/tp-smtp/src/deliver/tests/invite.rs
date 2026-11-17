@@ -4,7 +4,8 @@
 use tp_contracts::DomainId;
 use tp_contracts::auth::{Resource, Rights, SendRight};
 use tp_contracts::meta::{AccountKind, AccountUpsert};
-use tp_contracts::schedule::{ItipMethod, SenderKind};
+use tp_contracts::schedule::ItipMethod;
+use tp_contracts::trust::PeerKind;
 use tp_testkit::FakeItip;
 
 use super::*;
@@ -101,7 +102,7 @@ async fn reached(env: &Env, itip: &FakeItip) -> Vec<String> {
             assert_eq!(c.recipient, bob);
             assert_eq!(c.to, BOB);
             assert_eq!(c.method, ItipMethod::Request);
-            assert_eq!(c.sender, SenderKind::Own);
+            assert_eq!(c.sender, PeerKind::Own);
             assert!(c.ics.contains("UID:u1"));
             c.from
         })
@@ -197,10 +198,7 @@ async fn internal_sender_is_own_whatever_from_domain() {
     }
     let calls = itip.calls();
     assert_eq!(calls.len(), 3, "{calls:?}");
-    assert!(
-        calls.iter().all(|c| c.sender == SenderKind::Own),
-        "{calls:?}"
-    );
+    assert!(calls.iter().all(|c| c.sender == PeerKind::Own), "{calls:?}");
 }
 
 #[tokio::test]

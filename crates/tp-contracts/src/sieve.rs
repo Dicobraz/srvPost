@@ -6,7 +6,10 @@
 //! роли не меняются.
 //!
 //! Порядок при доставке (реализация `tp-sieve`): скрипт организации ([`SieveStore::org_script`]), автоответ
-//! ([`Vacation`]), активный скрипт пользователя.
+//! ([`Vacation`]), активный скрипт пользователя. Контекст правил включает тип абонента отправителя
+//! ([`RulesInput::peer`]) и действующую матрицу доверия получателя ([`RulesInput::matrix`], решение 124): админский
+//! Sieve сужает внутри потолка, `processcalendar` (RFC 9671) вносит приглашения не шире матрицы, автоответ чужим —
+//! только внешним текстом [`Vacation`].
 
 use std::time::Duration;
 
@@ -19,6 +22,7 @@ use crate::bus::{Event, EventKind};
 use crate::error::{Error, Result};
 use crate::ids::{MailboxId, TenantId};
 use crate::meta::{AccountScope, Flags, Mailbox};
+use crate::trust::{PeerKind, TrustMatrix};
 
 /// Наибольшая длина имени скрипта, символов.
 pub const MAX_SCRIPT_NAME_LEN: usize = 128;
@@ -80,6 +84,8 @@ impl Default for SieveLimits {
 }
 
 /// Автоответ учётной записи (модель JMAP `VacationResponse`, RFC 8621 §8); выполняется до активного скрипта.
+/// Внешний текст — отдельно (Exchange `ExternalMessage`, RFC 3834): чужим (`PeerKind` не `Own`) ответ идёт только
+/// им и только если задан; пока все внешние поля `None`, наружу ничего не уходит.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Vacation {
     /// Включён.
@@ -94,10 +100,19 @@ pub struct Vacation {
     pub text_body: Option<String>,
     /// Текст ответа HTML.
     pub html_body: Option<String>,
+    /// Тема внешнего автоответа (`None` — общая).
+    #[serde(default)]
+    pub external_subject: Option<String>,
+    /// Текст внешнего автоответа; все внешние поля `None` — чужим ответа нет.
+    #[serde(default)]
+    pub external_text_body: Option<String>,
+    /// Текст внешнего автоответа HTML.
+    #[serde(default)]
+    pub external_html_body: Option<String>,
 }
 
 impl Vacation {
-    /// Проверяет поля: `from` не позже `to`; тема — до [`MAX_VACATION_SUBJECT_LEN`] символов без управляющих;
+    /// Проверяет поля: `from` не позже `to`; темы — до [`MAX_VACATION_SUBJECT_LEN`] символов без управляющих;
     /// тексты — до [`MAX_VACATION_BODY_LEN`] байт. Иначе — `Error::Invalid`.
     pub fn validate(&self) -> Result<()> {
         if let (Some(from), Some(to)) = (self.from, self.to)
@@ -105,15 +120,22 @@ impl Vacation {
         {
             return Err(Error::invalid("начало автоответа позже конца"));
         }
-        if self.subject.as_deref().is_some_and(|s| {
-            s.chars().count() > MAX_VACATION_SUBJECT_LEN || s.chars().any(char::is_control)
-        }) {
-            return Err(Error::invalid("недопустимая тема автоответа"));
+        for subject in [&self.subject, &self.external_subject] {
+            if subject.as_deref().is_some_and(|s| {
+                s.chars().count() > MAX_VACATION_SUBJECT_LEN || s.chars().any(char::is_control)
+            }) {
+                return Err(Error::invalid("недопустимая тема автоответа"));
+            }
         }
-        if [&self.text_body, &self.html_body]
-            .into_iter()
-            .flatten()
-            .any(|b| b.len() > MAX_VACATION_BODY_LEN)
+        if [
+            &self.text_body,
+            &self.html_body,
+            &self.external_text_body,
+            &self.external_html_body,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|b| b.len() > MAX_VACATION_BODY_LEN)
         {
             return Err(Error::invalid("текст автоответа слишком длинный"));
         }
@@ -123,6 +145,15 @@ impl Vacation {
     /// Автоответ действует в момент `now`: включён и `from ≤ now < to`.
     pub fn is_active(&self, now: OffsetDateTime) -> bool {
         self.enabled && self.from.is_none_or(|f| f <= now) && self.to.is_none_or(|t| now < t)
+    }
+
+    /// Есть внешний текст (тема или хотя бы одно тело): чужим (`PeerKind` не `Own`) идёт он, своим — общий
+    /// ([`Vacation::subject`], [`Vacation::text_body`], [`Vacation::html_body`]). Все внешние поля `None` —
+    /// наружу ответа нет (решение 124 г, RFC 3834).
+    pub fn has_external(&self) -> bool {
+        self.external_subject.is_some()
+            || self.external_text_body.is_some()
+            || self.external_html_body.is_some()
     }
 }
 
@@ -218,6 +249,14 @@ pub struct RulesInput {
     pub message: Bytes,
     /// Папки учётной записи (`fileinto`, `mailboxexists`); путь — имена от корня через `/`.
     pub mailboxes: Vec<Mailbox>,
+    /// Тип абонента — отправителя относительно организации получателя (решение 124): тест `peer` расширения
+    /// `vnd.thepost.peer` и проверки матрицы доверия. Вычисляет вызывающий (`tp-smtp`); заголовкам письма не
+    /// доверяем (RFC 5183, RFC 8601 §5).
+    pub peer: PeerKind,
+    /// Действующая матрица доверия получателя ([`crate::trust::TrustStore::effective_for`]; до подключения
+    /// хранилища — [`TrustMatrix::default`]). Ограничивает `processcalendar`, автоответ и `redirect` чужим
+    /// (шире матрицы действия не выполняются).
+    pub matrix: TrustMatrix,
 }
 
 /// Папка доставки.
@@ -279,6 +318,30 @@ pub struct AutoReply {
     pub references: Vec<String>,
 }
 
+/// Внесение приглашения в календарь правилом — действие `processcalendar` (RFC 9671 §3). Расширить им права
+/// нельзя (решение 124 д): действует в пределах действующей матрицы получателя ([`RulesInput::matrix`]) —
+/// вносит только новое приглашение (`REQUEST`) типа абонента с `invite_new = auto` (администратор открыл
+/// автодобавление, по умолчанию — партнёры); для остальных типов и методов ничего не вносит, implicit keep не
+/// отменяет.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ProcessCalendar {
+    /// `:allowpublic` — вносить и от отправителей, обычно не проходящих проверку источника (внутри матрицы).
+    #[serde(default)]
+    pub allow_public: bool,
+    /// `:addresses` — адреса, приглашения от которых вносятся (пусто — все в пределах матрицы).
+    #[serde(default)]
+    pub addresses: Vec<String>,
+    /// `:updatesonly` — только обновления уже внесённых событий.
+    #[serde(default)]
+    pub updates_only: bool,
+    /// `:calendarid` — календарь для внесения (по умолчанию — календарь по умолчанию).
+    #[serde(default)]
+    pub calendar_id: Option<String>,
+    /// `:deletecancelled` — отменённое событие (`CANCEL`) удалять, а не помечать `STATUS:CANCELLED`.
+    #[serde(default)]
+    pub delete_cancelled: bool,
+}
+
 /// Итог правил для получателя.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct RulesOutcome {
@@ -290,6 +353,10 @@ pub struct RulesOutcome {
     pub discard: bool,
     /// Автоответ.
     pub vacation: Option<AutoReply>,
+    /// Внесение приглашения в календарь (`processcalendar`, RFC 9671): параметры действия; действует в пределах
+    /// [`RulesInput::matrix`] — применяет вызывающий.
+    #[serde(default)]
+    pub calendar: Option<ProcessCalendar>,
     /// Ошибки выполнения (без содержимого письма) для журнала; при ошибке правила делают implicit keep.
     pub errors: Vec<String>,
 }
@@ -363,8 +430,12 @@ mod tests {
             subject: Some("В отпуске".into()),
             text_body: Some("Вернусь позже".into()),
             html_body: None,
+            external_subject: None,
+            external_text_body: None,
+            external_html_body: None,
         };
         assert_eq!(v.validate(), Ok(()));
+        assert!(!v.has_external(), "внешнего текста нет — наружу ничего");
         assert!(!v.is_active(t(9)));
         assert!(v.is_active(t(10)));
         assert!(!v.is_active(t(20)));
@@ -397,9 +468,33 @@ mod tests {
                 html_body: Some("x".repeat(MAX_VACATION_BODY_LEN + 1)),
                 ..v.clone()
             },
+            Vacation {
+                external_subject: Some("a\nb".into()),
+                ..v.clone()
+            },
+            Vacation {
+                external_html_body: Some("x".repeat(MAX_VACATION_BODY_LEN + 1)),
+                ..v.clone()
+            },
         ] {
             assert!(bad.validate().is_err(), "{bad:?}");
         }
+        // Внешний текст задан — чужим идёт он.
+        let external = Vacation {
+            external_subject: Some("Away".into()),
+            external_text_body: Some("Back later".into()),
+            ..v.clone()
+        };
+        assert!(external.has_external());
+        assert_eq!(external.validate(), Ok(()));
+        // Одного внешнего темы достаточно, чтобы отличать внешний ответ; без темы, но с телом — тоже.
+        assert!(
+            Vacation {
+                external_html_body: Some("<p>…</p>".into()),
+                ..v.clone()
+            }
+            .has_external()
+        );
     }
 
     #[test]
@@ -407,7 +502,7 @@ mod tests {
         let keep = RulesOutcome::implicit_keep();
         assert_eq!(keep.keep.len(), 1);
         assert_eq!(keep.keep[0].mailbox, MailboxRef::Inbox);
-        assert!(!keep.discard && keep.errors.is_empty());
+        assert!(!keep.discard && keep.errors.is_empty() && keep.calendar.is_none());
         let failed = RulesOutcome::failed("ошибка");
         assert_eq!(failed.keep, keep.keep);
         assert_eq!(failed.errors, ["ошибка"]);
@@ -415,6 +510,34 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<RulesOutcome>(&s).expect("parse"),
             failed
+        );
+        // processcalendar (RFC 9671 §3): параметры и JSON в терминах действия.
+        let outcome = RulesOutcome {
+            calendar: Some(ProcessCalendar {
+                allow_public: true,
+                addresses: vec!["pm@partner.example".into()],
+                updates_only: true,
+                calendar_id: Some("work".into()),
+                delete_cancelled: false,
+            }),
+            ..RulesOutcome::implicit_keep()
+        };
+        let s = serde_json::to_string(&outcome).expect("json");
+        assert!(s.contains("\"allow_public\":true"), "{s}");
+        assert!(s.contains("\"updates_only\":true"), "{s}");
+        assert!(s.contains("\"calendar_id\":\"work\""), "{s}");
+        assert_eq!(
+            serde_json::from_str::<RulesOutcome>(&s).expect("parse"),
+            outcome
+        );
+        // Отсутствие calendar в старом JSON — None.
+        assert_eq!(
+            serde_json::from_str::<RulesOutcome>(
+                &serde_json::to_string(&RulesOutcome::implicit_keep()).expect("json")
+            )
+            .expect("parse")
+            .calendar,
+            None
         );
     }
 }
