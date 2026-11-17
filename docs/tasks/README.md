@@ -936,7 +936,7 @@
 | [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-78 | todo | CTR-97,META-88,BLOB-18 |
 | [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-78 | todo | CTR-97 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
-| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-49 | done | APP-83,BLOB-18 |
+| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | todo | APP-83,BLOB-18 |
 
 ## Вне волн
 
