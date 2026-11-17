@@ -1,10 +1,12 @@
 //! FIX-01: решения модератора (`impl Moderation for Delivery`, CTR-31, CTR-43) — одобренное письмо участникам группы
 //! ровно один раз, письмо правила потока — исходным получателям, отказ — уведомление отправителю через очередь.
+//! SMTP-30: исход `Moderate` правил потока — постановка в очередь модерации и уведомление модератору.
 
 use tp_contracts::groups::{
     DistributionGroup, GroupMember, GroupStore, HeldMessage, HoldSource, Moderation, Moderator,
     SenderRestriction,
 };
+use tp_contracts::transport::{FlowInput, FlowOutcome, FlowVerdict, MailFlow};
 use tp_contracts::{Error, GroupId, HeldId, TenantId};
 use tp_testkit::suite::{self, ModerationFixture};
 
@@ -248,4 +250,268 @@ async fn flow_rule_message_delivered_to_original_recipients() {
         "{dsn}"
     );
     assert_eq!(env.inbox("bob@example.org").await.len(), 1);
+}
+
+// ---------- SMTP-30: исход Moderate правил потока — очередь модерации ----------
+
+/// Заглушка `MailFlow`: отвечает заданным исходом, сработавшее правило — по имени (тело не читает).
+struct RuleFlow {
+    verdict: FlowVerdict,
+    matched: Vec<String>,
+}
+
+#[async_trait]
+impl MailFlow for RuleFlow {
+    async fn apply(&self, input: &FlowInput) -> Result<FlowOutcome> {
+        let mut out = FlowOutcome::unchanged(input);
+        out.verdict = self.verdict.clone();
+        out.matched = self.matched.clone();
+        Ok(out)
+    }
+}
+
+/// Письмо с темой `subject` и `Message-ID` от `from` (для очереди модерации по `message_id`).
+fn letter(tag: &str, from: &str) -> Bytes {
+    Bytes::from(format!(
+        "From: {from}\r\nTo: bob@example.org\r\nSubject: {tag}\r\nMessage-ID: <{tag}@example.net>\r\n\r\nbody\r\n"
+    ))
+}
+
+impl Env {
+    /// Доставка с группами (очередь модерации) и правилом потока `flow`.
+    fn flow_moderating(&self, flow: Arc<RuleFlow>) -> Delivery {
+        self.moderating(true).with_mail_flow(
+            flow,
+            Arc::new(self.blobs.clone()),
+            Arc::new(self.index.clone()),
+        )
+    }
+
+    /// Запись очереди модерации письма правила (без группы) по `Message-ID`.
+    async fn rule_message(&self, message_id: &str) -> HeldMessage {
+        self.groups
+            .held(T, None, None, 100)
+            .await
+            .expect("held")
+            .into_iter()
+            .find(|h| h.message_id.as_deref() == Some(message_id))
+            .expect("письмо правила в очереди модерации")
+    }
+}
+
+/// Правило с исходом Moderate (приём): отправителю — 250, письмо — в очереди модерации с исходными
+/// получателями и модераторами, ссылка на объект — у очереди; модератору — уведомление с исходным письмом
+/// во вложении. Одобрение доставляет письмо исходным получателям, отказ — DSN отправителю.
+#[tokio::test]
+async fn flow_rule_moderation_holds_then_approve_or_reject() {
+    let env = Env::new(DecisionHooks::default()).await;
+    let moderator = env.scope("carol@example.org").await.account;
+    let flow = Arc::new(RuleFlow {
+        verdict: FlowVerdict::Moderate {
+            moderators: vec![moderator],
+        },
+        matched: vec!["Внешним — с одобрения".into()],
+    });
+    let d = env.flow_moderating(flow);
+    let e = envelope(Mode::Inbound, &["bob@example.org"]);
+    assert_eq!(
+        d.data(&e, letter("smtp30-a", "sender@example.net"))
+            .await
+            .code,
+        250
+    );
+    assert!(env.inbox("bob@example.org").await.is_empty(), "до решения");
+    let notice = env.inbox("carol@example.org").await;
+    assert_eq!(notice.len(), 1, "уведомление модератору: {notice:?}");
+    let msg = mail_parser::MessageParser::new()
+        .parse(notice[0].as_bytes())
+        .expect("parse notice");
+    assert_eq!(
+        msg.subject(),
+        Some("Moderation Request: Внешним — с одобрения")
+    );
+    assert!(
+        notice[0].contains("Auto-Submitted: auto-replied"),
+        "{}",
+        notice[0]
+    );
+    assert!(notice[0].contains("message/rfc822"), "{}", notice[0]);
+    assert!(notice[0].contains("Subject: smtp30-a"), "{}", notice[0]);
+    let held = env.rule_message("smtp30-a@example.net").await;
+    assert_eq!(held.group, None);
+    assert_eq!(
+        held.source,
+        HoldSource::FlowRule {
+            rule: "Внешним — с одобрения".into(),
+        }
+    );
+    assert_eq!(held.moderators, vec![Moderator::Account(moderator)]);
+    assert_eq!(held.recipients, ["bob@example.org"]);
+    assert_eq!(
+        (held.sender.as_str(), held.sender_account),
+        ("sender@example.net", None)
+    );
+    assert_eq!(env.refs(&held), 1, "ссылка на объект — у очереди");
+
+    // Одобрение (Admin API: take_held + Moderation::deliver без группы) — исходным получателям.
+    let held = env.groups.take_held(T, held.id).await.expect("take");
+    d.deliver(T, None, &held).await.expect("deliver");
+    let bob = env.inbox("bob@example.org").await;
+    assert_eq!(bob.len(), 1, "{bob:?}");
+    assert!(bob[0].contains("Subject: smtp30-a"), "{}", bob[0]);
+    assert!(
+        env.queued().is_empty(),
+        "без уведомлений: {:?}",
+        env.queued()
+    );
+    assert_eq!(env.refs(&held), 0);
+
+    // Отказ — DSN отправителю с причиной модератора; получателям ничего.
+    assert_eq!(
+        d.data(&e, letter("smtp30-r", "sender@example.net"))
+            .await
+            .code,
+        250
+    );
+    assert_eq!(
+        env.inbox("carol@example.org").await.len(),
+        2,
+        "второе уведомление"
+    );
+    let held = env.rule_message("smtp30-r@example.net").await;
+    let held = env.groups.take_held(T, held.id).await.expect("take");
+    d.reject(T, &held, "не для внешней рассылки")
+        .await
+        .expect("reject");
+    let queued = env.queued();
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    assert_eq!(queued[0].1, ["sender@example.net"]);
+    let dsn = String::from_utf8_lossy(&queued[0].2);
+    assert!(dsn.contains("Status: 5.7.1"), "{dsn}");
+    assert!(dsn.contains("не для внешней рассылки"), "{dsn}");
+    assert_eq!(env.inbox("bob@example.org").await.len(), 1, "после отказа");
+}
+
+/// Submission вошедшего пользователя: у записи очереди — учётная запись отправителя; отправка вне сессии
+/// (JMAP, [`Delivery::submit`]) — `Queued` всем получателям.
+#[tokio::test]
+async fn flow_rule_moderation_submission_and_submit() {
+    let env = Env::new(DecisionHooks::default()).await;
+    let moderator = env.scope("carol@example.org").await.account;
+    let alice = env.scope("alice@example.org").await.account;
+    let flow = Arc::new(RuleFlow {
+        verdict: FlowVerdict::Moderate {
+            moderators: vec![moderator],
+        },
+        matched: vec!["Проверка отправки".into()],
+    });
+    let d = env.flow_moderating(flow);
+    let mut e = envelope(Mode::Submission, &["bob@example.org", "x@remote.example"]);
+    let mut principal = tp_testkit::principal(T, "alice@example.org");
+    principal.account = alice;
+    e.principal = Some(principal);
+    e.mail_from = "alice@example.org".into();
+    let raw = letter("smtp30-s", "alice@example.org");
+    assert_eq!(d.data(&e, raw).await.code, 250);
+    assert!(env.inbox("bob@example.org").await.is_empty());
+    assert!(env.queue.0.lock().expect("lock").is_empty());
+    let held = env.rule_message("smtp30-s@example.net").await;
+    assert_eq!(held.sender, "alice@example.org");
+    assert_eq!(held.sender_account, Some(alice));
+    assert_eq!(held.recipients, ["bob@example.org", "x@remote.example"]);
+    assert_eq!(env.inbox("carol@example.org").await.len(), 1);
+
+    // Отправка вне сессии SMTP: письмо — в очереди модерации, всем получателям — `Queued`.
+    let out = d
+        .submit(
+            T,
+            None,
+            "alice@example.org",
+            &rcpts(&["bob@example.org"]),
+            letter("smtp30-j", "alice@example.org"),
+        )
+        .await
+        .expect("submit");
+    assert_eq!(
+        out.rcpts,
+        [("bob@example.org".to_owned(), SubmitStatus::Queued)],
+        "{out:?}"
+    );
+    assert!(env.inbox("bob@example.org").await.is_empty());
+    let held = env.rule_message("smtp30-j@example.net").await;
+    assert_eq!(held.sender_account, Some(alice));
+    assert_eq!(
+        env.inbox("carol@example.org").await.len(),
+        2,
+        "второе уведомление"
+    );
+}
+
+/// Ставить некуда (нет хранилища очереди или модераторов) — временный отказ: письмо не теряется.
+/// Имя правила — из сработавших, с запасным именем и обрезкой до 255 символов.
+#[tokio::test]
+async fn flow_rule_moderation_fallback_and_rule_name() {
+    let env = Env::new(DecisionHooks::default()).await;
+    let moderator = env.scope("carol@example.org").await.account;
+    let e = envelope(Mode::Inbound, &["bob@example.org"]);
+    // Хранилище очереди модерации не подключено.
+    let flow = Arc::new(RuleFlow {
+        verdict: FlowVerdict::Moderate {
+            moderators: vec![moderator],
+        },
+        matched: vec!["R".into()],
+    });
+    let no_groups = env.delivery(true).with_mail_flow(
+        flow,
+        Arc::new(env.blobs.clone()),
+        Arc::new(env.index.clone()),
+    );
+    assert_eq!(no_groups.data(&e, Bytes::from_static(MAIL)).await.code, 451);
+    // Вердикт без модераторов — уведомлять некого.
+    let flow = Arc::new(RuleFlow {
+        verdict: FlowVerdict::Moderate {
+            moderators: Vec::new(),
+        },
+        matched: vec!["R".into()],
+    });
+    let nobody = env.flow_moderating(flow);
+    assert_eq!(nobody.data(&e, Bytes::from_static(MAIL)).await.code, 451);
+    assert!(env.inbox("carol@example.org").await.is_empty());
+    assert!(
+        env.groups
+            .held(T, None, None, 10)
+            .await
+            .expect("held")
+            .is_empty(),
+        "ничего не поставлено"
+    );
+
+    // Имя правила: первое сработавшее, запасное имя, обрезка до предела контракта.
+    assert_eq!(rule_name(&["Первое".into(), "Второе".into()]), "Первое");
+    assert_eq!(rule_name(&[]), "mail flow rule");
+    assert_eq!(rule_name(&["  ".into()]), "mail flow rule");
+    assert_eq!(rule_name(&["a\nb".into()]), "a b");
+    assert_eq!(rule_name(&["д".repeat(300)]), "д".repeat(255));
+    let flow = Arc::new(RuleFlow {
+        verdict: FlowVerdict::Moderate {
+            moderators: vec![moderator],
+        },
+        matched: Vec::new(),
+    });
+    let d = env.flow_moderating(flow);
+    assert_eq!(d.data(&e, Bytes::from_static(MAIL)).await.code, 250);
+    let held = env
+        .groups
+        .held(T, None, None, 10)
+        .await
+        .expect("held")
+        .into_iter()
+        .find(|h| h.group.is_none())
+        .expect("запись правила");
+    assert_eq!(
+        held.source,
+        HoldSource::FlowRule {
+            rule: "mail flow rule".into(),
+        }
+    );
 }

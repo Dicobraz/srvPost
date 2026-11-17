@@ -146,6 +146,15 @@
   async: 280000
   poll: 0
 
+# FIX-13: сэмплер умирал на старте тихо (CRLF в shebang → env: python3\r) — критерии 6/7/14/17 Д.7
+# оставались «не измерялось». Первый артефакт smb-samples.csv появляется сразу после makedirs.
+- name: SMB sampler must start (FIX-13)
+  ansible.builtin.wait_for:
+    path: "{{ stand_smb_out }}/smb-samples.csv"
+    state: present
+    timeout: 60
+  delegate_to: "{{ stand_smb_host }}"
+
 # Пустые длительность и множитель — значения сценария (Д.6). Длинный сценарий — 72 ч: ожидание до 75 ч.
 - name: Start scenario on generator
   ansible.builtin.command:

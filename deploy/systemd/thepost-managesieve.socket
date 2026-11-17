@@ -5,7 +5,7 @@
 
 [Unit]
 Description=The Post ManageSieve socket (port 4190)
-Documentation=https://github.com/Dicobraz421/ThePost
+Documentation=https://github.com/Dicobraz/srvPost
 
 [Socket]
 ListenStream=4190

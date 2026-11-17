@@ -21,7 +21,46 @@
         file: thresholds.yml
 
     # Профиль порогов (stand_profiles) накладывает прогон (run.yml) — здесь только общее для обоих профилей.
-    # Генератор — доверенный для ограничения частоты (ratelimit.trusted, решение 109): его ansible_host — IP-адрес.
+    # Генератор — доверенный для ограничения частоты (ratelimit.trusted, решение 109): его адрес — IP-адрес.
+    # FIX-12 (решение #22, вар. 1; тот же класс бага, что FIX-11): адрес генератора подставлялся как
+    # ansible_host | default(имя узла) — на docker-стенде без ansible_host в конфиг узла уходило имя:
+    # ratelimit.trusted (Vec<Cidr>, crates/tp-platform/src/ratelimit.rs) не парсился — узел не стартует;
+    # smtp.queue.relay = «имя:2525» мог не резолвиться — исходящая почта молча копится в очереди. Здесь:
+    # ansible_host, иначе IP из фактов генератора (ansible_default_ipv4), иначе assert — до применения конфига.
+    # FIX-12 (решение #22, вар. 1; класс бага FIX-11): адрес генератора уходил в конфиг узла как
+    # ansible_host | default(имя) — на docker-стенде без ansible_host это имя: ratelimit.trusted
+    # (Vec<Cidr>, crates/tp-platform/src/ratelimit.rs) не парсится — узел не стартует; smtp.queue.relay
+    # = «имя:2525» может не резолвиться — исходящая почта молча копится в очереди. Здесь: ansible_host,
+    # если это IP; иначе адрес контейнера из фактов генератора; иначе assert до применения конфига узла.
+    # Внимание: при docker-подключении ansible_host — имя контейнера, НЕ IP (иначе связь падает с 404),
+    # адрес берётся из фактов — как в stand_generator (FIX-11, PR #21).
+    - name: Gather generator facts for container address (docker, FIX-12)
+      ansible.builtin.setup:
+      when:
+        - inventory_hostname in groups['generator']
+        - ansible_connection | default('ssh') is search('(docker|docker_api)$')
+        - hostvars[inventory_hostname].ansible_host is not match('^[0-9A-Fa-f.]*[.:][0-9A-Fa-f.:]*$')
+
+    - name: Generator address from ansible_host or node facts (FIX-12)
+      ansible.builtin.set_fact:
+        stand_generator_address: >-
+          {{ (hostvars[groups['generator'] | first].ansible_host | default(''))
+             if (hostvars[groups['generator'] | first].ansible_host | default('')) is match('^[0-9A-Fa-f.]*[.:][0-9A-Fa-f.:]*$')
+             else (hostvars[groups['generator'] | first].ansible_default_ipv4.address | default('')) }}
+      when: inventory_hostname in groups['smb']
+
+    - name: Generator address must be an IP before node config (FIX-12)
+      ansible.builtin.assert:
+        that: stand_generator_address | default('') is match('^[0-9A-Fa-f.]*[.:][0-9A-Fa-f.:]*$')
+        fail_msg: >-
+          Адрес генератора «{{ groups['generator'] | first }}» — «{{ stand_generator_address | default('<пусто>') }}»:
+          не IP (ansible_host — не IP и не задан, фактов узла нет). ratelimit.trusted — список CIDR
+          (crates/tp-platform/src/ratelimit.rs): имя не парсится, узел не стартует; smtp.queue.relay = «имя:2525»
+          может не резолвиться — исходящая почта молча копится в очереди (FIX-12, как потерянные прогоны Д.7).
+          Задайте ansible_host генератора — IP-адрес (для docker-подключений ansible_host остаётся именем
+          контейнера: адрес возьмётся из фактов — как в stand_generator, FIX-11).
+      when: inventory_hostname in groups['smb']
+
     - name: Apply common stand parameters, trusted generator and relay of outgoing mail to smtp-sink
       ansible.builtin.set_fact:
         thepost_config_extra: >-
@@ -30,9 +69,6 @@
              | combine({'smtp': {'queue': {'relay': stand_generator_address ~ ':' ~ stand_sink_port | default(2525)}}},
                        recursive=true)
              | combine(stand_config_extra | default({}), recursive=true, list_merge='replace') }}
-      vars:
-        stand_generator: "{{ groups['generator'] | first }}"
-        stand_generator_address: "{{ hostvars[stand_generator].ansible_host | default(stand_generator) }}"
       when: inventory_hostname in groups['smb']
 
 - name: SMB node

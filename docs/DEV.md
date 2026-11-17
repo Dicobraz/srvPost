@@ -1,7 +1,7 @@
 # Разработка The Post
 
 ## Окружение
-- Linux x86_64/AArch64 (на Windows — WSL2 Ubuntu, репозиторий — в файловой системе WSL). Rust stable
+- Linux x86_64 (на Windows — WSL2 Ubuntu, репозиторий — в файловой системе WSL). Rust stable
   (`rust-toolchain.toml`; не ниже 1.98 — `rust-version` в `Cargo.toml`), `cargo install cargo-nextest --locked`.
 - Узел собирается только под Linux: `tp-sys` зависит от `landlock`, `seccompiler` и `nix`. На Windows без WSL не
   собираются `tp-sys` и всё, что от него зависит: `tp-platform`, `tp-search`, `tp-smtp`, `tp-sieve`, `tp-imap`,
@@ -84,7 +84,7 @@ PR только с `docs/`, `*.md` в корне и `*/README.md` идёт бе�
 python scripts/cloud_agent.py run ThePost <полоса> <NN> <ID> [<ID> ...] [--budget 10]
 python scripts/cloud_agent.py wait <session>
 python scripts/cloud_agent.py say <session> <текст>
-gh pr create -R Dicobraz421/ThePost --head w/<полоса>-<NN> --fill && gh pr merge -R Dicobraz421/ThePost --auto w/<полоса>-<NN>
+gh pr create -R Dicobraz/srvPost --head w/<полоса>-<NN> --fill && gh pr merge -R Dicobraz/srvPost --auto w/<полоса>-<NN>
 ```
 Нужны `ant` (`ant auth login`) и `gh` (`gh auth login`). Агент и окружение — те же, что у pets (`PETS_AGENT_ID`, `PETS_AGENT_ENV`).
 Альтернатива — сессия Claude Code (claude.ai/code или локально в WSL2) с промптом `docs/process/agent-prompt.md`;

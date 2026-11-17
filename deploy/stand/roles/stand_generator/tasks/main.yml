@@ -23,6 +23,53 @@
     state: stopped
     enabled: false
 
+# FIX-11: первое поле /etc/hosts — только IP (hosts(5)). При docker-подключении без ansible_host адресом
+# становилось имя узла, строка «имя mail.stand.test» не резолвилась, и нагрузка молча ползла (Д.7, 16–17.11).
+# Здесь: для docker-подключения берём адрес контейнера из фактов узла; иначе имя — последний резерв: роль
+# резолвит его с генератора (getent) и падает ДО записи, если адрес — не IP и не резолвится.
+- name: Take SMB container address from node facts (docker, FIX-11)
+  ansible.builtin.set_fact:
+    stand_smb_address: "{{ hostvars[stand_smb_host].ansible_default_ipv4.address }}"
+  when:
+    - hostvars[stand_smb_host].ansible_connection | default('ssh') is search('(docker|docker_api)$')
+    - hostvars[stand_smb_host].ansible_default_ipv4.address is defined
+    - stand_smb_address is not match('^[0-9A-Fa-f.]*[.:][0-9A-Fa-f.:]*$')
+
+- name: Remember name fallback for SMB address (FIX-11)
+  ansible.builtin.set_fact:
+    stand_smb_address_is_name: "{{ stand_smb_address is not match('^[0-9A-Fa-f.]*[.:][0-9A-Fa-f.:]*$') }}"
+
+- name: Look up SMB node address on generator (FIX-11)
+  ansible.builtin.command:
+    argv: [getent, ahosts, "{{ stand_smb_address }}"]
+  register: stand_smb_lookup
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: SMB address must be an IP or resolvable from generator (FIX-11)
+  ansible.builtin.assert:
+    that: stand_smb_lookup.stdout_lines | default([]) | length > 0
+    fail_msg: >-
+      Адрес узла SMB «{{ stand_smb_host }}» — «{{ stand_smb_address }}»: не IP и не резолвится с генератора
+      (getent пуст). Строка «{{ stand_smb_address }} {{ stand_smb_hostname }}» в /etc/hosts была бы мёртвой:
+      getaddrinfo её игнорирует, имя уходит в docker-DNS (127.0.0.11) и наружу, каждый SMTP/IMAP-коннект
+      висит в getaddrinfo десятки секунд — нагрузка молча ползёт (FIX-11, прогоны Д.7 16–17.11).
+      Задайте ansible_host узла SMB в инвентаре — IP-адрес (или stand_smb_address = IP), либо обеспечьте
+      резолв имени узла с генератора (DNS / сеть стенда).
+
+- name: Write resolved IP of SMB node into address fact (FIX-11)
+  ansible.builtin.set_fact:
+    stand_smb_address: "{{ stand_smb_lookup.stdout_lines | first | split | first }}"
+
+- name: Warn about name fallback for SMB address (FIX-11)
+  ansible.builtin.debug:
+    msg: >-
+      ВНИМАНИЕ (FIX-11): адрес узла SMB «{{ stand_smb_host }}» взят резолвом имени с генератора
+      ({{ stand_smb_address }}) — резолв зависит от DNS стенда. Надёжнее задать ansible_host — IP-адрес
+      (или stand_smb_address = IP) в инвентаре.
+  when: stand_smb_address_is_name | bool
+
 - name: Resolve SMB host name on generator
   ansible.builtin.lineinfile:
     path: /etc/hosts

@@ -17,8 +17,8 @@
 
 | Требование | Проверка | При нарушении | Источник |
 |---|---|---|---|
-| Linux x86_64 или AArch64 | `uname -m` | бинарного файла под другую платформу нет | [README](../README.md#установка) |
-| glibc 2.18 и новее (выпуск собирается `cross` в образе с glibc 2.23; по версиям символов `beta-20261111.3` x86_64 и AArch64 — не выше `GLIBC_2.18`) | `ldd --version` | бинарный файл не запустится: `version 'GLIBC_2.xx' not found` | [`beta.yml`](../.github/workflows/beta.yml), [решение 51](decisions/2026-11-11-stage2-followups.md) |
+| Linux x86_64 | `uname -m` | бинарного файла под другую платформу нет | [README](../README.md#установка) |
+| glibc 2.18 и новее (выпуск собирается `cross` в образе с glibc 2.23; по версиям символов `beta-20261111.3` x86_64 — не выше `GLIBC_2.18`) | `ldd --version` | бинарный файл не запустится: `version 'GLIBC_2.xx' not found` | [`beta.yml`](../.github/workflows/beta.yml), [решение 51](decisions/2026-11-11-stage2-followups.md) |
 | Эталон Ansible: apt — Debian 13 (основа) и 12, Ubuntu 26.04 и 24.04, Astra Linux SE 1.8; dnf — РЕД ОС 8, AlmaLinux 10 и 9 (совместимость с RHEL 9 и 10, сам RHEL не проверяется) | `cat /etc/os-release` | плейбук `smb.yml` останавливается на проверке платформы (менеджер пакетов не apt и не dnf) | [`smb.yml`](../deploy/ansible/smb.yml), [INSTALL](INSTALL.md#рабочий-сервер-ansible), решения 28, 51, 52, [DEP-24](manual-tests/DEP-24.md), [DEP-19](manual-tests/DEP-19.md), [DEP-20](manual-tests/DEP-20.md) |
 | systemd с `systemd-sysusers` и `LoadCredential=` (юнит, sysusers, учётные данные) | `systemd-analyze verify /etc/systemd/system/thepost.service` | юнит не загрузится; без `LoadCredential=` узел не получит `secret_id` OpenBao | [`thepost.service`](../deploy/systemd/thepost.service) |
 | Ядро с seccomp | `privileges.seccomp`: `OK enforce` | `FAIL`: запуск с `confine.seccomp` не выполнится | [`privileges.rs`](../crates/tp-platform/src/privileges.rs) |

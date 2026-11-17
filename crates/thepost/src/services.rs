@@ -14,10 +14,10 @@
 //!
 //! Планирование встреч (APP-28, SRS 4.4) — одни зависимости на узел ([`Services::schedule`]): приём iTIP в календари
 //! (`tp_dav::ItipInbox`) — у CalDAV, JMAP и доставки узла (iMIP извне и письма-приглашения из почтового клиента,
-//! `Delivery::with_itip`, права отправки — `Delivery::with_authz`); приглашения
-//! внешним участникам — письмом (`tp_dav::ImipSender`) через ту же доставку, что у JMAP; занятость — `PgMeta`.
-//! Применённые сообщения во входящих планирования (`dav.schedule_keep_processed`) удаляет по сроку роль maintenance
-//! (`crate::roles::ItipPurge`, APP-53).
+//! `Delivery::with_itip`, права отправки — `Delivery::with_authz`, представители — `Delivery::with_delegates`);
+//! приглашения внешним участникам — письмом (`tp_dav::ImipSender`) через ту же доставку, что у JMAP; занятость —
+//! `PgMeta`. Применённые сообщения во входящих планирования (`dav.schedule_keep_processed`) удаляет по сроку роль
+//! maintenance (`crate::roles::ItipPurge`, APP-53).
 //!
 //! Общий доступ к календарям и книгам (DAV-17, DAV-18, APP-71) — один слой прав на узел ([`Services::collections`]);
 //! CalDAV принимает выдачу прав `POST` (`cs:share`, `share-resource`) и состав групп представителей
@@ -413,7 +413,9 @@ impl Services {
     /// (`Jmap::with_mail_flow`), повторный вызов нарушил бы «один раз на письмо».
     /// Приглашения и ответы в письмах после доставки в ящик применяются к календарю получателя (`Delivery::with_itip`):
     /// извне — iMIP с DMARC (SMTP-33), из submission, JMAP и DAV — если `From` принадлежит отправителю: свой адрес,
-    /// псевдоним или право Send As / Send on Behalf из ACL узла (`Delivery::with_authz`, SMTP-36, APP-62).
+    /// псевдоним или право Send As / Send on Behalf из ACL узла (`Delivery::with_authz`, SMTP-36, APP-62);
+    /// приглашение представителя (`SENT-BY`) — по записи представителя организатора с `schedule_on_behalf` из
+    /// `PgMeta` (`Delivery::with_delegates`, APP-69).
     fn base_delivery(&self, smtp: &SmtpConfig) -> Result<Delivery> {
         let resolver = system_resolver()?;
         let milter = (!smtp.milter.filters.is_empty())
@@ -445,6 +447,7 @@ impl Services {
             .with_policies(Arc::new(self.meta.clone()))
             .with_send_limits(self.send_limits.clone())
             .with_itip(self.itip.clone())
+            .with_delegates(Arc::new(self.meta.clone()))
             .with_authz(self.authz.clone()))
     }
 

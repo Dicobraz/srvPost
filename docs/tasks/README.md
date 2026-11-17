@@ -488,7 +488,7 @@
 | [PLT-22](PLT-22.md) | необязательный сертификат клиента на слушателях SMTP | platform | A | platform-12 | done | SMTP-20 |
 | [CTR-43](CTR-43.md) | очередь модерации — и для правил потока почты | contracts | B | contracts-31 | done | CTR-31,SMTP-22 |
 | [META-44](META-44.md) | очередь модерации без группы в PostgreSQL | meta | B | meta-28 | done | CTR-43 |
-| [SMTP-30](SMTP-30.md) | исход Moderate правил потока — в очередь модерации | smtp | A | smtp-11 | ready | CTR-43,SMTP-22 |
+| [SMTP-30](SMTP-30.md) | исход Moderate правил потока — в очередь модерации | smtp | A | smtp-11 | done | CTR-43,SMTP-22 |
 | [CTR-49](CTR-49.md) | учётная запись в очереди и учёте BLOB, сигнал ShardsChanged | contracts | B | contracts-36 | done | CTR-35 |
 | [CTR-50](CTR-50.md) | подключение отключённого ящика — опция «оставить» / «удалить» содержимое | contracts | B | contracts-36 | done | CTR-35 |
 | [DEPS-06](DEPS-06.md) | HTTP/2 для межузловых вызовов — фичи axum и reqwest | deps | B | deps-06 | ready | CLU-14 |
@@ -605,7 +605,7 @@
 | [TUI-04](TUI-04.md) | конфигурация узла в текстовом интерфейсе | tui | A | tui-02 | done | TUI-02,DEP-55 |
 | [TUI-05](TUI-05.md) | подкоманда `thepost admin tui` в узле | app | A | app-65 | done | TUI-01 |
 | [CI-16](CI-16.md) | покрытие Admin API тремя клиентами | ci | B | ci-14 | ready | TUI-02 |
-| [DOC-08](DOC-08.md) | руководство по текстовому интерфейсу | docs | A | docs-08 | ready | TUI-03,TUI-04 |
+| [DOC-08](DOC-08.md) | руководство по текстовому интерфейсу | docs | A | docs-08 | done | TUI-03,TUI-04 |
 | [DES-01](DES-01.md) | файл токенов фирменного стиля и проверка контраста в CI | design | B | design-01 | done | — |
 | [DEPS-15](DEPS-15.md) | зависимости картинок и мыши текстового интерфейса — `ratatui-image`, `evdev` | deps | B | deps-15 | done | DEPS-14 |
 | [TUI-06](TUI-06.md) | тема текстового интерфейса по токенам — пять режимов, палитра консоли Linux, знак IT TASK | tui | A | tui-03 | done | TUI-01,DES-01 |
@@ -616,7 +616,7 @@
 | [UI-20](UI-20.md) | консоль — экран «Очередь» | console | A | console-11 | ready | ADM-45 |
 | [CTR-86](CTR-86.md) | хранилище уведомлений о доступе (`ShareNotification`) в контракте | contracts | B | contracts-58 | done | — |
 | [CTR-87](CTR-87.md) | `Directory::contacts_since` без тела по умолчанию | contracts | B | contracts-58 | done | — |
-| [APP-69](APP-69.md) | представители (`DelegateStore`) в доставке — приглашения «от имени» по `schedule_on_behalf` | app | B | app-66 | ready | — |
+| [APP-69](APP-69.md) | представители (`DelegateStore`) в доставке — приглашения «от имени» по `schedule_on_behalf` | app | B | app-66 | done | — |
 | [DEPS-16](DEPS-16.md) | зависимости подсветки вывода CLI — `anstream`, `anstyle`, `toml` | deps | B | deps-16 | done | ADM-44 |
 | [ADM-46](ADM-46.md) | подсветка вывода `thepost admin` — таблицы, ошибки, изменения, JSON; модуль стилей `tp-admin-client::style` | admin | A | admin-32 | done | ADM-44,DES-01,DEPS-16 |
 | [APP-70](APP-70.md) | подсветка справки всех команд `thepost`, цветные `doctor` и `config check` | app | A | app-67 | done | ADM-46 |
@@ -670,6 +670,9 @@
 |---|---|---|---|---|---|---|
 | [FIX-09](FIX-09.md) | systemd-юнит openbao не переживает нечистую остановку: drop-in в роли | deploy | A | deploy-45 | done | — |
 | [FIX-10](FIX-10.md) | doctor — ретрай и явные причины при медленном secret store; без ложного каскада | app | A | app-77 | done | — |
+| [FIX-11](FIX-11.md) | молча нерабочая запись /etc/hosts (имя вместо адреса) |  |  | deploy-46 | done | — |
+| [FIX-12](FIX-12.md) | адрес генератора в конфиге узла — ansible_host / факты / assert |  |  | deploy-47 | done | — |
+| [FIX-13](FIX-13.md) | чужой From в исходящей нагрузке, CRLF в файлах стенда, сэмплер без проверки старта |  |  | deploy-48 | done | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
 
@@ -776,10 +779,10 @@
 | [CTR-54](CTR-54.md) | `DavStore` — перенос объекта между коллекциями и поиск контактов по индексу | contracts | B | contracts-38 | done | CTR-45 |
 | [CTR-55](CTR-55.md) | очередь модерации — продолжение по курсору | contracts | B | contracts-38 | done | CTR-43 |
 | [CTR-56](CTR-56.md) | `Collection` — по умолчанию, подписка и видимость, оповещения по умолчанию | contracts | B | contracts-38 | done | CTR-45 |
-| [META-57](META-57.md) | адреса учётной записи в PostgreSQL | meta | A | meta-37 | ready | CTR-53 |
-| [META-58](META-58.md) | перенос объекта DAV и индекс поиска контактов | meta | B | meta-37 | ready | CTR-54,META-46 |
-| [META-59](META-59.md) | очередь модерации — страница по курсору | meta | A | meta-37 | ready | CTR-55 |
-| [META-60](META-60.md) | поля `Collection` — по умолчанию, подписка, оповещения | meta | B | meta-37 | ready | CTR-56,META-46 |
+| [META-57](META-57.md) | адреса учётной записи в PostgreSQL | meta | A | meta-37 | done | CTR-53 |
+| [META-58](META-58.md) | перенос объекта DAV и индекс поиска контактов | meta | B | meta-37 | done | CTR-54,META-46 |
+| [META-59](META-59.md) | очередь модерации — страница по курсору | meta | A | meta-37 | done | CTR-55 |
+| [META-60](META-60.md) | поля `Collection` — по умолчанию, подписка, оповещения | meta | B | meta-37 | done | CTR-56,META-46 |
 | [DAV-23](DAV-23.md) | `calendar-user-address-set` — псевдонимы учётной записи | dav | A | dav-07 | done | CTR-53,DAV-05 |
 | [DAV-24](DAV-24.md) | CardDAV — поисковые строки контакта и `addressbook-query` по индексу | dav | A | dav-07 | done | CTR-54,DAV-10 |
 | [DAV-25](DAV-25.md) | CalDAV и CardDAV — оповещения по умолчанию и коллекция по умолчанию | dav | A | dav-07 | done | CTR-56,DAV-05 |
@@ -916,6 +919,22 @@
 |---|---|---|---|---|---|---|
 | [CI-09](CI-09.md) | фаззинг `tp-sieve` под libFuzzer | ci | B | ci-08 | done | SIEVE-07 |
 | [META-71](META-71.md) | миграции — одна базовая схема перед выпуском 1.0 | meta | B | meta-45 | ready | — |
+
+## Ф3. Enterprise: конвейер обработки и журналирование (SRS 4.9, ред. 8 / PR #31)
+
+| Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
+|---|---|---|---|---|---|---|
+| [CTR-96](CTR-96.md) | конвейер обработки — реестр этапов, итоговый набор действий, итоговый контроль | contracts | B | contracts-67 | ready | — |
+| [CTR-97](CTR-97.md) | журналирование — контракт записей, правил и хранилища журнала | contracts | B | contracts-67 | ready | CTR-96 |
+| [META-88](META-88.md) | индекс журнала — схема journal, хеш-цепочка, восстановление из хранилища записей | meta | B | meta-61 | todo | CTR-97 |
+| [BLOB-18](BLOB-18.md) | хранилище записей журнала — отдельный бакет S3 с Object Lock, дедуп, SMB append-only | blob | A | blob-11 | todo | CTR-97 |
+| [SMTP-53](SMTP-53.md) | этап журналирования в конвейере — приём, отправка, конверт | smtp | A | smtp-33 | todo | CTR-96,CTR-97 |
+| [SMTP-54](SMTP-54.md) | конвейер как реестр этапов и итоговый контроль действий в доставке | smtp | A | smtp-33 | todo | CTR-96 |
+| [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | todo | CTR-97,META-88 |
+| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-78 | todo | CTR-97,META-88,BLOB-18 |
+| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-78 | todo | CTR-97 |
+| [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
+| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-49 | todo | APP-83,BLOB-18 |
 
 ## Вне волн
 

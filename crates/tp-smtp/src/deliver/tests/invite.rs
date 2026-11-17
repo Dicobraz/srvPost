@@ -235,10 +235,13 @@ async fn external_sender_of_submit_is_not_internal() {
     assert_eq!(env.inbox(BOB).await.len(), 1);
 }
 
-/// SMTP-38: приглашение представителя — `From` alice совпал с `SENT-BY` организатора; сообщение — от имени
-/// организатора при праве alice на его адрес, иначе только письмо.
+/// SMTP-38, APP-69: приглашение представителя — `From` alice совпал с `SENT-BY` организатора; сообщение — от
+/// имени организатора при записи его представителя с `schedule_on_behalf`. Право отправки почты (Send As, Send on
+/// Behalf) приглашение представителя не признаёт: право без делегирования календаря — только письмо.
 #[tokio::test]
-async fn sent_by_delegate_needs_right_on_owner() {
+async fn sent_by_delegate_needs_schedule_on_behalf() {
+    use tp_contracts::sharing::{Delegate, DelegateLevel, DelegateStore};
+
     let env = Env::new(DecisionHooks::default()).await;
     let on_behalf = |organizer: &str| {
         invite(ALICE, organizer).replace(
@@ -246,21 +249,55 @@ async fn sent_by_delegate_needs_right_on_owner() {
             &format!("ORGANIZER;CN=Boss;SENT-BY=\"mailto:{ALICE}\":mailto:"),
         )
     };
-    let rights = Arc::new(SendRights::default());
-    rights.grant(ALICE, "boss@example.org", SendRight::SendOnBehalf);
-    let (d, itip) = delivery(&env, Some(rights));
-    submission(&env, &d, &on_behalf("boss@example.org")).await;
-    submit(&d, &on_behalf("boss@example.org")).await;
-    // Тот же `SENT-BY`, но у alice нет права на адрес организатора.
+    let carol = env.scope("carol@example.org").await;
+    let alice = env.scope(ALICE).await;
+    let set = |on_behalf: bool| {
+        DelegateStore::set_delegate(
+            &env.meta,
+            carol,
+            Delegate {
+                delegate: alice.account,
+                level: DelegateLevel::Write,
+                schedule_on_behalf: on_behalf,
+            },
+        )
+    };
+    set(true).await.expect("delegate");
+
+    // Запись с `schedule_on_behalf` — сообщение от имени организатора (submission и отправка вне сессии).
+    let (d, itip) = delegated(&env, None);
     submission(&env, &d, &on_behalf("carol@example.org")).await;
     submit(&d, &on_behalf("carol@example.org")).await;
     assert_eq!(
         reached(&env, &itip).await,
-        ["boss@example.org", "boss@example.org"]
+        ["carol@example.org", "carol@example.org"]
     );
-    // Без прав отправки представителю не верят.
-    let (d, itip) = delivery(&env, None);
+
+    // Право Send on Behalf на адрес организатора без делегирования календаря — только письмо (SMTP-38
+    // признавал такое право — APP-69 больше нет).
+    let rights = Arc::new(SendRights::default());
+    rights.grant(ALICE, "boss@example.org", SendRight::SendOnBehalf);
+    let (d, itip) = delegated(&env, Some(rights));
     submission(&env, &d, &on_behalf("boss@example.org")).await;
+    submit(&d, &on_behalf("boss@example.org")).await;
     assert!(itip.calls().is_empty());
-    assert_eq!(env.inbox(BOB).await.len(), 5);
+
+    // Представитель без права планирования от имени — только письмо.
+    set(false).await.expect("delegate without schedule");
+    let (d, itip) = delegated(&env, None);
+    submission(&env, &d, &on_behalf("carol@example.org")).await;
+    assert!(itip.calls().is_empty());
+
+    // Без хранилища представителей записи нет — только письмо.
+    let (d, itip) = delivery(&env, None);
+    set(true).await.expect("delegate again");
+    submission(&env, &d, &on_behalf("carol@example.org")).await;
+    assert!(itip.calls().is_empty());
+    assert_eq!(env.inbox(BOB).await.len(), 6);
+}
+
+/// Доставка [`delivery`] с представителями из каталога окружения ([`Delivery::with_delegates`], APP-69).
+fn delegated(env: &Env, rights: Option<Arc<SendRights>>) -> (Delivery, FakeItip) {
+    let (d, itip) = delivery(env, rights);
+    (d.with_delegates(Arc::new(env.meta.clone())), itip)
 }
