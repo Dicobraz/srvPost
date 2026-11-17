@@ -671,6 +671,7 @@
 | [FIX-09](FIX-09.md) | systemd-юнит openbao не переживает нечистую остановку: drop-in в роли | deploy | A | deploy-45 | done | — |
 | [FIX-10](FIX-10.md) | doctor — ретрай и явные причины при медленном secret store; без ложного каскада | app | A | app-77 | done | — |
 | [FIX-11](FIX-11.md) | молча нерабочая запись /etc/hosts (имя вместо адреса) |  |  | deploy-46 | done | — |
+| [FIX-12](FIX-12.md) | адрес генератора в конфиге узла — ansible_host / факты / assert |  |  | deploy-47 | ready | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
 
