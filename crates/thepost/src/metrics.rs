@@ -576,7 +576,9 @@ mod tests {
         let metrics = Metrics::default();
         let meta = Arc::new(MemMetadata::new(Arc::new(SystemClock)));
         let scope = meta.account("a@example.org").await.expect("acc");
-        let inbox = meta.mailbox_by_role(scope, SpecialUse::Inbox).expect("inbox");
+        let inbox = meta
+            .mailbox_by_role(scope, SpecialUse::Inbox)
+            .expect("inbox");
         let cache = Arc::new(CachedMessages::new(
             meta.clone(),
             meta.clone(),
