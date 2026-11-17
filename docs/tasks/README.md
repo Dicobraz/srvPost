@@ -487,8 +487,8 @@
 | [DEP-23](DEP-23.md) | резервная копия OpenBao — снимок Raft | deploy | A | deploy-19 | done | DEP-15 |
 | [PLT-22](PLT-22.md) | необязательный сертификат клиента на слушателях SMTP | platform | A | platform-12 | done | SMTP-20 |
 | [CTR-43](CTR-43.md) | очередь модерации — и для правил потока почты | contracts | B | contracts-31 | done | CTR-31,SMTP-22 |
-| [META-44](META-44.md) | очередь модерации без группы в PostgreSQL | meta | B | meta-28 | ready | CTR-43 |
-| [SMTP-30](SMTP-30.md) | исход Moderate правил потока — в очередь модерации | smtp | A | smtp-11 | todo | CTR-43,SMTP-22 |
+| [META-44](META-44.md) | очередь модерации без группы в PostgreSQL | meta | B | meta-28 | done | CTR-43 |
+| [SMTP-30](SMTP-30.md) | исход Moderate правил потока — в очередь модерации | smtp | A | smtp-11 | ready | CTR-43,SMTP-22 |
 | [CTR-49](CTR-49.md) | учётная запись в очереди и учёте BLOB, сигнал ShardsChanged | contracts | B | contracts-36 | done | CTR-35 |
 | [CTR-50](CTR-50.md) | подключение отключённого ящика — опция «оставить» / «удалить» содержимое | contracts | B | contracts-36 | done | CTR-35 |
 | [DEPS-06](DEPS-06.md) | HTTP/2 для межузловых вызовов — фичи axum и reqwest | deps | B | deps-06 | ready | CLU-14 |
@@ -668,8 +668,8 @@
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
-| [FIX-09](FIX-09.md) | systemd-юнит openbao не переживает нечистую остановку: drop-in в роли | deploy | A | deploy-45 | ready | — |
-| [FIX-10](FIX-10.md) | doctor — ретрай и явные причины при медленном secret store; без ложного каскада | app | A | app-77 | ready | — |
+| [FIX-09](FIX-09.md) | systemd-юнит openbao не переживает нечистую остановку: drop-in в роли | deploy | A | deploy-45 | done | — |
+| [FIX-10](FIX-10.md) | doctor — ретрай и явные причины при медленном secret store; без ложного каскада | app | A | app-77 | done | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
 
@@ -869,9 +869,9 @@
 | [CTR-90](CTR-90.md) | вытеснение старых `ShareNotification` сверх предела в хранилище | contracts | B | contracts-61 | todo | CTR-86,META-83 |
 | [DAV-39](DAV-39.md) | удалить `tp_dav::router_with`, тесты — на `router_shared` | dav | A | dav-18 | ready | — |
 | [APP-73](APP-73.md) | e2e узла — ответ ресурса внешнему организатору письмом iMIP | app | A | app-70 | todo | APP-71 |
-| [CTR-91](CTR-91.md) | брендинг заказчика в контракте — `BrandingStore`, роли цветов, уровни установки и организации | contracts | B | contracts-62 | ready | — |
-| [META-84](META-84.md) | брендинг заказчика в PostgreSQL — миграция 0043 и `BrandingStore` в `PgMeta` | meta | A | meta-57 | todo | CTR-91 |
-| [ADM-48](ADM-48.md) | брендинг заказчика в Admin API — чтение, запись, сброс, знак, контраст, открытый маршрут | admin | B | admin-34 | todo | CTR-91,DES-01,ADM-44 |
+| [CTR-91](CTR-91.md) | брендинг заказчика в контракте — `BrandingStore`, роли цветов, уровни установки и организации | contracts | B | contracts-62 | done | — |
+| [META-84](META-84.md) | брендинг заказчика в PostgreSQL — миграция 0043 и `BrandingStore` в `PgMeta` | meta | A | meta-57 | ready | CTR-91 |
+| [ADM-48](ADM-48.md) | брендинг заказчика в Admin API — чтение, запись, сброс, знак, контраст, открытый маршрут | admin | B | admin-34 | ready | CTR-91,DES-01,ADM-44 |
 | [APP-75](APP-75.md) | узел — брендинг заказчика (`BrandingStore` и BLOB в Admin API) | app | A | app-72 | todo | META-84,ADM-48 |
 | [UI-22](UI-22.md) | консоль — брендинг заказчика: тема из действующего брендинга, знак на входе и в шапке, настройка | console | A | console-13 | todo | UI-19,ADM-48 |
 | [TUI-08](TUI-08.md) | текстовый интерфейс — тема поверх действующего брендинга, знак на экране входа | tui | A | tui-05 | todo | TUI-06,ADM-48 |
