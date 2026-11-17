@@ -147,7 +147,7 @@
 
 ## Установка
 
-Linux x86_64 (без требования AVX2) или AArch64. Готовые файлы — на странице [выпусков](https://github.com/Dicobraz/srvPost/releases),
+Linux x86_64 (без требования AVX2). Готовые файлы — на странице [выпусков](https://github.com/Dicobraz/srvPost/releases),
 каждый подписан ([как проверить](docs/INSTALL.md#проверка-подписи)).
 Что должно быть готово до установки (ОС, порты, DNS, PostgreSQL, OpenBao) и как это проверить —
 [требования к окружению](docs/PREREQUISITES.md).

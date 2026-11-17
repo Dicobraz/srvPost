@@ -1,7 +1,7 @@
 # Разработка The Post
 
 ## Окружение
-- Linux x86_64/AArch64 (на Windows — WSL2 Ubuntu, репозиторий — в файловой системе WSL). Rust stable
+- Linux x86_64 (на Windows — WSL2 Ubuntu, репозиторий — в файловой системе WSL). Rust stable
   (`rust-toolchain.toml`; не ниже 1.98 — `rust-version` в `Cargo.toml`), `cargo install cargo-nextest --locked`.
 - Узел собирается только под Linux: `tp-sys` зависит от `landlock`, `seccompiler` и `nix`. На Windows без WSL не
   собираются `tp-sys` и всё, что от него зависит: `tp-platform`, `tp-search`, `tp-smtp`, `tp-sieve`, `tp-imap`,
