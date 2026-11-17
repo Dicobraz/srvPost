@@ -487,34 +487,35 @@ impl MessageStore for CachedMessages {
             self.count(|s| s.hits += 1);
             return Ok(Self::serve(&e, limit));
         }
-        if e.complete && changes <= self.cfg.patch_max {
-            if let Some(mut list) = self.patch(scope, mailbox, (*e.list).clone(), &c).await {
-                list.truncate(e.limit);
-                let complete = list.len() < e.limit;
-                if complete || limit <= e.limit {
-                    let bytes = list_bytes(&list);
-                    self.store(
-                        key,
-                        Entry {
-                            base: c.new_state,
-                            limit: e.limit,
-                            complete,
-                            list: Arc::new(list.clone()),
-                            at: Instant::now(),
-                        },
-                    );
-                    self.count(|s| s.patches += 1);
-                    tracing::debug!(
-                        account = %scope.account,
-                        mailbox = %mailbox,
-                        changes,
-                        len = list.len(),
-                        bytes,
-                        "list_cache: список папки обновлён по журналу"
-                    );
-                    let n = limit.min(list.len());
-                    return Ok(list[..n].to_vec());
-                }
+        if e.complete
+            && changes <= self.cfg.patch_max
+            && let Some(mut list) = self.patch(scope, mailbox, (*e.list).clone(), &c).await
+        {
+            list.truncate(e.limit);
+            let complete = list.len() < e.limit;
+            if complete || limit <= e.limit {
+                let bytes = list_bytes(&list);
+                self.store(
+                    key,
+                    Entry {
+                        base: c.new_state,
+                        limit: e.limit,
+                        complete,
+                        list: Arc::new(list.clone()),
+                        at: Instant::now(),
+                    },
+                );
+                self.count(|s| s.patches += 1);
+                tracing::debug!(
+                    account = %scope.account,
+                    mailbox = %mailbox,
+                    changes,
+                    len = list.len(),
+                    bytes,
+                    "list_cache: список папки обновлён по журналу"
+                );
+                let n = limit.min(list.len());
+                return Ok(list[..n].to_vec());
             }
         }
         self.rebuild(scope, mailbox, key, limit).await
@@ -692,10 +693,7 @@ mod tests {
         let list = MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
             .await
             .expect("list");
-        assert_eq!(
-            subjects(&list),
-            vec!["m0".into(), "m1".into(), "новое".into()]
-        );
+        assert_eq!(subjects(&list), vec!["m0", "m1", "новое"]);
         assert_eq!(f.cache.stats().patches, 1);
         assert_transparent(&f, 100).await;
     }
@@ -756,8 +754,8 @@ mod tests {
         let work_list = MessageStore::list(&f.cache, f.scope, work, MessageQuery::All, 100)
             .await
             .expect("work");
-        assert_eq!(subjects(&inbox_list), vec!["m1".into()]);
-        assert_eq!(subjects(&work_list), vec!["m0".into()]);
+        assert_eq!(subjects(&inbox_list), vec!["m1"]);
+        assert_eq!(subjects(&work_list), vec!["m0"]);
         assert_eq!(f.cache.stats().patches, 2);
         let inner_work = MessageStore::list(&f.env.meta, f.scope, work, MessageQuery::All, 100)
             .await
@@ -858,7 +856,7 @@ mod tests {
         let list = MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 2)
             .await
             .expect("list");
-        assert_eq!(subjects(&list), vec!["m0".into(), "m1".into()]);
+        assert_eq!(subjects(&list), vec!["m0", "m1"]);
         let s = f.cache.stats();
         assert_eq!((s.rebuilds, s.patches), (2, 0));
     }
