@@ -33,6 +33,8 @@
 //! - правила потока почты ([`Delivery::with_mail_flow`], `MailFlow`, SMTP-22) — один раз на письмо: smtp-in после
 //!   Milter, submission и [`Delivery::submit`] — до точек принятия решений и очереди; `Reject` — `550 5.7.1`,
 //!   `Drop` — `250` без доставки, изменённые конверт и тело — дальше по ним, `matched` — в журнал доставки;
+//!   `Moderate` (SMTP-30, CTR-43) — письмо в очередь модерации, отправителю — `250` (`SubmitStatus::Queued`
+//!   вне сессии), модератору — уведомление ([`crate::deliver::moderation`]); без хранилища очереди — `451`;
 //! - правила Sieve получателей ([`Delivery::with_rules`], [`crate::sieve`], SMTP-31, SMTP-32) — для каждого
 //!   локального получателя (smtp-in, submission, [`Delivery::submit`]) после правил потока и до `ingest`: папки и
 //!   флаги, отброс, перенаправление, автоответ; перенаправленное письмо и внутренний автоответ — через правила
@@ -80,7 +82,7 @@ use time::OffsetDateTime;
 use tp_contracts::auth::{Authorizer, DirChange, DirCursor, Directory, Principal, SendRight};
 use tp_contracts::blob::{BlobIndex, BlobStore};
 use tp_contracts::ext::{CopyTo, Decision, DecisionHooks, SubmissionInfo};
-use tp_contracts::groups::DistributionGroup;
+use tp_contracts::groups::{DistributionGroup, MAX_RULE_NAME_LEN};
 use tp_contracts::mailstore::{Delivery as MailDelivery, IngestRequest, Ingested, MailStore};
 use tp_contracts::meta::{
     Account, AccountScope, AccountStore, Mailbox, MailboxStore, Policy, PolicyResolver, SpecialUse,
@@ -1647,10 +1649,31 @@ impl Delivery {
                     };
                     return Ok(Some(reply(550, [5, 7, 1], text)));
                 }
-                FlowVerdict::Moderate { .. } => {
-                    // Очередь модерации (GroupStore::hold) — только для групп рассылки: письмо правила потока
-                    // в неё не ставится (нужен контракт); временный отказ — письмо не теряется.
-                    tracing::warn!(id = %env.id, "smtp: модерация правилом потока не поддержана");
+                FlowVerdict::Moderate { moderators } => {
+                    // SMTP-30: письмо — в очередь модерации (CTR-43), отправителю — 250, модератору —
+                    // уведомление. Без хранилища очереди или модераторов — временный отказ: письмо не теряется.
+                    let rule = rule_name(&outcome.matched);
+                    let sender = sender_account(env, self.deps.tenant);
+                    let held = self
+                        .hold_by_rule(
+                            self.deps.tenant,
+                            &env.id,
+                            &rule,
+                            moderators,
+                            &outcome.envelope.mail_from,
+                            sender,
+                            &outcome.envelope.rcpt_to,
+                            &full,
+                        )
+                        .await?;
+                    if held {
+                        trail.steps.push(
+                            Step::new(Ek::Deliver, Dd::Hold, outcome.envelope.rcpt_to.clone())
+                                .reason(format!("held for moderation by flow rule: {rule}")),
+                        );
+                        return Ok(Some(reply(250, [2, 0, 0], format!("OK id={}", env.id))));
+                    }
+                    tracing::warn!(id = %env.id, "smtp: очередь модерации недоступна — письмо правила потока не принято");
                     return Ok(Some(reply(
                         451,
                         [4, 7, 0],
@@ -1874,7 +1897,8 @@ impl Delivery {
 
     /// Обработка письма отправки вне сессии SMTP до доставки и очереди: фильтры Milter исходящей почты
     /// (SMTP-27) из профиля политики организации (SMTP-40), правила потока (один раз на письмо) и переписывание
-    /// отправителя. `Done` — судьба письма решена фильтром или правилом (отказ, удаление).
+    /// отправителя. `Done` — судьба письма решена фильтром или правилом (отказ, удаление, задержано модерацией —
+    /// SMTP-30, всем получателям `SubmitStatus::Queued`).
     async fn pre_submit(
         &self,
         id: &str,
@@ -1942,21 +1966,50 @@ impl Delivery {
         };
         let mut flowed_from = None;
         if let Some((outcome, body)) = self.mail_flow(input, &raw).await? {
+            let mut moderate = None;
             let status = match outcome.verdict {
                 FlowVerdict::Accept if !outcome.envelope.rcpt_to.is_empty() => None,
                 FlowVerdict::Accept | FlowVerdict::Drop => Some(SubmitStatus::Delivered),
                 FlowVerdict::Reject(text) => {
                     Some(SubmitStatus::Failed(format!("550 5.7.1 {}", clean(&text))))
                 }
-                FlowVerdict::Moderate { .. } => Some(SubmitStatus::Failed(
-                    "451 4.7.0 moderation by mail flow rule is not available".into(),
-                )),
+                FlowVerdict::Moderate { moderators } => {
+                    moderate = Some(moderators);
+                    None
+                }
             };
             if !outcome.matched.is_empty() {
                 let step = Step::new(Ek::Receive, Dd::Accept, rcpts.to_vec())
                     .reason(format!("mail flow rules: {}", outcome.matched.join(", ")));
                 self.track(mail_from, tracking::message_id(&raw).as_deref(), vec![step])
                     .await;
+            }
+            if let Some(moderators) = moderate {
+                // SMTP-30: письмо — в очередь модерации; отправке вне сессии SMTP — `Queued` (ждёт модерации).
+                let rule = rule_name(&outcome.matched);
+                let sender = self.sender_by_address(mail_from).await?;
+                let held = self
+                    .hold_by_rule(
+                        tenant,
+                        id,
+                        &rule,
+                        moderators,
+                        &outcome.envelope.mail_from,
+                        sender,
+                        &outcome.envelope.rcpt_to,
+                        &raw,
+                    )
+                    .await?;
+                if held {
+                    let step = Step::new(Ek::Deliver, Dd::Hold, outcome.envelope.rcpt_to.clone())
+                        .reason(format!("held for moderation by flow rule: {rule}"));
+                    self.track(mail_from, tracking::message_id(&raw).as_deref(), vec![step])
+                        .await;
+                    return Ok(Pre::Done(SubmitStatus::Queued));
+                }
+                return Ok(Pre::Done(SubmitStatus::Failed(
+                    "451 4.7.0 moderation by mail flow rule is not available".into(),
+                )));
             }
             if let Some(status) = status {
                 return Ok(Pre::Done(status));
@@ -3020,6 +3073,25 @@ fn sender_account(env: &Envelope, tenant: TenantId) -> Option<AccountId> {
         .as_ref()
         .filter(|p| env.mode == Mode::Submission && p.tenant == tenant)
         .map(|p| p.account)
+}
+
+/// Имя правила потока для очереди модерации (SMTP-30): первое сработавшее ([`FlowOutcome::matched`]),
+/// без управляющих, до [`MAX_RULE_NAME_LEN`] символов ([`HeldMessage::validate`]); пусто — запасное имя.
+fn rule_name(matched: &[String]) -> String {
+    let name: String = matched
+        .first()
+        .map(String::as_str)
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX_RULE_NAME_LEN)
+        .collect();
+    let name = name.trim();
+    if name.is_empty() {
+        "mail flow rule".into()
+    } else {
+        name.to_owned()
+    }
 }
 
 /// Вошедший пользователь сеанса submission (SMTP-45): его адреса отправителя проверяются; smtp-in и приложение без

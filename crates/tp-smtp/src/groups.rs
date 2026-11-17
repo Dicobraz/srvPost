@@ -19,6 +19,10 @@
 //!
 //! Решение модератора (`tp_contracts::groups::Moderation`, FIX-01) — `impl Moderation for Delivery`
 //! ([`crate::deliver`]): объект письма читается отсюда, ссылку на него снимает успешное решение.
+//!
+//! Правило потока с исходом `Moderate` (SMTP-30) ставит письмо в ту же очередь без группы
+//! ([`Groups::hold_rule`], CTR-43): источник — правило с именем, у записи — модераторы и исходные
+//! получатели; одобрение доставляет письмо им ([`crate::deliver::moderation`]).
 
 use std::collections::HashSet;
 use std::fmt;
@@ -29,7 +33,8 @@ use time::OffsetDateTime;
 use tp_contracts::addressbook::{ContactStore, DynamicGroupStore};
 use tp_contracts::blob::{BlobIndex, BlobStore};
 use tp_contracts::groups::{
-    DistributionGroup, GroupMember, GroupStore, HeldMessage, SenderRestriction,
+    DistributionGroup, GroupMember, GroupStore, HeldMessage, HoldSource, Moderator,
+    SenderRestriction,
 };
 use tp_contracts::{AccountId, BlobKey, GroupId, HeldId, Result, TenantId};
 
@@ -78,6 +83,22 @@ impl fmt::Debug for Groups {
 pub(crate) struct Hold<'a> {
     pub tenant: TenantId,
     pub group: &'a DistributionGroup,
+    pub sender: &'a str,
+    pub sender_account: Option<AccountId>,
+    pub message_id: Option<String>,
+    pub raw: Bytes,
+    pub at: OffsetDateTime,
+}
+
+/// Письмо правила потока для очереди модерации (SMTP-30).
+pub(crate) struct RuleHold<'a> {
+    pub tenant: TenantId,
+    /// Имя сработавшего правила: 1–255 символов без управляющих ([`HeldMessage::validate`]).
+    pub rule: &'a str,
+    /// Модераторы правила (не пусто).
+    pub moderators: Vec<Moderator>,
+    /// Исходные получатели конверта после действий правила (не пусто): им — одобренное письмо.
+    pub recipients: Vec<String>,
     pub sender: &'a str,
     pub sender_account: Option<AccountId>,
     pub message_id: Option<String>,
@@ -232,6 +253,41 @@ impl Groups {
             source: Default::default(),
             moderators: Vec::new(),
             recipients: Vec::new(),
+            sender: h.sender.to_owned(),
+            sender_account: h.sender_account,
+            message_id: h.message_id,
+            blob,
+            size,
+            held_at: h.at,
+        };
+        if let Err(e) = self.store.hold(h.tenant, message).await {
+            release_blob(self.index.as_ref(), &blob).await;
+            return Err(e);
+        }
+        Ok(id)
+    }
+
+    /// Ставит письмо правила потока в очередь модерации без группы (CTR-43, SMTP-30): источник — правило
+    /// `rule`, у записи — модераторы и исходные получатели; ошибка постановки снимает ссылку на объект.
+    pub(crate) async fn hold_rule(&self, h: RuleHold<'_>) -> Result<HeldId> {
+        let size = h.raw.len() as u64;
+        let blob = store_blob(
+            self.blobs.as_ref(),
+            self.index.as_ref(),
+            h.tenant,
+            None,
+            h.raw,
+        )
+        .await?;
+        let id = HeldId::new();
+        let message = HeldMessage {
+            id,
+            group: None,
+            source: HoldSource::FlowRule {
+                rule: h.rule.to_owned(),
+            },
+            moderators: h.moderators,
+            recipients: h.recipients,
             sender: h.sender.to_owned(),
             sender_account: h.sender_account,
             message_id: h.message_id,
