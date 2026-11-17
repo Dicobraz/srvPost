@@ -35,12 +35,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tp_contracts::config::duration;
 use tp_contracts::meta::{
-    AccountScope, ChangeLog, Changes, Flag, FlagOp, MailboxStore, Message, MessageChange,
-    MessageMeta, MessageQuery, MessageStore, NewMessage,
+    AccountScope, ChangeLog, Changes, Flag, FlagOp, FlagsUpdate, Inserted, MailboxStore, Message,
+    MessageChange, MessageMeta, MessageQuery, MessageStore, NewMessage,
 };
-use tp_contracts::{
-    AccountId, FlagsUpdate, Inserted, MailboxId, MessageId, ModSeq, Result, TenantId,
-};
+use tp_contracts::{AccountId, MailboxId, MessageId, ModSeq, Result, TenantId};
 
 /// Секция `mailstore.list_cache`: кэш списка писем папки (PERF-01).
 ///
@@ -389,8 +387,9 @@ fn meta_bytes(m: &MessageMeta) -> usize {
             .sum::<usize>()
         + opt_bytes(&e.message_id)
         + opt_bytes(&e.in_reply_to)
-        + opt_bytes(&m.preview)
-        + opt_bytes(&m.thread_key)
+        + 16
+        + m.preview.len()
+        + m.thread_key.len()
         + body_bytes(&m.body)
 }
 
