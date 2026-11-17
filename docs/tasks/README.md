@@ -341,8 +341,8 @@
 |---|---|---|---|---|---|---|
 | [CTR-36](CTR-36.md) | точка расширения источников занятости, публикации календарей | contracts | B | contracts-24 | ready | CTR-35 |
 | [META-34](META-34.md) | хранение публикаций календарей и шаблонов партнёров | meta | A | meta-16 | todo | CTR-36,META-33 |
-| [JMAP-19](JMAP-19.md) | расширение Availability/get | jmap | A | jmap-09 | todo | CTR-36,JMAP-14 |
-| [JMAP-20](JMAP-20.md) | расширение публикации календарей | jmap | A | jmap-09 | todo | CTR-36,JMAP-14 |
+| [JMAP-19](JMAP-19.md) | расширение Availability/get | jmap | A | jmap-09 | done | CTR-36,JMAP-14 |
+| [JMAP-20](JMAP-20.md) | расширение публикации календарей | jmap | A | jmap-09 | done | CTR-36,JMAP-14 |
 
 ## Ф1 · Решение 2026-11-01: «Очистить корзину» — настройка; APPEND без правил доставки (`docs/decisions/2026-11-01-trash-purge.md`)
 
@@ -481,8 +481,8 @@
 | [DEP-24](DEP-24.md) | эталон на Debian 13 и Ubuntu 26.04 | deploy | A | deploy-16 | done | DEP-17 |
 | [DEP-19](DEP-19.md) | эталон Ansible на Astra Linux SE 1.8 | deploy | A | deploy-16 | done | DEP-15,DEP-17 |
 | [DEP-20](DEP-20.md) | эталон Ansible на РЕД ОС 8 и семействе RHEL (AlmaLinux 9 и 10) | deploy | A | deploy-16 | done | DEP-15,DEP-17 |
-| [DEP-40](DEP-40.md) | эталон на ВМ Astra Linux SE 1.8 | deploy | A | deploy-30 | ready | DEP-19 |
-| [DEP-41](DEP-41.md) | restore.yml на семействе RHEL — обёртки полным путём | deploy | A | deploy-30 | ready | DEP-23 |
+| [DEP-40](DEP-40.md) | эталон на ВМ Astra Linux SE 1.8 | deploy | A | deploy-30 | done | DEP-19 |
+| [DEP-41](DEP-41.md) | restore.yml на семействе RHEL — обёртки полным путём | deploy | A | deploy-30 | done | DEP-23 |
 | [APP-30](APP-30.md) | cluster.listen — адрес приёма межузловых вызовов отдельно от объявляемого | app | A | app-29 | done | APP-18 |
 | [DEP-23](DEP-23.md) | резервная копия OpenBao — снимок Raft | deploy | A | deploy-19 | done | DEP-15 |
 | [PLT-22](PLT-22.md) | необязательный сертификат клиента на слушателях SMTP | platform | A | platform-12 | done | SMTP-20 |
@@ -607,15 +607,15 @@
 | [CI-16](CI-16.md) | покрытие Admin API тремя клиентами | ci | B | ci-14 | ready | TUI-02 |
 | [DOC-08](DOC-08.md) | руководство по текстовому интерфейсу | docs | A | docs-08 | ready | TUI-03,TUI-04 |
 | [DES-01](DES-01.md) | файл токенов фирменного стиля и проверка контраста в CI | design | B | design-01 | done | — |
-| [DEPS-15](DEPS-15.md) | зависимости картинок и мыши текстового интерфейса — `ratatui-image`, `evdev` | deps | B | deps-15 | ready | DEPS-14 |
+| [DEPS-15](DEPS-15.md) | зависимости картинок и мыши текстового интерфейса — `ratatui-image`, `evdev` | deps | B | deps-15 | done | DEPS-14 |
 | [TUI-06](TUI-06.md) | тема текстового интерфейса по токенам — пять режимов, палитра консоли Linux, знак IT TASK | tui | A | tui-03 | done | TUI-01,DES-01 |
-| [TUI-07](TUI-07.md) | мышь в текстовом интерфейсе — щелчки, прокрутка, граница панелей, плавный курсор | tui | A | tui-04 | todo | TUI-06,DEPS-15 |
+| [TUI-07](TUI-07.md) | мышь в текстовом интерфейсе — щелчки, прокрутка, граница панелей, плавный курсор | tui | A | tui-04 | ready | TUI-06,DEPS-15 |
 | [UI-19](UI-19.md) | веб-консоль на токенах фирменного стиля — тема antd, шрифты в статике | console | A | console-10 | ready | DES-01 |
-| [CTR-85](CTR-85.md) | очередь исходящей почты — список записей и повтор доставки в контракте `QueueStore` | contracts | B | contracts-57 | ready | — |
-| [ADM-45](ADM-45.md) | Admin API очереди — `GET /orgs/{org}/queue`, `POST /orgs/{org}/queue/{id}/retry` | admin | A | admin-31 | todo | CTR-85 |
-| [UI-20](UI-20.md) | консоль — экран «Очередь» | console | A | console-11 | todo | ADM-45 |
-| [CTR-86](CTR-86.md) | хранилище уведомлений о доступе (`ShareNotification`) в контракте | contracts | B | contracts-58 | ready | — |
-| [CTR-87](CTR-87.md) | `Directory::contacts_since` без тела по умолчанию | contracts | B | contracts-58 | ready | — |
+| [CTR-85](CTR-85.md) | очередь исходящей почты — список записей и повтор доставки в контракте `QueueStore` | contracts | B | contracts-57 | done | — |
+| [ADM-45](ADM-45.md) | Admin API очереди — `GET /orgs/{org}/queue`, `POST /orgs/{org}/queue/{id}/retry` | admin | A | admin-31 | done | CTR-85 |
+| [UI-20](UI-20.md) | консоль — экран «Очередь» | console | A | console-11 | ready | ADM-45 |
+| [CTR-86](CTR-86.md) | хранилище уведомлений о доступе (`ShareNotification`) в контракте | contracts | B | contracts-58 | done | — |
+| [CTR-87](CTR-87.md) | `Directory::contacts_since` без тела по умолчанию | contracts | B | contracts-58 | done | — |
 | [APP-69](APP-69.md) | представители (`DelegateStore`) в доставке — приглашения «от имени» по `schedule_on_behalf` | app | B | app-66 | ready | — |
 | [DEPS-16](DEPS-16.md) | зависимости подсветки вывода CLI — `anstream`, `anstyle`, `toml` | deps | B | deps-16 | done | ADM-44 |
 | [ADM-46](ADM-46.md) | подсветка вывода `thepost admin` — таблицы, ошибки, изменения, JSON; модуль стилей `tp-admin-client::style` | admin | A | admin-32 | done | ADM-44,DES-01,DEPS-16 |
@@ -634,9 +634,9 @@
 | [APP-59](APP-59.md) | узел запускает экспорт журнала аудита в syslog/OTLP | app | A | app-53 | done | ADM-34 |
 | [META-76](META-76.md) | убрать старые PgMeta::policy/set_policy и реэкспорт PolicyTarget | meta | A | meta-49 | done | META-70 |
 | [META-77](META-77.md) | проверка номеров миграций — подряд, без повторов, совпадают с именами файлов | meta | A | meta-50 | done | — |
-| [ADM-35](ADM-35.md) | CLI: проверка скрипта Sieve без `tp_sieve::check` | admin | A | admin-24 | ready | JMAP-35 |
+| [ADM-35](ADM-35.md) | CLI: проверка скрипта Sieve без `tp_sieve::check` | admin | A | admin-24 | done | JMAP-35 |
 | [SIEVE-13](SIEVE-13.md) | одна проверка скрипта: удалить `tp_sieve::check` | sieve | A | sieve-06 | done | SIEVE-11,JMAP-35,ADM-35 |
-| [DEP-43](DEP-43.md) | эталоны: лимиты, селектор DKIM и Milter — политикой организации | deploy | A | deploy-32 | ready | CTR-67 |
+| [DEP-43](DEP-43.md) | эталоны: лимиты, селектор DKIM и Milter — политикой организации | deploy | A | deploy-32 | done | CTR-67 |
 | [SMTP-39](SMTP-39.md) | локальные домены — только принятые домены организации | smtp | A | smtp-21 | done | DEP-42,APP-54 |
 | [SMTP-40](SMTP-40.md) | политика организации в SMTP вместо настроек config.yaml | smtp | A | smtp-21 | done | CTR-67,DEP-43 |
 | [APP-55](APP-55.md) | узел: политика организации в SMTP | app | A | app-48 | done | SMTP-40 |
@@ -746,16 +746,16 @@
 | [APP-28](APP-28.md) | планирование встреч в узле | app | A | app-27 | done | DAV-16,SMTP-33,META-51,JMAP-31,APP-27 |
 | [CMP-10](CMP-10.md) | приёмка Ф2 — календари, контакты, правила, консоль | deploy | A | deploy-18 | ready | APP-28,UI-09,DEP-21 |
 | [CTR-48](CTR-48.md) | общий доступ к календарям и контактам, представители, ресурсы | contracts | B | contracts-35 | done | CTR-45,CTR-47 |
-| [META-52](META-52.md) | права на коллекции, представители, правила ресурсов | meta | B | meta-33 | ready | CTR-48 |
+| [META-52](META-52.md) | права на коллекции, представители, правила ресурсов | meta | B | meta-33 | done | CTR-48 |
 | [AUTH-12](AUTH-12.md) | Authorizer — права на календари и адресные книги | auth | A | auth-07 | done | CTR-48,AUTH-07 |
-| [DAV-17](DAV-17.md) | общий доступ к календарям и адресным книгам | dav | A | dav-05 | ready | DAV-16,CTR-48,AUTH-12 |
-| [DAV-18](DAV-18.md) | представители — calendar-proxy | dav | A | dav-05 | ready | DAV-17 |
-| [DAV-19](DAV-19.md) | ресурсы — бронирование переговорных | dav | A | dav-05 | ready | DAV-17 |
-| [JMAP-32](JMAP-32.md) | JMAP — общий доступ к календарям и адресным книгам | jmap | A | jmap-19 | ready | JMAP-31,CTR-48 |
-| [JMAP-33](JMAP-33.md) | JMAP Tasks поверх VTODO | jmap | A | jmap-19 | ready | JMAP-29 |
-| [ADM-16](ADM-16.md) | Admin API — ресурсы, представители, общий доступ | admin | A | admin-11 | ready | CTR-48 |
-| [UI-10](UI-10.md) | ресурсы, представители, общий доступ | console | A | console-04 | todo | UI-09,ADM-16 |
-| [UI-11](UI-11.md) | массовые операции — импорт учётных записей из CSV | console | A | console-04 | todo | UI-09 |
+| [DAV-17](DAV-17.md) | общий доступ к календарям и адресным книгам | dav | A | dav-05 | done | DAV-16,CTR-48,AUTH-12 |
+| [DAV-18](DAV-18.md) | представители — calendar-proxy | dav | A | dav-05 | done | DAV-17 |
+| [DAV-19](DAV-19.md) | ресурсы — бронирование переговорных | dav | A | dav-05 | done | DAV-17 |
+| [JMAP-32](JMAP-32.md) | JMAP — общий доступ к календарям и адресным книгам | jmap | A | jmap-19 | done | JMAP-31,CTR-48 |
+| [JMAP-33](JMAP-33.md) | JMAP Tasks поверх VTODO | jmap | A | jmap-19 | done | JMAP-29 |
+| [ADM-16](ADM-16.md) | Admin API — ресурсы, представители, общий доступ | admin | A | admin-11 | done | CTR-48 |
+| [UI-10](UI-10.md) | ресурсы, представители, общий доступ | console | A | console-04 | done | UI-09,ADM-16 |
+| [UI-11](UI-11.md) | массовые операции — импорт учётных записей из CSV | console | A | console-04 | done | UI-09 |
 | [DAV-20](DAV-20.md) | публикация календаря по ссылке ICS | dav | A | dav-06 | todo | DAV-17,CTR-36,META-34 |
 | [DAV-21](DAV-21.md) | ссылка занятости FBURL | dav | A | dav-06 | todo | DAV-20,DAV-16 |
 | [DAV-22](DAV-22.md) | оргструктура в глобальной адресной книге | dav | A | dav-06 | todo | DAV-12,CTR-35,AUTH-10 |
@@ -794,7 +794,7 @@
 | [DAV-27](DAV-27.md) | GAL: скрытые учётные записи не попадают в книгу «Организация» | dav | A | dav-08 | done | CTR-58,DAV-12 |
 | [DAV-28](DAV-28.md) | GAL: ETag карточки — хэш её содержимого | dav | A | dav-08 | done | DAV-12 |
 | [SIEVE-12](SIEVE-12.md) | адрес клиента во входе ManageSieve | sieve | A | sieve-05 | done | CTR-57 |
-| [JMAP-38](JMAP-38.md) | JMAP Principal: тип `resource` для переговорных и оборудования | jmap | A | jmap-22 | ready | JMAP-30,CTR-48 |
+| [JMAP-38](JMAP-38.md) | JMAP Principal: тип `resource` для переговорных и оборудования | jmap | A | jmap-22 | done | JMAP-30,CTR-48 |
 | [CTR-60](CTR-60.md) | `DavStore` — глобальная адресная книга организации | contracts | B | contracts-41 | done | CTR-45,CTR-58 |
 | [META-63](META-63.md) | книга GAL в PostgreSQL | meta | B | meta-39 | done | CTR-60 |
 | [DAV-29](DAV-29.md) | CardDAV: книга GAL из `DavStore` | dav | A | dav-09 | done | CTR-60,DAV-27,DAV-28 |
@@ -851,26 +851,26 @@
 | [JMAP-42](JMAP-42.md) | `CalendarEventNotification/query` и изменения по журналу входящих | jmap | A | jmap-25 | done | CTR-65,JMAP-31 |
 | [SMTP-37](SMTP-37.md) | журнал доставки: запись о приёме iTIP | smtp | A | smtp-18 | done | CTR-66,SMTP-33 |
 | [APP-53](APP-53.md) | узел: планирование в JMAP и очистка входящих | app | A | app-46 | done | JMAP-31,DAV-32 |
-| [SMTP-38](SMTP-38.md) | iMIP: отправитель «от имени» (`SENT-BY`) | smtp | A | smtp-19 | ready | SMTP-33,CTR-48 |
+| [SMTP-38](SMTP-38.md) | iMIP: отправитель «от имени» (`SENT-BY`) | smtp | A | smtp-19 | done | SMTP-33,CTR-48 |
 | [APP-58](APP-58.md) | узел: вход GSSAPI | app | A | app-51 | done | DEPS-12 |
-| [APP-71](APP-71.md) | узел — общий доступ, представители и бронирование CalDAV (хвост dav-05) | app | A | app-68 | todo | DAV-17,DAV-18,DAV-19 |
-| [DOC-09](DOC-09.md) | INSTALL — ключи поиска принципалов `dav.principal_search_scan`, `dav.principal_search_results` | docs | A | docs-09 | todo | DAV-19 |
-| [CTR-88](CTR-88.md) | тип ресурса бронирования — помещение или оборудование — в контракте | contracts | B | contracts-59 | ready | — |
-| [META-81](META-81.md) | тип ресурса бронирования в PostgreSQL — миграция и хранилище | meta | A | meta-54 | todo | CTR-88 |
-| [ADM-47](ADM-47.md) | тип ресурса бронирования в Admin API и CLI | admin | A | admin-33 | todo | CTR-88,ADM-44 |
+| [APP-71](APP-71.md) | узел — общий доступ, представители и бронирование CalDAV (хвост dav-05) | app | A | app-68 | done | DAV-17,DAV-18,DAV-19 |
+| [DOC-09](DOC-09.md) | INSTALL — ключи поиска принципалов `dav.principal_search_scan`, `dav.principal_search_results` | docs | A | docs-09 | done | DAV-19 |
+| [CTR-88](CTR-88.md) | тип ресурса бронирования — помещение или оборудование — в контракте | contracts | B | contracts-59 | done | — |
+| [META-81](META-81.md) | тип ресурса бронирования в PostgreSQL — миграция и хранилище | meta | A | meta-54 | done | CTR-88 |
+| [ADM-47](ADM-47.md) | тип ресурса бронирования в Admin API и CLI | admin | A | admin-33 | ready | CTR-88,ADM-44 |
 | [UI-21](UI-21.md) | консоль — тип ресурса бронирования | console | A | console-12 | todo | ADM-47 |
-| [DAV-38](DAV-38.md) | `calendar-user-type` по типу ресурса — `ROOM` или `RESOURCE` | dav | A | dav-17 | todo | CTR-88,DAV-19 |
-| [JMAP-45](JMAP-45.md) | `Principal.type` по типу ресурса — `location` или `resource` | jmap | A | jmap-28 | todo | CTR-88 |
-| [META-82](META-82.md) | просмотр очереди и повтор доставки в PostgreSQL — `QueueStore::list` и `retry` | meta | A | meta-55 | todo | CTR-85 |
-| [CTR-89](CTR-89.md) | `QueueStore::list` и `retry` без тел по умолчанию | contracts | B | contracts-60 | todo | META-82 |
-| [META-83](META-83.md) | хранилище `ShareNotification` в PostgreSQL — миграция 0042 | meta | A | meta-56 | todo | CTR-86 |
-| [JMAP-46](JMAP-46.md) | `ShareNotification` из `ShareNotificationStore`, а не из памяти узла | jmap | B | jmap-29 | todo | CTR-86,META-83 |
-| [APP-72](APP-72.md) | узел — `ShareNotification` переживают перезапуск и видны на другом узле | app | A | app-69 | todo | JMAP-46 |
-| [CTR-90](CTR-90.md) | вытеснение старых `ShareNotification` сверх предела в хранилище | contracts | B | contracts-61 | todo | CTR-86,META-83 |
-| [DAV-39](DAV-39.md) | удалить `tp_dav::router_with`, тесты — на `router_shared` | dav | A | dav-18 | ready | — |
-| [APP-73](APP-73.md) | e2e узла — ответ ресурса внешнему организатору письмом iMIP | app | A | app-70 | todo | APP-71 |
+| [DAV-38](DAV-38.md) | `calendar-user-type` по типу ресурса — `ROOM` или `RESOURCE` | dav | A | dav-17 | ready | CTR-88,DAV-19 |
+| [JMAP-45](JMAP-45.md) | `Principal.type` по типу ресурса — `location` или `resource` | jmap | A | jmap-28 | ready | CTR-88 |
+| [META-82](META-82.md) | просмотр очереди и повтор доставки в PostgreSQL — `QueueStore::list` и `retry` | meta | A | meta-55 | done | CTR-85 |
+| [CTR-89](CTR-89.md) | `QueueStore::list` и `retry` без тел по умолчанию | contracts | B | contracts-60 | done | META-82 |
+| [META-83](META-83.md) | хранилище `ShareNotification` в PostgreSQL — миграция 0042 | meta | A | meta-56 | done | CTR-86 |
+| [JMAP-46](JMAP-46.md) | `ShareNotification` из `ShareNotificationStore`, а не из памяти узла | jmap | B | jmap-29 | done | CTR-86,META-83 |
+| [APP-72](APP-72.md) | узел — `ShareNotification` переживают перезапуск и видны на другом узле | app | A | app-69 | done | JMAP-46 |
+| [CTR-90](CTR-90.md) | вытеснение старых `ShareNotification` сверх предела в хранилище | contracts | B | contracts-61 | done | CTR-86,META-83 |
+| [DAV-39](DAV-39.md) | удалить `tp_dav::router_with`, тесты — на `router_shared` | dav | A | dav-18 | done | — |
+| [APP-73](APP-73.md) | e2e узла — ответ ресурса внешнему организатору письмом iMIP | app | A | app-70 | done | APP-71 |
 | [CTR-91](CTR-91.md) | брендинг заказчика в контракте — `BrandingStore`, роли цветов, уровни установки и организации | contracts | B | contracts-62 | done | — |
-| [META-84](META-84.md) | брендинг заказчика в PostgreSQL — миграция 0043 и `BrandingStore` в `PgMeta` | meta | A | meta-57 | ready | CTR-91 |
+| [META-84](META-84.md) | брендинг заказчика в PostgreSQL — миграция 0043 и `BrandingStore` в `PgMeta` | meta | A | meta-57 | done | CTR-91 |
 | [ADM-48](ADM-48.md) | брендинг заказчика в Admin API — чтение, запись, сброс, знак, контраст, открытый маршрут | admin | B | admin-34 | ready | CTR-91,DES-01,ADM-44 |
 | [APP-75](APP-75.md) | узел — брендинг заказчика (`BrandingStore` и BLOB в Admin API) | app | A | app-72 | todo | META-84,ADM-48 |
 | [UI-22](UI-22.md) | консоль — брендинг заказчика: тема из действующего брендинга, знак на входе и в шапке, настройка | console | A | console-13 | todo | UI-19,ADM-48 |
