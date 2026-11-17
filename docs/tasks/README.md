@@ -673,14 +673,14 @@
 | [FIX-11](FIX-11.md) | молча нерабочая запись /etc/hosts (имя вместо адреса) |  |  | deploy-46 | done | — |
 | [FIX-12](FIX-12.md) | адрес генератора в конфиге узла — ansible_host / факты / assert |  |  | deploy-47 | done | — |
 | [FIX-13](FIX-13.md) | чужой From в исходящей нагрузке, CRLF в файлах стенда, сэмплер без проверки старта |  |  | deploy-48 | done | — |
-| [FIX-14](FIX-14.md) | — | — | — | deploy-49 | done | — |
+| [FIX-14](FIX-14.md) | зонд доставки шлёт чужой From под AUTH (550) |  |  | deploy-49 | done | — |
 | [FIX-15](FIX-15.md) | условие сбора фактов FIX-12 падает; каталог drop-in openbao не создаётся |  |  | deploy-50 | done | — |
 
 ## Ф1 · Находки Д.7 2026-11-17 — производительность и наблюдаемость (этап 2)
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
-| [PERF-01](PERF-01.md) | p95 944 мс при пороге 100 мс (Д.7 №2) |  |  | mailstore-16 | ready | — |
+| [PERF-01](PERF-01.md) | p95 944 мс при пороге 100 мс (Д.7 №2) |  |  | mailstore-16 | done | — |
 | [PERF-02](PERF-02.md) | # PERF-02 — JMAP Email/query p95 311 мс при пороге 200 мс (Д.7 №1) |  |  | jmap-32 | done | — |
 | [PERF-03](PERF-03.md) | 981 KB на соединение при пороге 64 KB (Д.7 №17) |  |  | mailstore-17 | ready | — |
 | [PERF-04](PERF-04.md) | зонд «index» не находит письмо за 180 с (Д.7 №10) |  |  | mailstore-18 | ready | — |
@@ -972,6 +972,7 @@
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
+| [PERF-06](PERF-06.md) | IMAP и JMAP |  |  | — |
 | [PLT-35](PLT-35.md) | YAML ↔ JSON для правки config.yaml вне загрузчика | platform | A | — |
 | [PLT-36](PLT-36.md) | переменные THEPOST_* вне схемы не ломают проверку конфигурации | platform | A | — |
 | [SMTP-47](SMTP-47.md) | результаты шлюза — печать ARC домена шлюза и `header.from` письма | smtp | A | SMTP-20,SMTP-33 |
