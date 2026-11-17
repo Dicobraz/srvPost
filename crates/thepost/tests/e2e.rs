@@ -293,7 +293,7 @@ async fn smtp_reply<S: AsyncRead + Unpin>(s: &mut S) -> u16 {
     }
 }
 
-async fn smtp_cmd(s: &mut TcpStream, cmd: &str) -> u16 {
+async fn smtp_cmd<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, cmd: &str) -> u16 {
     s.write_all(format!("{cmd}\r\n").as_bytes())
         .await
         .expect("smtp write");
@@ -2098,6 +2098,188 @@ async fn sharing_delegates_and_booking() {
     let report = running.wait().await.expect("report");
     assert!(report.failed.is_empty(), "{report:?}");
     drop_database(&url, &db_name).await;
+}
+
+// ---------- APP-69: представители в доставке ----------
+
+/// Приглашение представителя из почтового клиента (APP-69): bob — представитель организатора alice с правом
+/// `schedule_on_behalf` (запись в `PgMeta`), отправляет приглашение через submission (`From` bob,
+/// `ORGANIZER;SENT-BY` bob, организатор alice) — событие попадает в календарь участника carol от имени alice,
+/// письмо остаётся в её ящике.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delegate_invitation_lands_in_calendar() {
+    use tp_contracts::sharing::{Delegate, DelegateLevel, DelegateStore};
+
+    let Some(url) = tp_testkit::pg_url() else {
+        eprintln!("TEST_DATABASE_URL не задан — тест пропущен");
+        return;
+    };
+    let url = dev_url(&url);
+    let (db_name, url_db) = create_database(&url).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (db_url, password) = split_password(&url_db);
+    let secrets = node_secrets(password);
+
+    let domain = "example.ru".to_owned();
+    let path = dir.path().join("config.yaml");
+    // Только submission: приглашение представителя — письмо вошедшего (решение 78), календарь читается из
+    // `PgMeta` напрямую.
+    let text = config(dir.path(), &db_url, &domain)
+        .replace(
+            "  inbound:\n    - { listen: \"127.0.0.1:0\" }",
+            "  submission:\n    - { listen: \"127.0.0.1:0\", implicit_tls: true }",
+        )
+        .replace("roles: [all]", "roles: [submission]");
+    assert!(text.contains("submission:"), "{text}");
+    assert!(!text.contains("roles: [all]"), "{text}");
+    std::fs::write(&path, text).expect("config");
+    let shutdown = CancellationToken::new();
+    let running = start(ServeOptions {
+        config: path,
+        secrets: Some(secrets.clone() as Arc<dyn SecretStore>),
+        telemetry: false,
+        shutdown: shutdown.clone(),
+        modules: thepost::modules::BUILTIN,
+    })
+    .await
+    .expect("start");
+    let until = deadline();
+    while !running.health.is_ready() {
+        retry(until, "узел готов").await;
+    }
+
+    let pool = db_pool(&url_db).await;
+    let meta = PgMeta::new(pool.clone(), MetaConfig::default());
+    let tenant = TenantId::DEFAULT;
+    let domain_id = accept_domain(&meta, tenant, &domain).await;
+    let apps =
+        tp_auth::AppPasswords::new(Arc::new(meta.clone()), tp_auth::PasswordConfig::default())
+            .expect("app passwords");
+    let mut users = Vec::new();
+    for name in ["alice", "bob", "carol"] {
+        let login = format!("{name}@{domain}");
+        let account = meta
+            .upsert(
+                tenant,
+                AccountUpsert {
+                    domain: domain_id,
+                    login: login.clone(),
+                    display_name: name.to_owned(),
+                    external_id: None,
+                    enabled: true,
+                    aliases: Vec::new(),
+                    kind: AccountKind::User,
+                    hidden_from_gal: false,
+                    resource_type: None,
+                },
+            )
+            .await
+            .expect("account");
+        let scope = AccountScope {
+            tenant,
+            account: account.id,
+        };
+        let (_, secret) = apps.issue(scope, "e2e").await.expect("issue");
+        users.push((login, account.id, secret.expose().to_owned()));
+    }
+    let (alice, alice_id, _) = users[0].clone();
+    let (bob, bob_id, bob_secret) = users[1].clone();
+    let (carol, carol_id, _) = users[2].clone();
+
+    // bob — представитель alice с правом планирования от её имени (APP-69, решение 121).
+    DelegateStore::set_delegate(
+        &meta,
+        AccountScope {
+            tenant,
+            account: alice_id,
+        },
+        Delegate {
+            delegate: bob_id,
+            level: DelegateLevel::Write,
+            schedule_on_behalf: true,
+        },
+    )
+    .await
+    .expect("delegate");
+
+    // Приглашение от имени alice через submission: `From` — представитель bob (`SENT-BY`), организатор — alice.
+    let submission = addr(&running, "submission");
+    let tcp = TcpStream::connect(submission)
+        .await
+        .expect("submission connect");
+    let name = ServerName::try_from("localhost").expect("name");
+    let mut s = tls_connector()
+        .connect(name, tcp)
+        .await
+        .expect("submission tls");
+    assert_eq!(smtp_reply(&mut s).await, 220);
+    assert_eq!(smtp_cmd(&mut s, "EHLO client.test").await, 250);
+    let plain = base64::engine::general_purpose::STANDARD.encode(format!("\0{bob}\0{bob_secret}"));
+    assert_eq!(smtp_cmd(&mut s, &format!("AUTH PLAIN {plain}")).await, 235);
+    assert_eq!(smtp_cmd(&mut s, &format!("MAIL FROM:<{bob}>")).await, 250);
+    assert_eq!(smtp_cmd(&mut s, &format!("RCPT TO:<{carol}>")).await, 250);
+    assert_eq!(smtp_cmd(&mut s, "DATA").await, 354);
+    let uid = "app-69-delegate";
+    let ics = format!(
+        "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//thepost//e2e//EN\nMETHOD:REQUEST\nBEGIN:VEVENT\n\
+         UID:{uid}\nDTSTAMP:20261112T100000Z\nDTSTART:20270115T070000Z\nDTEND:20270115T080000Z\n\
+         SEQUENCE:0\nSUMMARY:Delegate planning\n\
+         ORGANIZER;SENT-BY=\"mailto:{bob}\":mailto:{alice}\n\
+         ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{carol}\n\
+         END:VEVENT\nEND:VCALENDAR\n"
+    );
+    let message = format!(
+        "From: Bob <{bob}>\nTo: <{carol}>\nSubject: Invitation: Delegate planning\n\
+         MIME-Version: 1.0\nContent-Type: text/calendar; method=REQUEST; charset=utf-8\n\n{ics}"
+    );
+    s.write_all(message.replace('\n', "\r\n").as_bytes())
+        .await
+        .expect("data");
+    assert_eq!(smtp_cmd(&mut s, "\r\n.").await, 250, "письмо не принято");
+    assert_eq!(smtp_cmd(&mut s, "QUIT").await, 221);
+
+    // Событие — в календаре участника carol, организатор — alice (от её имени отправлено приглашение).
+    let carol_scope = AccountScope {
+        tenant,
+        account: carol_id,
+    };
+    let until = deadline();
+    let invited = loop {
+        match find_calendar_object(&meta, carol_scope, uid).await {
+            Some(body) => break body,
+            None => retry(until, "приглашение представителя в календаре участника").await,
+        }
+    };
+    assert!(invited.contains("SUMMARY:Delegate planning"), "{invited}");
+    assert!(
+        invited
+            .to_ascii_lowercase()
+            .contains(&format!("mailto:{alice}")),
+        "{invited}"
+    );
+
+    pool.close().await;
+    shutdown.cancel();
+    let report = running.wait().await.expect("report");
+    assert!(report.failed.is_empty(), "{report:?}");
+    drop_database(&url, &db_name).await;
+}
+
+/// Объект календаря `uid` в первом календаре учётной записи (все календари — `DavStore`).
+async fn find_calendar_object(meta: &PgMeta, scope: AccountScope, uid: &str) -> Option<String> {
+    use tp_contracts::dav::{CollectionKind, DavStore};
+    for c in DavStore::list_collections(meta, scope, CollectionKind::Calendar)
+        .await
+        .expect("calendars")
+    {
+        if let Some(o) = DavStore::object_by_uid(meta, scope, c.id, uid)
+            .await
+            .expect("object")
+        {
+            return Some(o.body);
+        }
+    }
+    None
 }
 
 // ---------- APP-73, решение 123: снаружи — только почта ----------

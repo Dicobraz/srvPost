@@ -89,6 +89,7 @@ use tp_contracts::queue::{DsnRet, Outbound, SubmitStatus, Submitted};
 use tp_contracts::retention::Quota;
 use tp_contracts::schedule::{ItipDelivery, ItipMessage, SenderKind};
 use tp_contracts::senders::{SenderLists, SenderVerdict};
+use tp_contracts::sharing::DelegateStore;
 use tp_contracts::sieve::{AutoReply, DeliveryRules, MailboxRef, RulesInput, RulesOutcome};
 use tp_contracts::transport::{
     AcceptedDomain, BlobRef, DomainKind, EnvelopeSide, FlowDirection, FlowEnvelope, FlowInput,
@@ -225,6 +226,9 @@ pub struct Delivery {
     partners: Option<Arc<dyn PartnerDomains>>,
     /// Права отправки от чужого адреса (Send As, Send on Behalf) для приглашений из почтового клиента (SMTP-36).
     authz: Option<Arc<dyn Authorizer>>,
+    /// Представители учётных записей (APP-69): право планирования от имени организатора у приглашений
+    /// представителя (`SENT-BY`, SMTP-38).
+    delegates: Option<Arc<dyn DelegateStore>>,
     senders: Option<Arc<dyn SenderLists>>,
     /// Политики организации (SMTP-40): профиль Milter, лимиты сеанса submission ([`Handler::policy`]).
     policies: Option<Arc<dyn PolicyResolver>>,
@@ -332,6 +336,7 @@ impl Delivery {
             itip: None,
             partners: None,
             authz: None,
+            delegates: None,
             senders: None,
             policies: None,
             vacation_rate: VacationRate::new(cfg.delivery.vacation_rate),
@@ -394,10 +399,12 @@ impl Delivery {
     /// применять, бронировать и на что отвечать, решает приём iTIP по матрице `tp_contracts::schedule::inbound_allowed`
     /// (снаружи — только почта; ответы и отмены к существующим событиям — как у Exchange и Google).
     ///
-    /// Представитель (SMTP-38): `From` совпал с `SENT-BY` организатора или участника — сообщение передаётся от имени
-    /// владельца (`ItipMessage::from`), если `From` принадлежит учётной записи отправителя и у неё есть право Send As
-    /// или Send on Behalf на адрес владельца; иначе — только письмо. У iMIP право представителя не проверить
-    /// (DMARC подтверждает только домен) — только письмо.
+    /// Представитель (SMTP-38, APP-69): `From` совпал с `SENT-BY` организатора или участника — сообщение передаётся
+    /// от имени владельца (`ItipMessage::from`), если отправитель может планировать от его имени: у организатора
+    /// есть запись представителя отправителя с `schedule_on_behalf` ([`Delivery::with_delegates`]; у письма из
+    /// клиента `From` к тому же принадлежит учётной записи отправителя, [`Delivery::sender_right`]). Право отправки
+    /// почты (Send As, Send on Behalf) приглашение представителя не признаёт; без хранилища представителей — только
+    /// письмо.
     ///
     /// Письмо в любом случае остаётся в ящике. Итог `itip` (применено или пропущено с причиной) — событие `Itip`
     /// журнала доставки на получателя (SMTP-37, `delivery::itip_record`), сбой — только запись в журнал узла.
@@ -418,6 +425,14 @@ impl Delivery {
     /// внутренним приглашением считает только свой адрес или псевдоним.
     pub fn with_authz(mut self, authz: Arc<dyn Authorizer>) -> Self {
         self.authz = Some(authz);
+        self
+    }
+
+    /// Представители учётных записей ([`DelegateStore`], APP-69): право отправителя приглашения (`SENT-BY`,
+    /// SMTP-38) планировать от имени организатора — по записи представителя с `schedule_on_behalf`, а не по правам
+    /// отправки почты. Без хранилища представителей нет — приглашение представителя остаётся письмом.
+    pub fn with_delegates(mut self, delegates: Arc<dyn DelegateStore>) -> Self {
+        self.delegates = Some(delegates);
         self
     }
 
@@ -449,29 +464,54 @@ impl Delivery {
                 tracing::info!(%id, reason = "отправитель не прошёл DMARC", "smtp: сообщение iTIP не применено");
                 return steps;
             }
-            // Право представителя внешнего отправителя узлу неизвестно: DMARC подтверждает только домен `From`.
+            // Представитель (SENT-BY): подлинность `From` подтверждает DMARC, право планировать от имени
+            // организатора — его запись представителя с `schedule_on_behalf` (APP-69). Организатор или отправитель —
+            // не учётная запись организации (группа, внешний адрес): записи быть не может.
             ItipOrigin::Imip { dmarc_pass: true } if msg.sent_by.is_some() => {
-                tracing::info!(%id, reason = "представитель (SENT-BY) извне", "smtp: сообщение iTIP не применено");
-                return steps;
+                match self
+                    .schedules_on_behalf(&msg.from, msg.sent_by.as_deref().unwrap_or_default())
+                    .await
+                {
+                    Ok(true) => false,
+                    Ok(false) => {
+                        tracing::info!(%id, reason = "представитель (SENT-BY) без права планирования от имени", "smtp: сообщение iTIP не применено");
+                        return steps;
+                    }
+                    Err(e) => {
+                        tracing::warn!(%id, error = %e, "smtp: сбой проверки представителя приглашения");
+                        return steps;
+                    }
+                }
             }
             ItipOrigin::Imip { dmarc_pass: true } => false,
             ItipOrigin::Internal { account, principal } => {
-                // `From` — адрес отправителя; у представителя (`SENT-BY`, SMTP-38) — ещё и право Send As или Send on
-                // Behalf на адрес владельца: то же право, что у письма от имени владельца.
-                let mut owned = true;
-                for addr in msg.sent_by.iter().chain([&msg.from]) {
-                    match self.sender_right(account, principal, addr).await {
-                        Ok(Some(_)) => {}
-                        Ok(None) => owned = false,
+                // `From` письма (`SENT-BY` у представителя) — адрес отправителя: свой, псевдоним или право Send As
+                // (SMTP-36). Право планировать от имени организатора (`SENT-BY`, SMTP-38) — по записи представителя
+                // организатора с `schedule_on_behalf` (APP-69): право отправки почты его не заменяет.
+                let from = msg.sent_by.as_deref().unwrap_or(&msg.from);
+                match self.sender_right(account, principal, from).await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        tracing::info!(%id, %account, "smtp: From приглашения не принадлежит отправителю, осталось письмом");
+                        return steps;
+                    }
+                    Err(e) => {
+                        tracing::warn!(%id, %account, error = %e, "smtp: сбой проверки отправителя приглашения");
+                        return steps;
+                    }
+                }
+                if msg.sent_by.is_some() {
+                    match self.schedules_on_behalf(&msg.from, from).await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            tracing::info!(%id, %account, "smtp: отправитель — не представитель организатора с правом планирования, осталось письмом");
+                            return steps;
+                        }
                         Err(e) => {
-                            tracing::warn!(%id, %account, error = %e, "smtp: сбой проверки отправителя приглашения");
+                            tracing::warn!(%id, %account, error = %e, "smtp: сбой проверки представителя приглашения");
                             return steps;
                         }
                     }
-                }
-                if !owned {
-                    tracing::info!(%id, %account, "smtp: From приглашения не принадлежит отправителю, осталось письмом");
-                    return steps;
                 }
                 true
             }
@@ -606,6 +646,29 @@ impl Delivery {
             }
         };
         authz.send_right(principal, from).await
+    }
+
+    /// Отправитель `sender` (адрес `From`, `SENT-BY`) может планировать от имени организатора `owner`
+    /// (APP-69): оба — учётные записи организации узла (ровно по одной; группа и внешний адрес права не имеют),
+    /// у организатора есть запись представителя отправителя с `schedule_on_behalf`
+    /// ([`Delivery::with_delegates`]). Без хранилища представителей — нет.
+    async fn schedules_on_behalf(&self, owner: &str, sender: &str) -> Result<bool> {
+        let Some(delegates) = &self.delegates else {
+            return Ok(false);
+        };
+        let owner = self.sender_by_address(owner).await?;
+        let sender = self.sender_by_address(sender).await?;
+        let (Some(owner), Some(sender)) = (owner, sender) else {
+            return Ok(false);
+        };
+        Ok(delegates
+            .delegates(AccountScope {
+                tenant: self.deps.tenant,
+                account: owner,
+            })
+            .await?
+            .into_iter()
+            .any(|d| d.delegate == sender && d.schedule_on_behalf))
     }
 
     /// Отправитель конверта сеанса submission (SMTP-45, аналог `reject_sender_login_mismatch`): пустой (`<>`), свой
