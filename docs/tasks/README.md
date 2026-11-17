@@ -862,7 +862,7 @@
 | [META-81](META-81.md) | тип ресурса бронирования в PostgreSQL — миграция и хранилище | meta | A | meta-54 | done | CTR-88 |
 | [ADM-47](ADM-47.md) | тип ресурса бронирования в Admin API и CLI | admin | A | admin-33 | ready | CTR-88,ADM-44 |
 | [UI-21](UI-21.md) | консоль — тип ресурса бронирования | console | A | console-12 | todo | ADM-47 |
-| [DAV-38](DAV-38.md) | `calendar-user-type` по типу ресурса — `ROOM` или `RESOURCE` | dav | A | dav-17 | ready | CTR-88,DAV-19 |
+| [DAV-38](DAV-38.md) | `calendar-user-type` по типу ресурса — `ROOM` или `RESOURCE` | dav | A | dav-17 | done | CTR-88,DAV-19 |
 | [JMAP-45](JMAP-45.md) | `Principal.type` по типу ресурса — `location` или `resource` | jmap | A | jmap-28 | ready | CTR-88 |
 | [META-82](META-82.md) | просмотр очереди и повтор доставки в PostgreSQL — `QueueStore::list` и `retry` | meta | A | meta-55 | done | CTR-85 |
 | [CTR-89](CTR-89.md) | `QueueStore::list` и `retry` без тел по умолчанию | contracts | B | contracts-60 | done | META-82 |
