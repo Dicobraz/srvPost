@@ -34,7 +34,7 @@
 //! с вошедшим (ссылками на коллекции владельцев), книга GAL — последней; чужой дом — коллекции владельца, на которые
 //! у вошедшего есть права, без создания коллекций по умолчанию. Объекты коллекции (`Depth: 1`) — только с правом
 //! чтения. Свои коллекции при общем доступе: `cs:allowed-sharing-modes` (`can-be-shared`) и `cs:invite` (по имени).
-//! Принципал: `calendar-user-type` (`INDIVIDUAL`, ресурс — `ROOM`), своему — `calendar-proxy-read-for`,
+//! Принципал: `calendar-user-type` (`INDIVIDUAL`, помещение — `ROOM`, оборудование — `RESOURCE`; DAV-38), своему —
 //! `calendar-proxy-write-for` и `group-membership` (DAV-18, [`crate::proxy`]); `Depth: 1` — группы представителей.
 
 use std::collections::BTreeSet;
@@ -50,7 +50,7 @@ use calcard::icalendar::{
 use time::OffsetDateTime;
 use tp_contracts::ModSeq;
 use tp_contracts::dav::{Collection, CollectionKind, Component, DavStore};
-use tp_contracts::meta::{Account, AccountKind, AccountScope};
+use tp_contracts::meta::{Account, AccountKind, AccountScope, ResourceType};
 use tp_contracts::{Error, Result};
 
 use crate::alarm;
@@ -119,17 +119,19 @@ impl PrincipalView {
             login: a.login.clone(),
             name: share::display_name(a),
             addresses: a.addresses(),
-            cutype: cutype(a.kind),
+            cutype: cutype(Some(a)),
             proxy_for: None,
         }
     }
 }
 
-/// `calendar-user-type` учётной записи вида `kind`: ресурс — переговорная (`ROOM`).
-pub(crate) fn cutype(kind: AccountKind) -> &'static str {
-    match kind {
-        AccountKind::User => "INDIVIDUAL",
-        AccountKind::Resource => "ROOM",
+/// `calendar-user-type` (RFC 6638 §2.4.2) учётной записи: пользователь — `INDIVIDUAL`, ресурс — помещение `ROOM`
+/// или оборудование `RESOURCE` ([`Account::resource_type`], CTR-88); без учётной записи — `INDIVIDUAL`.
+pub(crate) fn cutype(account: Option<&Account>) -> &'static str {
+    match account.map(|a| (a.kind, a.resource_type)) {
+        Some((AccountKind::Resource, Some(ResourceType::Equipment))) => "RESOURCE",
+        Some((AccountKind::Resource, _)) => "ROOM",
+        Some((AccountKind::User, _)) | None => "INDIVIDUAL",
     }
 }
 
@@ -147,7 +149,7 @@ pub(crate) async fn principal_view(cx: &Cx<'_>) -> Result<PrincipalView> {
             .as_ref()
             .map_or_else(|| cx.login().to_owned(), share::display_name),
         addresses: cx.addresses().await?,
-        cutype: cutype(account.map_or(AccountKind::User, |a| a.kind)),
+        cutype: cutype(account.as_ref()),
         proxy_for,
     })
 }

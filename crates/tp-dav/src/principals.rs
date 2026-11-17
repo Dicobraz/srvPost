@@ -3,9 +3,10 @@
 //!
 //! - `principal-property-search` (RFC 3744 §9.4): условия `property-search` по `displayname` (и `cs:first-name`,
 //!   `cs:last-name`), адресам (`calendar-user-address-set`, `cs:email-address-set`) — подстрока без учёта регистра, и по
-//!   `calendar-user-type` — точное значение (`INDIVIDUAL`, `ROOM`); `test="anyof"` — любое условие, иначе все;
+//!   `calendar-user-type` — точное значение (`INDIVIDUAL`, `ROOM`, `RESOURCE`); `test="anyof"` — любое условие, иначе все;
 //! - `calendarserver-principal-search` (Календарь macOS и iOS): все `search-token` — подстроки имени или адреса;
-//!   `context="location"` и `"resource"` — только ресурсы, `"attendee"` и `"user"` — только пользователи; `nresults`;
+//!   `context="location"` — помещения (`ROOM`), `context="resource"` — оборудование (`RESOURCE`), `"attendee"` и
+//!   `"user"` — только пользователи; `nresults`;
 //! - `principal-search-property-set` — свойства, по которым ищется;
 //! - `expand-property` (RFC 3253 §3.8) у принципала и группы представителей: `calendar-proxy-read-for`,
 //!   `calendar-proxy-write-for` и `group-member-set` — вложенными `response` принципалов с запрошенными свойствами,
@@ -19,7 +20,7 @@ use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::Response;
 use tp_contracts::Result;
-use tp_contracts::meta::{Account, AccountKind, AccountStore};
+use tp_contracts::meta::{Account, AccountKind, AccountStore, ResourceType};
 
 use crate::path::{self, Target};
 use crate::props::{self, PrincipalView, Res, Want};
@@ -41,6 +42,32 @@ enum Field {
     Unknown,
 }
 
+/// Фильтр вида учётных записей поиска (`calendarserver-principal-search` `context`; DAV-38).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Любые.
+    Any,
+    /// Пользователи.
+    User,
+    /// Помещения — ресурсы с `calendar-user-type` `ROOM`.
+    Room,
+    /// Оборудование — ресурсы с `calendar-user-type` `RESOURCE`.
+    Equipment,
+}
+
+impl Kind {
+    /// Вид учётной записи `a`.
+    fn of(a: &Account) -> Self {
+        match a.kind {
+            AccountKind::User => Kind::User,
+            AccountKind::Resource if a.resource_type == Some(ResourceType::Equipment) => {
+                Kind::Equipment
+            }
+            AccountKind::Resource => Kind::Room,
+        }
+    }
+}
+
 /// Запрос поиска.
 #[derive(Debug)]
 struct Query {
@@ -48,8 +75,8 @@ struct Query {
     tests: Vec<(Field, String)>,
     /// Все условия (иначе любое).
     all: bool,
-    /// Вид учётных записей; `None` — любой.
-    kind: Option<AccountKind>,
+    /// Вид учётных записей.
+    kind: Kind,
     /// Найденных в ответе.
     limit: usize,
     /// Свойства найденных.
@@ -98,7 +125,7 @@ impl Query {
         Some(Query {
             tests,
             all: root.attr("test") != Some("anyof"),
-            kind: None,
+            kind: Kind::Any,
             limit: max,
             want: want_of(root),
         })
@@ -117,9 +144,10 @@ impl Query {
             return None;
         }
         let kind = match root.attr("context") {
-            Some("location" | "resource") => Some(AccountKind::Resource),
-            Some("attendee" | "user") => Some(AccountKind::User),
-            _ => None,
+            Some("location") => Kind::Room,
+            Some("resource") => Kind::Equipment,
+            Some("attendee" | "user") => Kind::User,
+            _ => Kind::Any,
         };
         let limit = root
             .child(CS, "limit")
@@ -146,13 +174,13 @@ impl Query {
             Field::Name => name(),
             Field::Address => address(),
             Field::Any => name() || address(),
-            Field::Type => props::cutype(a.kind).eq_ignore_ascii_case(value),
+            Field::Type => props::cutype(Some(a)).eq_ignore_ascii_case(value),
             Field::Unknown => false,
         }
     }
 
     fn matches(&self, a: &Account) -> bool {
-        if !a.enabled || self.kind.is_some_and(|k| k != a.kind) {
+        if !a.enabled || (self.kind != Kind::Any && self.kind != Kind::of(a)) {
             return false;
         }
         let mut it = self.tests.iter().map(|(f, v)| Self::test(*f, v, a));
