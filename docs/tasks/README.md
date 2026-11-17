@@ -753,9 +753,9 @@
 | [DAV-19](DAV-19.md) | ресурсы — бронирование переговорных | dav | A | dav-05 | todo | DAV-17 |
 | [JMAP-32](JMAP-32.md) | JMAP — общий доступ к календарям и адресным книгам | jmap | A | jmap-19 | ready | JMAP-31,CTR-48 |
 | [JMAP-33](JMAP-33.md) | JMAP Tasks поверх VTODO | jmap | A | jmap-19 | ready | JMAP-29 |
-| [ADM-16](ADM-16.md) | Admin API — ресурсы, представители, общий доступ | admin | A | admin-11 | ready | CTR-48 |
-| [UI-10](UI-10.md) | ресурсы, представители, общий доступ | console | A | console-04 | todo | UI-09,ADM-16 |
-| [UI-11](UI-11.md) | массовые операции — импорт учётных записей из CSV | console | A | console-04 | todo | UI-09 |
+| [ADM-16](ADM-16.md) | Admin API — ресурсы, представители, общий доступ | admin | A | admin-11 | done | CTR-48 |
+| [UI-10](UI-10.md) | ресурсы, представители, общий доступ | console | A | console-04 | ready | UI-09,ADM-16 |
+| [UI-11](UI-11.md) | массовые операции — импорт учётных записей из CSV | console | A | console-04 | ready | UI-09 |
 | [DAV-20](DAV-20.md) | публикация календаря по ссылке ICS | dav | A | dav-06 | todo | DAV-17,CTR-36,META-34 |
 | [DAV-21](DAV-21.md) | ссылка занятости FBURL | dav | A | dav-06 | todo | DAV-20,DAV-16 |
 | [DAV-22](DAV-22.md) | оргструктура в глобальной адресной книге | dav | A | dav-06 | todo | DAV-12,CTR-35,AUTH-10 |
