@@ -218,7 +218,10 @@ async fn event_loop(
     };
     #[cfg(target_os = "linux")]
     if let Some(screen) = console_screen {
-        crate::input::spawn(tx.clone(), screen);
+        let tx = tx.clone();
+        crate::input::spawn(screen, move |ev| {
+            let _ = tx.send(Msg::Mouse(ev));
+        });
     }
     let mut client: Option<Client> = None;
     if let Some(token) = token {

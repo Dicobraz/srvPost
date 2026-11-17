@@ -3,10 +3,8 @@
 //! терминалах). Чтение блокирующее — отдельный поток, как поток клавиатуры; экран в пикселях — sysfs
 //! framebuffer, ячейка — экран поделён на колонки и строки.
 
-use evdev::{Device, InputEventKind, KeyCode, RelativeAxisType};
-use tokio::sync::mpsc::UnboundedSender;
-
 use crate::mouse::Tracker;
+use evdev::{Device, EventSummary, KeyCode, RelativeAxisCode};
 
 /// Событие мыши из `/dev/input`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,13 +69,14 @@ pub fn screen(fallback: (u16, u16)) -> Option<Screen> {
 
 /// Первая мышь `/dev/input`: относительные оси и левая кнопка.
 fn first_mouse() -> Option<Device> {
-    evdev::enumerate().find_map(|(_, d)| {
-        let rel = d.supported_relative_axes()?;
-        let keys = d.supported_keys()?;
-        (rel.contains(RelativeAxisType::REL_X)
-            && rel.contains(RelativeAxisType::REL_Y)
+    evdev::enumerate().find_map(|(path, raw)| {
+        let rel = raw.supported_relative_axes()?;
+        let keys = raw.supported_keys()?;
+        (rel.contains(RelativeAxisCode::REL_X)
+            && rel.contains(RelativeAxisCode::REL_Y)
             && keys.contains(KeyCode::BTN_LEFT))
-        .then_some(d)
+        .then(|| Device::open(path).ok())
+        .flatten()
     })
 }
 
@@ -86,8 +85,11 @@ pub fn available() -> bool {
     first_mouse().is_some()
 }
 
-/// Поток мыши `/dev/input`: события — в цикл интерфейса, пока тот открыт.
-pub fn spawn(tx: UnboundedSender<MouseEv>, screen: Screen) {
+/// Поток мыши `/dev/input`: события — в цикл интерфейса (`send`), пока тот открыт.
+pub fn spawn<F>(screen: Screen, send: F)
+where
+    F: Fn(MouseEv) + Send + 'static,
+{
     std::thread::spawn(move || {
         let Some(mut dev) = first_mouse() else {
             return;
@@ -99,41 +101,32 @@ pub fn spawn(tx: UnboundedSender<MouseEv>, screen: Screen) {
             };
             let (mut dx, mut dy, mut wheel, mut button) = (0i32, 0i32, 0i32, None);
             for e in events {
-                match e.kind() {
-                    InputEventKind::RelativeAxis(RelativeAxisType::REL_X) => dx += e.value(),
-                    InputEventKind::RelativeAxis(RelativeAxisType::REL_Y) => dy += e.value(),
-                    InputEventKind::RelativeAxis(RelativeAxisType::REL_WHEEL) => wheel += e.value(),
-                    InputEventKind::Key(KeyCode::BTN_LEFT) => {
-                        button = Some(e.value() == 1);
-                    }
+                match e.destructure() {
+                    EventSummary::RelativeAxis(_, RelativeAxisCode::REL_X, v) => dx += v,
+                    EventSummary::RelativeAxis(_, RelativeAxisCode::REL_Y, v) => dy += v,
+                    EventSummary::RelativeAxis(_, RelativeAxisCode::REL_WHEEL, v) => wheel += v,
+                    EventSummary::Key(_, KeyCode::BTN_LEFT, v) => button = Some(v == 1),
                     _ => {}
                 }
             }
             if dx != 0 || dy != 0 {
                 t.move_by(dx, dy);
                 let (x, y) = t.pos();
-                if tx
-                    .send(MouseEv {
-                        x,
-                        y,
-                        kind: Kind::Move,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
+                send(MouseEv {
+                    x,
+                    y,
+                    kind: Kind::Move,
+                });
             }
             let (x, y) = t.pos();
             for kind in [
-                (wheel != 0).then(|| Kind::Wheel(wheel)),
+                (wheel != 0).then_some(Kind::Wheel(wheel)),
                 button.map(|down| if down { Kind::Down } else { Kind::Up }),
             ]
             .into_iter()
             .flatten()
             {
-                if tx.send(MouseEv { x, y, kind }).is_err() {
-                    return;
-                }
+                send(MouseEv { x, y, kind });
             }
         }
     });
