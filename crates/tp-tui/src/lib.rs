@@ -7,14 +7,19 @@
 //! - [`layout`] — ручные раскладки главных разделов поверх движка (TUI-03);
 //! - [`node`] — конфигурация узла `config.yaml` на самом узле (TUI-04);
 //! - [`cli`] — эквивалентная команда `thepost admin …` для действия на экране;
+//! - [`mouse`] — события мыши: щелчок, двойной, колесо, граница панелей (TUI-07);
+//! - [`cursor`] — плавный курсор: kitty/sixel, глифы 2×2, подсветка ячейки (TUI-07);
+//! - [`input`] — мышь консоли Linux из `/dev/input` (TUI-07);
 //! - [`term`] — запуск в терминале с клиентом `tp-admin-client` ([`run`]).
-//!
-//! Мышь — TUI-07.
 
 pub mod app;
 pub mod cli;
+pub mod cursor;
 pub mod engine;
+#[cfg(target_os = "linux")]
+pub mod input;
 pub mod layout;
+pub mod mouse;
 pub mod node;
 pub mod schema;
 pub mod term;

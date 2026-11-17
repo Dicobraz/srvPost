@@ -13,6 +13,7 @@ use crate::app::{
     App, BODY_ROWS, CardView, ConfigEdit, ConfigView, LIST_ROWS, Level, ListView, LoginField,
     LoginForm, Main, Method, Overlay, Panel, Stage, TreeRow, View,
 };
+use crate::cursor::{self, CursorView};
 use crate::engine::{self, Form};
 use crate::layout::{self, Layout};
 use crate::node::Access;
@@ -27,10 +28,10 @@ pub const HEIGHT: u16 = 24;
 /// Ширина левой панели.
 pub const LEFT: u16 = 30;
 
-const ROW_STATUS: u16 = 21;
-const ROW_CLI: u16 = 22;
-const ROW_KEYS: u16 = 23;
-const ROW_SEP: u16 = 17;
+pub(crate) const ROW_STATUS: u16 = 21;
+pub(crate) const ROW_CLI: u16 = 22;
+pub(crate) const ROW_KEYS: u16 = 23;
+pub(crate) const ROW_SEP: u16 = 17;
 
 /// Отрисовать интерфейс в кадр.
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -63,6 +64,45 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
     p.status(app);
     p.cli(&app.command_line());
     p.keys(&app.keys());
+    mouse_cursor(app, area, buf);
+}
+
+/// Плавный курсор мыши поверх экрана (TUI-07): картинка протоколом терминала, глифы 2×2 или подсветка
+/// ячейки под мышью — инверсия.
+fn mouse_cursor(app: &App, area: Rect, buf: &mut Buffer) {
+    let (w, h) = (area.width, area.height);
+    let inside = |x: u16, y: u16| x < w && y < h;
+    match &app.cursor {
+        Some(CursorView::Cell) => {
+            let Some((x, y)) = app.mouse.pos else {
+                return;
+            };
+            if inside(x, y) {
+                let cell = &mut buf[(x, y)];
+                cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
+            }
+        }
+        Some(CursorView::Glyphs { anchor }) => {
+            // SS2 в символе ячейки — escape-последовательность: ширина принудительно одна ячейка,
+            // иначе diff посчитает её по символам и пропустит соседние ячейки.
+            for (i, s) in cursor::glyph_symbols().into_iter().enumerate() {
+                let (x, y) = (anchor.0 + i as u16 % 2, anchor.1 + i as u16 / 2);
+                if inside(x, y) {
+                    buf[(x, y)].set_symbol(s).set_diff_option(
+                        ratatui::buffer::CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN),
+                    );
+                }
+            }
+        }
+        Some(CursorView::Image { mark, anchor }) => {
+            let (x, y) = (
+                anchor.0.min(w.saturating_sub(2)),
+                anchor.1.min(h.saturating_sub(2)),
+            );
+            ratatui_image::Image::new(&mark.0).render(Rect::new(x, y, 2, 2), buf);
+        }
+        None => {}
+    }
 }
 
 struct Painter<'a> {
@@ -238,16 +278,17 @@ impl Painter<'_> {
 
     fn main(mut self, m: &Main) -> Self {
         let w = self.w;
-        let left = Rect::new(0, 1, LEFT, ROW_STATUS - 1);
-        let right = Rect::new(LEFT, 1, w - LEFT, ROW_STATUS - 1);
+        let l = m.left;
+        let left = Rect::new(0, 1, l, ROW_STATUS - 1);
+        let right = Rect::new(l, 1, w - l, ROW_STATUS - 1);
         let tree_active = m.focus == Panel::Tree && m.overlay.is_none();
         self.panel(left, tree_active, "Ресурсы");
         let title = format!("{} › {}", m.org_label(&m.org), m.section);
-        let title: String = title.chars().take((w - LEFT - 4) as usize).collect();
+        let title: String = title.chars().take((w - l - 4) as usize).collect();
         self.panel(right, !tree_active, &title);
         self.tree(m, tree_active);
         let body = Body {
-            x0: LEFT + 2,
+            x0: l + 2,
             x1: w - 3,
             active: !tree_active,
         };
@@ -274,12 +315,13 @@ impl Painter<'_> {
     }
 
     fn tree(&mut self, m: &Main, active: bool) {
+        let l = m.left;
         self.put_n(
             1,
             2,
             &format!("▾ {}", m.org_label(&m.org)),
             Role::Text,
-            LEFT - 2,
+            l - 2,
         );
         let rows = m.tree_rows();
         for (i, row) in rows.iter().enumerate() {
@@ -292,17 +334,17 @@ impl Painter<'_> {
                         "├"
                     };
                     self.put(3, y, branch, Role::Frame);
-                    self.put_n(5, y, SECTIONS[*s].label, Role::Text, LEFT - 6);
+                    self.put_n(5, y, SECTIONS[*s].label, Role::Text, l - 6);
                     y
                 }
                 TreeRow::Org(o) => {
                     let y = 3 + SECTIONS.len() as u16 + *o as u16;
                     let label = m.orgs.get(*o).map(|id| m.org_label(id)).unwrap_or_default();
-                    self.put_n(1, y, &format!("▸ {label}"), Role::Text, LEFT - 2);
+                    self.put_n(1, y, &format!("▸ {label}"), Role::Text, l - 2);
                     y
                 }
                 TreeRow::Config => {
-                    self.put_n(1, 18, &format!("◆ {NODE_CONFIG}"), Role::Text, LEFT - 2);
+                    self.put_n(1, 18, &format!("◆ {NODE_CONFIG}"), Role::Text, l - 2);
                     let (label, ro) = match &m.view {
                         View::Config(c) => match &c.file.access {
                             Access::Write => ("config.yaml · правка".to_owned(), false),
@@ -313,15 +355,15 @@ impl Painter<'_> {
                         },
                         _ => ("config.yaml · на узле".to_owned(), false),
                     };
-                    self.put_n(3, 19, &label, Role::Muted, LEFT - 8);
+                    self.put_n(3, 19, &label, Role::Muted, l - 8);
                     if ro {
-                        self.put(LEFT - 5, 19, "R/O", Role::Warn);
+                        self.put(l - 5, 19, "R/O", Role::Warn);
                     }
                     18
                 }
             };
             if i == m.tree {
-                self.fill(1, LEFT - 2, y, if active { Role::Sel } else { Role::SelI });
+                self.fill(1, l - 2, y, if active { Role::Sel } else { Role::SelI });
             }
         }
     }
@@ -792,11 +834,12 @@ impl Painter<'_> {
             "Tab — другая панель · ↑↓ PgUp PgDn — строки",
             "Enter, F3 — открыть запись · Esc — назад",
             "F2 — фильтр (параметры запроса)",
-            "F4 — правка · F5 — блокировка",
-            "F6 — пароль приложения · F7 — создать",
-            "F8 — удалить (с подтверждением)",
+            "F4 — правка · F5 — блокировка · F6 — пароль",
+            "F7 — создать · F8 — удалить (подтверждение)",
             "F9 — все операции Admin API · F10 — выход",
             "",
+            "Мышь: щелчок — выбор, двойной — открыть,",
+            "колесо — прокрутка, границу панелей тянуть.",
             "Внизу — та же операция командой CLI.",
         ];
         self.put(b.x0, 2, "Справка", Role::TitleA);
@@ -967,7 +1010,7 @@ mod tests {
     use crate::app::LoginForm;
     use crate::app::tests::{call, key, ok, section, with_accounts, with_members};
     use crate::theme::{Brand, Mode};
-    use crossterm::event::KeyCode;
+    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use serde_json::json;
 
     fn screen(app: &App) -> (Vec<String>, Buffer) {
@@ -1489,5 +1532,102 @@ mod tests {
         let buf = term.backend().buffer();
         let row: String = (0..30).map(|x| buf[(x, 0)].symbol().to_owned()).collect();
         assert!(row.starts_with("Нужен терминал не меньше 80×24"));
+    }
+
+    /// Уровень 4: ячейка под мышью инвертируется.
+    #[test]
+    fn cell_cursor_highlight() {
+        let mut app = with_accounts();
+        app.on_mouse(
+            &MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 40,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            },
+            None,
+        );
+        app.cursor = Some(CursorView::Cell);
+        let (_, buf) = screen(&app);
+        assert!(
+            buf[(40, 5)].modifier.contains(Modifier::REVERSED),
+            "{:?}",
+            buf[(40, 5)]
+        );
+        assert!(!buf[(41, 5)].modifier.contains(Modifier::REVERSED));
+    }
+
+    /// Уровень 3: блок 2×2 из четырёх глифов становится на ячейку острия.
+    #[test]
+    fn glyph_cursor_block() {
+        let mut app = with_accounts();
+        app.cursor = Some(CursorView::Glyphs { anchor: (40, 5) });
+        let (_, buf) = screen(&app);
+        let want = crate::cursor::glyph_symbols();
+        for (i, s) in want.iter().enumerate() {
+            let (x, y) = (40 + i as u16 % 2, 5 + i as u16 / 2);
+            assert_eq!(buf[(x, y)].symbol(), *s, "глиф {i}");
+        }
+    }
+
+    /// Уровни 1–2: стрелка картинкой протокола терминала (полублоки) в якорной ячейке.
+    #[test]
+    fn image_cursor_mark() {
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let mut cur = crate::cursor::SmoothCursor::new(
+            crate::cursor::Level::Sixel,
+            Some(&picker),
+            app_mouse_steps(),
+        );
+        let mut app = with_accounts();
+        app.cursor = cur.view(Some((44, 90)), (40, 5));
+        let (rows, buf) = screen(&app);
+        let cells = &buf;
+        let block: String = (40..42)
+            .flat_map(|x| (5..7).map(move |y| cells[(x, y)].symbol().to_owned()))
+            .collect();
+        assert!(
+            block.contains('▀') || block.contains('▄') || block.contains('█'),
+            "{block:?}"
+        );
+        let all = rows.join("\n");
+        assert!(all.contains("user0@it-task.ru"), "экран цел");
+    }
+
+    /// Границу панелей тянут мышью: ширина левой панели меняется, экран перерисовывается.
+    #[test]
+    fn dragged_border_renders() {
+        let mut app = with_accounts();
+        app.on_mouse(
+            &MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: LEFT - 1,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            },
+            None,
+        );
+        app.on_mouse(
+            &MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: 40,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            },
+            None,
+        );
+        let (rows, _) = screen(&app);
+        assert_eq!(rows[1].chars().nth(40), Some('╔'), "рамка правой панели");
+        assert_eq!(rows[1].chars().nth(39), Some('┐'), "рамка левой панели");
+        assert!(rows[3].contains("user0@it-task.ru"), "{}", rows[3]);
+        assert!(rows[18].contains("◆ Конфигурация узла"));
+        // Справка упоминает мышь.
+        let _ = app.on_key(key(KeyCode::F(1)));
+        let (rows, _) = screen(&app);
+        assert!(rows.join("\n").contains("Мышь: щелчок"), "справка о мыши");
+    }
+
+    fn app_mouse_steps() -> u16 {
+        crate::mouse::MouseConfig::default().shift_steps
     }
 }
