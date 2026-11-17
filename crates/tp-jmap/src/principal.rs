@@ -6,7 +6,8 @@
 //! `/queryChanges` нет; `canCalculateChanges` — `false`).
 //!
 //! Отличия от RFC 9670 и черновика:
-//! - `type` — `individual` или `resource` по виду учётной записи (`Account::kind`, CTR-48); фильтр `type` с другим
+//! - `type` — `individual`, `location` или `resource`: пользователь — `individual`, ресурс — по типу ресурса
+//!   (`Account::resource_type`, CTR-88: помещение — `location`, оборудование — `resource`); фильтр `type` с другим
 //!   значением ничего не находит;
 //! - `description`, `timeZone`, `accounts` — `null`;
 //! - занятость видна всем участникам организации (права «только занятость» и политика — CTR-48);
@@ -23,7 +24,7 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tp_contracts::ids::{AccountId, TenantId};
-use tp_contracts::meta::{Account, AccountKind, AccountState, AccountStore};
+use tp_contracts::meta::{Account, AccountKind, AccountState, AccountStore, ResourceType};
 use tp_contracts::schedule::{BusyKind, BusyPeriod, Period};
 
 use crate::core::error::{MethodError, MethodResult};
@@ -95,11 +96,15 @@ pub(crate) async fn find(jmap: &Jmap, tenant: TenantId, id: &str) -> MethodResul
     Ok(visible(store, &a).await?.then_some(a))
 }
 
-/// `Principal.type` (RFC 9670) по виду учётной записи.
-fn principal_type(kind: AccountKind) -> &'static str {
-    match kind {
+/// `Principal.type` (RFC 9670) по виду учётной записи и типу ресурса (CTR-88): пользователь — `individual`,
+/// помещение — `location`, оборудование — `resource`. У ресурса тип задан контрактом всегда; `None` — как помещение.
+fn principal_type(a: &Account) -> &'static str {
+    match a.kind {
         AccountKind::User => "individual",
-        AccountKind::Resource => "resource",
+        AccountKind::Resource => match a.resource_type {
+            Some(ResourceType::Equipment) => "resource",
+            Some(ResourceType::Room) | None => "location",
+        },
     }
 }
 
@@ -120,7 +125,7 @@ fn principal_json(ctx: &Ctx<'_>, a: &Account) -> Map<String, Value> {
     }
     object(json!({
         "id": id,
-        "type": principal_type(a.kind),
+        "type": principal_type(a),
         "name": a.display_name,
         "description": null,
         "email": a.login,
@@ -212,7 +217,7 @@ fn matches(filter: &Value, own: AccountId, a: &Account) -> MethodResult<bool> {
                 let t = text()?;
                 name.contains(&t) || email.contains(&t)
             }
-            "type" => val.as_str().ok_or_else(unsupported)? == principal_type(a.kind),
+            "type" => val.as_str().ok_or_else(unsupported)? == principal_type(a),
             "timeZone" => {
                 val.as_str().ok_or_else(unsupported)?;
                 false
@@ -373,7 +378,9 @@ mod tests {
     use tp_contracts::dav::{
         Collection, CollectionKind, Component, DavStore, ObjectIndex, Precondition, Span,
     };
-    use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert};
+    use tp_contracts::meta::{
+        AccountKind, AccountScope, AccountStore, AccountUpsert, ResourceType,
+    };
     use tp_contracts::schedule::{BusyKind, BusyPeriod};
 
     use crate::testenv::Env;
@@ -397,13 +404,14 @@ mod tests {
         OffsetDateTime::parse(s, &Rfc3339).expect("time")
     }
 
-    /// Учётная запись организации с отображаемым именем и видом.
+    /// Учётная запись организации с отображаемым именем, видом и типом ресурса.
     async fn user(
         env: &Env,
         login: &str,
         name: &str,
         enabled: bool,
         kind: AccountKind,
+        resource_type: Option<ResourceType>,
     ) -> AccountScope {
         let scope = env.meta.account(login).await.expect("account");
         let cur = env
@@ -421,7 +429,7 @@ mod tests {
             aliases: cur.aliases,
             kind,
             hidden_from_gal: false,
-            resource_type: None,
+            resource_type,
         };
         env.meta.upsert(scope.tenant, data).await.expect("upsert");
         scope
@@ -518,6 +526,7 @@ mod tests {
             "Иван Петров",
             true,
             AccountKind::User,
+            None,
         )
         .await;
         let anna = user(
@@ -526,6 +535,7 @@ mod tests {
             "Анна Смирнова",
             true,
             AccountKind::User,
+            None,
         )
         .await;
         let room = user(
@@ -534,9 +544,27 @@ mod tests {
             "Переговорная 3",
             true,
             AccountKind::Resource,
+            Some(ResourceType::Room),
         )
         .await;
-        let off = user(&env, "gone@example.org", "Уволен", false, AccountKind::User).await;
+        let equip = user(
+            &env,
+            "projector@example.org",
+            "Проектор",
+            true,
+            AccountKind::Resource,
+            Some(ResourceType::Equipment),
+        )
+        .await;
+        let off = user(
+            &env,
+            "gone@example.org",
+            "Уволен",
+            false,
+            AccountKind::User,
+            None,
+        )
+        .await;
         let id = |s: AccountScope| s.account.to_string();
 
         let g = call(&env, "Principal/get", json!({"accountId": acc})).await;
@@ -549,7 +577,12 @@ mod tests {
         // Отключённая учётная запись — не участник.
         assert_eq!(
             emails,
-            ["anna@example.org", "room-3@example.org", "user@example.org"]
+            [
+                "anna@example.org",
+                "projector@example.org",
+                "room-3@example.org",
+                "user@example.org"
+            ]
         );
         let g = call(
             &env,
@@ -573,16 +606,19 @@ mod tests {
             g["list"][1]["capabilities"]["urn:ietf:params:jmap:calendars"]["accountId"],
             acc
         );
-        // Переговорная — участник вида «ресурс».
+        // Переговорная (помещение) — участник типа «location», оборудование — «resource» (CTR-88, приёмка JMAP-45).
         let g = call(
             &env,
             "Principal/get",
-            json!({"accountId": acc, "ids": [id(room)], "properties": ["type", "name"]}),
+            json!({"accountId": acc, "ids": [id(room), id(equip)], "properties": ["type", "name"]}),
         )
         .await;
         assert_eq!(
             g["list"],
-            json!([{"id": id(room), "type": "resource", "name": "Переговорная 3"}]),
+            json!([
+                {"id": id(room), "type": "location", "name": "Переговорная 3"},
+                {"id": id(equip), "type": "resource", "name": "Проектор"},
+            ]),
             "{g}"
         );
 
@@ -592,15 +628,15 @@ mod tests {
             call(&env, "Principal/query", a).await
         };
         let r = q(json!({})).await;
-        assert_eq!(r["ids"], json!([id(anna), id(room), acc]), "{r}");
+        assert_eq!(r["ids"], json!([id(anna), id(equip), id(room), acc]), "{r}");
         assert_eq!(r["canCalculateChanges"], false);
         let r = q(
             json!({"sort": [{"property": "name", "isAscending": false}], "limit": 2,
                          "calculateTotal": true}),
         )
         .await;
-        assert_eq!(r["ids"], json!([id(room), acc]), "{r}");
-        assert_eq!(r["total"], 3);
+        assert_eq!(r["ids"], json!([id(equip), id(room)]), "{r}");
+        assert_eq!(r["total"], 4);
         // Переговорная находится по имени и адресу.
         assert_eq!(
             q(json!({"filter": {"name": "переговорная"}})).await["ids"],
@@ -618,17 +654,25 @@ mod tests {
             q(json!({"filter": {"accountIds": [acc, id(anna)]}})).await["ids"],
             json!([acc])
         );
-        // Вид участника — по виду учётной записи: переговорная — ресурс (приёмка JMAP-30, JMAP-38).
+        // Тип участника — по виду учётной записи и типу ресурса: переговорная — `location`, оборудование —
+        // `resource`, пользователь — `individual` (CTR-88, приёмка JMAP-45).
         assert_eq!(
             q(json!({"filter": {"type": "individual"}})).await["ids"],
             json!([id(anna), acc])
         );
         assert_eq!(
-            q(json!({"filter": {"type": "resource"}})).await["ids"],
+            q(json!({"filter": {"type": "location"}})).await["ids"],
             json!([id(room)])
         );
-        let both = json!({"operator": "AND", "conditions": [{"type": "resource"}, {"text": "переговорная"}]});
+        assert_eq!(
+            q(json!({"filter": {"type": "resource"}})).await["ids"],
+            json!([id(equip)])
+        );
+        let both = json!({"operator": "AND", "conditions": [{"type": "location"}, {"text": "переговорная"}]});
         assert_eq!(q(json!({"filter": both})).await["ids"], json!([id(room)]));
+        let both =
+            json!({"operator": "AND", "conditions": [{"type": "resource"}, {"text": "проектор"}]});
+        assert_eq!(q(json!({"filter": both})).await["ids"], json!([id(equip)]));
         let both = json!({"operator": "OR", "conditions": [{"name": "анна"}, {"name": "иван"}]});
         assert_eq!(
             q(json!({"filter": both})).await["ids"],
@@ -649,8 +693,24 @@ mod tests {
     async fn availability_of_two_users() {
         let env = Env::new().await;
         let acc = env.account();
-        let anna = user(&env, "anna@example.org", "Анна", true, AccountKind::User).await;
-        let off = user(&env, "gone@example.org", "Уволен", false, AccountKind::User).await;
+        let anna = user(
+            &env,
+            "anna@example.org",
+            "Анна",
+            true,
+            AccountKind::User,
+            None,
+        )
+        .await;
+        let off = user(
+            &env,
+            "gone@example.org",
+            "Уволен",
+            false,
+            AccountKind::User,
+            None,
+        )
+        .await;
         event(
             &env,
             env.scope,
