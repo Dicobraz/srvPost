@@ -5,7 +5,7 @@
 
 [Unit]
 Description=The Post IMAP/TLS socket (port 993)
-Documentation=https://github.com/Dicobraz421/ThePost
+Documentation=https://github.com/Dicobraz/srvPost
 
 [Socket]
 ListenStream=993

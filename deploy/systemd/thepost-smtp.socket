@@ -5,7 +5,7 @@
 
 [Unit]
 Description=The Post SMTP socket (port 25)
-Documentation=https://github.com/Dicobraz421/ThePost
+Documentation=https://github.com/Dicobraz/srvPost
 
 [Socket]
 ListenStream=25

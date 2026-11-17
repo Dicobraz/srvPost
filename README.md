@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Dicobraz421/ThePost/releases"><b>Скачать</b></a> ·
+  <a href="https://github.com/Dicobraz/srvPost/releases"><b>Скачать</b></a> ·
   <a href="docs/INSTALL.md"><b>Установка</b></a> ·
   <a href="docs/ADMIN-GUIDE.md"><b>Руководство администратора</b></a> ·
   <a href="https://github.com/orgs/Dicobraz421/projects/3"><b>План-график</b></a>
@@ -147,7 +147,7 @@
 
 ## Установка
 
-Linux x86_64 (без требования AVX2) или AArch64. Готовые файлы — на странице [выпусков](https://github.com/Dicobraz421/ThePost/releases),
+Linux x86_64 (без требования AVX2) или AArch64. Готовые файлы — на странице [выпусков](https://github.com/Dicobraz/srvPost/releases),
 каждый подписан ([как проверить](docs/INSTALL.md#проверка-подписи)).
 Что должно быть готово до установки (ОС, порты, DNS, PostgreSQL, OpenBao) и как это проверить —
 [требования к окружению](docs/PREREQUISITES.md).

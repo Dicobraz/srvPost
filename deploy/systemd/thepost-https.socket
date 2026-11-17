@@ -5,7 +5,7 @@
 
 [Unit]
 Description=The Post JMAP/HTTPS socket (port 443)
-Documentation=https://github.com/Dicobraz421/ThePost
+Documentation=https://github.com/Dicobraz/srvPost
 
 [Socket]
 ListenStream=443
