@@ -43,7 +43,6 @@ use tp_contracts::sharing::{
     Bookers, BookingDecision, BookingPeriod, BookingPolicy, BookingRequest, DeclineReason,
     ResourceStore,
 };
-use tp_contracts::trust::PeerKind;
 use tp_contracts::{AccountId, Result};
 
 use crate::config::DavConfig;

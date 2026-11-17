@@ -273,7 +273,7 @@ async fn imip_sent_by_delegate_with_record_reaches_itip() {
     assert_eq!(calls[0].recipient, bob);
     assert_eq!(calls[0].to, "bob@example.org");
     assert_eq!(calls[0].from, "carol@example.org");
-    assert_eq!(calls[0].sender, SenderKind::External);
+    assert_eq!(calls[0].sender, PeerKind::External);
     assert!(calls[0].ics.contains("UID:u1"));
 
     // Представитель без права планирования от имени — только письмо (в ящике — оба).

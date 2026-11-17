@@ -29,6 +29,7 @@ use tp_contracts::groups::{
 use tp_contracts::mailstore::IngestRequest;
 use tp_contracts::meta::AccountScope;
 use tp_contracts::queue::DsnRet;
+use tp_contracts::trust::PeerKind;
 use tp_contracts::{AccountId, Error, Result, TenantId};
 
 use super::{
@@ -301,6 +302,9 @@ impl Moderation for Delivery {
                 &mut prepared.deliveries,
                 &prepared.junk,
                 false,
+                // Отпущенное модератором письмо пришло снаружи (чужой в модерируемую группу) — до SMTP-50
+                // безопасное умолчание: чужой, матрица — умолчания контракта.
+                PeerKind::External,
             )
             .await?;
         let local = local_rcpts(&prepared.deliveries);
