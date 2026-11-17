@@ -17,7 +17,7 @@
 | `config/` | Примеры `config.yaml` для пресетов `all` (SMB), `mailbox` (Enterprise-ВМ), `edge` (DMZ) |
 
 ## Чистая машина
-1. Linux x86_64/AArch64 или Windows + WSL2 Ubuntu (работать внутри WSL, репозиторий — в файловой системе WSL).
+1. Linux x86_64 или Windows + WSL2 Ubuntu (работать внутри WSL, репозиторий — в файловой системе WSL).
 2. Docker Engine с Compose v2 (`docker compose version`) или Docker Desktop с интеграцией WSL.
 3. Rust через rustup (тулчейн подхватится из `rust-toolchain.toml`), `cargo install cargo-nextest --locked`.
    Пакеты для сборки: `build-essential pkg-config`; с фичей `gssapi` (как выпуск и образ) — ещё `libkrb5-dev libclang-dev`;

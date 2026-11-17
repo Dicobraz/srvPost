@@ -10,7 +10,7 @@ description: cross build --release thepost (с gssapi) и запуск на ст
 
 inputs:
   target:
-    description: Цель rustc (x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu)
+    description: Цель rustc (x86_64-unknown-linux-gnu)
     required: true
   cache:
     description: rust-cache ('false' — сборка с нуля, repro)
@@ -56,7 +56,6 @@ runs:
     # загрузчик и libc собраны под x86-64-v3 и под Nehalem падают сами, ещё до бинаря (qemu -L не спасает).
     # libgssapi-krb5-2 — библиотека фичи gssapi, нужна узлу при запуске.
     - name: Запуск на старом процессоре (qemu Nehalem, без AVX)
-      if: inputs.target == 'x86_64-unknown-linux-gnu'
       shell: bash
       env:
         BIN: target/${{ inputs.target }}/release/thepost
