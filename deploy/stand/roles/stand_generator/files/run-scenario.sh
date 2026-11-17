@@ -70,8 +70,14 @@ send_out() {
   else
     to="sink$RANDOM@${EXTERNAL_DOMAIN}"
   fi
+  # FIX-13: корпус — для fill (порт 25, внешние отправители sender*@external.test); сабмишен с AUTH
+  # узел прав, отвергая чужой From («отправить только со своего адреса»): подменяем From на вошедшего.
+  local data
+  data=$(mktemp /tmp/stand-send.XXXXXX.eml)
+  sed "0,/^$/{s/^From:.*/From: $from/}" "$(rnd_msg)" >"$data"
   swaks --silent 2 --server "$SMB_HOST" --port 587 --tls --auth PLAIN --auth-user "$from" \
-    --auth-password "${PASS[$from]}" --from "$from" --to "$to" --data "@$(rnd_msg)"
+    --auth-password "${PASS[$from]}" --from "$from" --to "$to" --data "@$data"
+  rm -f "$data"
 }
 
 # Итог команды: ok или fail <код SMTP 4xx/5xx; conn — без кода (соединение, TLS)>.
