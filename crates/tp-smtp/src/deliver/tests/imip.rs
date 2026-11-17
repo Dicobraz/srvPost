@@ -51,6 +51,21 @@ fn with_partners(env: &Env, partners: &[&'static str]) -> (Delivery, FakeItip) {
     (d, itip)
 }
 
+/// Доставка [`delivery`] с представителями из каталога окружения и SPF/DMARC домена организации `example.org`
+/// (APP-69): письмо узла `From` домена организации проходит DMARC с выравниванием SPF.
+async fn with_delegates(env: &Env) -> (Delivery, FakeItip) {
+    let check = fx::checker();
+    fx::publish_sender(check.cache(), "none");
+    fx::publish_sender_domain(check.cache(), "example.org", "none");
+    let itip = FakeItip::new();
+    let mut d = env
+        .delivery(false)
+        .with_itip(Arc::new(itip.clone()))
+        .with_delegates(Arc::new(env.meta.clone()));
+    d.deps.authcheck = Some(Arc::new(check));
+    (d, itip)
+}
+
 /// Принятый домен `name` организации `tenant` в настройках транспорта окружения.
 pub(super) async fn accept(env: &Env, name: &str, tenant: TenantId) {
     let store = env.transport.clone();
@@ -185,7 +200,8 @@ async fn forged_sender_is_ignored() {
     let reply = imip("REPLY", "bob@example.org", "boss@example.com");
     assert_eq!(send(&d, &request).await, 250);
     assert_eq!(send(&d, &reply).await, 250);
-    // Отправитель — `SENT-BY` организатора (SMTP-38): право представителя извне не проверить.
+    // Отправитель — `SENT-BY` организатора (SMTP-38): организатор — не учётная запись организации, записи
+    // представителя с правом планирования от его имени быть не может.
     let sent_by = request.replace(
         "ORGANIZER;CN=Org:",
         "ORGANIZER;SENT-BY=\"mailto:sender@example.com\":",
@@ -207,6 +223,63 @@ async fn forged_sender_is_ignored() {
     assert!(itip.calls().is_empty());
     // Письма остаются в ящике.
     assert_eq!(env.inbox("bob@example.org").await.len(), 5);
+}
+
+/// APP-69: приглашение представителя iMIP — `From` alice совпал с `SENT-BY` организатора carol, письмо прошло
+/// DMARC: сообщение передаётся приёму iTIP от имени carol при её записи представителя alice с
+/// `schedule_on_behalf`; без права — только письмо. Отправитель — по домену организатора (решение 123): домен
+/// свой, но письмо через smtp-in — внешний.
+#[tokio::test]
+async fn imip_sent_by_delegate_with_record_reaches_itip() {
+    use tp_contracts::sharing::{Delegate, DelegateLevel, DelegateStore};
+
+    let env = Env::new(DecisionHooks::default()).await;
+    let (d, itip) = with_delegates(&env).await;
+    let carol = env.scope("carol@example.org").await;
+    let alice = env.scope("alice@example.org").await;
+    let set = |on_behalf: bool| {
+        DelegateStore::set_delegate(
+            &env.meta,
+            carol,
+            Delegate {
+                delegate: alice.account,
+                level: DelegateLevel::Write,
+                schedule_on_behalf: on_behalf,
+            },
+        )
+    };
+    set(true).await.expect("delegate");
+
+    // Приглашение от имени carol: `From` — alice, домен организации в SPF и DMARC (выравнивание с конвертом).
+    let request = || {
+        imip("REQUEST", "carol@example.org", "bob@example.org")
+            .replace(
+                "From: Sender <sender@example.com>",
+                "From: Alice <alice@example.org>",
+            )
+            .replace(
+                "ORGANIZER;CN=Org:",
+                "ORGANIZER;SENT-BY=\"mailto:alice@example.org\":",
+            )
+    };
+    let mut e = fx::envelope("192.0.2.10:1000");
+    e.mail_from = "alice@example.org".into();
+    e.helo = "example.org".into();
+    assert_eq!(d.data(&e, Bytes::from(request())).await.code, 250);
+    let bob = env.scope("bob@example.org").await;
+    let calls = itip.calls();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].recipient, bob);
+    assert_eq!(calls[0].to, "bob@example.org");
+    assert_eq!(calls[0].from, "carol@example.org");
+    assert_eq!(calls[0].sender, SenderKind::External);
+    assert!(calls[0].ics.contains("UID:u1"));
+
+    // Представитель без права планирования от имени — только письмо (в ящике — оба).
+    set(false).await.expect("delegate without schedule");
+    assert_eq!(d.data(&e, Bytes::from(request())).await.code, 250);
+    assert_eq!(itip.calls().len(), 1);
+    assert_eq!(env.inbox("bob@example.org").await.len(), 2);
 }
 
 #[tokio::test]
