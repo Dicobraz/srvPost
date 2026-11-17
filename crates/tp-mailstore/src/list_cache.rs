@@ -701,7 +701,7 @@ mod tests {
     #[tokio::test]
     async fn flag_change_reflected_in_cache() {
         let f = fx().await;
-        let ids = vec![deliver(&f, "m0").await, deliver(&f, "m1").await];
+        let ids = [deliver(&f, "m0").await, deliver(&f, "m1").await];
         MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
             .await
             .expect("list");
@@ -723,7 +723,7 @@ mod tests {
     #[tokio::test]
     async fn move_between_folders_reflected_in_both_caches() {
         let f = fx().await;
-        let ids = vec![deliver(&f, "m0").await, deliver(&f, "m1").await];
+        let ids = [deliver(&f, "m0").await, deliver(&f, "m1").await];
         let work = MailboxStore::create(
             &f.env.meta,
             f.scope,
@@ -766,7 +766,7 @@ mod tests {
     #[tokio::test]
     async fn trash_restore_expunge_reflected_in_cache() {
         let f = fx().await;
-        let ids = vec![deliver(&f, "m0").await, deliver(&f, "m1").await];
+        let ids = [deliver(&f, "m0").await, deliver(&f, "m1").await];
         MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
             .await
             .expect("inbox");
