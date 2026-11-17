@@ -36,7 +36,7 @@ use serde::Deserialize;
 use tp_contracts::config::duration;
 use tp_contracts::meta::{
     AccountScope, ChangeLog, Changes, Flag, FlagOp, MailboxStore, Message, MessageChange,
-    MessageQuery, MessageMeta, MessageStore, NewMessage,
+    MessageMeta, MessageQuery, MessageStore, NewMessage,
 };
 use tp_contracts::{
     AccountId, FlagsUpdate, Inserted, MailboxId, MessageId, ModSeq, Result, TenantId,
@@ -210,11 +210,7 @@ impl CachedMessages {
             while st.bytes > self.cfg.max_bytes
                 || (self.cfg.max_entries > 0 && st.entries.len() > self.cfg.max_entries)
             {
-                let Some(oldest) = st
-                    .entries
-                    .iter()
-                    .min_by_key(|(_, e)| e.at)
-                    .map(|(k, _)| *k)
+                let Some(oldest) = st.entries.iter().min_by_key(|(_, e)| e.at).map(|(k, _)| *k)
                 else {
                     break;
                 };
@@ -278,12 +274,8 @@ impl CachedMessages {
                 _ => remove(&mut list, ch.id),
             }
         }
-        let mut fetch: Vec<MessageId> = c
-            .created
-            .iter()
-            .chain(&c.updated)
-            .map(|ch| ch.id)
-            .collect();
+        let mut fetch: Vec<MessageId> =
+            c.created.iter().chain(&c.updated).map(|ch| ch.id).collect();
         fetch.sort_unstable();
         fetch.dedup();
         if !fetch.is_empty() {
@@ -411,8 +403,7 @@ fn opt_bytes(s: &Option<String>) -> usize {
 }
 
 fn body_bytes(b: &tp_contracts::meta::BodyPart) -> usize {
-    96
-        + b.part.len()
+    96 + b.part.len()
         + b.media_type.len()
         + b.subtype.len()
         + b.content_id.as_ref().map_or(0, String::len)
@@ -420,12 +411,13 @@ fn body_bytes(b: &tp_contracts::meta::BodyPart) -> usize {
         + b.encoding.as_ref().map_or(0, String::len)
         + b.location.as_ref().map_or(0, String::len)
         + b.language.iter().map(String::len).sum::<usize>()
-        + b.params.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>()
-        + b.disposition
-            .as_ref()
-            .map_or(0, |(t, p)| {
-                t.len() + p.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>()
-            })
+        + b.params
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum::<usize>()
+        + b.disposition.as_ref().map_or(0, |(t, p)| {
+            t.len() + p.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>()
+        })
         + b.children.iter().map(body_bytes).sum::<usize>()
 }
 
@@ -585,9 +577,9 @@ mod tests {
     use super::*;
     use crate::testenv::Env;
     use time::OffsetDateTime;
+    use tp_contracts::Uid;
     use tp_contracts::mailstore::{Delivery, IngestRequest, MailStore};
     use tp_contracts::meta::{Flags, MailboxStore, NewMailbox, SpecialUse};
-    use tp_contracts::Uid;
 
     /// Окружение: метаданные `tp-testkit` и кэш поверх них (хранилище, папки, журнал — одно).
     struct Fx {
@@ -701,7 +693,10 @@ mod tests {
         let list = MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
             .await
             .expect("list");
-        assert_eq!(subjects(&list), vec!["m0".into(), "m1".into(), "новое".into()]);
+        assert_eq!(
+            subjects(&list),
+            vec!["m0".into(), "m1".into(), "новое".into()]
+        );
         assert_eq!(f.cache.stats().patches, 1);
         assert_transparent(&f, 100).await;
     }
@@ -765,10 +760,9 @@ mod tests {
         assert_eq!(subjects(&inbox_list), vec!["m1".into()]);
         assert_eq!(subjects(&work_list), vec!["m0".into()]);
         assert_eq!(f.cache.stats().patches, 2);
-        let inner_work =
-            MessageStore::list(&f.env.meta, f.scope, work, MessageQuery::All, 100)
-                .await
-                .expect("inner");
+        let inner_work = MessageStore::list(&f.env.meta, f.scope, work, MessageQuery::All, 100)
+            .await
+            .expect("inner");
         assert_eq!(work_list, inner_work);
     }
 
@@ -797,11 +791,7 @@ mod tests {
         assert!(inbox_list.is_empty());
         assert_eq!(trash_list.len(), 2);
         // Восстановление: вернулись во «Входящие».
-        f.env
-            .store
-            .restore(f.scope, &ids)
-            .await
-            .expect("restore");
+        f.env.store.restore(f.scope, &ids).await.expect("restore");
         let inbox_list = MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
             .await
             .expect("inbox");
@@ -1006,7 +996,11 @@ mod tests {
         // Перенести каждый второй в «Work» и обратно — порядок UID в кэше сохраняется.
         for (i, id) in ids.iter().enumerate() {
             if i % 2 == 0 {
-                f.env.store.move_to(f.scope, std::slice::from_ref(id), work).await.expect("move");
+                f.env
+                    .store
+                    .move_to(f.scope, std::slice::from_ref(id), work)
+                    .await
+                    .expect("move");
                 f.env
                     .store
                     .move_to(f.scope, std::slice::from_ref(id), f.inbox)
@@ -1020,7 +1014,10 @@ mod tests {
             .expect("list");
         // Перенесённые письма вернулись с новыми UID (6–8), порядок списка — по возрастанию UID.
         let uids: Vec<u32> = list.iter().map(|m| m.uid.0).collect();
-        assert!(uids.windows(2).all(|w| w[0] < w[1]), "UID по возрастанию: {uids:?}");
+        assert!(
+            uids.windows(2).all(|w| w[0] < w[1]),
+            "UID по возрастанию: {uids:?}"
+        );
         assert_eq!(subjects(&list), vec!["m1", "m3", "m0", "m2", "m4"]);
     }
 }
