@@ -4,12 +4,12 @@
 # секрет с цепочкой TLS клиентских протоколов (values.tls.secretName: tls.crt; ca.crt — CA внутренних каналов) и ключ TLS
 # в OpenBao (секрет thepost/tls#key — bootstrap.sh с TLS_KEY; в под монтируются только tls.crt и ca.crt).
 
-# Образ узла — ghcr.io (выпуски beta.yml, linux/amd64; теги <версия> = appVersion чарта, beta-<дата> и beta),
+# Образ узла — ghcr.io (выпуски beta.yml, linux/amd64; теги <версия> = appVersion чарта, v<версия>-beta.N и beta),
 # подписан cosign без ключей:
 #   cosign verify ghcr.io/dicobraz421/thepost:<тег> \
 #     --certificate-identity 'https://github.com/Dicobraz421/ThePost/.github/workflows/beta.yml@refs/heads/main' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
-# Закрепить проверенный образ — tag с digest из описания выпуска: "beta-20261112@sha256:…". Свой реестр (зеркало,
+# Закрепить проверенный образ — tag с digest из описания выпуска: "v0.2.1-beta.1@sha256:…". Свой реестр (зеркало,
 # закрытый контур) — repository: <реестр>/thepost (тот же digest после копирования, например crane copy или skopeo
 # copy с подписью: cosign copy).
 image:

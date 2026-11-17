@@ -5670,7 +5670,7 @@ dependencies = [
 
 [[package]]
 name = "thepost"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5984,7 +5984,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tp-admin"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -6015,7 +6015,7 @@ dependencies = [
 
 [[package]]
 name = "tp-admin-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anstream",
  "anstyle",
@@ -6034,7 +6034,7 @@ dependencies = [
 
 [[package]]
 name = "tp-auth"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -6061,7 +6061,7 @@ dependencies = [
 
 [[package]]
 name = "tp-blob"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6088,7 +6088,7 @@ dependencies = [
 
 [[package]]
 name = "tp-cluster"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -6110,7 +6110,7 @@ dependencies = [
 
 [[package]]
 name = "tp-contracts"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6127,7 +6127,7 @@ dependencies = [
 
 [[package]]
 name = "tp-dav"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -6152,7 +6152,7 @@ dependencies = [
 
 [[package]]
 name = "tp-imap"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -6182,7 +6182,7 @@ dependencies = [
 
 [[package]]
 name = "tp-jmap"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -6212,7 +6212,7 @@ dependencies = [
 
 [[package]]
 name = "tp-mailstore"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6235,7 +6235,7 @@ dependencies = [
 
 [[package]]
 name = "tp-meta"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "calcard",
@@ -6258,7 +6258,7 @@ dependencies = [
 
 [[package]]
 name = "tp-platform"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -6289,7 +6289,7 @@ dependencies = [
 
 [[package]]
 name = "tp-search"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6316,7 +6316,7 @@ dependencies = [
 
 [[package]]
 name = "tp-sieve"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -6340,7 +6340,7 @@ dependencies = [
 
 [[package]]
 name = "tp-smtp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -6371,7 +6371,7 @@ dependencies = [
 
 [[package]]
 name = "tp-sys"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "landlock",
  "nix 0.31.3",
@@ -6389,7 +6389,7 @@ dependencies = [
 
 [[package]]
 name = "tp-testkit"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6405,7 +6405,7 @@ dependencies = [
 
 [[package]]
 name = "tp-tui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "crossterm",
  "evdev",

@@ -1,6 +1,8 @@
-# Бета The Post (процесс pets-dev, CI-01): ночной тег beta-YYYYMMDD, если main изменился с прошлой беты.
+# Бета The Post (процесс pets-dev, CI-01): ночной тег v<версия>-beta.N, если main изменился с прошлой беты.
+# Нумерация по образцу Postman (решение 2026-11-17-beta-versioning): версия-цель — appVersion из Chart.yaml,
+# бета целит в будущий стабильный выпуск v<версия>; N растёт с каждой бетой цели, счётчик — git-теги.
 # Release-сборка x86_64 и aarch64 через cross (один образ glibc на обе цели), артефакты, GitHub pre-release.
-# Ручной запуск (workflow_dispatch) собирает бету всегда; повтор в тот же день — тег beta-YYYYMMDD.N.
+# Ручной запуск (workflow_dispatch) собирает бету всегда; повтор — следующий N.
 # Тег создаёт `gh release create` только после успешной сборки; тег от GITHUB_TOKEN не запускает ci.yml.
 # CI-03 (SRS 6.8): SBOM (SPDX, syft) в выпуске; архивы, SBOM и OCI-образ ghcr.io подписаны cosign без ключей
 # (OIDC GitHub, Rekor), проверка подписи — в описании выпуска; repro — вторая сборка с нуля на чистом раннере
@@ -54,23 +56,31 @@ jobs:
           EVENT: ${{ github.event_name }}
           SHA: ${{ github.sha }}
         run: |
-          prev=$(git tag --list 'beta-*' --sort=-v:refname | head -n1)
+          version=$(sed -n 's/^appVersion:[[:space:]]*//p' deploy/helm/thepost/Chart.yaml | tr -d "\"'")
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::appVersion в deploy/helm/thepost/Chart.yaml не версия-цель (X.Y.Z): '$version'"
+            exit 1
+          fi
+          # Последняя бета любой схемы (v*-beta.* новой и beta-* календарной до решения 2026-11-17).
+          prev=$(git tag --list 'v*-beta.*' 'beta-*' --sort=-creatordate | head -n1)
           echo "prev=$prev" >> "$GITHUB_OUTPUT"
           if [ "$EVENT" = schedule ] && [ -n "$prev" ] && [ "$(git rev-list -n1 "$prev")" = "$SHA" ]; then
             echo "main не изменился с $prev — бета не нужна"
             echo build=false >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          tag="beta-$(date -u +%Y%m%d)"
-          n=1
-          while git rev-parse -q --verify "refs/tags/$tag" >/dev/null; do
-            n=$((n + 1)); tag="beta-$(date -u +%Y%m%d).$n"
-          done
-          version=$(sed -n 's/^appVersion:[[:space:]]*//p' deploy/helm/thepost/Chart.yaml | tr -d "\"'")
-          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
-            echo "::error::appVersion в deploy/helm/thepost/Chart.yaml не версия: '$version'"
+          # Бета целит в будущий выпуск (решение 2026-11-17): после стабильного v<версия> — поднять appVersion.
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::стабильный тег v$version уже существует — поднять appVersion в deploy/helm/thepost/Chart.yaml"
             exit 1
           fi
+          last=$(git tag --list "v$version-beta.*" --sort=-v:refname | head -n1)
+          n=1
+          [ -n "$last" ] && n=$(( ${last##*.} + 1 ))
+          tag="v$version-beta.$n"
+          while git rev-parse -q --verify "refs/tags/$tag" >/dev/null; do
+            n=$((n + 1)); tag="v$version-beta.$n"
+          done
           echo "Бета $tag (версия $version) от $SHA (предыдущая: ${prev:-нет})"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo build=true >> "$GITHUB_OUTPUT"
