@@ -779,10 +779,10 @@
 | [CTR-54](CTR-54.md) | `DavStore` — перенос объекта между коллекциями и поиск контактов по индексу | contracts | B | contracts-38 | done | CTR-45 |
 | [CTR-55](CTR-55.md) | очередь модерации — продолжение по курсору | contracts | B | contracts-38 | done | CTR-43 |
 | [CTR-56](CTR-56.md) | `Collection` — по умолчанию, подписка и видимость, оповещения по умолчанию | contracts | B | contracts-38 | done | CTR-45 |
-| [META-57](META-57.md) | адреса учётной записи в PostgreSQL | meta | A | meta-37 | ready | CTR-53 |
-| [META-58](META-58.md) | перенос объекта DAV и индекс поиска контактов | meta | B | meta-37 | ready | CTR-54,META-46 |
-| [META-59](META-59.md) | очередь модерации — страница по курсору | meta | A | meta-37 | ready | CTR-55 |
-| [META-60](META-60.md) | поля `Collection` — по умолчанию, подписка, оповещения | meta | B | meta-37 | ready | CTR-56,META-46 |
+| [META-57](META-57.md) | адреса учётной записи в PostgreSQL | meta | A | meta-37 | done | CTR-53 |
+| [META-58](META-58.md) | перенос объекта DAV и индекс поиска контактов | meta | B | meta-37 | done | CTR-54,META-46 |
+| [META-59](META-59.md) | очередь модерации — страница по курсору | meta | A | meta-37 | done | CTR-55 |
+| [META-60](META-60.md) | поля `Collection` — по умолчанию, подписка, оповещения | meta | B | meta-37 | done | CTR-56,META-46 |
 | [DAV-23](DAV-23.md) | `calendar-user-address-set` — псевдонимы учётной записи | dav | A | dav-07 | done | CTR-53,DAV-05 |
 | [DAV-24](DAV-24.md) | CardDAV — поисковые строки контакта и `addressbook-query` по индексу | dav | A | dav-07 | done | CTR-54,DAV-10 |
 | [DAV-25](DAV-25.md) | CalDAV и CardDAV — оповещения по умолчанию и коллекция по умолчанию | dav | A | dav-07 | done | CTR-56,DAV-05 |
