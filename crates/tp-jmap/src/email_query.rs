@@ -3,6 +3,8 @@
 //! Нетекстовые условия (папка, даты, размер, ключевые слова, вложения, цепочки) проверяются по метаданным
 //! писем (`MessageStore`), текстовые (`text`, `from`, `to`, `cc`, `bcc`, `subject`, `body`, `header`) — запросом
 //! к `SearchIndex` на каждое условие; результаты пересекаются (SRS 4.6). Сортировка — по метаданным.
+//! Поиск по тексту (`text`, `body`) в чужом ящике — запись `AuditAction::Search` в журнал аудита до выполнения
+//! (решение 114, JMAP-43; [`crate::audit::search`]).
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -163,6 +165,30 @@ fn walk<'f>(f: &'f Filter, out: &mut Vec<&'f Cond>) {
         Filter::Op(_, fs) => fs.iter().for_each(|f| walk(f, out)),
         Filter::Cond(c) => out.push(c),
     }
+}
+
+/// Строка запроса для записи аудита (решение 114): условия поиска по тексту письма — только `text` и `body`, как
+/// `BODY`/`TEXT` в IMAP-23; поиск по адресам, теме и заголовкам не записывается. Формат — `поле "значение"`
+/// (кавычки в значении экранированы), несколько условий — через пробел. Нетекстовых условий — `None`.
+fn search_detail(f: &Filter) -> Option<String> {
+    fn terms(f: &Filter, out: &mut Vec<String>) {
+        match f {
+            Filter::Op(_, fs) => fs.iter().for_each(|f| terms(f, out)),
+            Filter::Cond(c) => {
+                out.extend(c.terms.iter().filter_map(|(field, value)| {
+                    let name = match field {
+                        TextField::Any => "text",
+                        TextField::Body => "body",
+                        _ => return None,
+                    };
+                    Some(format!("{name} \"{}\"", value.replace('"', "\\\"")))
+                }));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    terms(f, &mut out);
+    (!out.is_empty()).then(|| out.join(" "))
 }
 
 /// Данные для проверки условий: результаты текстовых запросов и цепочки.
@@ -358,6 +384,11 @@ async fn run(
         }
         _ => None,
     };
+    // Поиск представителя по тексту в чужом ящике — запись `Search` до выполнения (решение 114): без записи
+    // результат не выдаётся; свой ящик не записывается ([`crate::audit::search`]).
+    if let Some(detail) = filter.as_ref().and_then(search_detail) {
+        crate::audit::search(ctx, only, &detail).await?;
+    }
     let mut text = HashMap::new();
     for (field, value) in conds.iter().flat_map(|c| c.terms.iter()) {
         let key = (field.clone(), value.clone());
