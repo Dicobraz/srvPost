@@ -919,6 +919,17 @@
 |---|---|---|---|---|---|---|
 | [CI-09](CI-09.md) | фаззинг `tp-sieve` под libFuzzer | ci | B | ci-08 | done | SIEVE-07 |
 | [META-71](META-71.md) | миграции — одна базовая схема перед выпуском 1.0 | meta | B | meta-45 | ready | — |
+| [CTR-96](CTR-96.md) | конвейер обработки — реестр этапов, итоговый набор действий, итоговый контроль | contracts | B | contracts-67 | ready | — |
+| [CTR-97](CTR-97.md) | журналирование — контракт записей, правил и хранилища журнала | contracts | B | contracts-67 | ready | CTR-96 |
+| [META-88](META-88.md) | индекс журнала — схема journal, хеш-цепочка, восстановление из хранилища записей | meta | B | meta-61 | todo | CTR-97 |
+| [BLOB-18](BLOB-18.md) | хранилище записей журнала — отдельный бакет S3 с Object Lock, дедуп, SMB append-only | blob | A | blob-11 | todo | CTR-97 |
+| [SMTP-53](SMTP-53.md) | этап журналирования в конвейере — приём, отправка, конверт | smtp | A | smtp-33 | todo | CTR-96,CTR-97 |
+| [SMTP-54](SMTP-54.md) | конвейер как реестр этапов и итоговый контроль действий в доставке | smtp | A | smtp-33 | todo | CTR-96 |
+| [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | todo | CTR-97,META-88 |
+| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-78 | todo | CTR-97,META-88,BLOB-18 |
+| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-78 | todo | CTR-97 |
+| [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
+| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-49 | todo | APP-83,BLOB-18 |
 
 ## Вне волн
 
