@@ -8,24 +8,35 @@
 //! отправителю с причиной модератора: локальному — во «Входящие», внешнему — через очередь. Решение — в журнал
 //! доставки. Успешное решение снимает ссылку письма очереди на объект; ошибка — ссылка остаётся (вызывающий
 //! возвращает письмо в очередь).
+//!
+//! Постановка письмом правила потока (SMTP-30, [`Delivery::hold_by_rule`]): письмо — в очередь модерации,
+//! каждому модератору — уведомление с исходным письмом во вложении (аналог approval request Exchange);
+//! решение — в Admin API, не ответом на уведомление.
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::HashSet;
 
+use mail_builder::MessageBuilder;
+use mail_builder::headers::address::Address;
+use mail_builder::headers::date::Date;
+use mail_builder::headers::raw::Raw;
+use mail_builder::mime::MimePart;
 use time::OffsetDateTime;
 use tp_contracts::groups::{
-    DistributionGroup, HeldMessage, Moderation, check_delivery, validate_reject_reason,
+    DistributionGroup, HeldMessage, Moderation, Moderator, check_delivery, validate_reject_reason,
 };
+use tp_contracts::mailstore::IngestRequest;
+use tp_contracts::meta::AccountScope;
 use tp_contracts::queue::DsnRet;
-use tp_contracts::{Error, Result, TenantId};
+use tp_contracts::{AccountId, Error, Result, TenantId};
 
 use super::{
-    Dd, Delivery, Ek, Filing, NO_OUTBOUND, Origin, Prepared, accounts_of, dsn_step, junk_rcpts,
-    local_rcpts, no_outbound, outcome_steps, push_unique,
+    Dd, Delivery, Ek, Filing, MailDelivery, NO_OUTBOUND, Origin, Prepared, accounts_of, clean,
+    dsn_step, junk_rcpts, local_rcpts, no_outbound, outcome_steps, push_unique,
 };
 use crate::dsn::{self, DsnSink};
-use crate::groups::Groups;
+use crate::groups::{Groups, RuleHold};
 use crate::sieve::{self, Sieved};
 use crate::tracking::Step;
 
@@ -39,6 +50,107 @@ impl Delivery {
             ));
         }
         self.groups.as_ref().ok_or(Error::UNAVAILABLE)
+    }
+
+    /// Задерживает письмо правилом потока (SMTP-30, `FlowVerdict::Moderate`): объект с письмом — в очередь
+    /// модерации ([`Groups::hold_rule`], CTR-43) с модераторами и исходными получателями, каждому модератору —
+    /// уведомление ([`notice`]). `Ok(true)` — письмо в очереди (отправителю — `250`); `Ok(false)` — ставить
+    /// некуда (нет хранилища очереди, модераторов или получателей) — временный отказ, письмо не теряется.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn hold_by_rule(
+        &self,
+        tenant: TenantId,
+        id: &str,
+        rule: &str,
+        moderators: Vec<AccountId>,
+        sender: &str,
+        sender_account: Option<AccountId>,
+        rcpts: &[String],
+        raw: &Bytes,
+    ) -> Result<bool> {
+        let Some(groups) = &self.groups else {
+            return Ok(false);
+        };
+        if moderators.is_empty() || rcpts.is_empty() {
+            return Ok(false);
+        }
+        let at = OffsetDateTime::now_utc();
+        let held = groups
+            .hold_rule(RuleHold {
+                tenant,
+                rule,
+                moderators: moderators.iter().copied().map(Moderator::Account).collect(),
+                recipients: rcpts.to_vec(),
+                sender,
+                sender_account,
+                message_id: crate::tracking::message_id(raw),
+                raw: raw.clone(),
+                at,
+            })
+            .await?;
+        tracing::info!(%id, %rule, held = %held, "smtp: письмо задержано правилом потока — ждёт модератора");
+        self.notify_moderators(tenant, id, rule, &moderators, sender, rcpts, raw)
+            .await;
+        Ok(true)
+    }
+
+    /// Уведомление модераторов письма правила потока (SMTP-30): во «Входящие» каждому, с исходным письмом
+    /// во вложении; конверт пустой — на уведомление не отвечают (RFC 3834). Сбой доставки — только в журнал:
+    /// письмо уже в очереди, отправителю — `250`.
+    #[allow(clippy::too_many_arguments)]
+    async fn notify_moderators(
+        &self,
+        tenant: TenantId,
+        id: &str,
+        rule: &str,
+        moderators: &[AccountId],
+        sender: &str,
+        rcpts: &[String],
+        raw: &Bytes,
+    ) {
+        let now = OffsetDateTime::now_utc();
+        for account in moderators {
+            let Ok(Some(acc)) = self.deps.accounts.get(tenant, *account).await else {
+                tracing::warn!(%id, moderator = %account, "smtp: модератор правила потока не найден");
+                continue;
+            };
+            if !acc.enabled {
+                continue;
+            }
+            let scope = AccountScope {
+                tenant: acc.tenant,
+                account: acc.id,
+            };
+            let Ok(mailbox) = self.mailbox(scope, false).await else {
+                tracing::warn!(%id, moderator = %account, "smtp: «Входящие» модератора недоступны");
+                continue;
+            };
+            let notice = notice(
+                &self.hostname,
+                id,
+                rule,
+                &acc.login,
+                sender,
+                rcpts,
+                raw,
+                now,
+            );
+            let request = IngestRequest {
+                tenant: acc.tenant,
+                mail_from: String::new(),
+                raw: Box::pin(futures::stream::once(async move { Ok(notice) })),
+                deliveries: vec![MailDelivery {
+                    account: acc.id,
+                    mailbox,
+                    extra_headers: Vec::new(),
+                    flags: Default::default(),
+                }],
+                received_at: now,
+            };
+            if let Err(e) = self.deps.store.ingest(request).await {
+                tracing::warn!(%id, moderator = %account, error = %e, "smtp: уведомление модератора не доставлено");
+            }
+        }
     }
 
     /// Доставки участникам группы `group` (включённые учётные записи, каждая — один раз) с адресом группы;
@@ -92,6 +204,58 @@ async fn recipients_of(
         // Группа удалена или без адреса: в уведомлении — её идентификатор.
         _ => vec![gid.to_string()],
     })
+}
+
+/// Уведомление модератору `to` о письме, задержанном правилом потока `rule` (SMTP-30): исходное письмо —
+/// во вложении `message/rfc822` (как approval request Exchange), решение — в Admin API. Отправитель —
+/// `MAILER-DAEMON` узла, конверт пустой, `Auto-Submitted: auto-replied` (RFC 3834) — на уведомление не
+/// отвечают. Текст — по-русски и по-английски, как у уведомлений о доставке ([`crate::dsn`]).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn notice(
+    hostname: &str,
+    id: &str,
+    rule: &str,
+    to: &str,
+    sender: &str,
+    rcpts: &[String],
+    original: &[u8],
+    now: OffsetDateTime,
+) -> Bytes {
+    let mut text = format!(
+        "Письмо задержано правилом потока почты и ждёт решения модератора.\r\n\
+         A message was held by a mail flow rule and awaits a moderator's decision.\r\n\r\n\
+         Правило / Rule: {}\r\nОтправитель / Sender: {}\r\nПолучатели / Recipients: {}\r\n\r\n",
+        clean(rule),
+        clean(sender),
+        clean(&rcpts.join(", ")),
+    );
+    text.push_str(
+        "Одобрить или отклонить письмо можно в консоли администратора — очередь модерации.\r\n\
+         Approve or reject the message in the admin console — the moderation queue.\r\n\r\n\
+         -- \r\nThe Post, ",
+    );
+    text.push_str(hostname);
+    text.push_str("\r\n");
+    let cte = if original.is_ascii() { "7bit" } else { "8bit" };
+    let body = MimePart::new(
+        "multipart/mixed",
+        vec![
+            MimePart::new("text/plain", text),
+            MimePart::new("message/rfc822", original).transfer_encoding(cte),
+        ],
+    );
+    let from = format!("MAILER-DAEMON@{hostname}");
+    let msg = MessageBuilder::new()
+        .from(Address::new_address(Some("Mail Delivery System"), from))
+        .to(Address::new_address(None::<&str>, clean(to)))
+        .subject(format!("Moderation Request: {}", clean(rule)))
+        .date(Date::new(now.unix_timestamp()))
+        .message_id(format!("held-{id}@{hostname}"))
+        .header("Auto-Submitted", Raw::new("auto-replied"))
+        .body(body)
+        .write_to_vec()
+        .unwrap_or_default();
+    Bytes::from(msg)
 }
 
 #[async_trait]
