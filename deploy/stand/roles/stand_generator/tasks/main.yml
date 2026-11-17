@@ -73,6 +73,8 @@
 - name: Resolve SMB host name on generator
   ansible.builtin.lineinfile:
     path: /etc/hosts
+    # FIX-15: /etc/hosts в контейнере — bind-mount, атомарный rename поверх него EBUSY
+    unsafe_writes: true
     regexp: "\\s{{ stand_smb_hostname | regex_escape }}$"
     line: "{{ stand_smb_address }} {{ stand_smb_hostname }}"
 
