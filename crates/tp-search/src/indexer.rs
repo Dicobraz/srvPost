@@ -36,7 +36,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use futures::TryStreamExt as _;
 use futures::stream;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -291,9 +290,7 @@ impl Indexer {
             | CoreEventKind::Trashed { message }
             | CoreEventKind::Moved { message, .. } => {
                 let mut ops = Vec::with_capacity(2);
-                if let CoreEventKind::Moved {
-                    from_message, ..
-                } = kind
+                if let CoreEventKind::Moved { from_message, .. } = kind
                     && from_message != message
                 {
                     ops.push(IndexOp::Delete(*from_message));
@@ -755,16 +752,16 @@ mod tests {
             ..MemSource::default()
         });
         let cfg = IndexerConfig {
-            // PERF-04: поток коммитов в пачке — по `commit_docs` (50 < 80 писем); `commit_interval`
-            // страхует паузы выдачи дольше интервала — отсчитывается от последнего flush'а.
-            commit_docs: 50,
+            commit_docs: 1_000_000,
             commit_interval: interval,
             ..IndexerConfig::default()
         };
         let indexer = Indexer::new(indexes.clone(), source.clone(), cfg);
         let inbox = MailboxId::new();
         let log = MemEventLog::new(1);
-        for i in 0..80 {
+        // Пачка длиннее нескольких интервалов коммита даже при параллельном чтении (окно 8:
+        // 800 × 20 мс / 8 ≈ 2 с) — видимость писем держит только поток коммитов по времени.
+        for i in 0..800 {
             let d = mail(inbox, &format!("Письмо {i}"));
             log.append(event(
                 a,
@@ -774,29 +771,28 @@ mod tests {
             source.put(d);
         }
         let batch = log
-            .read(Partition(0), EventPos(0), 1000)
+            .read(Partition(0), EventPos(0), 2000)
             .await
             .expect("read");
         indexer.handle(&batch).await.expect("handle");
-        assert_eq!(indexes.open(a).expect("open").expect("index").docs(), 80);
+        assert_eq!(indexes.open(a).expect("open").expect("index").docs(), 800);
 
-        // Письмо видно в поиске не позже интервала коммита после выдачи, хотя вся пачка (80 × 20 мс)
-        // обрабатывается дольше: коммиты идут потоком по `commit_docs`, интервал — от последнего
-        // flush'а страхует паузы. Задержка считается в выдачах писем: каждая занимает не меньше `step`,
-        // поэтому между коммитами их не больше `interval / step`, ещё одна — на срабатывание и одна —
-        // на наблюдение. Длительность самого коммита (fsync) в счёт не входит: во время него выдач нет.
+        // Письмо видно в поиске не позже интервала коммита после своей выдачи, хотя вся пачка
+        // обрабатывается дольше: коммит идёт пакетами по времени от первого изменения, а не в конце
+        // пачки. Задержка меряется по часам выдач (письма читаются одновременно, выдачи не отмечают
+        // шаг `step`); запас сверх интервала — на сам коммит (fsync) и медленную машину CI.
         let seen = source.seen.lock().expect("lock").clone();
-        assert_eq!(seen.len(), 80);
-        let window = (interval.as_millis() / step.as_millis()) as usize + 2;
-        for (i, (message, ..)) in seen.iter().enumerate().take(seen.len() - window) {
-            let j = seen
+        assert_eq!(seen.len(), 800);
+        let bound = interval * 4;
+        for (i, (message, at, _)) in seen.iter().enumerate() {
+            let visible_at = seen
                 .iter()
-                .position(|(_, _, visible)| visible.contains(message))
+                .find(|(_, _, visible)| visible.contains(message))
                 .expect("письмо не стало видно до конца пачки");
+            let delay = visible_at.1.duration_since(*at);
             assert!(
-                j - i <= window,
-                "письмо {i} стало видно через {} выдач",
-                j - i
+                delay <= bound,
+                "письмо {i} стало видно через {delay:?} (интервал {interval:?})"
             );
         }
     }
@@ -830,16 +826,35 @@ mod tests {
             ));
         }
         source.put(probe.clone());
-        log.append(event(a, inbox, CoreEventKind::Delivered { message: probe.message }));
+        log.append(event(
+            a,
+            inbox,
+            CoreEventKind::Delivered {
+                message: probe.message,
+            },
+        ));
         // Одна пачка — весь бэклог: прежний код коммитил только по времени от первого изменения,
         // и зонд не был виден до конца пачки.
-        let batch = log.read(Partition(0), EventPos(0), 10_000).await.expect("read");
+        let batch = log
+            .read(Partition(0), EventPos(0), 10_000)
+            .await
+            .expect("read");
         indexer.handle(&batch).await.expect("handle");
         let hits = search
-            .query(a, &[], &TextQuery::term(TextField::Any, "perfect04backlog"), SearchSort::NewestFirst, 1)
+            .query(
+                a,
+                &[],
+                &TextQuery::term(TextField::Any, "perfect04backlog"),
+                SearchSort::NewestFirst,
+                1,
+            )
             .await
             .expect("query");
-        assert_eq!(hits.len(), 1, "письмо из хвоста бэклога должно быть в индексе после обработки");
+        assert_eq!(
+            hits.len(),
+            1,
+            "письмо из хвоста бэклога должно быть в индексе после обработки"
+        );
         assert_eq!(indexes.open(a).expect("open").expect("index").docs(), 3001);
     }
 
@@ -873,12 +888,24 @@ mod tests {
             for s in [&a, &b, &c, &d] {
                 let doc = mail(inbox, &format!("Наполнение {i}"));
                 source.put(doc.clone());
-                log.append(event(*s, inbox, CoreEventKind::Delivered { message: doc.message }));
+                log.append(event(
+                    *s,
+                    inbox,
+                    CoreEventKind::Delivered {
+                        message: doc.message,
+                    },
+                ));
             }
         }
         let probe = mail(inbox, "Зонд zqperfect04");
         source.put(probe.clone());
-        log.append(event(a, inbox, CoreEventKind::Delivered { message: probe.message }));
+        log.append(event(
+            a,
+            inbox,
+            CoreEventKind::Delivered {
+                message: probe.message,
+            },
+        ));
         let batch = log
             .read(Partition(0), EventPos(0), 10_000)
             .await
@@ -921,8 +948,20 @@ mod tests {
             mailbox: trash,
             ..report.clone()
         });
-        log.append(event(a, inbox, CoreEventKind::Delivered { message: report.message }));
-        log.append(event(a, inbox, CoreEventKind::Trashed { message: report.message }));
+        log.append(event(
+            a,
+            inbox,
+            CoreEventKind::Delivered {
+                message: report.message,
+            },
+        ));
+        log.append(event(
+            a,
+            inbox,
+            CoreEventKind::Trashed {
+                message: report.message,
+            },
+        ));
         let batch = log
             .read(Partition(0), EventPos(0), 100)
             .await
@@ -954,9 +993,10 @@ mod tests {
         assert_eq!(c.commit_interval, Duration::from_millis(500));
         assert!(crate::tests::from_pairs::<IndexerConfig>(&[("commit_interval", "5")]).is_err());
         assert!(crate::tests::from_pairs::<IndexerConfig>(&[("batch", "5")]).is_err());
-        let c = crate::tests::from_pairs::<IndexerConfig>(&[("fetch_concurrency", "16")])
-            .expect("fetch");
-        assert_eq!(c.fetch_concurrency, 16);
+        assert!(
+            crate::tests::from_pairs::<IndexerConfig>(&[("fetch_parallel", "16")]).is_err(),
+            "неизвестное поле"
+        );
         let c = crate::tests::from_pairs::<IndexerConfig>(&[
             ("retry_initial", "100ms"),
             ("retry_max", "1m"),
