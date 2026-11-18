@@ -1617,11 +1617,17 @@ export interface components {
         BrandingIssue: {
             /** @description Фон: роль (`panel`) или цвет фона терминала (`#0C0C0C`). */
             bg: string;
-            /** @description Контраст пары. */
+            /**
+             * Format: double
+             * @description Контраст пары.
+             */
             contrast: number;
             /** @description Слот палитры: `<тема>.<роль>` или `cli.<роль>`. */
             field: string;
-            /** @description Нужный контраст (текст — 4,5; рамки, заливки и CLI — 3). */
+            /**
+             * Format: double
+             * @description Нужный контраст (текст — 4,5; рамки, заливки и CLI — 3).
+             */
             min: number;
             /** @description Роль переднего плана (имя из `design/tokens.toml`). */
             role: string;
@@ -2052,11 +2058,17 @@ export interface components {
         OrgBrandingIssue: {
             /** @description Фон: роль или цвет фона терминала. */
             bg: string;
-            /** @description Контраст пары. */
+            /**
+             * Format: double
+             * @description Контраст пары.
+             */
             contrast: number;
             /** @description Слот палитры: `<тема>.<роль>` или `cli.<роль>`. */
             field: string;
-            /** @description Нужный контраст. */
+            /**
+             * Format: double
+             * @description Нужный контраст.
+             */
             min: number;
             /** @description Организация (UUID); `null` — сам набор установки. */
             org?: string | null;
@@ -5017,6 +5029,14 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             403: {
