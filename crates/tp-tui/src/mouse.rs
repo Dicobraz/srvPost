@@ -399,15 +399,22 @@ mod tests {
             "F9 открывает меню без запросов"
         );
         assert!(matches!(view(&app).overlay, Some(Overlay::Menu { .. })));
-        // Меню: щелчок выбирает операцию, двойной — открывает её.
-        assert!(click(&mut app, 40, 3).is_empty());
+        // Меню: щелчок выбирает операцию, двойной — открывает её. Индекс — по составу каталога
+        // (первая операция-список: жёсткий индекс ломается от новых путей схемы).
+        let i = catalog()
+            .ops
+            .iter()
+            .position(|o| o.is_list())
+            .expect("операция-список");
+        let y = 2 + i as u16;
+        assert!(click(&mut app, 40, y).is_empty());
         let Some(Overlay::Menu { sel }) = &view(&app).overlay else {
             panic!("нет меню");
         };
-        assert_eq!(*sel, 1);
+        assert_eq!(*sel, i);
         // Двойной щелчок по операции — открыть её экран (список или карточка).
-        let fx = click(&mut app, 40, 3);
-        let want = catalog().ops[1].id.clone();
+        let fx = click(&mut app, 40, y);
+        let want = catalog().ops[i].id.clone();
         assert!(
             matches!(fx.as_slice(), [Effect::Call(_, r)] if r.op.id == want),
             "{fx:?}"

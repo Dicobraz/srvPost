@@ -374,10 +374,14 @@ async fn view(a: &Admin, tenant: Option<TenantId>) -> std::result::Result<Brandi
     let s = stores(a)?;
     let levels = s.store.branding_levels(tenant).await?;
     let effective = levels.effective();
-    Ok(BrandingView {
-        own: levels.org,
-        effective,
-    })
+    // Свой набор: у организации — её набор, у установки — набор установки (`branding_levels(None)`
+    // отдаёт организацию пустой).
+    let own = if tenant.is_some() {
+        levels.org
+    } else {
+        levels.installation
+    };
+    Ok(BrandingView { own, effective })
 }
 
 /// Набор из тела со знаком прежнего набора уровня (`PUT` знак не меняет) и проверкой полей (`validate` — 400).
@@ -617,7 +621,7 @@ async fn get_org_branding(
 
 /// Заменяет набор организации (без знака — знак сохраняется). Контраст проверяется по действующему набору
 /// организации поверх текущего набора установки: пары ниже порога — 422 problem+json с `errors`; неверное
-/// название или цвет — 400; чужая организация — 404.
+/// название или цвет — 400; чужая организация — 403, неизвестная — 404.
 #[utoipa::path(put, path = "/api/v1/orgs/{org}/branding", tag = "branding",
     params(("org" = String, Path, description = "Организация (UUID)")),
     request_body = BrandingBody,
@@ -1379,8 +1383,16 @@ mod tests {
             .await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
         assert_eq!(h[header::CONTENT_TYPE], "application/problem+json");
-        let e = &b["errors"][0];
-        assert_eq!(e["org"], TenantId::DEFAULT.to_string());
+        // Сначала — пары самого набора установки (`org` = null), затем — каждой организации.
+        let errors = b["errors"].as_array().expect("errors");
+        assert!(
+            errors.iter().any(|e| e["org"] == Value::Null),
+            "сам набор установки: {errors:?}"
+        );
+        let e = errors
+            .iter()
+            .find(|e| e["org"] == TenantId::DEFAULT.to_string())
+            .expect("организация в errors");
         assert_eq!(e["theme"], "light");
         assert_eq!(e["role"], "text");
         assert_eq!(e["bg"], "panel");
@@ -1419,7 +1431,7 @@ mod tests {
     }
 
     /// Приёмка ADM-48: права — уровень установки только у администратора установки (403 остальным); чужая
-    /// организация — 404; оператор — только `GET` своей организации; без входа — 401; хранилище не подключено — 503.
+    /// организация — 403; оператор — только `GET` своей организации; без входа — 401; хранилище не подключено — 503.
     #[tokio::test]
     async fn roles() {
         let env = Env::new();
@@ -1437,9 +1449,9 @@ mod tests {
             let (s, _, _) = env.call(method, LOGO_ROUTE, Some("operator"), None).await;
             assert_eq!(s, StatusCode::FORBIDDEN);
         }
-        // Чужая организация — 404, своя — 200.
+        // Чужая организация — 403 (как в остальных модулях), своя — 200.
         let (s, _, _) = env.call("PUT", &other, Some("org"), Some(json!({}))).await;
-        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert_eq!(s, StatusCode::FORBIDDEN);
         let (s, _, _) = env.call("GET", &other, Some("root"), None).await;
         assert_eq!(s, StatusCode::OK);
         // Оператор: GET своей — ок, изменения — 403; аудитор — только журнал.
