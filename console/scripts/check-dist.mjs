@@ -2,13 +2,13 @@
 // работает без интернета (решение 119: шрифты и прочие ресурсы вшиты, CDN не используется нигде).
 // Ищем http(s):// и протокольно-относительные адреса в текстовых файлах dist. Разрешены только
 // строки, которые браузер не загружает: пространства имён XML (w3.org) и ссылки на документацию
-// в сообщениях библиотек (например, подсказка antd про CSS Logical Properties).
+// в сообщениях библиотек (подсказка antd про CSS Logical Properties, коды ошибок react.dev).
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const dist = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
-const INERT = [/^https?:\/\/(www\.)?w3\.org\//, /^https?:\/\/developer\.mozilla\.org\//];
+const INERT = [/^https?:\/\/(www\.)?w3\.org\//, /^https?:\/\/developer\.mozilla\.org\//, /^https?:\/\/react\.dev\//];
 const TEXT = /\.(html|js|mjs|css|svg|txt|json|webmanifest)$/;
 
 const files = [];
