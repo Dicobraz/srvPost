@@ -108,7 +108,7 @@ impl JournalRule {
             JournalScope::Mailbox(account) => sender == Some(account) || rcpts.contains(&account),
             JournalScope::Group(_) => {
                 let in_group = |a: &AccountId| members.contains(a);
-                sender.is_some_and(in_group) || rcpts.iter().any(in_group)
+                sender.as_ref().is_some_and(in_group) || rcpts.iter().any(in_group)
             }
         }
     }

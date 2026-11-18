@@ -184,26 +184,31 @@ pub async fn pipeline() {
         .expect("module before");
     reg.register(PipelinePoint::AfterMailboxSieve, after_sieve.clone())
         .expect("module after");
-    let ids = |p: PipelinePoint| {
+    let ids = |reg: &StageRegistry, p: PipelinePoint| {
         reg.stages_at(p)
             .into_iter()
             .map(|s| s.id().to_owned())
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        ids(PipelinePoint::BeforeMailboxSieve),
+        ids(&reg, PipelinePoint::BeforeMailboxSieve),
         vec![core_stage::JOURNAL, "mod.pre", core_stage::SIEVE],
         "журналирование до модульных этапов и Sieve"
     );
-    assert_eq!(ids(PipelinePoint::AfterMailboxSieve), vec!["mod.post"]);
-    let points = || -> Vec<PipelinePoint> { reg.stages().iter().map(|s| s.point()).collect() };
+    assert_eq!(
+        ids(&reg, PipelinePoint::AfterMailboxSieve),
+        vec!["mod.post"]
+    );
+    let points = |reg: &StageRegistry| -> Vec<PipelinePoint> {
+        reg.stages().iter().map(|s| s.point()).collect()
+    };
     assert!(
-        points().windows(2).all(|w| w[0] <= w[1]),
+        points(&reg).windows(2).all(|w| w[0] <= w[1]),
         "этапы в порядке точек: {:?}",
-        points()
+        points(&reg)
     );
     for point in PipelinePoint::ALL {
-        assert!(points().contains(&point), "точка {point:?} без этапов");
+        assert!(points(&reg).contains(&point), "точка {point:?} без этапов");
     }
 
     // Этап ядра нельзя удалить или переставить; модульный — можно.
@@ -219,7 +224,7 @@ pub async fn pipeline() {
     assert_eq!(reg.stage("absent"), None);
     reg.set_order("mod.pre", 100).expect("свой порядок");
     assert_eq!(
-        ids(PipelinePoint::BeforeMailboxSieve),
+        ids(&reg, PipelinePoint::BeforeMailboxSieve),
         vec![core_stage::JOURNAL, core_stage::SIEVE, "mod.pre"],
         "порядок модульного этапа изменился, ядро на месте"
     );

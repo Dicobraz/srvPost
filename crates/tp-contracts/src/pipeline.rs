@@ -552,14 +552,14 @@ mod tests {
             ),
             Err(Error::Conflict)
         ));
-        let ids = |p: PipelinePoint| {
+        let ids = |reg: &StageRegistry, p: PipelinePoint| {
             reg.stages_at(p)
                 .into_iter()
                 .map(|s| s.id().to_owned())
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            ids(PipelinePoint::BeforeMailboxSieve),
+            ids(&reg, PipelinePoint::BeforeMailboxSieve),
             vec![core_stage::JOURNAL, "mod.pre", core_stage::SIEVE],
             "журналирование до модулей и Sieve"
         );
@@ -576,7 +576,7 @@ mod tests {
         reg.set_order("mod.pre", 10).expect("reorder module");
         reg.remove("mod.pre").expect("remove module");
         assert_eq!(
-            ids(PipelinePoint::BeforeMailboxSieve),
+            ids(&reg, PipelinePoint::BeforeMailboxSieve),
             vec![core_stage::JOURNAL, core_stage::SIEVE]
         );
         assert!(format!("{reg:?}").contains(core_stage::JOURNAL));
