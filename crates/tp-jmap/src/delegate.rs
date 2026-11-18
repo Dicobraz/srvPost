@@ -136,6 +136,7 @@ pub(crate) async fn session_accounts(jmap: &Jmap, p: &Principal) -> Vec<MailAcco
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+    use tp_contracts::acl::AclStore;
     use tp_contracts::auth::{Principal, Rights};
     use tp_contracts::meta::SpecialUse;
     use tp_contracts::sharing::CollectionRights as R;

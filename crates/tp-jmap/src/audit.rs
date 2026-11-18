@@ -136,6 +136,7 @@ pub(crate) async fn search(ctx: &Ctx<'_>, mailbox: Option<MailboxId>, query: &st
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+    use tp_contracts::acl::AclStore;
     use tp_contracts::audit::{AuditAction, AuditActorKind, AuditPolicy, MailboxAudit};
     use tp_contracts::auth::{Principal, Rights, SendRight};
     use tp_contracts::meta::SpecialUse;
