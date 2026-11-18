@@ -81,6 +81,29 @@ test("ресурсы: список с типами и правилами, уда
   await waitFor(() => expect(screen.queryByText("Переговорная 5.12")).toBeNull());
 });
 
+test("ресурсы: фильтр списка по типу — локально, без новых запросов", async () => {
+  const calls = open("/resources", {
+    [`GET ${BASE}/resources`]: {
+      body: [
+        resource("r1", "room@example.org", "Переговорная 5.12"),
+        resource("r2", "beamer@example.org", "Проектор", DEFAULT_BOOKING, "equipment"),
+      ],
+    },
+  });
+  expect(await screen.findByText("Переговорная 5.12")).toBeTruthy();
+  expect(screen.getByText("Проектор")).toBeTruthy();
+  // Оборудование — остаётся только проектор; помещение — только переговорная; список не перезапрашивается.
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Тип" }));
+  fireEvent.click(await screen.findByTitle("оборудование"));
+  await waitFor(() => expect(screen.queryByText("Переговорная 5.12")).toBeNull());
+  expect(screen.getByText("Проектор")).toBeTruthy();
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Тип" }));
+  fireEvent.click(await screen.findByTitle("помещение"));
+  await waitFor(() => expect(screen.queryByText("Проектор")).toBeNull());
+  expect(screen.getByText("Переговорная 5.12")).toBeTruthy();
+  expect(calls.filter((c) => c.method === "GET" && c.path.startsWith(`${BASE}/resources`))).toHaveLength(1);
+});
+
 test("ресурсы: оператор видит список без удаления", async () => {
   open("/resources", { [`GET ${BASE}/resources`]: { body: [resource("r1", "room@example.org", "Переговорная")] } }, ["operator"]);
   expect(await screen.findByText("Переговорная")).toBeTruthy();
