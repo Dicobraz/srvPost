@@ -16,6 +16,7 @@ use tp_contracts::meta::{
     AccountKind, AccountScope, AccountStore, AccountUpsert, account_disabled,
 };
 use tp_meta::accounts::{LIST_PREFIX_SQL, LIST_SQL};
+use tp_meta::schema;
 use tp_testkit::suite::{
     AccountListFixture, ExternalIdFixture, account_by_address, account_by_ids,
     account_installation_admin, account_list, account_resource_type,

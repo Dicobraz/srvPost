@@ -9,8 +9,8 @@ use tp_contracts::TenantId;
 use tp_contracts::dav::{Collection, CollectionKind, DavStore};
 use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert};
 use tp_contracts::sharing::{
-    CollectionRights, Delegate, DelegateLevel, DelegateStore, SharingPolicy, SharingPolicyStore,
-    SharingScope,
+    CollectionAcl, CollectionRights, Delegate, DelegateLevel, DelegateStore, SharingPolicy,
+    SharingPolicyStore, SharingScope,
 };
 use tp_meta::{PgMeta, schema};
 use tp_testkit::suite::sharing::{
