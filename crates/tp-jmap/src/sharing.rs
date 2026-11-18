@@ -883,7 +883,7 @@ mod tests {
     use tp_contracts::auth::Principal;
     use tp_contracts::dav::CollectionId;
     use tp_contracts::ids::{DomainId, TenantId};
-    use tp_contracts::meta::{AccountKind, AccountScope, AccountUpsert};
+    use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert};
     use tp_contracts::sharing::{CollectionAcl, CollectionRights as R};
     use tp_contracts::trust::{Detail, TrustLevel, TrustPolicy, TrustStore};
 
