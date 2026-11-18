@@ -14,6 +14,7 @@ use crate::error::Result;
 use crate::events::Partition;
 use crate::ids::{AccountId, MailboxId, ModSeq, TenantId};
 use crate::meta::AccountScope;
+use crate::trust::TrustLevel;
 
 /// Вид сигнала. Виды учётной записи (`account = Some`): `MailboxChanged`, `MailboxListChanged`, `DavChanged`,
 /// `ScheduleInboxChanged`, `SieveChanged`; остальные —
@@ -115,6 +116,14 @@ pub enum EventKind {
         collection: CollectionId,
         /// `ModSeq` книги после записи.
         modseq: ModSeq,
+    },
+    /// Изменилась политика доверия уровня `level` (CTR-93, решение 124): после фиксации
+    /// [`crate::trust::TrustStore::set_policy`] и [`reset_policy`](crate::trust::TrustStore::reset_policy).
+    /// Подписчики — узлы: сбрасывают кэш действующей матрицы и перечитывают из хранилища. Сигнал —
+    /// [`crate::trust::trust_changed`].
+    TrustChanged {
+        /// Уровень.
+        level: TrustLevel,
     },
     /// Сигналы подписки потеряны (переполнение буфера подписчика, переподключение слушателя): сверка с хранилищем.
     /// Шина вставляет его в поток подписки с `tenant`/`account` этой подписки (системная — `TenantId::DEFAULT`,
@@ -229,6 +238,12 @@ mod tests {
             EventKind::GalChanged {
                 collection: CollectionId::new(),
                 modseq: ModSeq(4),
+            },
+            EventKind::TrustChanged {
+                level: TrustLevel::Installation,
+            },
+            EventKind::TrustChanged {
+                level: TrustLevel::Org(TenantId::new()),
             },
         ] {
             assert!(kind.is_system(), "{kind:?}");

@@ -5,6 +5,8 @@
 //!
 //! - [`ItipDelivery`] — приём iTIP учётной записью. Реализация — `tp-dav` (DAV-15); вызывают `tp-smtp` при доставке
 //!   письма iMIP (RFC 6047, SMTP-33), `tp-dav` и `tp-jmap` при планировании внутри организации (DAV-13, JMAP-31).
+//!   Что можно отправителю — матрица доверия ([`crate::trust`], решение 124): [`PeerKind`] в сообщении,
+//!   [`crate::trust::TrustMatrix::inbound`] в приёме.
 //! - [`ItipSender`] — iTIP внешним участникам письмом iMIP через `queue::Outbound` (очередь и DKIM).
 //! - Входящие планирования (`schedule-inbox`, RFC 6638 §2.2) — методы `inbox_*` [`crate::dav::DavStore`].
 //! - [`FreeBusy`] — занятость: индекс [`crate::dav::ObjectIndex::busy`] неповторяющихся объектов и разворот повторов
@@ -24,6 +26,7 @@ use crate::error::{Error, Result};
 use crate::ids::{AccountId, ModSeq, TenantId};
 use crate::meta::AccountScope;
 use crate::queue::Submitted;
+use crate::trust::PeerKind;
 
 /// Наибольшая длина адреса календарного пользователя (без `mailto:`), байт.
 pub const MAX_ADDRESS_LEN: usize = 320;
@@ -121,28 +124,9 @@ impl FromStr for ItipMethod {
     }
 }
 
-/// Кто отправитель сообщения iTIP относительно организации получателя (решение 123) — первый аргумент матрицы
-/// [`inbound_allowed`]. Своя организация — по входу в систему, а не по домену `From`; остальные — по домену `From`
-/// письма через smtp-in (домен и его поддомены).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SenderKind {
-    /// Своя организация — вошедший в систему: CalDAV и JMAP (`tp-dav`, `tp-jmap`) и письмо из почтового клиента
-    /// (submission со входом, JMAP `EmailSubmission`; решение 78, SMTP-36), `From` которого принадлежит вошедшей
-    /// учётной записи (свой адрес, псевдоним, право Send As или Send on Behalf).
-    Own,
-    /// Домен-партнёр организации получателя — официально заведённые доверительные отношения в политике организации
-    /// (письмо iMIP через smtp-in, прошедшее DMARC).
-    Partner,
-    /// Другая организация той же установки (MSSP), не партнёр.
-    Neighbor,
-    /// Остальные, в том числе письмо через smtp-in с адресом своей организации: DMARC проходит и сторонний сервис,
-    /// разрешённый в SPF или DKIM домена.
-    External,
-}
-
-/// Что сообщение iTIP делает у получателя — второй аргумент матрицы [`inbound_allowed`]. Каждая клетка — отдельное
-/// решение «кто — что»; содержательные проверки (UID, `ORGANIZER`, `ATTENDEE`, `SEQUENCE`) — у приёма, сверх неё.
+/// Что сообщение iTIP делает у получателя — второй аргумент матрицы [`crate::trust::TrustMatrix::inbound`]
+/// (первый — [`PeerKind`]). Каждая клетка — отдельное решение «кто — что»; содержательные проверки (UID,
+/// `ORGANIZER`, `ATTENDEE`, `SEQUENCE`) — у приёма, сверх неё.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InboundAction {
@@ -177,36 +161,6 @@ impl InboundAction {
     }
 }
 
-/// Матрица «кто — что» приёма iTIP (решение 123, «Снаружи — только почта») — единственное место решения «применять,
-/// бронировать, отвечать»; позже — настройка администратора (политика или Sieve) с этими значениями по умолчанию.
-///
-/// | Отправитель \ действие | `Invite` | `Update` | `Reply` | `Cancel` | `Other` | `Booking` |
-/// |---|---|---|---|---|---|---|
-/// | `Own` — своя организация (вошедший) | да | да | да | да | да | да |
-/// | `Partner` — домен-партнёр | нет¹ | да | да | да | нет | нет |
-/// | `Neighbor` — соседняя организация установки | нет | да | да | да | нет | нет |
-/// | `External` — внешний | нет | да | да | да | нет | нет |
-///
-/// «Нет» — письмо остаётся письмом: ни события, ни брони, ни ответа. `Update`, `Reply` и `Cancel` извне — как у
-/// Exchange и Google: только к существующему событию (RFC 5546 §6.1, RFC 6638 §11.2) — обновление и отмена от
-/// организатора события (тот же `ORGANIZER`, у обновления `SEQUENCE` строго больше) получателю из `ATTENDEE`, `REPLY`
-/// от участника этого события его организатору; UID совпадает, письмо прошло DMARC; проверяет приём. ¹ Новое
-/// приглашение партнёра — письмом, пока администратор не включит автодобавление (настройки ещё нет).
-pub const fn inbound_allowed(sender: SenderKind, action: InboundAction) -> bool {
-    use InboundAction::{Booking, Cancel, Invite, Other, Reply, Update};
-    match (sender, action) {
-        (SenderKind::Own, _) => true,
-        (
-            SenderKind::Partner | SenderKind::Neighbor | SenderKind::External,
-            Update | Reply | Cancel,
-        ) => true,
-        (
-            SenderKind::Partner | SenderKind::Neighbor | SenderKind::External,
-            Invite | Other | Booking,
-        ) => false,
-    }
-}
-
 /// Сообщение iTIP одному получателю — учётной записи организации.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItipMessage {
@@ -214,14 +168,15 @@ pub struct ItipMessage {
     pub recipient: AccountScope,
     /// Адрес получателя (`ATTENDEE` или `ORGANIZER` в сообщении; у iMIP — получатель конверта без подадреса).
     pub to: String,
-    /// Адрес отправителя, проверенный вызывающим ([`SenderKind`]); сверяется с `ORGANIZER` или `ATTENDEE`.
+    /// Адрес отправителя, проверенный вызывающим ([`PeerKind`]); сверяется с `ORGANIZER` или `ATTENDEE`.
     pub from: String,
     /// Метод (`METHOD` объекта; у iMIP — и параметр `method` части `text/calendar`).
     pub method: ItipMethod,
     /// Объект iCalendar как получен.
     pub ics: String,
-    /// Кто отправитель относительно организации получателя; что ему можно — [`inbound_allowed`].
-    pub sender: SenderKind,
+    /// Кто отправитель относительно организации получателя; что ему можно —
+    /// [`TrustMatrix::inbound`](crate::trust::TrustMatrix::inbound).
+    pub sender: PeerKind,
 }
 
 impl ItipMessage {
@@ -542,19 +497,8 @@ mod tests {
     }
 
     #[test]
-    fn inbound_matrix() {
+    fn inbound_actions() {
         use InboundAction::{Booking, Cancel, Invite, Other, Reply, Update};
-        use SenderKind::{External, Neighbor, Own, Partner};
-        for action in [Invite, Update, Reply, Cancel, Other, Booking] {
-            assert!(inbound_allowed(Own, action));
-            for sender in [Partner, Neighbor, External] {
-                assert_eq!(
-                    inbound_allowed(sender, action),
-                    matches!(action, Update | Reply | Cancel),
-                    "{sender:?} {action:?}"
-                );
-            }
-        }
         assert_eq!(InboundAction::of(ItipMethod::Request, false, false), Invite);
         assert_eq!(InboundAction::of(ItipMethod::Request, false, true), Update);
         assert_eq!(InboundAction::of(ItipMethod::Reply, false, false), Reply);
@@ -598,7 +542,7 @@ mod tests {
             from: "boss@partner.example".into(),
             method: ItipMethod::Request,
             ics: "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n".into(),
-            sender: SenderKind::Partner,
+            sender: PeerKind::Partner,
         };
         assert_eq!(msg.validate(), Ok(()));
         assert!(

@@ -9,6 +9,7 @@ use tp_contracts::meta::{AccountScope, Flag};
 use tp_contracts::sieve::{
     DeliveryRules, MailboxRef, ReplyBody, RulesInput, RulesOutcome, SieveStore, Vacation,
 };
+use tp_contracts::trust::{PeerKind, TrustMatrix};
 use tp_contracts::{AccountId, TenantId};
 use tp_testkit::{ManualClock, MemSieve, MemVacationLog};
 
@@ -50,6 +51,8 @@ impl Fixture {
             mail_from: "alice@example.com".into(),
             message: MAIL.as_bytes().to_vec().into(),
             mailboxes: mailboxes(),
+            peer: PeerKind::Own,
+            matrix: TrustMatrix::default(),
         };
         Self {
             store,
@@ -193,6 +196,9 @@ async fn vacation_setting() {
         subject: None,
         text_body: Some("из настройки".into()),
         html_body: None,
+        external_subject: None,
+        external_text_body: None,
+        external_html_body: None,
     };
     f.store
         .set_vacation(f.scope, setting)

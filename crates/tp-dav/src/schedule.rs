@@ -38,8 +38,9 @@ use tp_contracts::meta::{AccountScope, AccountStore, AddressTarget};
 use tp_contracts::queue::SubmitStatus;
 use tp_contracts::schedule::{
     BusyKind, BusyPeriod, FreeBusy, Inbox, ItipDelivery, ItipMessage, ItipMethod, ItipOutcome,
-    ItipOutgoing, ItipSender, Period, SenderKind, valid_address,
+    ItipOutgoing, ItipSender, Period, valid_address,
 };
+use tp_contracts::trust::PeerKind;
 use tp_contracts::{AccountId, Error, ModSeq, Result, TenantId};
 
 use crate::itip::{self, Message};
@@ -201,7 +202,7 @@ impl ScheduleDeps {
                     from: from.to_owned(),
                     method: m.method,
                     ics: ics.clone(),
-                    sender: SenderKind::Own,
+                    sender: PeerKind::Own,
                 };
                 match self.delivery.deliver(&msg).await {
                     Ok(ItipOutcome::Applied) => set(to, STATUS_DELIVERED),

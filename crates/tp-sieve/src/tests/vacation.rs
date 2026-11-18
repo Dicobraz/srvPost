@@ -7,6 +7,7 @@ use tp_contracts::AccountId;
 use tp_contracts::TenantId;
 use tp_contracts::meta::AccountScope;
 use tp_contracts::sieve::{AutoReply, ReplyBody, RulesInput, Vacation};
+use tp_contracts::trust::{PeerKind, TrustMatrix};
 use tp_testkit::{ManualClock, MemVacationLog};
 
 use crate::run::parse_headers;
@@ -28,6 +29,8 @@ fn input(mail: &str, mail_from: &str, recipient: &str) -> RulesInput {
         mail_from: mail_from.to_owned(),
         message: mail.as_bytes().to_vec().into(),
         mailboxes: Vec::new(),
+        peer: PeerKind::External,
+        matrix: TrustMatrix::default(),
     }
 }
 
@@ -332,6 +335,9 @@ async fn reply_from_setting() {
         subject: None,
         text_body: Some("Вернусь в понедельник".into()),
         html_body: None,
+        external_subject: None,
+        external_text_body: None,
+        external_html_body: None,
     };
     // До начала — ответа нет.
     assert_eq!(f.setting(&v, &i).await, None);
@@ -360,6 +366,9 @@ async fn reply_from_setting() {
         subject: Some("В отпуске".into()),
         text_body: Some("т".into()),
         html_body: Some("<p>т</p>".into()),
+        external_subject: None,
+        external_text_body: None,
+        external_html_body: None,
     };
     let r = f.setting(&html, &other).await.expect("reply");
     assert_eq!(r.subject, "В отпуске");

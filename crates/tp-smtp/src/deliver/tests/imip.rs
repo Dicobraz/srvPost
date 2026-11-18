@@ -3,7 +3,8 @@
 
 use tp_contracts::delivery::{DeliveryDecision, DeliveryEvent, DeliveryEventKind};
 use tp_contracts::membership::NodeId;
-use tp_contracts::schedule::{ItipMethod, ItipOutcome, SenderKind};
+use tp_contracts::schedule::{ItipMethod, ItipOutcome};
+use tp_contracts::trust::PeerKind;
 use tp_testkit::{FakeItip, MemDeliveryLog};
 
 use super::*;
@@ -117,26 +118,26 @@ async fn smtp_in_sender_kind_by_from_domain() {
     let env = Env::new(DecisionHooks::default()).await;
     let (d, itip) = with_partners(&env, &[]);
     assert_eq!(send(&d, &request).await, 250);
-    assert_eq!(kind(&itip), SenderKind::External);
+    assert_eq!(kind(&itip), PeerKind::External);
     // Партнёр.
     let (d, itip) = delivery(&env);
     assert_eq!(send(&d, &request).await, 250);
-    assert_eq!(kind(&itip), SenderKind::Partner);
+    assert_eq!(kind(&itip), PeerKind::Partner);
     // Домен своей организации письмом снаружи — внешний, и в списке партнёров тоже.
     let env = Env::new(DecisionHooks::default()).await;
     accept(&env, "example.com", TenantId::DEFAULT).await;
     let (d, itip) = delivery(&env);
     assert_eq!(send(&d, &request).await, 250);
-    assert_eq!(kind(&itip), SenderKind::External);
+    assert_eq!(kind(&itip), PeerKind::External);
     // Другая организация установки (MSSP): соседняя; партнёр — партнёр.
     let env = Env::new(DecisionHooks::default()).await;
     accept(&env, "example.com", TenantId::new()).await;
     let (d, itip) = with_partners(&env, &[]);
     assert_eq!(send(&d, &request).await, 250);
-    assert_eq!(kind(&itip), SenderKind::Neighbor);
+    assert_eq!(kind(&itip), PeerKind::Neighbor);
     let (d, itip) = delivery(&env);
     assert_eq!(send(&d, &request).await, 250);
-    assert_eq!(kind(&itip), SenderKind::Partner);
+    assert_eq!(kind(&itip), PeerKind::Partner);
     // Письмо в любом случае — в ящике.
     assert_eq!(env.inbox("bob@example.org").await.len(), 2);
 }
@@ -171,7 +172,7 @@ async fn request_reply_cancel_reach_itip_and_stay_in_inbox() {
         assert_eq!(c.recipient, bob);
         assert_eq!(c.to, "bob@example.org");
         assert_eq!(c.from, "sender@example.com");
-        assert_eq!(c.sender, SenderKind::Partner);
+        assert_eq!(c.sender, PeerKind::Partner);
         assert!(c.ics.starts_with("BEGIN:VCALENDAR") && c.ics.contains("UID:u1"));
     }
     assert!(calls[1].ics.contains("METHOD:REPLY"));
@@ -272,7 +273,7 @@ async fn imip_sent_by_delegate_with_record_reaches_itip() {
     assert_eq!(calls[0].recipient, bob);
     assert_eq!(calls[0].to, "bob@example.org");
     assert_eq!(calls[0].from, "carol@example.org");
-    assert_eq!(calls[0].sender, SenderKind::External);
+    assert_eq!(calls[0].sender, PeerKind::External);
     assert!(calls[0].ics.contains("UID:u1"));
 
     // Представитель без права планирования от имени — только письмо (в ящике — оба).

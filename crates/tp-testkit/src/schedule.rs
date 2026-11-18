@@ -115,7 +115,8 @@ impl ItipSender for MemItipSender {
 mod tests {
     use super::*;
     use tp_contracts::meta::AccountScope;
-    use tp_contracts::schedule::{ItipMethod, SenderKind};
+    use tp_contracts::schedule::ItipMethod;
+    use tp_contracts::trust::PeerKind;
     use tp_contracts::{AccountId, TenantId};
 
     fn scope() -> AccountScope {
@@ -132,7 +133,7 @@ mod tests {
             from: "boss@partner.example".into(),
             method: ItipMethod::Request,
             ics: "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n".into(),
-            sender: SenderKind::Partner,
+            sender: PeerKind::Partner,
         }
     }
 

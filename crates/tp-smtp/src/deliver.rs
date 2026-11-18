@@ -42,7 +42,7 @@
 //! - приглашения iTIP в письмах ([`Delivery::with_itip`], [`crate::itip`]): письмо с частью `text/calendar;
 //!   method=…` после доставки в ящик передаётся `ItipDelivery` получателя с типом отправителя (решение 123):
 //!   submission и [`Delivery::submit`] — внутреннее планирование (решение 78, SMTP-36), smtp-in — iMIP (SMTP-33);
-//!   снаружи — только почта: что применять, решает матрица `inbound_allowed` приёма; письмо остаётся в ящике,
+//!   снаружи — только почта: что применять, решает матрица доверия приёма (`TrustMatrix::inbound`); письмо остаётся в ящике,
 //!   итог приёма — событие `Itip` журнала доставки (SMTP-37), сбой — только запись в журнал узла.
 //! - личные списки отправителей ящика ([`Delivery::with_sender_lists`], `SenderLists`, SMTP-25) — при каждой
 //!   доставке в ящик (smtp-in, submission, [`Delivery::submit`], пересылки и перенаправления): письмо
@@ -89,7 +89,7 @@ use tp_contracts::meta::{
 };
 use tp_contracts::queue::{DsnRet, Outbound, SubmitStatus, Submitted};
 use tp_contracts::retention::Quota;
-use tp_contracts::schedule::{ItipDelivery, ItipMessage, SenderKind};
+use tp_contracts::schedule::{ItipDelivery, ItipMessage};
 use tp_contracts::senders::{SenderLists, SenderVerdict};
 use tp_contracts::sharing::DelegateStore;
 use tp_contracts::sieve::{AutoReply, DeliveryRules, MailboxRef, RulesInput, RulesOutcome};
@@ -97,6 +97,7 @@ use tp_contracts::transport::{
     AcceptedDomain, BlobRef, DomainKind, EnvelopeSide, FlowDirection, FlowEnvelope, FlowInput,
     FlowOutcome, FlowVerdict, MailFlow,
 };
+use tp_contracts::trust::{PeerKind, TrustMatrix};
 use tp_contracts::{AccountId, Error, MailboxId, QueueId, Result, TenantId};
 
 use crate::address::Addressing;
@@ -395,11 +396,12 @@ impl Delivery {
     ///   (`Account::addresses`) или право Send As / Send on Behalf ([`Delivery::with_authz`]);
     /// - smtp-in (iMIP, RFC 6047, SMTP-33; в том числе через шлюз Edge) — письмо прошло DMARC.
     ///
-    /// Иначе — только письмо. С сообщением передаётся тип отправителя (`SenderKind`, решение 123, SMTP-49): своя
+    /// Иначе — только письмо. С сообщением передаётся тип отправителя (`PeerKind`, решение 124, SMTP-49): своя
     /// организация — вошедший (внутренний путь); письмо через smtp-in — по домену `From`: адрес своего домена —
     /// внешний, домен-партнёр ([`Delivery::with_partners`]), другая организация установки (MSSP), внешний. Что
-    /// применять, бронировать и на что отвечать, решает приём iTIP по матрице `tp_contracts::schedule::inbound_allowed`
-    /// (снаружи — только почта; ответы и отмены к существующим событиям — как у Exchange и Google).
+    /// применять, бронировать и на что отвечать, решает приём iTIP по матрице доверия
+    /// `tp_contracts::trust::TrustMatrix::inbound` (снаружи — только почта; ответы и отмены к существующим
+    /// событиям — как у Exchange и Google).
     ///
     /// Представитель (SMTP-38, APP-69): `From` совпал с `SENT-BY` организатора или участника — сообщение передаётся
     /// от имени владельца (`ItipMessage::from`), если отправитель может планировать от его имени: у организатора
@@ -415,8 +417,8 @@ impl Delivery {
         self
     }
 
-    /// Домены-партнёры организации (решение 123): письмо iMIP с них через smtp-in — от отправителя
-    /// `SenderKind::Partner` ([`Delivery::with_itip`]). Без них партнёров нет.
+    /// Домены-партнёры организации (решение 123 → 124): письмо iMIP с них через smtp-in — от отправителя
+    /// `PeerKind::Partner` ([`Delivery::with_itip`]). Без них партнёров нет.
     pub fn with_partners(mut self, partners: Arc<dyn PartnerDomains>) -> Self {
         self.partners = Some(partners);
         self
@@ -518,8 +520,8 @@ impl Delivery {
                 true
             }
         };
-        // Кто отправитель: вошедший — своя организация, письмо через smtp-in — по домену `From`; что ему можно, решает
-        // приём iTIP по матрице решения 123 (`inbound_allowed`).
+        // Кто отправитель: вошедший — своя организация, письмо через smtp-in — по домену `From`; что ему можно,
+        // решает приём iTIP по матрице доверия (решение 124, `TrustMatrix::inbound`).
         let sender = match self.sender_kind(&msg.from, internal).await {
             Ok(kind) => kind,
             Err(e) => {
@@ -582,30 +584,30 @@ impl Delivery {
     }
 
     /// Тип отправителя `from` относительно организации узла (решение 123). Своя организация
-    /// ([`SenderKind::Own`]) — по входу, а не по домену: внутренний путь (`internal`), `From` которого принадлежит
+    /// ([`PeerKind::Own`]) — по входу, а не по домену: внутренний путь (`internal`), `From` которого принадлежит
     /// вошедшей учётной записи. Письмо через smtp-in — по домену `From` (ближайший принятый домен — сам или
-    /// родитель): домен своей организации — [`SenderKind::External`] (DMARC проходит и сторонний сервис,
-    /// разрешённый в SPF или DKIM домена), домен-партнёр ([`Delivery::with_partners`]) — [`SenderKind::Partner`],
-    /// принятый домен другой организации установки — [`SenderKind::Neighbor`], иначе — [`SenderKind::External`].
-    async fn sender_kind(&self, from: &str, internal: bool) -> Result<SenderKind> {
+    /// родитель): домен своей организации — [`PeerKind::External`] (DMARC проходит и сторонний сервис,
+    /// разрешённый в SPF или DKIM домена), домен-партнёр ([`Delivery::with_partners`]) — [`PeerKind::Partner`],
+    /// принятый домен другой организации установки — [`PeerKind::Neighbor`], иначе — [`PeerKind::External`].
+    async fn sender_kind(&self, from: &str, internal: bool) -> Result<PeerKind> {
         if internal {
-            return Ok(SenderKind::Own);
+            return Ok(PeerKind::Own);
         }
         let org = self.org_of(from).await?;
         if org == Some(self.deps.tenant) {
-            return Ok(SenderKind::External);
+            return Ok(PeerKind::External);
         }
         if let (Some(partners), Some((_, domain))) = (&self.partners, from.rsplit_once('@'))
             && partners
                 .is_partner(self.deps.tenant, &domain.to_lowercase())
                 .await?
         {
-            return Ok(SenderKind::Partner);
+            return Ok(PeerKind::Partner);
         }
         Ok(if org.is_some() {
-            SenderKind::Neighbor
+            PeerKind::Neighbor
         } else {
-            SenderKind::External
+            PeerKind::External
         })
     }
 
@@ -1841,6 +1843,7 @@ impl Delivery {
                 &mut prepared.deliveries,
                 &prepared.junk,
                 false,
+                PeerKind::External,
             )
             .await?;
         let local = local_rcpts(&prepared.deliveries);
@@ -2146,6 +2149,7 @@ impl Delivery {
                 &mut prepared.deliveries,
                 &prepared.junk,
                 false,
+                PeerKind::Own,
             )
             .await?;
         let local_list = local_rcpts(&prepared.deliveries);
@@ -2375,6 +2379,7 @@ impl Delivery {
     /// Петля перенаправлений (SMTP-34, [`crate::sieve`]): ящик уже есть в цепочке письма, цепочка длиннее
     /// `delivery.redirect_hops` или исчерпан `delivery.redirect_total` (`over`) — правила ящика не применяются,
     /// письмо — в папку по умолчанию, запись в журнал доставки.
+    #[allow(clippy::too_many_arguments)]
     async fn apply_rules(
         &self,
         id: &str,
@@ -2383,6 +2388,7 @@ impl Delivery {
         deliveries: &mut Vec<(String, MailDelivery)>,
         junk: &HashSet<AccountId>,
         over: bool,
+        peer: PeerKind,
     ) -> Result<Sieved> {
         let mut out = Sieved::default();
         let Some(rules) = &self.rules else {
@@ -2424,6 +2430,11 @@ impl Delivery {
                 mail_from: mail_from.to_owned(),
                 message: raw.clone(),
                 mailboxes: self.deps.mailboxes.list(scope).await?,
+                // Тип абонента — от пути письма (CTR-93): точную проводку (входящая почта, партнёры, соседние
+                // организации) и действующую матрицу получателя подключает SMTP-50; пока — безопасные умолчания:
+                // вход и перенаправления — чужой, submission вошедшего — свой, матрица — умолчания контракта.
+                peer,
+                matrix: TrustMatrix::default(),
             };
             let mut notes = Vec::new();
             let outcome = match rules.evaluate(&input).await {
@@ -2523,7 +2534,15 @@ impl Delivery {
             push_unique(&mut external, std::mem::take(&mut p.relayed));
             let delivered = accounts_of(&p.deliveries);
             let sieved = self
-                .apply_rules(id, mail_from, &hop.raw, &mut p.deliveries, &p.junk, over)
+                .apply_rules(
+                    id,
+                    mail_from,
+                    &hop.raw,
+                    &mut p.deliveries,
+                    &p.junk,
+                    over,
+                    PeerKind::External,
+                )
                 .await?;
             if !p.deliveries.is_empty() {
                 let mut ignored = Vec::new();
@@ -3091,7 +3110,7 @@ pub(crate) async fn read_blob(blobs: &dyn BlobStore, key: &tp_contracts::BlobKey
 }
 
 /// Домены-партнёры организации — официально установленные доверительные отношения (решение 123): отправитель письма
-/// iMIP с них — `SenderKind::Partner` ([`Delivery::with_partners`]). Источник списка — политика организации (шаблоны
+/// iMIP с них — `PeerKind::Partner` ([`Delivery::with_partners`]). Источник списка — политика организации (шаблоны
 /// ссылок занятости доменов-партнёров, META-34; хранилища ещё нет — узел список не подключает).
 #[async_trait]
 pub trait PartnerDomains: Send + Sync + 'static {

@@ -201,6 +201,9 @@ pub async fn sieve(store: &dyn SieveStore, fx: &SieveFixture) {
         subject: Some("В отпуске".into()),
         text_body: Some("Вернусь через две недели.".into()),
         html_body: Some("<p>Вернусь через две недели.</p>".into()),
+        external_subject: None,
+        external_text_body: None,
+        external_html_body: None,
     };
     let s9 = store
         .set_vacation(s, vacation.clone())

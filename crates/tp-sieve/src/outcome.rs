@@ -137,6 +137,7 @@ impl<'a> Merge<'a> {
                 redirect: self.redirect,
                 discard,
                 vacation: None,
+                calendar: None,
                 errors: self.errors,
             },
             self.vacation,

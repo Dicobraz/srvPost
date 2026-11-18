@@ -303,6 +303,7 @@ pub mod lifecycle;
 pub mod sharing;
 pub mod sharing_authorizer;
 pub mod sieve;
+pub mod trust;
 
 pub use branding::branding;
 pub use dav::dav;
@@ -311,6 +312,7 @@ pub use freebusy::recurring as freebusy_recurring;
 pub use itip::itip;
 pub use sharing_authorizer::{SharingAuthorizerFixture, sharing_authorizer};
 pub use sieve::sieve;
+pub use trust::{member_group, trust};
 
 // ---------- EventBus: сигналы ----------
 

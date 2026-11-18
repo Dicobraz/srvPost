@@ -34,6 +34,7 @@ pub mod sharing;
 pub mod sieve;
 pub mod suite;
 pub mod transport;
+pub mod trust;
 
 pub use abuse::MemAbuseBlocks;
 pub use acl::MemAcl;
@@ -70,3 +71,4 @@ pub use senders::MemSenderLists;
 pub use sharing::{FakeSharingAuthorizer, MemShareNotifications};
 pub use sieve::{FakeRules, MemSieve, MemVacationLog, RulesCall};
 pub use transport::MemTransport;
+pub use trust::MemTrust;

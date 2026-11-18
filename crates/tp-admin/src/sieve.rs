@@ -176,6 +176,10 @@ impl From<VacationBody> for Vacation {
             subject: v.subject,
             text_body: v.text_body,
             html_body: v.html_body,
+            // Внешний текст — не этой волной (CTR-93): Admin API его не задаёт, `None` — наружу ответа нет.
+            external_subject: None,
+            external_text_body: None,
+            external_html_body: None,
         }
     }
 }

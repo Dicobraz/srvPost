@@ -515,6 +515,10 @@ impl SieveStore for PgMeta {
                 subject: r.subject,
                 text_body: r.text_body,
                 html_body: r.html_body,
+                // Внешний текст — не этой волной (CTR-93): столбцов нет, `None` — наружу ответа нет.
+                external_subject: None,
+                external_text_body: None,
+                external_html_body: None,
             }))
         })
         .await

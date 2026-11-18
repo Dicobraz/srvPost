@@ -17,12 +17,13 @@
 //! заданы, получатель — не ресурс — обычный приём iTIP. Группы организатора для [`Bookers::Only`] раскрываются
 //! ([`GroupStore::expand`]).
 //!
-//! Бронирование — только внутри организации (решение 123, DAV-43): кому можно писать ресурсу, решает матрица
-//! [`inbound_allowed`](tp_contracts::schedule::inbound_allowed) (действие `Booking` — только [`SenderKind::Own`]:
-//! CalDAV, JMAP, почтовый клиент), её проверяет [`crate::ItipInbox`] до решения. Организатор приглашения — ещё и
-//! включённая учётная запись организации ресурса; иначе — только письмо: брони нет, ответа нет (`Ignored`).
+//! Бронирование — только внутри организации (решение 123 → 124, DAV-43): кому можно писать ресурсу, решает матрица
+//! доверия [`TrustMatrix::inbound`](tp_contracts::trust::TrustMatrix::inbound) (действие `Booking` — только
+//! [`PeerKind::Own`]: CalDAV, JMAP, почтовый клиент), её проверяет [`crate::ItipInbox`] до решения. Организатор
+//! приглашения — ещё и включённая учётная запись организации ресурса; иначе — только письмо: брони нет, ответа нет
+//! (`Ignored`).
 //!
-//! [`SenderKind::Own`]: tp_contracts::schedule::SenderKind::Own
+//! [`PeerKind::Own`]: tp_contracts::trust::PeerKind::Own
 
 use std::collections::BTreeSet;
 use std::str::FromStr;
