@@ -6,7 +6,7 @@
 //!   группам и [`ANYONE`] с ограничением политикой организации), — в аккаунтах их владельцев: в сессии аккаунт с
 //!   `isPersonal` = `false` и capability календарей, задач и контактов; методы `Calendar`, `CalendarEvent`,
 //!   `TaskList`, `Task`, `AddressBook`, `ContactCard` с `accountId` владельца видят только эти коллекции
-//!   ([`Access`]). Почта чужих ящиков через JMAP не открывается.
+//!   ([`Access`]). Почта чужих ящиков — делегированный доступ по ACL папок ([`crate::delegate`], JMAP-49).
 //! - `myRights` — действующие права субъекта ([`CollectionRights`]): свой аккаунт — все, чужой — по
 //!   [`SharingAuthorizer`]. `shareWith` — записи прав учётных записей организации по идентификатору `Principal`
 //!   (только своя организация, JMAP-47: идентификатор соседней организации установки — `invalidProperties`);
@@ -33,7 +33,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
-use tp_contracts::auth::Principal;
+use tp_contracts::auth::{Principal, Rights};
 use tp_contracts::dav::{
     Collection, CollectionId, CollectionKind, DavObject, DavObjectId, DavStore,
 };
@@ -45,7 +45,7 @@ use tp_contracts::sharing::{
     SharedObjectType, SharingAuthorizer,
 };
 use tp_contracts::trust::Detail;
-use tp_contracts::{Error, ModSeq, Result};
+use tp_contracts::{Error, MailboxId, ModSeq, Result};
 
 use crate::core::error::{MethodError, MethodResult, changes_error, set_error};
 use crate::core::request::{
@@ -72,7 +72,8 @@ impl std::fmt::Debug for SharingDeps {
     }
 }
 
-/// Доступ вызова к коллекциям аккаунта: свой — все права, чужой — права на общие коллекции.
+/// Доступ вызова к коллекциям аккаунта: свой — все права, чужой — права на общие коллекции (DAV, JMAP-32)
+/// или общие папки почты (JMAP-49).
 #[derive(Debug, Clone, Default)]
 pub(crate) enum Access {
     /// Свой аккаунт.
@@ -80,6 +81,8 @@ pub(crate) enum Access {
     Own,
     /// Аккаунт владельца общих коллекций: действующие права по коллекциям.
     Shared(HashMap<CollectionId, CollectionRights>),
+    /// Аккаунт владельца общих папок почты (JMAP-49): действующие права по папкам.
+    Mail(HashMap<MailboxId, Rights>),
 }
 
 impl Access {
@@ -93,6 +96,7 @@ impl Access {
         match self {
             Self::Own => CollectionRights::ALL,
             Self::Shared(m) => m.get(&c).copied().unwrap_or(CollectionRights::NONE),
+            Self::Mail(_) => CollectionRights::NONE,
         }
     }
 
@@ -116,6 +120,34 @@ impl Access {
         self.rights(c).contains(CollectionRights {
             admin: true,
             ..CollectionRights::NONE
+        })
+    }
+
+    /// Письмо папки читается методами почты: свой аккаунт — все папки, чужой (JMAP-49) — открытые общим
+    /// доступом с правом `r`; аккаунт общих коллекций DAV папок почты не открывает.
+    pub(crate) fn reads_mail(&self, mailbox: MailboxId) -> bool {
+        match self {
+            Self::Own => true,
+            Self::Shared(_) => false,
+            Self::Mail(m) => m.get(&mailbox).is_some_and(|r| r.contains(Rights::READ)),
+        }
+    }
+
+    /// Папки чтения писем: свой аккаунт — `only` (одна папка фильтра, `None` — все), чужой — только общие
+    /// с правом `r`; папка фильтра без права чтения — пусто: папки для представителя не существует.
+    pub(crate) fn query_boxes(&self, only: Option<MailboxId>) -> Option<Vec<MailboxId>> {
+        let Self::Mail(rights) = self else {
+            return only.map(|m| vec![m]);
+        };
+        let readable = |m: &MailboxId| rights.get(m).is_some_and(|r| r.contains(Rights::READ));
+        Some(match only {
+            Some(m) if readable(&m) => vec![m],
+            Some(_) => Vec::new(),
+            None => rights
+                .iter()
+                .filter(|(_, r)| r.contains(Rights::READ))
+                .map(|(m, _)| *m)
+                .collect(),
         })
     }
 }

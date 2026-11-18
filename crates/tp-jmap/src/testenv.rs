@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use tp_contracts::Result;
+use tp_contracts::acl::AclStore;
 use tp_contracts::auth::{Authorizer, Principal, Resource, Rights, SendRight};
 use tp_contracts::blob::{BlobIndex, BlobStore, ByteStream, Compression, ObjectStream};
 use tp_contracts::dav::DavStore;
@@ -22,10 +23,10 @@ use tp_contracts::sieve::SieveStore;
 use tp_contracts::{BlobHash, BlobKey};
 use tp_contracts::{MailboxId, MessageId};
 use tp_testkit::{
-    Clock, FakeAuthenticator, FakeSearch, FakeSharingAuthorizer, MemAddressBook, MemBlobIndex,
-    MemBlobStore, MemDav, MemDeliveryLog, MemEventBus, MemGroups, MemItipSender, MemMailboxAudit,
-    MemMetadata, MemOutbound, MemPolicies, MemQuota, MemSenderLists, MemSieve, MemSubmissions,
-    MemTrash, MemTrust, RecordingDecisionHook, SearchDoc, SystemClock,
+    Clock, FakeAuthenticator, FakeSearch, FakeSharingAuthorizer, MemAcl, MemAddressBook,
+    MemBlobIndex, MemBlobStore, MemDav, MemDeliveryLog, MemEventBus, MemGroups, MemItipSender,
+    MemMailboxAudit, MemMetadata, MemOutbound, MemPolicies, MemQuota, MemSenderLists, MemSieve,
+    MemSubmissions, MemTrash, MemTrust, RecordingDecisionHook, SearchDoc, SystemClock,
 };
 
 use crate::{Deps, Jmap, JmapConfig, SharingDeps};
@@ -155,6 +156,8 @@ pub struct Env {
     pub collections: FakeSharingAuthorizer,
     /// Политики доверия (`Jmap::with_trust`): тест задаёт их уровнями; без политик — умолчания.
     pub trust: MemTrust,
+    /// ACL папок почты (`Jmap::with_acl`, JMAP-49): тест задаёт записи `set_acl`.
+    pub acl: MemAcl,
     pub jmap: Arc<Jmap>,
 }
 
@@ -257,6 +260,7 @@ impl Env {
         let meta = MemMetadata::new(clock)
             .with_blob_index(index.clone())
             .with_groups(groups.clone());
+        let acl = MemAcl::new(&meta);
         let bus = MemEventBus::default();
         let policies = MemPolicies::new(&meta);
         let trash = MemTrash::new(&meta).with_policies(policies.clone());
@@ -355,7 +359,8 @@ impl Env {
         )
         .with_trust(Some(
             Arc::new(trust.clone()) as Arc<dyn tp_contracts::trust::TrustStore>
-        ));
+        ))
+        .with_acl(Some(Arc::new(acl.clone()) as Arc<dyn AclStore>));
         Self {
             meta,
             search,
@@ -380,6 +385,7 @@ impl Env {
             imip,
             collections: FakeSharingAuthorizer::default(),
             trust,
+            acl,
             jmap: Arc::new(jmap),
         }
     }

@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
+use tp_contracts::acl::AclStore;
 use tp_contracts::addressbook::OrgStore;
 use tp_contracts::audit::MailboxAudit;
 use tp_contracts::auth::{Authenticator, Authorizer, Principal};
@@ -198,6 +199,9 @@ pub struct Jmap {
     /// Политики доверия (CTR-93, решение 124); `None` — действуют умолчания [`TrustMatrix::default`] (точки
     /// решения JMAP — JMAP-47: занятость и общий доступ).
     pub(crate) trust: Option<Arc<dyn TrustStore>>,
+    /// ACL папок почты (CONTRACTS.md#Auth): делегированный доступ к чужим ящикам (JMAP-49); `None` —
+    /// чужие ящики недоступны.
+    pub(crate) acl: Option<Arc<dyn AclStore>>,
     /// Кэш списков идентификаторов `Email/query` и ответов `Email/get` (PERF-02).
     pub(crate) caches: Mutex<query_cache::Caches>,
     stop: watch::Sender<bool>,
@@ -218,6 +222,7 @@ impl fmt::Debug for Jmap {
             .field("org", &self.org.is_some())
             .field("sharing", &self.sharing.is_some())
             .field("trust", &self.trust.is_some())
+            .field("acl", &self.acl.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -269,6 +274,21 @@ impl Ctx<'_> {
             .parse()
             .map_err(|_| MethodError::new("accountNotFound"))?;
         self.access = Access::Shared(rights);
+        Ok(())
+    }
+
+    /// Открывает аккаунт почты: свой или владельца общих по ACL папок (JMAP-49) — тогда `scope` — аккаунт
+    /// владельца, `access` — права на его общие папки ([`crate::delegate`]). Нет общих папок (и
+    /// неизвестный `accountId`) — `noAccess`: существование ящика не раскрывается.
+    pub async fn open_mail(&mut self, account_id: &str) -> MethodResult<()> {
+        if account_id == self.account_id() {
+            return Ok(());
+        }
+        let rights = crate::delegate::open(self.jmap, self.principal, account_id).await?;
+        self.scope.account = account_id
+            .parse()
+            .map_err(|_| MethodError::new("noAccess"))?;
+        self.access = Access::Mail(rights);
         Ok(())
     }
 
@@ -364,6 +384,7 @@ impl Jmap {
             org: None,
             sharing: None,
             trust: None,
+            acl: None,
             stop: watch::channel(false).0,
             push: crate::disable::Sessions::default(),
         })
@@ -497,6 +518,18 @@ impl Jmap {
         }
     }
 
+    /// Подключает ACL папок почты (CONTRACTS.md#Auth, JMAP-49): делегированный доступ к чужим ящикам —
+    /// `Email/query`, `Email/queryChanges` и `Email/get` по чужому `accountId` читают только папки,
+    /// открытые субъекту общим доступом (право чтения `r`), аккаунты владельцев — в сессии с
+    /// `isPersonal` = `false`. `None` — чужие ящики недоступны (`noAccess`). Узел передаёт то же
+    /// хранилище, над которым работает [`Authorizer`](tp_contracts::auth::Authorizer) `Deps::authz`
+    /// (`tp_auth::AclAuthorizer`, группы — CTR-82).
+    #[must_use]
+    pub fn with_acl(mut self, acl: Option<Arc<dyn AclStore>>) -> Self {
+        self.acl = acl;
+        self
+    }
+
     /// Списки отправителей для метода; не подключены — `unknownMethod`.
     pub(crate) fn sender_lists_store(&self) -> MethodResult<&Arc<dyn SenderLists>> {
         self.sender_lists
@@ -548,8 +581,22 @@ impl Jmap {
             || self.d.capabilities.iter().any(|c| c.uri() == uri)
     }
 
+    /// Capability почты аккаунта (RFC 8621 §2.3): `mayCreateTopLevelMailbox` — только у владельца
+    /// (представитель папок чужого ящика не создаёт, JMAP-49).
+    fn mail_capability(&self, may_create_top_level: bool) -> Value {
+        json!({
+            "maxMailboxesPerEmail": 1,
+            "maxMailboxDepth": null,
+            "maxSizeMailboxName": 255,
+            "maxSizeAttachmentsPerEmail": self.cfg.max_size_upload,
+            "emailQuerySortOptions": crate::EMAIL_SORT_OPTIONS,
+            "mayCreateTopLevelMailbox": may_create_top_level,
+        })
+    }
+
     /// Объект сессии (RFC 8620 §2) для субъекта; `base` — внешний адрес сервера без `/` в конце. Аккаунты владельцев
-    /// общих календарей и адресных книг ([`Jmap::with_sharing`]) — с `isPersonal` = `false`.
+    /// общих календарей и адресных книг ([`Jmap::with_sharing`]) и общих по ACL папок почты
+    /// ([`Jmap::with_acl`], JMAP-49) — с `isPersonal` = `false`.
     pub async fn session(&self, p: &Principal, base: &str) -> Value {
         let c = &self.cfg;
         let account = p.account.to_string();
@@ -580,17 +627,7 @@ impl Jmap {
             json!({ "url": format!("{ws}/jmap/ws"), "supportsPush": true }),
         );
         let mut account_caps = Map::new();
-        account_caps.insert(
-            MAIL.into(),
-            json!({
-                "maxMailboxesPerEmail": 1,
-                "maxMailboxDepth": null,
-                "maxSizeMailboxName": 255,
-                "maxSizeAttachmentsPerEmail": c.max_size_upload,
-                "emailQuerySortOptions": crate::EMAIL_SORT_OPTIONS,
-                "mayCreateTopLevelMailbox": true,
-            }),
-        );
+        account_caps.insert(MAIL.into(), self.mail_capability(true));
         account_caps.insert(
             SUBMISSION.into(),
             json!({
@@ -699,6 +736,28 @@ impl Jmap {
                     "accountCapabilities": caps,
                 }),
             );
+        }
+        // Владельцы общих по ACL папок почты (JMAP-49): capability почты, чтение — только общих папок;
+        // уже показанный владелец общих коллекций — один аккаунт сессии.
+        for mail in crate::delegate::session_accounts(self, p).await {
+            match accounts.entry(mail.owner.to_string()) {
+                serde_json::map::Entry::Occupied(mut e) => {
+                    let a = e.get_mut();
+                    a["accountCapabilities"][MAIL] = self.mail_capability(false);
+                    a["isReadOnly"] =
+                        json!(a["isReadOnly"].as_bool().unwrap_or(true) && mail.read_only);
+                }
+                serde_json::map::Entry::Vacant(e) => {
+                    let mut caps = Map::new();
+                    caps.insert(MAIL.into(), self.mail_capability(false));
+                    e.insert(json!({
+                        "name": mail.name,
+                        "isPersonal": false,
+                        "isReadOnly": mail.read_only,
+                        "accountCapabilities": caps,
+                    }));
+                }
+            }
         }
         let mut session = json!({
             "capabilities": caps,
@@ -853,8 +912,18 @@ impl Jmap {
         scope: AccountScope,
         mailbox: Option<MailboxId>,
     ) -> Result<Vec<Message>> {
-        let boxes = match mailbox {
-            Some(m) => vec![m],
+        self.messages_of(scope, mailbox.map(|m| vec![m])).await
+    }
+
+    /// Письма учётной записи из папок `boxes` (`None` — все папки): у представителя — только общие с
+    /// правом чтения ([`Access::query_boxes`], JMAP-49).
+    pub(crate) async fn messages_of(
+        &self,
+        scope: AccountScope,
+        boxes: Option<Vec<MailboxId>>,
+    ) -> Result<Vec<Message>> {
+        let boxes = match boxes {
+            Some(b) => b,
             None => self
                 .d
                 .mailboxes

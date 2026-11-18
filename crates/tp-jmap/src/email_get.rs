@@ -665,13 +665,13 @@ async fn email_json(
     Ok(Value::Object(o))
 }
 
-/// `Email/get`.
+/// `Email/get` (свой аккаунт или чужой по ACL — JMAP-49).
 pub(crate) async fn get(
     ctx: &mut Ctx<'_>,
     args: Map<String, Value>,
 ) -> MethodResult<Map<String, Value>> {
     let a: EmailGetArgs = parse_args(args)?;
-    ctx.check_account(&a.get.account_id)?;
+    ctx.open_mail(&a.get.account_id).await?;
     ctx.check_get_limit(a.get.ids.as_ref())?;
     let props: Vec<String> = match &a.get.properties {
         Some(p) => {
@@ -703,20 +703,22 @@ pub(crate) async fn get(
     let acct = ctx.scope;
     let scope = (acct.tenant, acct.account);
     // Ключ кэша: разрешённые идентификаторы (`#cid` разрешены заранее) и всё, что влияет на ответ.
+    // Кэш — только свой аккаунт: запись кэша владельца охватывает все его папки (JMAP-49).
     let resolved: Option<Vec<String>> = a
         .get
         .ids
         .as_ref()
         .map(|ids| ids.iter().map(|id| ctx.resolve_id(id).to_owned()).collect());
-    let cache_key = (ctx.jmap.cfg.query_cache.get_max_bytes > 0).then(|| {
-        format!(
-            "{resolved:?}|{props:?}|{body_props:?}|{}|{}|{}|{}",
-            a.fetch_text_body_values,
-            a.fetch_html_body_values,
-            a.fetch_all_body_values,
-            a.max_body_value_bytes
-        )
-    });
+    let cache_key =
+        (ctx.access.is_own() && ctx.jmap.cfg.query_cache.get_max_bytes > 0).then(|| {
+            format!(
+                "{resolved:?}|{props:?}|{body_props:?}|{}|{}|{}|{}",
+                a.fetch_text_body_values,
+                a.fetch_html_body_values,
+                a.fetch_all_body_values,
+                a.max_body_value_bytes
+            )
+        });
     // Попадание — готовый ответ без `state`; блокировка без `await` — `Caches` не `Send`.
     let cached = cache_key.as_ref().and_then(|k| {
         ctx.jmap
@@ -800,14 +802,24 @@ pub(crate) async fn get(
                 }
             }
             for (id, mid) in ids.iter().zip(&mids) {
-                match mid.as_ref().and_then(|mid| map.get(mid)) {
+                // Представителю письмо отдаётся только из читаемой папки (JMAP-49): из скрытой — как
+                // несуществующее.
+                match mid
+                    .as_ref()
+                    .and_then(|mid| map.get(mid))
+                    .filter(|m| ctx.access.reads_mail(m.mailbox))
+                {
                     Some(m) => found.push(m.clone()),
                     None => not_found.push(id.clone()),
                 }
             }
         }
         None => {
-            found = ctx.jmap.messages_in(ctx.scope, None).await?;
+            // Все письма: у представителя — только читаемые папки (JMAP-49).
+            found = ctx
+                .jmap
+                .messages_of(ctx.scope, ctx.access.query_boxes(None))
+                .await?;
             if found.len() > ctx.jmap.cfg.max_objects_in_get as usize {
                 return Err(MethodError::new("requestTooLarge"));
             }

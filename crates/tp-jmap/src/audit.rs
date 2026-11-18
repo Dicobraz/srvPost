@@ -8,8 +8,8 @@
 //!   при включённой политике ящика или организации;
 //! - не владелец: отправка от адреса другой учётной записи — `SendAs` или `SendOnBehalf` в ящике владельца адреса
 //!   (исполнитель — представитель); поиск по тексту (`Email/query` с `text`/`body`) в открытом чужом ящике —
-//!   `Search` до выполнения запроса (решение 114, JMAP-43), как IMAP-23; пишутся по умолчанию. Доступ к чужим
-//!   ящикам почты в JMAP откроет отдельная карточка (план, волна jmap-26): запись — на пути метода;
+//!   `Search` до выполнения запроса (решение 114, JMAP-43), как IMAP-23; пишутся по умолчанию. Чужой ящик
+//!   открывается делегированным доступом по ACL папок (JMAP-49, [`crate::delegate`]); запись — на пути метода;
 //! - чтение владельцем (`Email/get`, `Email/query` и прочие `/get`) журналу не сообщается: вход, чтение и поиск
 //!   владельца не записываются никогда (контракт CTR-81).
 //!
@@ -135,15 +135,11 @@ pub(crate) async fn search(ctx: &Ctx<'_>, mailbox: Option<MailboxId>, query: &st
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use serde_json::{Map, Value, json};
+    use serde_json::{Value, json};
     use tp_contracts::audit::{AuditAction, AuditActorKind, AuditPolicy, MailboxAudit};
-    use tp_contracts::auth::{Principal, SendRight};
+    use tp_contracts::auth::{Principal, Rights, SendRight};
     use tp_contracts::meta::SpecialUse;
 
-    use crate::core::{Ctx, MethodResult};
-    use crate::sharing::Access;
     use crate::testenv::{Env, mail};
 
     const USING: &[&str] = &[
@@ -315,8 +311,8 @@ mod tests {
     /// `Email/query` по тексту в чужом ящике — одна запись `Search` до выдачи результата (решение 114, как
     /// IMAP-23): строка запроса в `detail`, папка — при запросе к одной папке, найденные письма не записываются;
     /// поиск только по адресу (`from`) и владелец в своём ящике — не записываются; сбой журнала — ошибка метода.
-    /// Контекст представителя: сессия boss, открыт ящик владельца — как его откроет доступ к чужим ящикам
-    /// (план, волна jmap-26); сегодня методы JMAP принимают только свой `accountId`.
+    /// Представитель открывает ящик делегированным доступом по ACL (JMAP-49) — ветка аудита достижима через
+    /// запрос API.
     #[tokio::test]
     async fn delegate_text_search_is_recorded() {
         let env = Env::new().await;
@@ -328,33 +324,26 @@ mod tests {
         )
         .await;
         let boss = env.user("boss@example.org").await;
-        // `Email/query` от имени `who` в ящике владельца окружения.
-        async fn query(
-            env: &Env,
-            who: &Principal,
-            filter: Value,
-        ) -> MethodResult<Map<String, Value>> {
-            let mut created = HashMap::new();
-            let mut ctx = Ctx {
-                jmap: &env.jmap,
-                principal: who,
-                scope: env.scope,
-                access: Access::Own,
-                created: &mut created,
-                implicit: Vec::new(),
-                using: &[],
-            };
-            let mut args = Map::new();
-            args.insert("accountId".into(), json!(env.account()));
-            args.insert("filter".into(), filter);
-            crate::email_query::query(&mut ctx, args).await
+        env.acl
+            .set_acl(env.scope, inbox, &boss.login, Rights::LOOKUP | Rights::READ)
+            .await
+            .expect("acl");
+
+        // `Email/query` от имени `who` в ящике владельца окружения: аргументы ответа (или ошибки).
+        async fn query(env: &Env, who: &Principal, filter: Value) -> Value {
+            let req = json!({"using": USING, "methodCalls": [[
+                "Email/query", {"accountId": env.account(), "filter": filter}, "q"]]});
+            let resp = env
+                .jmap
+                .api(who, req.to_string().as_bytes())
+                .await
+                .expect("api");
+            serde_json::to_value(resp).expect("serialize")["methodResponses"][0][1].clone()
         }
 
         // Представитель ищет по тексту — одна запись со строкой запроса, без найденных писем.
-        let out = query(&env, &boss, json!({"text": "договор"}))
-            .await
-            .expect("query");
-        assert!(out.contains_key("ids"), "{out:?}");
+        let out = query(&env, &boss, json!({"text": "договор"})).await;
+        assert!(out["ids"].is_array(), "{out:?}");
         let e = env.audit.entries();
         assert_eq!(e.len(), 1, "{e:?}");
         assert_eq!(e[0].scope, env.scope);
@@ -368,21 +357,15 @@ mod tests {
         assert_eq!(e[0].client.as_deref(), Some("jmap"));
 
         // Только адрес (`from`) — не запись; вместе с текстом — запись с одной строкой `text`.
-        query(&env, &boss, json!({"from": "boris"}))
-            .await
-            .expect("query");
+        query(&env, &boss, json!({"from": "boris"})).await;
         assert_eq!(env.audit.entries().len(), 1);
-        query(&env, &boss, json!({"text": "договор", "from": "boris"}))
-            .await
-            .expect("query");
+        query(&env, &boss, json!({"text": "договор", "from": "boris"})).await;
         let e = env.audit.entries();
         assert_eq!(e.len(), 2, "{e:?}");
         assert_eq!(e[1].object.detail.as_deref(), Some("text \"договор\""));
 
         // Управляющие символы чистятся, кавычки в строке запроса экранируются.
-        query(&env, &boss, json!({"text": "дог\"овор\n"}))
-            .await
-            .expect("query");
+        query(&env, &boss, json!({"text": "дог\"овор\n"})).await;
         let e = env.audit.entries();
         assert_eq!(e.len(), 3, "{e:?}");
         assert_eq!(e[2].object.detail.as_deref(), Some("text \"дог\\\"овор\""));
@@ -393,28 +376,21 @@ mod tests {
             &boss,
             json!({"body": "письма", "inMailbox": inbox.to_string()}),
         )
-        .await
-        .expect("query");
+        .await;
         let e = env.audit.entries();
         assert_eq!(e.len(), 4, "{e:?}");
         assert_eq!(e[3].object.mailbox, Some(inbox));
         assert_eq!(e[3].object.detail.as_deref(), Some("body \"письма\""));
 
         // Владелец в своём ящике — не запись.
-        query(&env, &env.principal, json!({"text": "договор"}))
-            .await
-            .expect("query");
+        query(&env, &env.principal, json!({"text": "договор"})).await;
         assert_eq!(env.audit.entries().len(), 4);
 
         // Сбой журнала — ошибка метода: результат чужого ящика без записи не выдаётся.
         env.audit
             .fail_next(tp_contracts::Error::Unavailable { retry_after: None });
-        assert!(
-            query(&env, &boss, json!({"text": "договор"}))
-                .await
-                .is_err(),
-            "сбой журнала"
-        );
+        let out = query(&env, &boss, json!({"text": "договор"})).await;
+        assert_eq!(out["type"], "serverUnavailable", "{out:?}");
         assert_eq!(env.audit.entries().len(), 4);
     }
 }
