@@ -67,10 +67,10 @@ server {
 Единственный источник цветов — `design/tokens.toml` (решение 119, UI-19): файл читается при сборке
 (`?raw` + `smol-toml`, `src/theme.ts`) и строит светлую и тёмную тему antd по системной настройке
 `prefers-color-scheme`; своих цветов в коде консоли нет, статусы — роли темы со знаками (● ▲ ×).
-Шрифты Bebas Neue (`@fontsource/bebas-neue`) и Evolventa (`design/fonts`, лицензии рядом) вшиты
-в сборку файлами `woff2`; знак IT TASK — `design/logo.svg` (белая надпись для тёмного фона —
-`design/logo-white.svg`). Внешних адресов в сборке нет — проверку делает `npm run build`
-(`scripts/check-dist.mjs`), консоль работает без интернета.
+Шрифты Bebas Neue (`@fontsource/bebas-neue`, сборочный актив) и Evolventa (`src/fonts/evolventa`,
+лицензии рядом) вшиты в сборку файлами `woff2`; знак IT TASK — `design/logo.svg` (белая надпись
+для тёмного фона — `design/logo-white.svg`). Внешних адресов в сборке нет — проверку делает
+`npm run build` (`scripts/check-dist.mjs`), консоль работает без интернета.
 
 ## Скрипты (их запускает job `console` в CI)
 

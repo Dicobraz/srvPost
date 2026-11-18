@@ -1,12 +1,12 @@
 // Шрифты в статике (UI-19, решение 119): без CDN и внешних адресов, консоль работает без интернета.
-// Файлы woff2 идут через сборку Vite: Bebas Neue — пакет @fontsource, Evolventa — design/fonts (с
-// лицензией рядом). Объявления @font-face — из design/tokens.toml (семейства, веса, начертание);
-// ставятся одним <style> при запуске консоли.
+// Файлы woff2 идут через сборку Vite: Bebas Neue — пакет @fontsource (сборочный актив, файлы шрифта
+// копируются в dist), Evolventa — src/fonts/evolventa с лицензиями рядом. Объявления @font-face —
+// из design/tokens.toml (семейства, веса, начертание); ставятся одним <style> при запуске консоли.
 import bebasLatin from "@fontsource/bebas-neue/files/bebas-neue-latin-400-normal.woff2";
 import bebasLatinExt from "@fontsource/bebas-neue/files/bebas-neue-latin-ext-400-normal.woff2";
 import bebasRanges from "@fontsource/bebas-neue/unicode.json";
-import evolventaRegular from "../../design/fonts/evolventa/Evolventa-Regular.woff2";
-import evolventaBold from "../../design/fonts/evolventa/Evolventa-Bold.woff2";
+import evolventaRegular from "./fonts/evolventa/Evolventa-Regular.woff2";
+import evolventaBold from "./fonts/evolventa/Evolventa-Bold.woff2";
 
 import { fonts, tokens } from "./theme";
 
@@ -24,7 +24,7 @@ const headingFaces = (Object.keys(bebasFiles) as (keyof typeof bebasFiles)[])
   )
   .join("");
 
-// Evolventa: веса [fonts.text] по порядку — файлы Regular и Bold из design/fonts.
+// Evolventa: веса [fonts.text] по порядку — файлы Regular и Bold из src/fonts/evolventa.
 const textFiles = [evolventaRegular, evolventaBold];
 const textFaces = tokens.fonts.text.weights
   .map(
