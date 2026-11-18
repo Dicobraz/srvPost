@@ -41,7 +41,6 @@ use tp_contracts::branding::{
     ContrastIssue, EffectiveBranding, OrgContrastIssue, Palette, Role, Theme,
     installation_change_issues,
 };
-use tp_contracts::transport::TransportStore;
 use tp_contracts::{BlobHash, Error, TenantId};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 
@@ -291,8 +290,16 @@ pub(crate) fn routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
             LOGO_ROUTE,
             put(put_installation_logo).delete(reset_installation_logo),
         )
-        .route(ORG_ROUTE, get(get_org).put(put_org).delete(reset_org))
-        .route(ORG_LOGO_ROUTE, put(put_org_logo).delete(reset_org_logo))
+        .route(
+            ORG_ROUTE,
+            get(get_org_branding)
+                .put(put_org_branding)
+                .delete(reset_org_branding),
+        )
+        .route(
+            ORG_LOGO_ROUTE,
+            put(put_org_branding_logo).delete(reset_org_branding_logo),
+        )
 }
 
 /// Открытые маршруты без входа (как `POST /api/v1/session`): вне слоя доступа.
@@ -330,8 +337,7 @@ pub(crate) fn public_routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
         BrandingProblem,
         OrgBrandingIssue,
         InstallationBrandingProblem,
-        PublicBranding,
-        PublicBrandingParams
+        PublicBranding
     ))
 )]
 pub(crate) struct Doc;
@@ -396,7 +402,7 @@ fn role_label(role: &str) -> &'static str {
         "json_key" => "ключ JSON",
         "json_number" => "число JSON",
         "json_bool" => "логическое значение JSON",
-        other => other,
+        _ => "роль",
     }
 }
 
@@ -615,7 +621,7 @@ async fn put_org_branding(
     };
     let issues = BrandingLevels {
         installation: levels.installation,
-        org: Some(new),
+        org: Some(new.clone()),
     }
     .contrast_issues();
     if !issues.is_empty() {
@@ -807,7 +813,7 @@ fn decode_png(bytes: &[u8]) -> std::result::Result<BrandLogo, String> {
     let decoded = reader
         .decode()
         .map_err(|e| format!("PNG не разобран: {e}"))?;
-    let (width, height) = decoded.dimensions();
+    let (width, height) = (decoded.width(), decoded.height());
     Ok(BrandLogo {
         hash: tp_mailstore::split::hash(bytes),
         size: bytes.len() as u64,
