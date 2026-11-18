@@ -17,7 +17,7 @@ const empty = {
   trash_purge: null,
   trash_retention: null,
 };
-const resource = (id: string, login: string, name: string, booking: object | null = DEFAULT_BOOKING) => ({
+const resource = (id: string, login: string, name: string, booking: object | null = DEFAULT_BOOKING, type: "room" | "equipment" = "room") => ({
   id,
   login,
   domain: "d1",
@@ -26,6 +26,7 @@ const resource = (id: string, login: string, name: string, booking: object | nul
   external_id: null,
   aliases: [],
   hidden_from_gal: false,
+  resource_type: type,
   quota: { used_bytes: 0, messages: 0, limit_bytes: null },
   policy: empty,
   effective: empty,
@@ -56,10 +57,10 @@ test("правила бронирования ↔ форма: по умолча�
   });
 });
 
-test("ресурсы: список с правилами, удаление — DELETE", async () => {
+test("ресурсы: список с типами и правилами, удаление — DELETE", async () => {
   let list = [
     resource("r1", "room@example.org", "Переговорная 5.12"),
-    resource("r2", "beamer@example.org", "Проектор", { ...DEFAULT_BOOKING, auto_accept: false, working_hours: { timezone: "UTC", days: ["monday"], from: "09:00", to: "18:00" } }),
+    resource("r2", "beamer@example.org", "Проектор", { ...DEFAULT_BOOKING, auto_accept: false, working_hours: { timezone: "UTC", days: ["monday"], from: "09:00", to: "18:00" } }, "equipment"),
   ];
   const calls = open("/resources", {
     [`GET ${BASE}/resources`]: () => ({ body: list }),
@@ -69,6 +70,8 @@ test("ресурсы: список с правилами, удаление — D
     },
   });
   expect(await screen.findByText("Переговорная 5.12")).toBeTruthy();
+  expect(screen.getByText("помещение")).toBeTruthy();
+  expect(screen.getByText("оборудование")).toBeTruthy();
   expect(screen.getByText("автопринятие, до 1d")).toBeTruthy();
   expect(screen.getByText("по решению представителя, до 1d, 09:00–18:00")).toBeTruthy();
   fireEvent.click((await buttons("Удалить"))[0]);
@@ -84,13 +87,16 @@ test("ресурсы: оператор видит список без удале
   await waitFor(() => expect(screen.queryByRole("button", { name: "Удалить" })).toBeNull());
 });
 
-test("ресурс: создание — POST с правилами бронирования", async () => {
+test("ресурс: создание — POST с типом и правилами бронирования", async () => {
   const calls = open("/resources/create", {
     [`POST ${BASE}/resources`]: (c) => ({ status: 201, body: { ...resource("r9", "room@example.org", "Комната"), ...(c.body as object) } }),
   });
   const [save] = await buttons(/Сохранить/);
   fireEvent.change(await screen.findByLabelText("Адрес"), { target: { value: "room@example.org" } });
   fireEvent.change(screen.getByLabelText("Название"), { target: { value: " Комната " } });
+  // Тип: по умолчанию помещение; выбор — оборудование.
+  fireEvent.mouseDown(screen.getByLabelText("Тип"));
+  fireEvent.click(await screen.findByText("оборудование"));
   fireEvent.change(screen.getByLabelText("Наибольшая длительность встречи"), { target: { value: "4h" } });
   fireEvent.click(screen.getByRole("switch", { name: "Разрешить пересечения" }));
   fireEvent.click(screen.getByRole("switch", { name: "Только в рабочее время" }));
@@ -100,6 +106,7 @@ test("ресурс: создание — POST с правилами бронир
     expect(sent(calls, "POST", `${BASE}/resources`)[0]?.body).toEqual({
       login: "room@example.org",
       display_name: "Комната",
+      resource_type: "equipment",
       booking_policy: {
         ...DEFAULT_BOOKING,
         allow_conflicts: true,
@@ -126,4 +133,19 @@ test("ресурс: правила — PUT booking-policy, представит�
     expect(sent(calls, "PUT", `${BASE}/resources/r1/booking-policy`)[0]?.body).toEqual({ ...DEFAULT_BOOKING, auto_accept: false, horizon: null }),
   );
   expect(await screen.findByText("Правила бронирования сохранены")).toBeTruthy();
+});
+
+test("ресурс: смена типа — PATCH resources/{account}", async () => {
+  const calls = open("/resources/r1", {
+    [`GET ${BASE}/resources/r1`]: { body: resource("r1", "room@example.org", "Переговорная 5.12") },
+    [`GET ${BASE}/accounts/r1/delegates`]: { body: [] },
+    [`PATCH ${BASE}/resources/r1`]: (c) => ({ body: { ...resource("r1", "room@example.org", "Переговорная 5.12", null, "room"), ...(c.body as object) } }),
+  });
+  expect((await screen.findAllByText("Переговорная 5.12")).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("помещение").length).toBeGreaterThan(0);
+  fireEvent.mouseDown(screen.getByLabelText("Тип"));
+  fireEvent.click(await screen.findByText("оборудование"));
+  fireEvent.click(screen.getByRole("button", { name: "Сменить тип" }));
+  await waitFor(() => expect(sent(calls, "PATCH", `${BASE}/resources/r1`)[0]?.body).toEqual({ resource_type: "equipment" }));
+  expect(await screen.findByText("Тип ресурса изменён")).toBeTruthy();
 });

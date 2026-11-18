@@ -1493,6 +1493,10 @@
           "login": {
             "description": "Имя входа — адрес в принятом домене организации (приводится к нижнему регистру).",
             "type": "string"
+          },
+          "resource_type": {
+            "$ref": "#/components/schemas/ResourceTypeBody",
+            "description": "Тип ресурса; нет — `room`."
           }
         },
         "required": [
@@ -1903,12 +1907,41 @@
                     "type": "null"
                   }
                 ]
+              },
+              "resource_type": {
+                "$ref": "#/components/schemas/ResourceTypeBody",
+                "description": "Тип ресурса: помещение или оборудование."
               }
             },
+            "required": [
+              "resource_type"
+            ],
             "type": "object"
           }
         ],
-        "description": "Ресурс: учётная запись и правила бронирования."
+        "description": "Ресурс: учётная запись, тип и правила бронирования."
+      },
+      "ResourcePatch": {
+        "additionalProperties": false,
+        "description": "Изменение ресурса: тип — переговорная (`room`) или оборудование (`equipment`).",
+        "properties": {
+          "resource_type": {
+            "$ref": "#/components/schemas/ResourceTypeBody",
+            "description": "Тип ресурса."
+          }
+        },
+        "required": [
+          "resource_type"
+        ],
+        "type": "object"
+      },
+      "ResourceTypeBody": {
+        "description": "Тип ресурса: помещение или оборудование (CTR-88; [`ResourceType`] контракта): правилам бронирования тип\nбезразличен, клиентам — CalDAV `calendar-user-type` (`ROOM`, `RESOURCE`) и JMAP `Principal.type` (`location`,\n`resource`).",
+        "enum": [
+          "room",
+          "equipment"
+        ],
+        "type": "string"
       },
       "RestoredMessage": {
         "description": "Восстановленное письмо.",
@@ -7776,7 +7809,7 @@
             }
           }
         },
-        "summary": "Создаёт ресурс: локальную учётную запись вида `resource` в принятом домене организации и правила бронирования.\nИмя занято — 409; домен не принят организацией, недопустимые правила или неизвестная учётная запись или группа в\n`bookers` — 400; хранилища не подключены — 503.",
+        "summary": "Создаёт ресурс: локальную учётную запись вида `resource` в принятом домене организации и правила бронирования\n(тип — `resource_type`, нет — помещение). Имя занято — 409; домен не принят организацией, недопустимые правила\nили неизвестная учётная запись или группа в `bookers` — 400; хранилища не подключены — 503.",
         "tags": [
           "resources"
         ]
@@ -7910,6 +7943,90 @@
           }
         },
         "summary": "Ресурс и его правила бронирования; нет или не ресурс — 404.",
+        "tags": [
+          "resources"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_resource",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ресурс (UUID)",
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourcePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Меняет тип ресурса: переговорная (`room`) или оборудование (`equipment`); имя, правила бронирования и прочее —\nбез изменений (правилам тип безразличен). Изменение пишет в журнал аудита слой доступа. Нет или не ресурс — 404;\nнеизвестное значение типа или поле — 400; тип ресурса из каталога ведёт каталог — 409.",
         "tags": [
           "resources"
         ]

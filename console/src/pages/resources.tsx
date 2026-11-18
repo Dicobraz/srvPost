@@ -1,8 +1,9 @@
-// Ресурсы — переговорные и оборудование (UI-10, ADM-16): учётная запись вида resource и её правила бронирования.
-// Имя и блокировку входа ведёт карточка учётной записи; представители ресурса — ответственные за бронирования.
+// Ресурсы — переговорные и оборудование (UI-10, ADM-16; тип — ADM-47): учётная запись вида resource, её тип
+// (помещение или оборудование) и правила бронирования. Имя и блокировку входа ведёт карточка учётной записи;
+// представители ресурса — ответственные за бронирования.
 import { Create, List, Show, ShowButton, useForm } from "@refinedev/antd";
 import { type HttpError, useCustomMutation, useDelete, useList, useShow } from "@refinedev/core";
-import { Button, Descriptions, Divider, Form, Input, Popconfirm, Space, Table } from "antd";
+import { Button, Descriptions, Divider, Form, Input, Popconfirm, Select, Space, Table } from "antd";
 import { Link, useNavigate } from "react-router";
 
 import type { Schemas } from "../api/client";
@@ -11,6 +12,18 @@ import { Delegates } from "../components/delegates";
 import { useReadOnly } from "../providers/access";
 
 type Resource = Schemas["ResourceInfo"];
+
+const TYPES: [Schemas["ResourceTypeBody"], string][] = [
+  ["room", "помещение"],
+  ["equipment", "оборудование"],
+];
+
+const TYPE_LABEL = new Map(TYPES);
+
+/** Выбор типа ресурса (свойства `Form.Item` — вперёд: метка и идентификатор поля). */
+function TypeSelect(props: Parameters<typeof Select>[0]) {
+  return <Select options={TYPES.map(([v, t]) => ({ value: v, label: t }))} style={{ width: 160 }} {...props} />;
+}
 
 /** Ресурсы организации. */
 export function ResourceList() {
@@ -22,6 +35,11 @@ export function ResourceList() {
       <Table<Resource> dataSource={result.data} loading={query.isLoading} rowKey="id" pagination={false}>
         <Table.Column dataIndex="display_name" title="Название" />
         <Table.Column dataIndex="login" title="Адрес" />
+        <Table.Column<Resource>
+          dataIndex="resource_type"
+          title="Тип"
+          render={(_, r) => TYPE_LABEL.get(r.resource_type) ?? "помещение"}
+        />
         <Table.Column<Resource> title="Правила бронирования" render={(_, r) => bookingSummary(r.booking_policy)} />
         <Table.Column<Resource>
           title="Действия"
@@ -49,9 +67,9 @@ export function ResourceList() {
   );
 }
 
-type NewValues = BookingValues & { login: string; display_name?: string };
+type NewValues = BookingValues & { login: string; display_name?: string; resource_type?: Schemas["ResourceTypeBody"] };
 
-/** Новый ресурс: адрес в принятом домене организации, название и правила бронирования. */
+/** Новый ресурс: адрес в принятом домене организации, название, тип и правила бронирования. */
 export function ResourceCreate() {
   // Поля формы — плоские (правила бронирования — `BookingValues`); тело запроса — `NewResource`.
   const { formProps, saveButtonProps } = useForm<Resource, HttpError, NewValues>({ redirect: "show" });
@@ -60,9 +78,14 @@ export function ResourceCreate() {
       <Form
         {...formProps}
         layout="vertical"
-        initialValues={fromBooking()}
-        onFinish={({ login, display_name, ...booking }) => {
-          const body: Schemas["NewResource"] = { login, display_name: display_name?.trim() || null, booking_policy: toBooking(booking) };
+        initialValues={{ ...fromBooking(), resource_type: "room" }}
+        onFinish={({ login, display_name, resource_type, ...booking }) => {
+          const body: Schemas["NewResource"] = {
+            login,
+            display_name: display_name?.trim() || null,
+            resource_type: resource_type ?? "room",
+            booking_policy: toBooking(booking),
+          };
           return formProps.onFinish?.(body as unknown as NewValues);
         }}
       >
@@ -76,6 +99,9 @@ export function ResourceCreate() {
         </Form.Item>
         <Form.Item name="display_name" label="Название" extra="Не задано — адрес.">
           <Input placeholder="Переговорная 5.12" />
+        </Form.Item>
+        <Form.Item name="resource_type" label="Тип" extra="Помещение (переговорная) или оборудование (проектор, автомобиль).">
+          <TypeSelect />
         </Form.Item>
         <Divider orientation="left">Правила бронирования</Divider>
         <BookingPolicyFields />
@@ -117,7 +143,42 @@ function BookingForm({ resource, onSaved }: { resource: Resource; onSaved: () =>
   );
 }
 
-/** Ресурс: сведения, правила бронирования, представители. */
+/** Смена типа ресурса: переговорная или оборудование (ADM-47); имя и правила бронирования не меняются. */
+function TypeForm({ resource, onSaved }: { resource: Resource; onSaved: () => void }) {
+  const readOnly = useReadOnly("resources");
+  const { mutate, mutation } = useCustomMutation<Schemas["ResourceInfo"], HttpError, Schemas["ResourcePatch"]>();
+  const [form] = Form.useForm<Schemas["ResourcePatch"]>();
+  return (
+    <Form
+      form={form}
+      layout="inline"
+      initialValues={{ resource_type: resource.resource_type ?? "room" }}
+      disabled={readOnly}
+      onFinish={(v) =>
+        mutate(
+          {
+            url: `/api/v1/orgs/{org}/resources/${encodeURIComponent(resource.id)}`,
+            method: "patch",
+            values: v,
+            successNotification: { type: "success", message: "Тип ресурса изменён" },
+          },
+          { onSuccess: onSaved },
+        )
+      }
+    >
+      <Form.Item name="resource_type" label="Тип">
+        <TypeSelect />
+      </Form.Item>
+      {!readOnly && (
+        <Button type="primary" htmlType="submit" loading={mutation.isPending}>
+          Сменить тип
+        </Button>
+      )}
+    </Form>
+  );
+}
+
+/** Ресурс: сведения, тип, правила бронирования, представители. */
 export function ResourceShow() {
   const { result: resource, query } = useShow<Resource>();
   const navigate = useNavigate();
@@ -150,8 +211,10 @@ export function ResourceShow() {
       <Descriptions column={1}>
         <Descriptions.Item label="Адрес">{resource?.login}</Descriptions.Item>
         <Descriptions.Item label="Название">{resource?.display_name}</Descriptions.Item>
+        <Descriptions.Item label="Тип">{resource && (TYPE_LABEL.get(resource.resource_type) ?? "помещение")}</Descriptions.Item>
         <Descriptions.Item label="Идентификатор">{resource?.id}</Descriptions.Item>
       </Descriptions>
+      {resource && !readOnly && <TypeForm resource={resource} onSaved={() => void query.refetch()} />}
       {resource && <Link to={`/accounts/${encodeURIComponent(resource.id)}`}>Название и блокировка — карточка учётной записи</Link>}
       <Divider orientation="left">Правила бронирования</Divider>
       {resource && <BookingForm resource={resource} onSaved={() => void query.refetch()} />}
