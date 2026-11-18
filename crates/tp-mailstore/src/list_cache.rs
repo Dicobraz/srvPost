@@ -8,11 +8,17 @@
 //! базового `ModSeq` записи — записи журнала папки с `ModSeq` больше базового и есть изменения
 //! «версии папки»; приём, флаги, перенос, корзина и окончательное удаление пишутся в журнал в
 //! транзакции изменения). Без изменений список возвращается из кэша, при изменениях —
-//! обновляется инкрементально по журналу (до [`ListCacheConfig::patch_max`]), иначе — полная
-//! пересборка; `ttl` — страховка от изменений вне журнала. Образец подхода — кэш `Email/query`
-//! tp-jmap (PERF-02): там версия — токен из статусов всех папок учётной записи, здесь база
-//! записи проверяется журналом одной папки, поэтому проверка не дороже самой записи (чтение
-//! журнала папки с лимитом `patch_max + 1`).
+//! обновляется инкрементально по журналу (до потолка патча: [`ListCacheConfig::patch_max`]
+//! или доля размера записи [`ListCacheConfig::patch_share`], если она больше), иначе — полная
+//! пересборка; `ttl` — страховка от изменений вне журнала. Потолок по доле размера — PERF-08
+//! (p95 108 мс на эталоне Д.2): путь SELECT — и IMAP, и JMAP — идёт через этот кэш, но при
+//! постоянном приёме в большой ящик (ящик `big` эталона, 10 тыс. писем) набор изменений между
+//! выборками перерастает фиксированный `patch_max`, и каждая выборка снова становится холодной —
+//! полной пересборкой. Часто меняемые большие папки остаются на патче по журналу, пока изменения —
+//! небольшая доля папки: перечитать пачкой изменившиеся строки дешевле выгрузки всех. Образец
+//! подхода — кэш `Email/query` tp-jmap (PERF-02): там версия — токен из статусов всех папок
+//! учётной записи, здесь база записи проверяется журналом одной папки, поэтому проверка не
+//! дороже самой записи (чтение журнала папки с лимитом «потолок + 1»).
 //!
 //! База пересборки — `highest_modseq` папки, прочитанный **до** чтения списка: список строится
 //! позже и отражает всё, что зафиксировано до базы, а изменения после базы переигрываются
@@ -46,6 +52,7 @@ use tp_contracts::{AccountId, MailboxId, MessageId, ModSeq, Result, TenantId};
 /// list_cache:
 ///   max_bytes: 64MiB
 ///   patch_max: 200
+///   patch_share: 10
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -60,6 +67,10 @@ pub struct ListCacheConfig {
     pub ttl: Duration,
     /// Изменений писем папки в журнале для инкрементального обновления; больше — полная пересборка.
     pub patch_max: usize,
+    /// Доля размера записи (процентов), до которой журнал патчится и сверх `patch_max`: потолок
+    /// патча — большее из двух. Часто меняемые большие папки (ящик `big` эталона Д.2, PERF-08)
+    /// остаются на инкрементальном обновлении и не падают в полную пересборку на каждой выборке.
+    pub patch_share: u8,
 }
 
 impl Default for ListCacheConfig {
@@ -69,6 +80,7 @@ impl Default for ListCacheConfig {
             max_entries: 256,
             ttl: Duration::from_secs(600),
             patch_max: 200,
+            patch_share: 10,
         }
     }
 }
@@ -157,6 +169,20 @@ impl CachedMessages {
 
     fn count(&self, f: impl FnOnce(&mut ListCacheStats)) {
         f(&mut self.stats.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+
+    /// Потолок инкрементального обновления для записи размером `len`: [`ListCacheConfig::patch_max`]
+    /// или [`ListCacheConfig::patch_share`] размера записи, если доля больше. Фиксированный потолок
+    /// останавливает патч там, где он ещё дешевле пересборки: при постоянном приёме в большой ящик
+    /// изменения между выборками перерастают `patch_max`, и каждая выборка (SELECT пути — и IMAP,
+    /// и JMAP — идут через этот кэш) снова выгружает папку целиком (PERF-08: p95 108 мс). Доля от
+    /// размера оставляет часто меняемые большие папки на патче: перечитать пачкой изменившиеся
+    /// строки (`message_id = ANY(...)`) дешевле выгрузки всех. На малых папках действует прежний
+    /// `patch_max`.
+    fn patch_ceiling(&self, len: usize) -> usize {
+        self.cfg
+            .patch_max
+            .max(len.saturating_mul(usize::from(self.cfg.patch_share)) / 100)
     }
 
     /// Запись, пригодная выдать список для запроса с окном `limit`, не просроченная. Блокировка
@@ -257,19 +283,37 @@ impl CachedMessages {
     /// «изменено, скрыто и восстановлено в интервале» в один `destroyed`, хотя письмо есть;
     /// созданные и изменённые перечитываются пачкой одним запросом, не найденные (перенос между
     /// чтением журнала и выборкой) — по одному.
+    ///
+    /// Применение — один проход по списку: свежие состояния и отсутствующие собираются в наборы
+    /// до правки, поиск по идентификатору — по `HashMap`, а не линейным сканом списка. На папке
+    /// 10 тыс. писем скан на каждое изменение при наборах на пределе потолка (PERF-08: потолок —
+    /// доля [`Self::patch_ceiling`]) дороже самой пересборки. Порядок по `Uid` восстанавливается:
+    /// обновление на месте — при прежнем `Uid`, вставки (созданные, вернувшиеся, перенос
+    /// туда-обратно в интервале — `Uid` у письма меняется) — по возрастанию `Uid` по месту.
     async fn patch(
         &self,
         scope: AccountScope,
         mailbox: MailboxId,
-        mut list: Vec<Message>,
+        list: Vec<Message>,
         c: &Changes<MessageChange>,
     ) -> Option<Vec<Message>> {
+        // Свежее состояние письма в этой папке (`fresh`) или отметка отсутствия (`gone`).
+        // Итог решают последние изменения: созданные/изменённые перечитываются после «удалённых».
+        let mut fresh: HashMap<MessageId, Message> = HashMap::new();
+        let mut gone: HashSet<MessageId> = HashSet::new();
         for ch in &c.destroyed {
             match self.messages.get(scope, ch.id).await.ok().flatten() {
                 // Восстановлено в ту же папку (скрытие с восстановлением свёрнуто в `destroyed`).
-                Some(m) if m.mailbox == mailbox => upsert(&mut list, m),
+                Some(m) if m.mailbox == mailbox => {
+                    let id = m.id;
+                    fresh.insert(id, m);
+                    gone.remove(&id);
+                }
                 // Нет или живёт в другой папке — убрать.
-                _ => remove(&mut list, ch.id),
+                _ => {
+                    fresh.remove(&ch.id);
+                    gone.insert(ch.id);
+                }
             }
         }
         let mut fetch: Vec<MessageId> =
@@ -285,20 +329,45 @@ impl CachedMessages {
                 .ok()?;
             let got: HashSet<MessageId> = found.iter().map(|m| m.id).collect();
             for m in found {
-                remove(&mut list, m.id);
-                upsert(&mut list, m);
+                let id = m.id;
+                fresh.insert(id, m);
+                gone.remove(&id);
             }
             for id in fetch.iter().filter(|id| !got.contains(id)) {
                 match self.messages.get(scope, *id).await.ok().flatten() {
                     Some(m) if m.mailbox == mailbox => {
-                        remove(&mut list, m.id);
-                        upsert(&mut list, m);
+                        let id = m.id;
+                        fresh.insert(id, m);
+                        gone.remove(&id);
                     }
-                    _ => remove(&mut list, *id),
+                    _ => {
+                        fresh.remove(id);
+                        gone.insert(*id);
+                    }
                 }
             }
         }
-        Some(list)
+        let mut kept: Vec<Message> = Vec::with_capacity(list.len());
+        let mut moved: Vec<Message> = Vec::new();
+        for m in list {
+            let id = m.id;
+            match fresh.remove(&id) {
+                // Изменилось с прежним `Uid` — замена на месте (позиция в порядке по `Uid` та же).
+                Some(nu) if nu.uid == m.uid => kept.push(nu),
+                // `Uid` сменился (вернулось в папку) — вставить по месту.
+                Some(nu) => moved.push(nu),
+                // Убрано из папки.
+                None if gone.contains(&id) => {}
+                None => kept.push(m),
+            }
+        }
+        moved.extend(fresh.into_values());
+        moved.sort_unstable_by_key(|m| m.uid);
+        for m in moved {
+            let pos = kept.partition_point(|x| x.uid < m.uid);
+            kept.insert(pos, m);
+        }
+        Some(kept)
     }
 
     /// Полная пересборка из внутреннего хранилища; база журнала — версия папки до чтения списка.
@@ -335,22 +404,6 @@ impl CachedMessages {
             "list_cache: список папки пересобран"
         );
         Ok(list)
-    }
-}
-
-/// Вставляет письмо в список по месту по `Uid` (существующий с тем же идентификатором — заменить).
-fn upsert(list: &mut Vec<Message>, m: Message) {
-    if let Some(p) = list.iter().position(|x| x.id == m.id) {
-        list.remove(p);
-    }
-    let pos = list.partition_point(|x| x.uid < m.uid);
-    list.insert(pos, m);
-}
-
-/// Убирает письмо по идентификатору; нет — ничего.
-fn remove(list: &mut Vec<Message>, id: MessageId) {
-    if let Some(p) = list.iter().position(|x| x.id == id) {
-        list.remove(p);
     }
 }
 
@@ -467,9 +520,9 @@ impl MessageStore for CachedMessages {
             self.drop_entry(&key);
             return self.messages.list(scope, mailbox, query, limit).await;
         }
-        // Свежесть по журналу папки: изменений нет — из кэша; до `patch_max` — обновить;
-        // больше, усечённый список или журнал недоступен — пересборка.
-        let cap = self.cfg.patch_max.saturating_add(1);
+        // Свежесть по журналу папки: изменений нет — из кэша; в пределах потолка патча —
+        // обновить; больше, усечённый список или журнал недоступен — пересборка.
+        let cap = self.patch_ceiling(e.list.len()).saturating_add(1);
         let fresh = match self
             .changes
             .message_changes(scope, Some(mailbox), e.base, cap)
@@ -488,7 +541,7 @@ impl MessageStore for CachedMessages {
             return Ok(Self::serve(&e, limit));
         }
         if e.complete
-            && changes <= self.cfg.patch_max
+            && changes <= self.patch_ceiling(e.list.len())
             && let Some(mut list) = self.patch(scope, mailbox, (*e.list).clone(), &c).await
         {
             list.truncate(e.limit);
@@ -1016,5 +1069,104 @@ mod tests {
             "UID по возрастанию: {uids:?}"
         );
         assert_eq!(subjects(&list), vec!["m1", "m3", "m0", "m2", "m4"]);
+    }
+
+    /// Конфиг с узким `patch_max` и долей `patch_share` (PERF-08: часто меняемый большой ящик).
+    fn churn_cfg() -> ListCacheConfig {
+        ListCacheConfig {
+            patch_max: 5,
+            patch_share: 50,
+            ..ListCacheConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn fill_churn_patches_within_share() {
+        // Доставок между выборками больше `patch_max` (5), но в пределах доли размера записи
+        // (50% от 20) — выборка (SELECT) обновляется по журналу, без полной пересборки.
+        let f = fx_with(churn_cfg()).await;
+        for i in 0..20 {
+            deliver(&f, &format!("m{i}")).await;
+        }
+        MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
+            .await
+            .expect("холодный SELECT");
+        assert_eq!(f.cache.stats().rebuilds, 1);
+        for i in 0..10 {
+            deliver(&f, &format!("n{i}")).await;
+        }
+        let list = MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
+            .await
+            .expect("SELECT после доставок");
+        assert_eq!(list.len(), 30);
+        let s = f.cache.stats();
+        assert_eq!((s.rebuilds, s.patches), (1, 1));
+        assert_transparent(&f, 100).await;
+    }
+
+    #[tokio::test]
+    async fn changes_beyond_share_rebuild() {
+        // Изменений больше и `patch_max`, и доли размера записи — прежняя полная пересборка.
+        let f = fx_with(churn_cfg()).await;
+        for i in 0..20 {
+            deliver(&f, &format!("m{i}")).await;
+        }
+        MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
+            .await
+            .expect("list");
+        for i in 0..11 {
+            deliver(&f, &format!("n{i}")).await;
+        }
+        MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
+            .await
+            .expect("list");
+        let s = f.cache.stats();
+        assert_eq!((s.rebuilds, s.patches), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn move_roundtrip_in_one_changeset_keeps_order() {
+        // Перенос туда-обратно между выборками: в одном наборе изменений письмо и «исчезло»,
+        // и вернулось с новым UID — патч ставит его по месту, порядок по UID сохраняется.
+        let f = fx().await;
+        let ids = [deliver(&f, "m0").await, deliver(&f, "m1").await];
+        deliver(&f, "m2").await;
+        MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
+            .await
+            .expect("list");
+        let work = MailboxStore::create(
+            &f.env.meta,
+            f.scope,
+            NewMailbox {
+                parent: None,
+                name: "Work".into(),
+                role: None,
+            },
+        )
+        .await
+        .expect("create")
+        .id;
+        f.env
+            .store
+            .move_to(f.scope, &ids[1..2], work)
+            .await
+            .expect("move out");
+        f.env
+            .store
+            .move_to(f.scope, &ids[1..2], f.inbox)
+            .await
+            .expect("move back");
+        let list = MessageStore::list(&f.cache, f.scope, f.inbox, MessageQuery::All, 100)
+            .await
+            .expect("list");
+        assert_eq!(subjects(&list), vec!["m0", "m2", "m1"]);
+        let uids: Vec<u32> = list.iter().map(|m| m.uid.0).collect();
+        assert!(
+            uids.windows(2).all(|w| w[0] < w[1]),
+            "UID по возрастанию: {uids:?}"
+        );
+        let s = f.cache.stats();
+        assert_eq!((s.rebuilds, s.patches), (1, 1));
+        assert_transparent(&f, 100).await;
     }
 }
