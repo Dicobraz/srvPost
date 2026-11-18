@@ -409,9 +409,11 @@ async fn run(
         !uses_threads && !a.collapse_threads && conds.iter().all(|c| c.terms.is_empty())
     });
     let scope = (ctx.scope.tenant, ctx.scope.account);
+    // Кэш — только свой аккаунт: записи кэша лежат в пространстве владельца и охватывают все его папки
+    // (JMAP-49).
     let key = spec
         .as_deref()
-        .filter(|_| ctx.jmap.cfg.query_cache.max_bytes > 0)
+        .filter(|_| ctx.access.is_own() && ctx.jmap.cfg.query_cache.max_bytes > 0)
         .map(|s| query_key(&a.filter, s));
     let mut built: Option<QueryList> = None;
     if let Some(k) = &key {
@@ -445,7 +447,12 @@ async fn run(
     let (ids, keys, boxes) = match built {
         Some(b) => b,
         None => {
-            let msgs = ctx.jmap.messages_in(ctx.scope, only).await?;
+            // Папки чтения: одна из фильтра или все; у представителя — только общие с правом `r` (JMAP-49),
+            // нечитаемая папка фильтра — пустой результат.
+            let msgs = ctx
+                .jmap
+                .messages_of(ctx.scope, ctx.access.query_boxes(only))
+                .await?;
             let ev = Eval {
                 text,
                 threads: if uses_threads || a.collapse_threads {
@@ -693,13 +700,13 @@ fn order(
         .collect()
 }
 
-/// `Email/query`.
+/// `Email/query` (свой аккаунт или чужой по ACL — JMAP-49).
 pub(crate) async fn query(
     ctx: &mut Ctx<'_>,
     args: Map<String, Value>,
 ) -> MethodResult<Map<String, Value>> {
     let a: QueryArgs = parse_args(args)?;
-    ctx.check_account(&a.account_id)?;
+    ctx.open_mail(&a.account_id).await?;
     let (state, token) = ctx.state_full().await?;
     let (ids, uses_threads) = run(ctx, &a, &token, state).await?;
     let ids = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
@@ -720,7 +727,7 @@ pub(crate) async fn query_changes(
     args: Map<String, Value>,
 ) -> MethodResult<Map<String, Value>> {
     let qc: QueryChangesArgs = parse_args(args.clone())?;
-    ctx.check_account(&qc.account_id)?;
+    ctx.open_mail(&qc.account_id).await?;
     let mut q = args;
     q.retain(|k, _| {
         matches!(
@@ -734,13 +741,20 @@ pub(crate) async fn query_changes(
     }
     let since = parse_state(&qc.since_query_state)?;
     let limit = qc.limit(ctx.jmap.cfg.max_changes)?;
-    let c = ctx
+    let mut c = ctx
         .jmap
         .d
         .changes
         .message_changes(ctx.scope, None, since, limit.saturating_add(1))
         .await
         .map_err(changes_error)?;
+    // Представителю сообщаются только изменения читаемых папок (JMAP-49): изменения остальных папок
+    // ящика его запросу не принадлежат и писем этих папок не раскрывают.
+    if !ctx.access.is_own() {
+        c.created.retain(|m| ctx.access.reads_mail(m.mailbox));
+        c.updated.retain(|m| ctx.access.reads_mail(m.mailbox));
+        c.destroyed.retain(|m| ctx.access.reads_mail(m.mailbox));
+    }
     let c = map_changes(c, |m| m.id.to_string());
     let (state, token) = ctx.state_full().await?;
     let (ids, uses_threads) = run(ctx, &a, &token, state).await?;

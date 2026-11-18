@@ -27,6 +27,8 @@
 //!   JMAP-33) поверх коллекций `VTODO` того же `DavStore`, что у CalDAV;
 //! - `sharing` — общий доступ к календарям и адресным книгам (JMAP-32): аккаунты владельцев, `shareWith`,
 //!   `myRights`, ShareNotification/get, changes, query, queryChanges, set ([`Jmap::with_sharing`]);
+//! - `delegate` — делегированный доступ к чужим ящикам почты (JMAP-49): Email/query, Email/queryChanges,
+//!   Email/get по ACL папок, аккаунты владельцев в сессии ([`Jmap::with_acl`]);
 //! - `contact_card` — ContactCard/get, changes, query, queryChanges, set, copy: vCard в `DavStore`, JSContact —
 //!   calcard, индекс — `tp_dav::index`;
 //! - `contacts` — AddressBook/get, changes, set (RFC 9610) поверх `DavStore`, [`Jmap::with_dav`];
@@ -54,6 +56,7 @@ mod calendars;
 mod contact_card;
 mod contacts;
 pub mod core;
+mod delegate;
 mod disable;
 mod email_get;
 mod email_query;
