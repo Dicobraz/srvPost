@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use futures::StreamExt;
 use tokio::io::AsyncReadExt;
@@ -25,6 +26,7 @@ use crate::proto::types::fetch::MessageDataItem;
 use crate::proto::types::response::{CommandContinuationRequest, Data, Response};
 use crate::proto::{self, Expect, Input};
 use crate::session::{Session, Transport, io_error};
+use crate::snapshot::Row;
 use crate::store::modseq_item;
 
 /// Что разбудило сессию в `IDLE`.
@@ -110,7 +112,7 @@ impl<T: Transport> Session<T> {
             .list(scope, selected.mailbox, MessageQuery::All, limit)
             .await?;
         let now: HashSet<Uid> = list.iter().map(|m| m.uid).collect();
-        let known: HashSet<Uid> = selected.messages.iter().map(|m| m.0).collect();
+        let known: HashSet<Uid> = selected.messages.iter().map(|m| m.uid).collect();
         let delta = Delta {
             created: list
                 .iter()
@@ -136,14 +138,14 @@ impl<T: Transport> Session<T> {
             .messages
             .iter()
             .enumerate()
-            .filter(|(_, (uid, _))| delta.destroyed.contains(uid))
+            .filter(|(_, m)| delta.destroyed.contains(&m.uid))
             .map(|(i, _)| i)
             .collect();
         self.expunged(&gone);
         let Some(selected) = self.selected.as_mut() else {
             return Ok(());
         };
-        let last = selected.messages.last().map_or(0, |m| m.0.0);
+        let last = selected.messages.last().map_or(0, |m| m.uid.0);
         let mut fresh: Vec<(Uid, MessageId)> = delta
             .created
             .into_iter()
@@ -152,7 +154,12 @@ impl<T: Transport> Session<T> {
         fresh.sort_unstable();
         fresh.dedup();
         let added = !fresh.is_empty();
-        selected.messages.extend(fresh.iter().copied());
+        // Снимок общий из кэша: правка — через `Arc::make_mut`, после неё копия у сессии (PERF-03).
+        Arc::make_mut(&mut selected.messages).extend(fresh.iter().map(|&(uid, id)| Row {
+            uid,
+            id,
+            seen: false,
+        }));
         selected.modseq = selected.modseq.max(modseq);
         let exists = u32::try_from(selected.messages.len()).unwrap_or(u32::MAX);
         let fresh: HashSet<MessageId> = fresh.into_iter().map(|f| f.1).collect();
@@ -161,7 +168,7 @@ impl<T: Transport> Session<T> {
             .messages
             .iter()
             .enumerate()
-            .map(|(i, (_, id))| (*id, i))
+            .map(|(i, m)| (m.id, i))
             .collect();
         let updated: Vec<MessageId> = delta
             .updated

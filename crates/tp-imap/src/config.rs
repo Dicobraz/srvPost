@@ -19,6 +19,9 @@
 //!   compress:
 //!     enabled: true
 //!     level: 6
+//!   snapshot:
+//!     max_bytes: 33554432
+//!     ttl: 10m
 //!   pop3:
 //!     enabled: false
 //!     listeners:
@@ -49,6 +52,8 @@ pub struct ImapConfig {
     pub namespace: NamespaceConfig,
     /// Сжатие `COMPRESS=DEFLATE` (RFC 4978).
     pub compress: CompressConfig,
+    /// Снимки папок для сеансов (PERF-03).
+    pub snapshot: SnapshotsConfig,
     /// POP3 (RFC 1939) для устаревших устройств; выключен по умолчанию.
     pub pop3: Pop3Config,
 }
@@ -112,6 +117,33 @@ impl Default for CompressConfig {
         Self {
             enabled: true,
             level: 6,
+        }
+    }
+}
+
+/// Снимки папок для сеансов (`imap.snapshot`, PERF-03): список писем папки
+/// (UID, идентификатор, `\Seen`) — общий `Arc` на папку вместо копии на соединение.
+/// Свежесть проверяется журналом изменений папки при выдаче, поэтому доставленные,
+/// изменённые и удалённые письма снимок не скрывает.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SnapshotsConfig {
+    /// Бюджет снимков, байт по всем записям (24 байта на письмо плюс накладные); `0` — кэш выключен.
+    pub max_bytes: usize,
+    /// Записей (папок) не больше; при превышении вытесняется самая давняя по обращению.
+    pub max_entries: usize,
+    /// Сколько хранится запись; инвалидация по журналу — основная, это страховка.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub ttl: Duration,
+}
+
+impl Default for SnapshotsConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes: 32 * 1024 * 1024,
+            max_entries: 1024,
+            ttl: Duration::from_secs(600),
         }
     }
 }
