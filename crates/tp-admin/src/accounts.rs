@@ -30,7 +30,7 @@ use axum::{Extension, Router};
 use serde::{Deserialize, Serialize};
 use tp_contracts::config::duration;
 use tp_contracts::meta::{
-    Account, AccountKind, AccountUpsert, AddressTarget, Policy, PolicyTarget,
+    Account, AccountKind, AccountUpsert, AddressTarget, Policy, PolicyTarget, ResourceType,
 };
 use tp_contracts::retention::TrashPurgeRule;
 use tp_contracts::transport::normalize_domain;
@@ -467,13 +467,15 @@ async fn create_account(
         &body.login,
         body.display_name.as_deref(),
         AccountKind::User,
+        None,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(account_info(&a, acc).await?)))
 }
 
 /// Создаёт локальную учётную запись вида `kind` в принятом домене организации (`POST …/accounts`, ресурсы —
-/// [`crate::resources`]). Не адрес — `Invalid`; домен не принят организацией — `Invalid` с подсказкой; имя занято —
+/// [`crate::resources`]); `resource_type` — тип ресурса (нет — помещение; правило `account_resource_type`, CTR-88;
+/// у пользователя — `None`). Не адрес — `Invalid`; домен не принят организацией — `Invalid` с подсказкой; имя занято —
 /// `Conflict`; настройки транспорта не подключены — `Unavailable`.
 pub(crate) async fn create_local(
     a: &Admin,
@@ -481,6 +483,7 @@ pub(crate) async fn create_local(
     login: &str,
     display_name: Option<&str>,
     kind: AccountKind,
+    resource_type: Option<ResourceType>,
 ) -> Result<Account> {
     let (login, domain) = split_login(login)?;
     let t = a.transport.as_deref().ok_or(Error::UNAVAILABLE)?;
@@ -513,7 +516,7 @@ pub(crate) async fn create_local(
                 aliases: Vec::new(),
                 kind,
                 hidden_from_gal: false,
-                resource_type: None,
+                resource_type,
             },
         )
         .await

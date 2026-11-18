@@ -828,9 +828,9 @@ export interface paths {
         get: operations["list_resources"];
         put?: never;
         /**
-         * Создаёт ресурс: локальную учётную запись вида `resource` в принятом домене организации и правила бронирования.
-         *     Имя занято — 409; домен не принят организацией, недопустимые правила или неизвестная учётная запись или группа в
-         *     `bookers` — 400; хранилища не подключены — 503.
+         * Создаёт ресурс: локальную учётную запись вида `resource` в принятом домене организации и правила бронирования
+         *     (тип — `resource_type`, нет — помещение). Имя занято — 409; домен не принят организацией, недопустимые правила
+         *     или неизвестная учётная запись или группа в `bookers` — 400; хранилища не подключены — 503.
          */
         post: operations["create_resource"];
         delete?: never;
@@ -857,7 +857,12 @@ export interface paths {
         delete: operations["delete_resource"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Меняет тип ресурса: переговорная (`room`) или оборудование (`equipment`); имя, правила бронирования и прочее —
+         *     без изменений (правилам тип безразличен). Изменение пишет в журнал аудита слой доступа. Нет или не ресурс — 404;
+         *     неизвестное значение типа или поле — 400; тип ресурса из каталога ведёт каталог — 409.
+         */
+        patch: operations["patch_resource"];
         trace?: never;
     };
     "/api/v1/orgs/{org}/resources/{account}/booking-policy": {
@@ -1775,6 +1780,8 @@ export interface components {
             display_name?: string | null;
             /** @description Имя входа — адрес в принятом домене организации (приводится к нижнему регистру). */
             login: string;
+            /** @description Тип ресурса; нет — `room`. */
+            resource_type?: components["schemas"]["ResourceTypeBody"];
         };
         /** @description Вход в консоль через поставщика OIDC: издатель из `auth.oidc`, клиент из `admin.oidc`. */
         OidcLogin: {
@@ -1955,10 +1962,24 @@ export interface components {
             /** @description Причина для уведомления отправителя (одна строка, ≤ 500 символов). */
             reason?: string | null;
         };
-        /** @description Ресурс: учётная запись и правила бронирования. */
+        /** @description Ресурс: учётная запись, тип и правила бронирования. */
         ResourceInfo: components["schemas"]["AccountInfo"] & {
             booking_policy?: components["schemas"]["BookingPolicyBody"] | null;
+            /** @description Тип ресурса: помещение или оборудование. */
+            resource_type: components["schemas"]["ResourceTypeBody"];
         };
+        /** @description Изменение ресурса: тип — переговорная (`room`) или оборудование (`equipment`). */
+        ResourcePatch: {
+            /** @description Тип ресурса. */
+            resource_type: components["schemas"]["ResourceTypeBody"];
+        };
+        /**
+         * @description Тип ресурса: помещение или оборудование (CTR-88; [`ResourceType`] контракта): правилам бронирования тип
+         *     безразличен, клиентам — CalDAV `calendar-user-type` (`ROOM`, `RESOURCE`) и JMAP `Principal.type` (`location`,
+         *     `resource`).
+         * @enum {string}
+         */
+        ResourceTypeBody: "room" | "equipment";
         /** @description Восстановленное письмо. */
         RestoredMessage: {
             /** @description Письмо. */
@@ -5754,6 +5775,66 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    patch_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Ресурс (UUID) */
+                account: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourcePatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceInfo"];
+                };
             };
             400: {
                 headers: {

@@ -35,6 +35,7 @@ export const covered: Record<string, string> = {
   "GET /api/v1/orgs/{org}/resources": "pages/resources.tsx",
   "POST /api/v1/orgs/{org}/resources": "pages/resources.tsx",
   "GET /api/v1/orgs/{org}/resources/{account}": "pages/resources.tsx",
+  "PATCH /api/v1/orgs/{org}/resources/{account}": "pages/resources.tsx",
   "DELETE /api/v1/orgs/{org}/resources/{account}": "pages/resources.tsx",
   "PUT /api/v1/orgs/{org}/resources/{account}/booking-policy": "pages/resources.tsx",
   "GET /api/v1/orgs/{org}/disabled-accounts": "pages/disabled.tsx",
