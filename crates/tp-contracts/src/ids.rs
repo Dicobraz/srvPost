@@ -115,6 +115,10 @@ uuid_id!(
     /// `ShareNotification`.
     ShareNotificationId
 );
+uuid_id!(
+    /// Запись журнала переписки (`journal::JournalStore::append`, CTR-97).
+    JournalId
+);
 
 impl TenantId {
     /// Организация по умолчанию — единственная в базовой поставке (SRS 3.8).

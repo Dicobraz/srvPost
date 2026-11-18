@@ -5,7 +5,7 @@
 Асинхронные трейты, используемые как `dyn`, — через `async-trait`; все трейты `Send + Sync + 'static`.
 
 ## Ids
-- `TenantId`, `DomainId`, `AccountId`, `MailboxId`, `MessageId`, `QueueId`, `GroupId`, `HeldId` — newtype над `Uuid` (v7), `Copy`, `Serialize`; `TenantId::DEFAULT` = `00000000-0000-0000-0000-000000000001` — организация по умолчанию.
+- `TenantId`, `DomainId`, `AccountId`, `MailboxId`, `MessageId`, `QueueId`, `GroupId`, `HeldId`, `JournalId` — newtype над `Uuid` (v7), `Copy`, `Serialize`; `TenantId::DEFAULT` = `00000000-0000-0000-0000-000000000001` — организация по умолчанию.
 - `Uid(u32)` — IMAP UID в ящике, монотонный; `UidValidity(u32)`.
 - `ShardId(i32)` — шард метаданных (кластер PostgreSQL, SRS 3.6); `ShardId::MAIN` = 0 — основная БД с каталогом (CTR-34); `tp_meta::shards::ShardId` переходит на него (волна meta).
 - `ModSeq(u64)` — монотонный на ящик (IMAP CONDSTORE, состояние JMAP).
@@ -315,6 +315,35 @@ SRS 4.9, 2.5, 2.6 (CTR-96; код — `pipeline.rs`). Конвейер обра�
 - Служебные письма продукта (DSN, отбивки, уведомления) и копии журнала — `SystemMessage::{Dsn, Notification, JournalCopy}`:
   этапы правил (`StageKind::Rules`) для них пропускаются — петли исключены, копия журнала повторно не журналируется.
   Набор `suite::pipeline`.
+
+## Journal
+SRS 4.9, 5.2 (CTR-97; код — `journal.rs`). Журналирование переписки по модели Exchange Journaling — базовая
+поставка. Правило `JournalRule { id (valid_rule_id), tenant, scope: JournalScope::{Org, Group(GroupId), Mailbox(AccountId)},
+direction: JournalDirection::{In, Out, Both}, enabled }` задаётся на организацию, группу или ящик; выполняется этапом ядра
+конвейера (точка `BeforeMailboxSieve`, до Sieve ящика и этапов модулей) — скрипт ящика (`discard`, `stop`) и правила модулей
+запись не отменяют; `covers(direction, sender?, rcpts, members)` — область покрывает отправителя или получателя
+(раскрытие группы — вызывающий). Хранение правил и Admin API — волны полос.
+`JournalRecord { tenant, sender, recipients (все, включая скрытых и раскрытых из групп), message_id?, at, rule }` — конверт
+записи, `validate()`; одна запись на письмо (на правило). Копия в журнал — `SystemMessage` (CTR-96): без этапов правил.
+Хранилище записей — отдельное от BLOB ящиков (SRS 4.9: дедупликация внутри журнала, блокировка объектов не затрагивает
+хранилище ящиков); контракт бэкенда не знает — реализация в полосе blob (BLOB-18), индекс — META-88. Записи неизменяемы:
+методов изменения и удаления нет, срок хранения продлевается только.
+`JournalStore`:
+- `append(rule, record, message) -> JournalId` — письмо целиком с конвертом; `record.rule` = `rule.id`, `record.tenant` =
+  `rule.tenant`, пустое письмо — `Invalid`.
+- `search(&JournalAudit, &JournalQuery { tenant, sender, recipient, message_id, rule, since, until, limit, after })` —
+  отправитель, один из получателей (включая скрытых), Message-ID, правило, интервал `[since, until)`; `validate`/`matches` —
+  в контракте, порядок — по (`at`, `id`), страница `JournalPage { entries: Vec<JournalEntry { id, record, hash }>, next }`
+  с курсором; некорректный запрос или позиция — `Invalid`.
+- `export(&JournalAudit, tenant, id)` — .eml с конвертом: `journal_eml` добавляет заголовки `X-ThePost-Journal-*`
+  (отправитель, каждый получатель, Message-ID, правило, unix-время) перед исходным письмом; нет записи — `NotFound`.
+- `verify_chain(&JournalAudit, tenant) -> ChainReport { records, ok, broken_at }` — записи индекса связаны цепочкой хешей
+  `hash = SHA-256(prev_hash ‖ canonical(record))` (`chain_input` фиксирует образ, у первой записи `prev` — `GENESIS_HASH`);
+  целостность проверяют thepost doctor и Admin API.
+- `restore_index(tenant) -> u64` — индекс восстанавливается из хранилища записей (maintenance).
+Доступ — только роль «аудитор журнала» (SRS 5.2): токен `JournalAudit` (выдаёт авторизация Admin API) — параметр `search`,
+`export`, `verify_chain`; пользователи и администраторы правил журнал не видят, через IMAP и JMAP не доступен.
+In-memory — `MemJournal`; набор `suite::journal` (подмена записи и потеря индекса — колбэки теста).
 
 ## Groups
 SRS 4.5, решение 2026-11-01-borrowings-security (CTR-21; код — `groups.rs`). `DistributionGroup { id: GroupId, tenant, name, address:
@@ -1355,3 +1384,13 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   итоговый набор действий с итоговым контролем `forbid_external_forward`, служебные письма
   без этапов правил; `Registry::add_stage` — точка расширения (SRS 2.5). Раздел «Pipeline»; набор `suite::pipeline`.
   Реализация конвейера в `tp-smtp` — волна полосы.
+- 2026-11-18 — CTR-97 (волна contracts-67): модуль `journal::{JournalRule, JournalScope, JournalDirection, JournalRecord,
+  JournalStore, JournalAudit, JournalQuery, JournalPage, JournalCursor, JournalEntry, ChainReport, valid_rule_id,
+  MAX_RULE_ID_LEN, MAX_MESSAGE_ID_LEN, chain_input, GENESIS_HASH, journal_eml}` и id `JournalId` — журналирование переписки
+  (SRS 4.9): правила на организацию/группу/ящик с направлением, запись — письмо целиком с конвертом (все получатели,
+  включая скрытых и раскрытых из групп), хранилище отдельно от BLOB ящиков, индекс с хеш-цепочкой
+  `SHA-256(prev ‖ canonical(record))` и восстановлением из хранилища записей, доступ — токен роли «аудитор журнала».
+  По сравнению с карточкой: `scope` несёт цель (Org | Group(GroupId) | Mailbox(AccountId)), организация правила — отдельное
+  поле `tenant`; `covers` — проверка области правила (членство группы передаёт вызывающий). Раздел «Journal»; in-memory —
+  `MemJournal` (хеш — тестовый SipHash, SHA-256 считают реализации); набор `suite::journal`. Реализация — BLOB-18, индекс —
+  META-88.

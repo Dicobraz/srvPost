@@ -24,6 +24,7 @@ pub mod ext;
 pub mod groups;
 pub mod identity;
 pub mod ids;
+pub mod journal;
 pub mod lease;
 pub mod load;
 pub mod mailstore;
@@ -48,6 +49,7 @@ pub mod trust;
 
 pub use error::{Error, Result};
 pub use ids::{
-    AccountId, BlobHash, BlobKey, ContactId, DomainId, Gen, GroupId, HeldId, MailboxId, MessageId,
-    ModSeq, OrgUnitId, QueueId, ShardId, ShareNotificationId, TenantId, Uid, UidValidity,
+    AccountId, BlobHash, BlobKey, ContactId, DomainId, Gen, GroupId, HeldId, JournalId, MailboxId,
+    MessageId, ModSeq, OrgUnitId, QueueId, ShardId, ShareNotificationId, TenantId, Uid,
+    UidValidity,
 };
