@@ -378,9 +378,14 @@ impl EventSink for Indexer {
 
 impl Indexer {
     /// Пачка событий → изменения индекса, коммит пакетами.
+    /// PERF-04: интервал коммита — от последнего flush'а, не от первого изменения пачки: в бэклоге
+    /// (fill стенда, 100k событий) `commit_interval` от первого изменения делал видимость свежего
+    /// письма `commit_interval` × пачки бэклога (Д.7 №10: p95 68 с > 60 с). Теперь flush — по
+    /// `commit_docs` или через `commit_interval` после предыдущего flush'а; пачка без новых
+    /// изменений закрывается финальным flush'ем как прежде.
     async fn process(&self, batch: &[LoggedEvent]) -> Result<()> {
         let mut pending = Pending::new();
-        let (mut count, mut started) = (0, None::<Instant>);
+        let (mut count, mut last_flush) = (0, None::<Instant>);
         for logged in batch {
             let e = &logged.event;
             let scope = AccountScope {
@@ -389,7 +394,6 @@ impl Indexer {
             };
             let ops = self.ops(scope, &e.kind).await?;
             if !ops.is_empty() {
-                started.get_or_insert_with(Instant::now);
                 count += ops.len();
                 pending
                     .entry((scope.tenant, scope.account))
@@ -397,10 +401,10 @@ impl Indexer {
                     .extend(ops);
             }
             if count >= self.cfg.commit_docs.max(1)
-                || started.is_some_and(|t| t.elapsed() >= self.cfg.commit_interval)
+                || last_flush.is_some_and(|t| t.elapsed() >= self.cfg.commit_interval)
             {
                 self.flush(&mut pending).await?;
-                (count, started) = (0, None);
+                (count, last_flush) = (0, Some(Instant::now()));
             }
         }
         self.flush(&mut pending).await
@@ -699,6 +703,46 @@ mod tests {
                 j - i
             );
         }
+    }
+
+    /// PERF-04: в бэклоге (пачки больше `commit_docs`) письмо из конца журнала видно не позже
+    /// `commit_interval` после его обработки, независимо от длины пачки: коммит — по `commit_docs`,
+    /// интервал — от flush'а. Прежде интервал считался от первого изменения пачки, и письмо стояло
+    /// в очереди `commit_interval` × пачки бэклога.
+    #[tokio::test]
+    async fn backlog_visibility_within_interval() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let indexes = Arc::new(manager(&dir));
+        let a = scope();
+        // Бэклог: 30 пачек по 100 событий, документ «мгновенный»; коммит — каждые 50 документов.
+        let source = Arc::new(MemSource::default());
+        let cfg = IndexerConfig {
+            commit_docs: 50,
+            commit_interval: Duration::from_millis(200),
+            ..IndexerConfig::default()
+        };
+        let indexer = Indexer::new(indexes.clone(), source.clone(), cfg);
+        let search = Search::new(indexes.clone(), QueryConfig::default());
+        let inbox = MailboxId::new();
+        let log = MemEventLog::new(1);
+        let probe = mail(inbox, "perfect04backlog");
+        for i in 0..3000 {
+            let d = mail(inbox, &format!("fill {i}"));
+            source.put(d.clone());
+            log.append(event(a, inbox, CoreEventKind::Delivered { message: d.message }));
+        }
+        source.put(probe.clone());
+        log.append(event(a, inbox, CoreEventKind::Delivered { message: probe.message }));
+        // Одна пачка — весь бэклог: прежний код коммитил только по времени от первого изменения,
+        // и зонд не был виден до конца пачки.
+        let batch = log.read(Partition(0), EventPos(0), 10_000).await.expect("read");
+        indexer.handle(&batch).await.expect("handle");
+        let hits = search
+            .query(a, &[], &TextQuery::term(TextField::Any, "perfect04backlog"), SearchSort::NewestFirst, 1)
+            .await
+            .expect("query");
+        assert_eq!(hits.len(), 1, "письмо из хвоста бэклога должно быть в индексе после обработки");
+        assert_eq!(indexes.open(a).expect("open").expect("index").docs(), 3001);
     }
 
     #[test]
