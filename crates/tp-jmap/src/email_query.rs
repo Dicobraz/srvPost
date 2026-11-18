@@ -1590,7 +1590,7 @@ mod tests {
     fn restrict_by_terms() {
         use std::collections::{HashMap, HashSet};
 
-        use super::{Filter, restrict};
+        use super::{Filter, parse_filter, restrict};
         use tp_contracts::search::TextField;
 
         fn f(v: serde_json::Value) -> Filter {
