@@ -20,12 +20,13 @@ import { CollectionsAcl } from "../components/collection-acl";
 import { Delegates } from "../components/delegates";
 import { bytes, when } from "../components/format";
 import { PolicyForm } from "../components/policy-form";
+import { StatusTag } from "../components/status";
 import { useReadOnly } from "../providers/access";
 
 type Account = Schemas["AccountInfo"];
 type AppPassword = Schemas["AppPasswordInfo"];
 
-const state = (a: Account) => (a.enabled ? <Tag color="green">Вход разрешён</Tag> : <Tag color="red">Заблокирована</Tag>);
+const state = (a: Account) => (a.enabled ? <StatusTag role="ok">Вход разрешён</StatusTag> : <StatusTag role="err">Заблокирована</StatusTag>);
 const quota = (a: Account) =>
   a.quota.limit_bytes == null ? bytes(a.quota.used_bytes) : `${bytes(a.quota.used_bytes)} из ${bytes(a.quota.limit_bytes)}`;
 
@@ -130,7 +131,7 @@ function AppPasswords({ account }: { account: string }) {
         <Table.Column<AppPassword> title="Выпущен" render={(_, p) => when(p.created_at)} />
         <Table.Column<AppPassword>
           title="Состояние"
-          render={(_, p) => (p.revoked_at ? <Tag>Отозван {when(p.revoked_at)}</Tag> : <Tag color="green">Действует</Tag>)}
+          render={(_, p) => (p.revoked_at ? <Tag>Отозван {when(p.revoked_at)}</Tag> : <StatusTag role="ok">Действует</StatusTag>)}
         />
         <Table.Column<AppPassword>
           title="Действия"

@@ -6,6 +6,7 @@ import type { Schemas } from "../api/client";
 import { AccountSelect } from "../components/account-select";
 import { DynamicFilter } from "../components/dynamic-filter";
 import { ModerationQueue } from "../components/moderation-queue";
+import { StatusTag } from "../components/status";
 
 type Group = Schemas["GroupInfo"];
 
@@ -69,8 +70,8 @@ export function GroupList() {
           render={(_, g) => (
             <>
               {g.external_id && <Tag>каталог</Tag>}
-              {moderated(g) && <Tag color="blue">модерация</Tag>}
-              {g.senders !== "anyone" && <Tag color="gold">ограничены отправители</Tag>}
+              {moderated(g) && <StatusTag role="info">модерация</StatusTag>}
+              {g.senders !== "anyone" && <StatusTag role="warn">ограничены отправители</StatusTag>}
               {g.hidden_from_gal && <Tag>скрыта из адресной книги</Tag>}
             </>
           )}

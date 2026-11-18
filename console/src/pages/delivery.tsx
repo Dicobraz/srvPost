@@ -7,28 +7,41 @@ import { useState } from "react";
 import type { Schemas } from "../api/client";
 import { useCursorPages } from "../components/cursor-pages";
 import { interval, moment } from "../components/format";
+import { StatusTag, type StatusRole } from "../components/status";
+import { modeColors, useDark } from "../theme";
 
 type Entry = Schemas["DeliveryEntry"];
 type Filters = { sender?: string; recipient?: string; message_id?: string; range?: [Dayjs | null, Dayjs | null] | null };
 
 const URL = "/api/v1/orgs/{org}/delivery";
 const KINDS: Record<string, string> = { receive: "приём", reject: "отказ", deliver: "доставка", relay: "передача наружу", dsn: "DSN" };
-const DECISIONS: Record<string, [string, string]> = {
-  accept: ["принято", "green"],
-  reject: ["отклонено", "red"],
-  defer: ["отложено", "orange"],
-  quarantine: ["карантин", "purple"],
-  discard: ["отброшено", "default"],
-  hold: ["задержано", "blue"],
+// Решение доставки — роль состояния (ok/warn/err) или сведения (info); «отброшено» — нейтральное, без роли.
+const DECISIONS: Record<string, [string, StatusRole?]> = {
+  accept: ["принято", "ok"],
+  reject: ["отклонено", "err"],
+  defer: ["отложено", "warn"],
+  quarantine: ["карантин", "warn"],
+  discard: ["отброшено"],
+  hold: ["задержано", "info"],
 };
 
 const kind = (e: Entry) => KINDS[e.kind] ?? e.kind;
-const decision = (e: Entry) => <Tag color={DECISIONS[e.decision]?.[1]}>{DECISIONS[e.decision]?.[0] ?? e.decision}</Tag>;
 const sender = (e: Entry) => e.sender || "<> (уведомление о недоставке)";
+/** Метка решения: роль состояния — со знаком, «отброшено» — обычная метка. */
+function Decision({ e }: { e: Entry }) {
+  const [label, role] = DECISIONS[e.decision] ?? [];
+  return role ? <StatusTag role={role}>{label ?? e.decision}</StatusTag> : <Tag>{label ?? e.decision}</Tag>;
+}
 /** Карточка письма: все события журнала с этим Message-ID. */
 function MessageCard({ id }: { id: string }) {
   const { page, loading, pager } = useCursorPages<Schemas["DeliveryResults"]>(URL, { message_id: id });
   const events = page?.events ?? [];
+  const colors = modeColors(useDark());
+  const roleColor: Record<StatusRole, string> = { ok: colors.ok, warn: colors.warn, err: colors.err, info: colors.frameA };
+  const dot = (e: Entry) => {
+    const role = DECISIONS[e.decision]?.[1];
+    return role ? roleColor[role] : colors.frame; // «отброшено» — нейтральная точка.
+  };
   return (
     <>
       <Descriptions column={1} size="small">
@@ -40,11 +53,11 @@ function MessageCard({ id }: { id: string }) {
       <Timeline
         pending={loading && "Загрузка"}
         items={events.map((e) => ({
-          color: DECISIONS[e.decision]?.[1] === "default" ? "gray" : DECISIONS[e.decision]?.[1],
+          color: dot(e),
           children: (
             <>
               <div>
-                {moment(e.at)} — {kind(e)} {decision(e)}
+                {moment(e.at)} — {kind(e)} <Decision e={e} />
               </div>
               {e.reason && <div>Причина: {e.reason}</div>}
               <div>Получатели: {e.recipients.join(", ")}</div>
@@ -92,7 +105,7 @@ export function DeliveryPage() {
       <Table<Entry> dataSource={page?.events} loading={loading} rowKey={(e) => `${e.at} ${e.node} ${e.kind} ${e.queue_id} ${e.recipients}`} pagination={false}>
         <Table.Column<Entry> title="Время" render={(_, e) => moment(e.at)} />
         <Table.Column<Entry> title="Событие" render={(_, e) => kind(e)} />
-        <Table.Column<Entry> title="Решение" render={(_, e) => decision(e)} />
+        <Table.Column<Entry> title="Решение" render={(_, e) => <Decision e={e} />} />
         <Table.Column<Entry> title="Отправитель" render={(_, e) => sender(e)} />
         <Table.Column<Entry> title="Получатели" render={(_, e) => e.recipients.join(", ")} />
         <Table.Column<Entry>

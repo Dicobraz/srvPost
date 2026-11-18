@@ -30,6 +30,7 @@ test("правила учётной записи: редактор, ошибки
   });
   expect(await screen.findByText("Правила и автоответ: alice@example.org")).toBeTruthy();
   expect(await screen.findByText("активен")).toBeTruthy();
+  expect(screen.getByText("активен").closest(".ant-tag")?.querySelector("span[aria-hidden]")?.textContent).toBe("●");
   // Активный скрипт не удаляется и не активируется повторно: кнопки — только у второго.
   expect(screen.getAllByRole("button", { name: "Активировать" })).toHaveLength(1);
 

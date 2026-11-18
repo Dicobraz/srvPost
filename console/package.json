@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/check-dist.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
@@ -23,10 +23,12 @@
     "papaparse": "^5.7.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-router": "^7.18.5"
+    "react-router": "^7.18.5",
+    "smol-toml": "^1.9.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@fontsource/bebas-neue": "^5.3.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.6",
