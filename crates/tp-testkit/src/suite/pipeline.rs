@@ -13,7 +13,9 @@ use tp_contracts::transport::FlowDirection;
 
 use crate::infra::lock;
 
-/// Этап-зонд: фиксирует вызовы (получатель или `""`), возвращает заданный вердикт.
+/// Этап-зонд: фиксирует вызовы (получатель или `""`), возвращает заданный вердикт. Отказ получателю
+/// ([`StageVerdict::RejectRecipient`]) относится только к его копии письма; вызов письма в целом
+/// (`rcpt` нет) отказ возвращает — так набор проверяет запрет отказа вне `RcptTo`.
 struct Probe {
     id: String,
     point: PipelinePoint,
@@ -62,7 +64,16 @@ impl Stage for Probe {
 
     async fn run(&self, input: &StageInput) -> tp_contracts::Result<StageVerdict> {
         lock(&self.calls).push(input.rcpt.clone().unwrap_or_else(|| "-".to_owned()));
-        Ok(self.verdict.clone())
+        match &self.verdict {
+            StageVerdict::RejectRecipient { rcpt, .. } => {
+                if input.rcpt.as_deref().is_none_or(|r| r == rcpt) {
+                    Ok(self.verdict.clone())
+                } else {
+                    Ok(StageVerdict::Allow)
+                }
+            }
+            v => Ok(v.clone()),
+        }
     }
 }
 
