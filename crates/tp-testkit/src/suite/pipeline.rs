@@ -221,7 +221,7 @@ pub async fn pipeline() {
         Err(Error::Invalid(_))
     ));
     assert_eq!(reg.remove("absent"), Err(Error::NotFound));
-    assert_eq!(reg.stage("absent"), None);
+    assert!(reg.stage("absent").is_none());
     reg.set_order("mod.pre", 100).expect("свой порядок");
     assert_eq!(
         ids(&reg, PipelinePoint::BeforeMailboxSieve),
@@ -246,7 +246,7 @@ pub async fn pipeline() {
             .expect("rcpt anna"),
         StageVerdict::Allow
     );
-    let deny = Arc::new(Probe::new(
+    let deny = Probe::new(
         "mod.rcpt-deny",
         PipelinePoint::RcptTo,
         0,
@@ -255,7 +255,7 @@ pub async fn pipeline() {
             rcpt: "bob@internal.example".to_owned(),
             reason: "suite".to_owned(),
         },
-    ));
+    );
     reg.register(PipelinePoint::RcptTo, deny.clone())
         .expect("deny");
     assert_eq!(
@@ -281,7 +281,7 @@ pub async fn pipeline() {
         "этап вызван для каждого получателя"
     );
     // Отказ получателю вне RcptTo недопустим.
-    let data_rcpt = Arc::new(Probe::new(
+    let data_rcpt = Probe::new(
         "mod.rcpt-at-data",
         PipelinePoint::Data,
         0,
@@ -290,7 +290,7 @@ pub async fn pipeline() {
             rcpt: "bob@internal.example".to_owned(),
             reason: "suite".to_owned(),
         },
-    ));
+    );
     reg.register(PipelinePoint::Data, data_rcpt)
         .expect("rcpt@data");
     assert!(matches!(
@@ -303,13 +303,13 @@ pub async fn pipeline() {
     ));
     reg.remove("mod.rcpt-at-data").expect("убрали этап");
     // Отказ всему письму в той же SMTP-сессии.
-    let reject = Arc::new(Probe::new(
+    let reject = Probe::new(
         "mod.reject",
         PipelinePoint::Data,
         0,
         StageKind::Rules,
         StageVerdict::Reject("suite: content".to_owned()),
-    ));
+    );
     reg.register(PipelinePoint::Data, reject).expect("reject");
     assert_eq!(
         reg.run(

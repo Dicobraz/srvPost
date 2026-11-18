@@ -86,9 +86,9 @@ pub async fn journal(
 
     // Поиск по всем полям запроса: отправитель, получатель (включая скрытого), Message-ID, правило,
     // интервал; страницы с курсором.
-    let ids = |query: &JournalQuery| async {
+    let ids = |query: JournalQuery| async move {
         store
-            .search(&cap, query)
+            .search(&cap, &query)
             .await
             .expect("search")
             .entries
@@ -99,7 +99,7 @@ pub async fn journal(
     let mut all = JournalQuery::all(tenant, 10);
     all.sender = Some("SENDER@external.example".to_owned());
     assert_eq!(
-        ids(&all).await,
+        ids(all).await,
         vec![
             Some("m1@external.example".into()),
             Some("m2@external.example".into())
@@ -108,18 +108,18 @@ pub async fn journal(
     );
     let mut hidden = JournalQuery::all(tenant, 10);
     hidden.recipient = Some("hidden@internal.example".to_owned());
-    assert_eq!(ids(&hidden).await.len(), 2, "поиск по скрытому получателю");
+    assert_eq!(ids(hidden).await.len(), 2, "поиск по скрытому получателю");
     let mut by_mid = JournalQuery::all(tenant, 10);
     by_mid.message_id = Some("m2@external.example".to_owned());
-    assert_eq!(ids(&by_mid).await, vec![Some("m2@external.example".into())]);
+    assert_eq!(ids(by_mid).await, vec![Some("m2@external.example".into())]);
     let mut by_rule = JournalQuery::all(tenant, 10);
     by_rule.rule = Some("suite-rule".to_owned());
-    assert_eq!(ids(&by_rule).await.len(), 2);
+    assert_eq!(ids(by_rule).await.len(), 2);
     let mut interval = JournalQuery::all(tenant, 10);
     interval.since = Some(at);
     interval.until = Some(at + time::Duration::seconds(5));
     assert_eq!(
-        ids(&interval).await,
+        ids(interval).await,
         vec![Some("m1@external.example".into())],
         "интервал [since, until)"
     );
@@ -137,7 +137,7 @@ pub async fn journal(
     ));
     // Чужая организация записей не видит.
     assert_eq!(
-        ids(&JournalQuery::all(TenantId::new(), 10)).await,
+        ids(JournalQuery::all(TenantId::new(), 10)).await,
         Vec::<Option<String>>::new()
     );
     // Страницы: полная страница — с курсором, продолжение — строго после неё.
@@ -159,7 +159,7 @@ pub async fn journal(
     let mut after_discard = JournalQuery::all(tenant, 10);
     after_discard.message_id = Some("m1@external.example".to_owned());
     assert_eq!(
-        ids(&after_discard).await.len(),
+        ids(after_discard).await.len(),
         1,
         "discard не отменяет запись"
     );
@@ -184,7 +184,7 @@ pub async fn journal(
     drop_index();
     let restored = store.restore_index(tenant).await.expect("restore");
     assert_eq!(restored, 2);
-    assert_eq!(ids(&JournalQuery::all(tenant, 10)).await.len(), 2);
+    assert_eq!(ids(JournalQuery::all(tenant, 10)).await.len(), 2);
     let report = store.verify_chain(&cap, tenant).await.expect("verify");
     assert!(report.ok && report.broken_at.is_none());
 
