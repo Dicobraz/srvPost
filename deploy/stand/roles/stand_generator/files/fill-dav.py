@@ -67,14 +67,19 @@ def card(login, n, rng):
 
 
 class Dav:
-    """Соединение HTTPS учётной записи; переподключение — на каждой ошибке."""
+    """Соединение HTTPS на пару (логин, пароль); переподключение — на каждой ошибке. beta.3 привязывает
+    DAV-сессию к соединению при первой аутентификации: смена учётки на том же соединении идёт с правами
+    первого юзера (чужое = 404, concealment) — чужое соединение закрываем (FIX-17)."""
 
     def __init__(self, args, ctx):
-        self.args, self.ctx, self.conn = args, ctx, None
+        self.args, self.ctx, self.conn, self.login = args, ctx, None, None
 
     def request(self, login, pw, method, path, body, headers):
+        if self.conn is not None and self.login != login:
+            self.close()
         if self.conn is None:
             self.conn = http.client.HTTPSConnection(self.args.host, 443, context=self.ctx, timeout=60)
+            self.login = login
         h = {"Authorization": "Basic " + base64.b64encode(f"{login}:{pw}".encode()).decode()}
         h.update(headers)
         try:
@@ -91,7 +96,7 @@ class Dav:
     def close(self):
         if self.conn is not None:
             self.conn.close()
-            self.conn = None
+            self.conn, self.login = None, None
 
 
 def put(args, jobs, accounts, state, limiter, stats, ctx):
