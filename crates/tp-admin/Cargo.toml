@@ -36,6 +36,9 @@ opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
+# Знак брендинга — полный разбор PNG с Limits (ADM-48); та же версия и фичи, что у tp-tui (DEPS-17), в Cargo.lock
+# новых крейтов нет.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tp-testkit.workspace = true

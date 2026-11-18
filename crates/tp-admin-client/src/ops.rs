@@ -257,6 +257,66 @@ pub const ROUTE_DELETE: Op = Op {
     method: "DELETE",
     path: "/api/v1/orgs/{org}/transport/routes/{pattern}",
 };
+/// Брендинг установки.
+pub const BRANDING_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/branding",
+};
+/// Замена набора установки.
+pub const BRANDING_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/branding",
+};
+/// Сброс набора установки.
+pub const BRANDING_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/branding",
+};
+/// Знак установки.
+pub const BRANDING_LOGO_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/branding/logo",
+};
+/// Сброс знака установки.
+pub const BRANDING_LOGO_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/branding/logo",
+};
+/// Брендинг организации.
+pub const ORG_BRANDING_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/branding",
+};
+/// Замена набора организации.
+pub const ORG_BRANDING_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/orgs/{org}/branding",
+};
+/// Сброс набора организации.
+pub const ORG_BRANDING_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/orgs/{org}/branding",
+};
+/// Знак организации.
+pub const ORG_BRANDING_LOGO_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/orgs/{org}/branding/logo",
+};
+/// Сброс знака организации.
+pub const ORG_BRANDING_LOGO_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/orgs/{org}/branding/logo",
+};
+/// Действующий брендинг для экрана входа (без входа).
+pub const PUBLIC_BRANDING: Op = Op {
+    method: "GET",
+    path: "/api/v1/public/branding",
+};
+/// Знак по хэшу (без входа).
+pub const PUBLIC_BRANDING_LOGO: Op = Op {
+    method: "GET",
+    path: "/api/v1/public/branding/logo/{hash}",
+};
 
 /// Все операции клиента (сверка со спецификацией OpenAPI — тест).
 pub const OPERATIONS: &[Op] = &[
@@ -309,6 +369,18 @@ pub const OPERATIONS: &[Op] = &[
     ROUTE_LIST,
     ROUTE_PUT,
     ROUTE_DELETE,
+    BRANDING_GET,
+    BRANDING_PUT,
+    BRANDING_RESET,
+    BRANDING_LOGO_PUT,
+    BRANDING_LOGO_RESET,
+    ORG_BRANDING_GET,
+    ORG_BRANDING_PUT,
+    ORG_BRANDING_RESET,
+    ORG_BRANDING_LOGO_PUT,
+    ORG_BRANDING_LOGO_RESET,
+    PUBLIC_BRANDING,
+    PUBLIC_BRANDING_LOGO,
 ];
 
 #[cfg(test)]

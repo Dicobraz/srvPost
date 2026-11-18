@@ -29,6 +29,7 @@ use tp_admin::accounts::{
 };
 use tp_admin::app_passwords::{AppPasswordInfo, IssuedAppPassword, NewAppPassword};
 use tp_admin::audit::{AuditPage, AuditParams};
+use tp_admin::branding::{BrandingBody, BrandingView};
 use tp_admin::delivery::{DeliveryParams, DeliveryResults};
 use tp_admin::groups::{GroupInfo, GroupPatch, NewGroup};
 use tp_admin::resources::{NewResource, ResourceInfo, ResourcePatch, ResourceTypeBody};
@@ -43,8 +44,9 @@ use tp_admin_client::oidc::{DeviceLogin, DeviceSettings, prompt_text};
 use tp_admin_client::ops::*;
 use tp_admin_client::style::{self, ColorChoice, Theme, value_text};
 use tp_admin_client::{
-    Client, DEFAULT_TIMEOUT_SECS, ENV_TOKEN, ENV_URL, NO_BODY, Options, query, setting,
+    Client, DEFAULT_TIMEOUT_SECS, ENV_ORG, ENV_TOKEN, ENV_URL, NO_BODY, Options, query, setting,
 };
+use tp_contracts::branding::{BrandColor, CliRole, Role};
 use tp_contracts::groups::{GroupMember, SenderRestriction};
 use tp_contracts::transport::{
     AcceptedDomain, DestinationPolicy, DomainKind, SourceKind, SourceMatch, TlsRequirement,
@@ -230,6 +232,52 @@ pub enum ApiAction {
         #[command(subcommand)]
         action: Box<VacationAction>,
     },
+    /// Брендинг: название, основной цвет, роли цветов и знак (уровень установки; --org — организация).
+    Branding {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<BrandingAction>,
+    },
+}
+
+/// Действия с брендингом.
+#[derive(Debug, Clone, Subcommand)]
+pub enum BrandingAction {
+    /// Брендинг уровня: свой набор и действующий (без --org — установка, с --org — организация).
+    Show,
+    /// Изменение набора уровня: название, основной цвет и отдельные роли; остальное набора сохраняется.
+    Set {
+        /// Название продукта (1–64 символа).
+        #[arg(long)]
+        name: Option<String>,
+        /// Основной цвет #RRGGBB — источник незаданных ролей бренда уровня.
+        #[arg(long)]
+        primary: Option<String>,
+        /// Роль цвета: <тема>.<роль>=#RRGGBB (light.sel=#E3107F, dark.text=#161616, cli.head=#2A8BC4);
+        /// повторяется. Темы — light, dark, cli; роли — design/tokens.toml.
+        #[arg(long = "role", value_name = "ТЕМА.РОЛЬ=#RRGGBB")]
+        role: Vec<String>,
+    },
+    /// Сброс набора уровня — действует брендинг уровня выше (организация — установки, установка — IT TASK).
+    Reset,
+    /// Знак уровня.
+    Logo {
+        /// Действие.
+        #[command(subcommand)]
+        action: LogoAction,
+    },
+}
+
+/// Действия со знаком.
+#[derive(Debug, Clone, Subcommand)]
+pub enum LogoAction {
+    /// Знак из файла PNG (до 256 КБ, до 1024×1024; без названия и цветов уровня тоже ставится).
+    Set {
+        /// Файл PNG.
+        file: PathBuf,
+    },
+    /// Убрать знак уровня (название и цвета остаются).
+    Reset,
 }
 
 /// Действия с учётными записями.
@@ -1179,6 +1227,7 @@ pub async fn execute(client: &Client, args: &ApiArgs, action: ApiAction) -> CliR
         ApiAction::Policy { action } => policy_command(client, args, *action).await,
         ApiAction::Group { action } => group_command(client, args, *action).await,
         ApiAction::Resources { action } => resource_command(client, args, *action).await,
+        ApiAction::Branding { action } => branding_command(client, args, *action).await,
         ApiAction::Trash { action } => trash_command(client, args, action).await,
         ApiAction::Audit { action } => audit_command(client, args, *action).await,
         ApiAction::Delivery { action } => delivery_command(client, args, *action).await,
@@ -1735,6 +1784,172 @@ fn resource_record(r: &ResourceInfo) -> String {
         ("Имя", r.account.display_name.clone()),
         ("Тип", resource_type_name(r.resource_type).to_owned()),
         ("Из каталога", optional(r.account.external_id.as_ref())),
+    ])
+}
+
+/// `thepost admin branding …`: уровень — установка без `--org`, организация с `--org`.
+async fn branding_command(
+    client: &Client,
+    args: &ApiArgs,
+    action: BrandingAction,
+) -> CliResult<String> {
+    // Уровень: --org (или THEPOST_ADMIN_ORG) — организация, иначе — установка.
+    let org = setting(args.org.clone(), ENV_ORG);
+    let params: Vec<String> = match org {
+        None => Vec::new(),
+        Some(o) => {
+            o.parse::<tp_contracts::TenantId>()
+                .map_err(|e| format!("организация {o:?}: {e}"))?;
+            vec![o]
+        }
+    };
+    let p = params.iter().map(String::as_str).collect::<Vec<_>>();
+    let level = || match params.is_empty() {
+        true => (BRANDING_GET, BRANDING_PUT, BRANDING_RESET),
+        false => (ORG_BRANDING_GET, ORG_BRANDING_PUT, ORG_BRANDING_RESET),
+    };
+    match action {
+        BrandingAction::Show => {
+            let (get, _, _) = level();
+            let v: BrandingView = client.call(get, &p, &[], NO_BODY).await?;
+            out(args, &v, branding_record(&v))
+        }
+        BrandingAction::Set {
+            name,
+            primary,
+            role,
+        } => {
+            let (get, put, _) = level();
+            // Текущий набор уровня с наложением ключей: `set` меняет только заданное.
+            let view: BrandingView = client.call(get, &p, &[], NO_BODY).await?;
+            let own = view.own;
+            let mut body = BrandingBody {
+                product_name: own.as_ref().and_then(|o| o.product_name.clone()),
+                primary: own.as_ref().and_then(|o| o.primary),
+                light: own.as_ref().map(|o| o.light.clone()).unwrap_or_default(),
+                dark: own.as_ref().map(|o| o.dark.clone()).unwrap_or_default(),
+                cli: own.as_ref().map(|o| o.cli.clone()).unwrap_or_default(),
+            };
+            if let Some(name) = name {
+                body.product_name = Some(name);
+            }
+            if let Some(p) = primary {
+                body.primary = Some(p.parse().map_err(|e| format!("--primary: {e}"))?);
+            }
+            for one in role {
+                let (slot, color) = one
+                    .split_once('=')
+                    .ok_or_else(|| format!("--role {one:?}: нужно <тема>.<роль>=#RRGGBB"))?;
+                let color: BrandColor =
+                    color.parse().map_err(|e| format!("--role {one:?}: {e}"))?;
+                let (theme, role) = slot
+                    .split_once('.')
+                    .ok_or_else(|| format!("--role {one:?}: тема — light, dark или cli"))?;
+                match theme {
+                    "light" => {
+                        let r = Role::ALL
+                            .into_iter()
+                            .find(|r| r.as_str() == role)
+                            .ok_or_else(|| {
+                                format!(
+                                    "--role {one:?}: неизвестная роль {role:?} (design/tokens.toml)"
+                                )
+                            })?;
+                        body.light.insert(r, color);
+                    }
+                    "dark" => {
+                        let r = Role::ALL
+                            .into_iter()
+                            .find(|r| r.as_str() == role)
+                            .ok_or_else(|| {
+                                format!(
+                                    "--role {one:?}: неизвестная роль {role:?} (design/tokens.toml)"
+                                )
+                            })?;
+                        body.dark.insert(r, color);
+                    }
+                    "cli" => {
+                        let r = CliRole::ALL
+                            .into_iter()
+                            .find(|r| r.as_str() == role)
+                            .ok_or_else(|| {
+                                format!(
+                                    "--role {one:?}: неизвестная роль {role:?} (design/tokens.toml)"
+                                )
+                            })?;
+                        body.cli.insert(r, color);
+                    }
+                    other => {
+                        return Err(format!(
+                            "--role {one:?}: тема {other:?} — light, dark или cli"
+                        ));
+                    }
+                }
+            }
+            let v: BrandingView = client
+                .call(put, &p, &[], Some(&body))
+                .await
+                .map_err(|e| e.hint(422, "пары ниже порога контраста — смените цвет или роль"))?;
+            out(args, &v, branding_record(&v))
+        }
+        BrandingAction::Reset => {
+            let (_, _, reset) = level();
+            let v: BrandingView = client.call(reset, &p, &[], NO_BODY).await?;
+            out(args, &v, branding_record(&v))
+        }
+        BrandingAction::Logo { action } => {
+            let op = match (params.is_empty(), matches!(action, LogoAction::Set { .. })) {
+                (true, true) => BRANDING_LOGO_PUT,
+                (false, true) => ORG_BRANDING_LOGO_PUT,
+                (true, false) => BRANDING_LOGO_RESET,
+                (false, false) => ORG_BRANDING_LOGO_RESET,
+            };
+            match action {
+                LogoAction::Set { file } => {
+                    let png = tokio::fs::read(&file)
+                        .await
+                        .map_err(|e| format!("{}: {e}", file.display()))?;
+                    let v: BrandingView = client
+                        .put_branding_logo(op, &p, png)
+                        .await
+                        .map_err(|e| e.hint(415, "знак — файл PNG (image/png)"))?;
+                    out(args, &v, branding_record(&v))
+                }
+                LogoAction::Reset => {
+                    let v: BrandingView = client.call(op, &p, &[], NO_BODY).await?;
+                    out(args, &v, branding_record(&v))
+                }
+            }
+        }
+    }
+}
+
+/// Брендинг уровня — строки «подпись: значение».
+fn branding_record(v: &BrandingView) -> String {
+    let name = v
+        .effective
+        .product_name
+        .clone()
+        .unwrap_or_else(|| "IT TASK".to_owned());
+    let logo = match v.effective.logo {
+        None => "встроенный IT TASK".to_owned(),
+        Some(l) => format!("{} (PNG {}×{}, {} байт)", l.hash, l.width, l.height, l.size),
+    };
+    let set = match &v.own {
+        None => "не задан — действует уровень выше".to_owned(),
+        Some(o) => format!(
+            "название {}, основной {}, роли: light {}, dark {}, cli {}",
+            o.product_name.as_deref().unwrap_or("—"),
+            o.primary.map(|c| c.to_string()).as_deref().unwrap_or("—"),
+            o.light.len(),
+            o.dark.len(),
+            o.cli.len()
+        ),
+    };
+    record(&[
+        ("Название", name),
+        ("Знак", logo),
+        ("Свой набор уровня", set),
     ])
 }
 
@@ -2453,8 +2668,9 @@ mod tests {
     use tp_contracts::ext::DecisionHooks;
     use tp_testkit::{
         Clock, FakeAuthenticator, MemAbuseBlocks, MemAppPasswords, MemAuditLog, MemBlobIndex,
-        MemBlobStore, MemDeliveryLog, MemEventBus, MemGroups, MemLocalAdminTokens, MemMetadata,
-        MemModeration, MemPolicies, MemQuota, MemSieve, MemTransport, MemTrash, SystemClock,
+        MemBlobStore, MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemLocalAdminTokens,
+        MemMetadata, MemModeration, MemPolicies, MemQuota, MemSieve, MemTransport, MemTrash,
+        SystemClock,
     };
     use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate};
 
@@ -3066,7 +3282,11 @@ mod tests {
                     resources: Arc::new(meta.clone()),
                     policy: Arc::new(meta.clone()),
                     collections: Arc::new(MemDav::new()),
-                }),
+                })
+                .with_branding(
+                    Arc::new(MemBranding::default()),
+                    Arc::new(MemBlobStore::new(Arc::new(SystemClock))),
+                ),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -4475,4 +4695,158 @@ mod tests {
             "{err}"
         );
     }
+
+    /// ADM-48: брендинг — show/set/reset/logo против роутера tp-admin; `set` меняет только заданное,
+    /// контраст ниже порога — 422 с пояснением; открытый маршрут — без входа.
+    #[tokio::test]
+    async fn branding_commands_against_admin_api() {
+        let (_admin, url) = admin_api().await;
+        let c = client(&url, "oidc");
+        let branding = |action: BrandingAction| ApiAction::Branding {
+            action: Box::new(action),
+        };
+        let json = |out: CliResult<String>| -> Value {
+            serde_json::from_str(&out.expect("ответ")).expect("json")
+        };
+
+        // Без наборов — IT TASK; set меняет только заданное (флаги поверх текущего набора).
+        let show = json(exec(&c, true, branding(BrandingAction::Show)).await);
+        assert_eq!(show["own"], Value::Null);
+        assert_eq!(show["effective"]["palette"]["light"]["sel"], "#E3107F");
+        let set = exec(
+            &c,
+            false,
+            branding(BrandingAction::Set {
+                name: Some("Почта Ромашка".into()),
+                primary: Some("#177CAA".into()),
+                role: vec!["light.selI=#D7E2EA".into(), "cli.head=#2A8BC4".into()],
+            }),
+        )
+        .await
+        .expect("branding set");
+        assert!(set.contains("Почта Ромашка"), "{set}");
+        // Второй set без --primary сохраняет основной цвет и роли (набор не обнуляется).
+        let show = json(
+            exec(
+                &c,
+                true,
+                branding(BrandingAction::Set {
+                    name: Some("Ромашка".into()),
+                    primary: None,
+                    role: vec![],
+                }),
+            )
+            .await,
+        );
+        assert_eq!(show["own"]["product_name"], "Ромашка");
+        assert_eq!(show["own"]["primary"], "#177CAA");
+        assert_eq!(show["own"]["light"]["selI"], "#D7E2EA");
+        assert_eq!(show["own"]["cli"]["head"], "#2A8BC4");
+
+        // Контраст ниже порога — 422 с пояснением по-русски.
+        let err = exec(
+            &c,
+            false,
+            branding(BrandingAction::Set {
+                name: None,
+                primary: None,
+                role: vec!["light.sel=#F5E663".into()],
+            }),
+        )
+        .await
+        .expect_err("контраст");
+        assert!(err.contains("422") && err.contains("светлая тема"), "{err}");
+
+        // Знак из файла (PNG 12×6); logo reset убирает знак; несуществующий файл — понятная ошибка.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let logo = dir.path().join("logo.png");
+        std::fs::write(&logo, LOGO_PNG).expect("write");
+        let set = exec(
+            &c,
+            false,
+            branding(BrandingAction::Logo {
+                action: LogoAction::Set { file: logo.clone() },
+            }),
+        )
+        .await
+        .expect("logo set");
+        assert!(set.contains("PNG 12×6"), "{set}");
+        let err = exec(
+            &c,
+            false,
+            branding(BrandingAction::Logo {
+                action: LogoAction::Set {
+                    file: dir.path().join("нет.png"),
+                },
+            }),
+        )
+        .await
+        .expect_err("нет файла");
+        assert!(err.contains("нет.png"), "{err}");
+        let show = json(
+            exec(
+                &c,
+                true,
+                branding(BrandingAction::Logo {
+                    action: LogoAction::Reset,
+                }),
+            )
+            .await,
+        );
+        assert_eq!(show["own"]["logo"], Value::Null);
+
+        // Уровень организации: --org; без --org — уровень установки.
+        let mut args = ApiArgs {
+            org: Some(TenantId::DEFAULT.to_string()),
+            ..ApiArgs::default()
+        };
+        let set = execute(
+            &c,
+            &args,
+            branding(BrandingAction::Set {
+                name: Some("Ромашка-Орг".into()),
+                primary: None,
+                role: vec![],
+            }),
+        )
+        .await
+        .expect("org set");
+        assert!(set.contains("Ромашка-Орг"), "{set}");
+        args.org = None;
+        let show = json(exec(&c, true, branding(BrandingAction::Show)).await);
+        assert_eq!(
+            show["effective"]["product_name"], "Почта Ромашка",
+            "без --org — уровень установки"
+        );
+
+        // Открытый маршрут — без входа: домен имени входа даёт организацию (её набор поверх установки),
+        // без домена — брендинг установки.
+        exec(
+            &c,
+            false,
+            domain_action(DomainAction::Create {
+                name: "res.test".into(),
+                relay: None,
+            }),
+        )
+        .await
+        .expect("domain");
+        let anon = Client::anonymous(url, &Options::default()).expect("client");
+        let public = anon
+            .public_branding(Some("res.test"))
+            .await
+            .expect("public");
+        assert_eq!(public.product_name.as_deref(), Some("Ромашка-Орг"));
+        assert!(public.logo.is_none());
+        let public = anon.public_branding(None).await.expect("public");
+        assert_eq!(public.product_name.as_deref(), Some("Почта Ромашка"));
+    }
+
+    /// PNG 12×6 (сплошной #177CAA) для знака в тестах.
+    const LOGO_PNG: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 12, 0, 0, 0, 6, 8,
+        6, 0, 0, 0, 247, 238, 127, 129, 0, 0, 0, 19, 73, 68, 65, 84, 120, 218, 99, 16, 175, 89,
+        245, 159, 20, 204, 48, 18, 53, 0, 0, 254, 195, 160, 225, 13, 63, 71, 128, 0, 0, 0, 0, 73,
+        69, 78, 68, 174, 66, 96, 130,
+    ];
 }

@@ -36,6 +36,7 @@ use tp_contracts::admin_audit::{AdminAuditRecord, AuditLog};
 use tp_contracts::audit::MailboxAudit;
 use tp_contracts::auth::{Authenticator, Credentials, Principal, SyncGate};
 use tp_contracts::blob::BlobStore;
+use tp_contracts::branding::BrandingStore;
 use tp_contracts::delivery::DeliveryLog;
 use tp_contracts::ext::{AdminRequest, AdminRoutes};
 use tp_contracts::groups::GroupStore;
@@ -117,10 +118,12 @@ impl AdminRole {
         ]
         .contains(&route);
         let cluster = route.starts_with(crate::transport::CLUSTER_PREFIX);
+        // Брендинг установки — уровень инсталляции (ADM-48): администратору организации и оператору нельзя.
+        let installation = route.starts_with(crate::branding::BRANDING_PREFIX);
         match self {
             AdminRole::InstallationAdmin => true,
-            AdminRole::OrganizationAdmin => own_scope && !cluster,
-            AdminRole::Operator => own_scope && read && !audit && !cluster,
+            AdminRole::OrganizationAdmin => own_scope && !cluster && !installation,
+            AdminRole::Operator => own_scope && read && !audit && !cluster && !installation,
             AdminRole::Auditor => {
                 read && (route == WHOAMI_ROUTE || (audit && tenant.is_some_and(|t| t == own)))
             }
@@ -394,6 +397,8 @@ pub struct Admin {
     pub(crate) sharing: Option<crate::sharing::SharingStores>,
     /// Очередь исходящей почты ([`crate::queue`]); `None` — не подключено (маршруты отвечают 503).
     pub(crate) queue: Option<Arc<dyn QueueStore>>,
+    /// Брендинг установки и организаций ([`crate::branding`]); `None` — не подключено (маршруты — 503).
+    pub(crate) branding: Option<crate::branding::BrandingStores>,
     /// Организации инсталляции: без модуля «Мультитенантность» — только организация по умолчанию (решение 10).
     /// Маршрут `/api/v1/orgs/{org}/...` другой организации — 404 ([`guard`]).
     pub(crate) organizations: BTreeSet<TenantId>,
@@ -410,6 +415,7 @@ impl fmt::Debug for Admin {
             .field("held_blobs", &self.held_blobs.is_some())
             .field("sharing", &self.sharing.is_some())
             .field("queue", &self.queue.is_some())
+            .field("branding", &self.branding.is_some())
             .field("organizations", &self.organizations)
             .finish()
     }
@@ -447,6 +453,7 @@ impl Admin {
             held_blobs: None,
             sharing: None,
             queue: None,
+            branding: None,
             organizations: BTreeSet::from([TenantId::DEFAULT]),
         })
     }
@@ -454,6 +461,16 @@ impl Admin {
     /// Подключает настройки транспорта ([`crate::transport`]).
     pub fn with_transport(mut self, transport: Arc<dyn TransportStore>) -> Self {
         self.transport = Some(transport);
+        self
+    }
+
+    /// Подключает брендинг установки и организаций ([`crate::branding`]): наборы уровней и байты знаков.
+    pub fn with_branding(
+        mut self,
+        store: Arc<dyn BrandingStore>,
+        blobs: Arc<dyn BlobStore>,
+    ) -> Self {
+        self.branding = Some(crate::branding::BrandingStores { store, blobs });
         self
     }
 
@@ -487,6 +504,7 @@ impl Admin {
         api = crate::sharing::routes(api);
         api = crate::resources::routes(api);
         api = crate::queue::routes(api);
+        api = crate::branding::routes(api);
         for m in &self.d.modules {
             let prefix = m.prefix().to_owned();
             let handler = {
@@ -501,7 +519,11 @@ impl Admin {
                 .route(&format!("{prefix}/{{*rest}}"), any(handler));
         }
         let api = api.route_layer(middleware::from_fn_with_state(self.clone(), guard));
-        let api = crate::cors::layer(crate::init::routes(api), &self.cfg.console.cors_origins);
+        // Открытый маршрут брендинга — без входа, как вход по паролю (`crate::init`): слой доступа их не проверяет.
+        let api = crate::cors::layer(
+            crate::branding::public_routes(crate::init::routes(api)),
+            &self.cfg.console.cors_origins,
+        );
         crate::console::routes(api, &self.cfg.console, crate::console::embedded())
             .route("/api/openapi.json", get(openapi))
             .layer(DefaultBodyLimit::max(self.cfg.max_body_size))
@@ -843,6 +865,7 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     api.merge(crate::sharing::Doc::openapi());
     api.merge(crate::resources::Doc::openapi());
     api.merge(crate::queue::Doc::openapi());
+    api.merge(crate::branding::Doc::openapi());
     CommonErrors.modify(&mut api);
     api
 }
@@ -1187,6 +1210,7 @@ mod tests {
 
         use serde::de::DeserializeOwned;
         use time::OffsetDateTime;
+        use tp_contracts::branding::{CliRole, Palette, Role};
         use tp_contracts::transport::{AcceptedDomain, DomainKind};
         use tp_contracts::{AccountId, DomainId};
 
@@ -1194,6 +1218,7 @@ mod tests {
             AccountInfo, AccountQuery, NewAccount, Policies, PolicyBody, QuotaInfo,
         };
         use crate::app_passwords::{AppPasswordInfo, IssuedAppPassword, NewAppPassword};
+        use crate::branding::{BrandingBody, BrandingView, PublicBranding};
         use crate::init::AdminSession;
         use crate::transport::{DomainBody, DomainList, DomainWritten, VersionQuery, Written};
 
@@ -1306,6 +1331,27 @@ mod tests {
         });
         roundtrip(DomainWritten { version: 8, domain });
         roundtrip(Written { version: 9 });
+        roundtrip(BrandingBody {
+            product_name: Some("Почта".into()),
+            primary: Some("#177CAA".parse().expect("color")),
+            light: [(Role::Sel, "#E3107F".parse().expect("color"))]
+                .into_iter()
+                .collect(),
+            dark: std::collections::BTreeMap::new(),
+            cli: [(CliRole::Head, "#2A8BC4".parse().expect("color"))]
+                .into_iter()
+                .collect(),
+        });
+        roundtrip(BrandingBody::default());
+        roundtrip(BrandingView {
+            own: None,
+            effective: tp_contracts::branding::BrandingLevels::default().effective(),
+        });
+        roundtrip(PublicBranding {
+            product_name: None,
+            palette: Palette::it_task(),
+            logo: Some("/api/v1/public/branding/logo/00".into()),
+        });
         roundtrip(Problem {
             status: 400,
             title: "Bad Request".into(),
