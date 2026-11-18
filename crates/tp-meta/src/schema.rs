@@ -74,7 +74,7 @@ fn migrate_err(e: MigrateError) -> Error {
 /// Соединение — из пула `pool` через его наблюдателя.
 pub async fn migrate(pool: &DbPool) -> Result<()> {
     let mut conn = pool.acquire().await?;
-    fold_old_chain(&mut *conn).await?;
+    fold_old_chain(&mut conn).await?;
     migrator()
         .run_direct(None, &mut *conn, false)
         .await
