@@ -1,11 +1,12 @@
 //! Делегированный доступ к чужим ящикам почты в JMAP (JMAP-49): `Email/query`, `Email/queryChanges`,
 //! `Email/get` по чужому `accountId` от представителя поверх ACL папок (RFC 4314) — единый слой прав
-//! с группами и `anyone` ([`AclStore`]; в узле над ним — [`Authorizer`](tp_contracts::auth::Authorizer)
-//! `tp_auth::AclAuthorizer`, CTR-82), [`Jmap::with_acl`].
+//! с группами и `anyone` ([`AclStore`](tp_contracts::acl::AclStore); в узле над ним —
+//! [`Authorizer`](tp_contracts::auth::Authorizer) `tp_auth::AclAuthorizer`, CTR-82), [`Jmap::with_acl`].
 //!
 //! - Открытие ящика — как пространство имён общих папок IMAP: папки владельца, открытые субъекту правом
-//!   `l` ([`AclStore::shared_mailboxes`]), с их действующими правами. Чужой `accountId` без общих папок
-//!   (и неизвестный, и без подключённого хранилища) — `noAccess`: существование ящика не раскрывается.
+//!   `l` ([`AclStore::shared_mailboxes`](tp_contracts::acl::AclStore::shared_mailboxes)), с их
+//!   действующими правами. Чужой `accountId` без общих папок (и неизвестный, и без подключённого
+//!   хранилища) — `noAccess`: существование ящика не раскрывается.
 //! - Видимость — модель общего доступа календарей и книг (JMAP-32): аккаунт владельца в сессии с
 //!   `isPersonal` = `false` и capability почты (без создания папок); письмо читается только из папки с
 //!   правом `r` (как SELECT/FETCH в IMAP) — фильтр по папке без права даёт пустой результат, письмо из
@@ -20,9 +21,8 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use tp_contracts::acl::{ANYONE, AclStore, SharedMailbox, validate_identifier};
+use tp_contracts::acl::{ANYONE, SharedMailbox, validate_identifier};
 use tp_contracts::auth::{Principal, Rights};
-use tp_contracts::meta::AccountStore;
 use tp_contracts::{AccountId, MailboxId, Result};
 
 use crate::core::Jmap;
