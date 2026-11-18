@@ -610,7 +610,7 @@
 | [DEPS-15](DEPS-15.md) | зависимости картинок и мыши текстового интерфейса — `ratatui-image`, `evdev` | deps | B | deps-15 | done | DEPS-14 |
 | [TUI-06](TUI-06.md) | тема текстового интерфейса по токенам — пять режимов, палитра консоли Linux, знак IT TASK | tui | A | tui-03 | done | TUI-01,DES-01 |
 | [TUI-07](TUI-07.md) | мышь в текстовом интерфейсе — щелчки, прокрутка, граница панелей, плавный курсор | tui | A | tui-04 | done | TUI-06,DEPS-15 |
-| [TUI-12](TUI-12.md) | уровень 3 плавного курсора на консоли Linux — глифы в шрифт через KDFONTOP (tp-sys) | tui | B | tui-08 | todo | TUI-07 |
+| [TUI-12](TUI-12.md) | уровень 3 консоли — KDFONTOP через tp-sys (плавный курсор) | tui | B | tui-08 | done | TUI-07 |
 | [UI-19](UI-19.md) | веб-консоль на токенах фирменного стиля — тема antd, шрифты в статике | console | A | console-10 | ready | DES-01 |
 | [CTR-85](CTR-85.md) | очередь исходящей почты — список записей и повтор доставки в контракте `QueueStore` | contracts | B | contracts-57 | done | — |
 | [ADM-45](ADM-45.md) | Admin API очереди — `GET /orgs/{org}/queue`, `POST /orgs/{org}/queue/{id}/retry` | admin | A | admin-31 | done | CTR-85 |
