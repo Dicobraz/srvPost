@@ -51,11 +51,14 @@ test("очередь: фильтры — параметрами запроса, 
   expect(await screen.findByText("carol@example.org")).toBeTruthy();
 });
 
-test("очередь: «Повторить» с подтверждением вызывает retry и обновляет строку; запись под лизой — без кнопки", async () => {
+test("очередь: «Повторить» с подтверждением вызывает retry и обновляет строку; запись под лизой — без кнопки; отказ — с причиной", async () => {
   let queue = [
     entry("q1", "alice@example.org", {
       status: "retry",
-      rcpts: [{ address: "x@remote.example", status: "pending", next_attempt: AT, reply: null, attempts: 2, last_error: "451 try later" }],
+      rcpts: [
+        { address: "x@remote.example", status: "pending", next_attempt: AT, reply: null, attempts: 2, last_error: "451 try later" },
+        { address: "y@remote.example", status: "failed", next_attempt: null, reply: "550 5.1.1 no such user", attempts: 3, last_error: null },
+      ],
     }),
     entry("q2", "bob@example.org", { status: "active" }),
   ];
@@ -68,6 +71,9 @@ test("очередь: «Повторить» с подтверждением в�
   });
   expect(await screen.findByText("x@remote.example — ждёт, попыток: 2")).toBeTruthy();
   expect(screen.getByText("(451 try later)", { exact: false })).toBeTruthy();
+  // Причина окончательного отказа — ответ сервера (reply), а не последняя временная неудача.
+  expect(screen.getByText("y@remote.example — отказ, попыток: 3")).toBeTruthy();
+  expect(screen.getByText("(550 5.1.1 no such user)")).toBeTruthy();
   const [first, second] = (await screen.findAllByRole("button", { name: "Повторить" })) as HTMLButtonElement[];
   expect(second.disabled).toBe(true);
 
