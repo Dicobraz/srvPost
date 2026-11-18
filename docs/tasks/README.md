@@ -673,7 +673,7 @@
 | [FIX-11](FIX-11.md) | молча нерабочая запись /etc/hosts (имя вместо адреса) |  |  | deploy-46 | done | — |
 | [FIX-12](FIX-12.md) | адрес генератора в конфиге узла — ansible_host / факты / assert |  |  | deploy-47 | done | — |
 | [FIX-13](FIX-13.md) | чужой From в исходящей нагрузке, CRLF в файлах стенда, сэмплер без проверки старта |  |  | deploy-48 | done | — |
-| [FIX-14](FIX-14.md) | зонд доставки шлёт чужой From под AUTH (550) |  |  | deploy-49 | done | — |
+| [FIX-14](FIX-14.md) | — | — | — | deploy-49 | done | — |
 | [FIX-15](FIX-15.md) | условие сбора фактов FIX-12 падает; каталог drop-in openbao не создаётся |  |  | deploy-50 | done | — |
 
 ## Ф1 · Находки Д.7 2026-11-17 — производительность и наблюдаемость (этап 2)
@@ -892,19 +892,19 @@
 | [UI-22](UI-22.md) | консоль — брендинг заказчика: тема из действующего брендинга, знак на входе и в шапке, настройка | console | A | console-13 | todo | UI-19,ADM-48 |
 | [TUI-08](TUI-08.md) | текстовый интерфейс — тема поверх действующего брендинга, знак на экране входа | tui | A | tui-05 | todo | TUI-06,ADM-48 |
 | [DOC-11](DOC-11.md) | INSTALL — брендинг заказчика | docs | A | docs-11 | todo | ADM-48 |
-| [CTR-93](CTR-93.md) | контракт политики доверия — типы абонентов, функции, уровни, потолок, безопасные умолчания | contracts | B | contracts-64 | ready | CTR-92 |
-| [META-85](META-85.md) | политика доверия в PostgreSQL — `TrustStore` в `PgMeta`, внешний текст автоответа | meta | A | meta-58 | todo | CTR-93 |
-| [ADM-49](ADM-49.md) | политика доверия в Admin API — маршруты уровней, проверка потолка, партнёры, CLI | admin | B | admin-35 | todo | CTR-93,ADM-44 |
+| [CTR-93](CTR-93.md) | контракт политики доверия — типы абонентов, функции, уровни, потолок, безопасные умолчания | contracts | B | contracts-64 | done | CTR-92 |
+| [META-85](META-85.md) | политика доверия в PostgreSQL — `TrustStore` в `PgMeta`, внешний текст автоответа | meta | A | meta-58 | ready | CTR-93 |
+| [ADM-49](ADM-49.md) | политика доверия в Admin API — маршруты уровней, проверка потолка, партнёры, CLI | admin | B | admin-35 | ready | CTR-93,ADM-44 |
 | [UI-23](UI-23.md) | консоль — экран «Доверие»: матрица типов абонентов и функций, уровни, партнёры | console | A | console-14 | todo | ADM-49 |
 | [TUI-09](TUI-09.md) | текстовый интерфейс — раздел «Доверие»: матрица, уровни, партнёры | tui | A | tui-06 | todo | TUI-03,ADM-49 |
-| [SMTP-50](SMTP-50.md) | матрица доверия в SMTP — тип абонента, автоответ, MDN, DSN, группы, автопересылка | smtp | A | smtp-30 | todo | CTR-93,SMTP-49 |
-| [DAV-44](DAV-44.md) | матрица доверия в CalDAV и CardDAV — iTIP извне, занятость, общий доступ, публикация, GAL | dav | A | dav-21 | todo | CTR-93,DAV-43 |
-| [JMAP-47](JMAP-47.md) | матрица доверия в JMAP — принципалы и занятость своей организации, общий доступ, публикация, внешний автоответ | jmap | A | jmap-30 | todo | CTR-93 |
-| [SIEVE-14](SIEVE-14.md) | `processcalendar` (RFC 9671), расширение `vnd.thepost.peer`, админский скрипт — только сужение | sieve | A | sieve-07 | todo | CTR-93 |
+| [SMTP-50](SMTP-50.md) | матрица доверия в SMTP — тип абонента, автоответ, MDN, DSN, группы, автопересылка | smtp | A | smtp-30 | ready | CTR-93,SMTP-49 |
+| [DAV-44](DAV-44.md) | матрица доверия в CalDAV и CardDAV — iTIP извне, занятость, общий доступ, публикация, GAL | dav | A | dav-21 | ready | CTR-93,DAV-43 |
+| [JMAP-47](JMAP-47.md) | матрица доверия в JMAP — принципалы и занятость своей организации, общий доступ, публикация, внешний автоответ | jmap | A | jmap-30 | ready | CTR-93 |
+| [SIEVE-14](SIEVE-14.md) | `processcalendar` (RFC 9671), расширение `vnd.thepost.peer`, админский скрипт — только сужение | sieve | A | sieve-07 | ready | CTR-93 |
 | [APP-76](APP-76.md) | узел — политика доверия в точках решения (SMTP, DAV, JMAP, Sieve, Admin API) | app | A | app-73 | todo | META-85,ADM-49,SMTP-50,DAV-44,JMAP-47,SIEVE-14 |
 | [DOC-12](DOC-12.md) | ADMIN-GUIDE — сверка раздела «Кто с кем и что может» с кодом | docs | A | docs-12 | todo | APP-76 |
 | [DEPS-18](DEPS-18.md) | зависимости метки ответа и BATV — `chacha20poly1305`, `hmac`, `sha1` в tp-smtp | deps | B | deps-18 | ready | — |
-| [CTR-94](CTR-94.md) | контракты ответа и беседы — запись об отправленном, ключи меток, беседа, удержание и действия по беседе | contracts | B | contracts-65 | todo | CTR-93 |
+| [CTR-94](CTR-94.md) | контракты ответа и беседы — запись об отправленном, ключи меток, беседа, удержание и действия по беседе | contracts | B | contracts-65 | ready | CTR-93 |
 | [META-86](META-86.md) | запись об отправленном и беседы в PostgreSQL — `SentLog`, `ThreadStore`, удержание и действия по беседе | meta | A | meta-59 | todo | CTR-94 |
 | [MS-21](MS-21.md) | приём письма — беседа и политики беседы в той же транзакции | mailstore | A | mailstore-15 | todo | CTR-94 |
 | [SMTP-51](SMTP-51.md) | ответ на наше письмо — метка в Message-ID, BATV, признак ответа, память беседы | smtp | A | smtp-31 | todo | CTR-94,DEPS-18,SMTP-50 |
