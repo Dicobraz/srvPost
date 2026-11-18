@@ -44,6 +44,9 @@ export interface Tokens {
 
 export const tokens = parse(raw) as unknown as Tokens;
 
+/** Знаки состояний (● ▲ ×) — из [signs] файла токенов: смысл статуса не держится на одном цвете. */
+export const signs = tokens.signs;
+
 /** Цвета текущей темы: тёмная (prefers-color-scheme) или светлая. */
 export function modeColors(dark: boolean): ModeColors {
   return dark ? tokens.mode.dark : tokens.mode.light;
@@ -83,7 +86,7 @@ export function brandTheme(dark: boolean): ThemeConfig {
     components: {
       Layout: { headerBg: "transparent", siderBg: c.panel, bodyBg: c.screen },
       Menu: { itemSelectedBg: c.sel, itemSelectedColor: c.selFg },
-      Table: { headerBg: c.selI, headerColor: c.head, rowSelectedBg: c.selI, rowSelectedColor: c.selIFg },
+      Table: { headerBg: c.selI, headerColor: c.head, rowSelectedBg: c.selI },
     },
   };
 }

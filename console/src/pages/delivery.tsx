@@ -105,7 +105,7 @@ export function DeliveryPage() {
       <Table<Entry> dataSource={page?.events} loading={loading} rowKey={(e) => `${e.at} ${e.node} ${e.kind} ${e.queue_id} ${e.recipients}`} pagination={false}>
         <Table.Column<Entry> title="Время" render={(_, e) => moment(e.at)} />
         <Table.Column<Entry> title="Событие" render={(_, e) => kind(e)} />
-        <Table.Column<Entry> title="Решение" render={(_, e) => decision(e)} />
+        <Table.Column<Entry> title="Решение" render={(_, e) => <Decision e={e} />} />
         <Table.Column<Entry> title="Отправитель" render={(_, e) => sender(e)} />
         <Table.Column<Entry> title="Получатели" render={(_, e) => e.recipients.join(", ")} />
         <Table.Column<Entry>

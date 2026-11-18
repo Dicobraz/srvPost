@@ -54,9 +54,11 @@ test("статус: знак роли рядом с текстом, цвет —
   expect(tags.map((t) => t.textContent)).toEqual(
     (Object.keys(labels) as (keyof typeof labels)[]).map((role) => `${signs[role]} ${labels[role]}`),
   );
-  // Цвет и рамка — роль светлой темы из токенов (атрибут style хранит значение как записали).
+  // Цвет — роль светлой темы из токенов (jsdom может отдать как hex или rgb — принимаем оба).
+  const rgb = (hex: string) =>
+    `rgb(${Number.parseInt(hex.slice(1, 3), 16)}, ${Number.parseInt(hex.slice(3, 5), 16)}, ${Number.parseInt(hex.slice(5, 7), 16)})`;
   for (const [i, role] of (Object.keys(labels) as (keyof typeof labels)[]).entries())
-    expect(tags[i].getAttribute("style")).toContain(tokens.mode.light[role]);
+    expect([tokens.mode.light[role], rgb(tokens.mode.light[role])]).toContain(tags[i].style.color);
 });
 
 test("в коде консоли нет своих цветов: шестнадцатеричные литералы — только в design/tokens.toml", () => {
