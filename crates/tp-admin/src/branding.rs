@@ -1066,7 +1066,7 @@ mod tests {
     use serde_json::{Value, json};
     use tower::ServiceExt;
     use tp_contracts::TenantId;
-    use tp_contracts::branding::{BrandingStore as _, ContrastIssue, Palette};
+    use tp_contracts::branding::{ContrastIssue, Palette};
     use tp_contracts::transport::{AcceptedDomain, DomainKind, TransportStore as _};
 
     use super::*;

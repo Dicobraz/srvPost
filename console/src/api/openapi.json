@@ -623,7 +623,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/BrandColor"
             },
-            "description": "Роли светлой темы (`design/tokens.toml`: screen, panel, text, muted, frame, frameA, titleA, head, sel,\n selFg, selI, selIFg, fkBg, fkFg, ok, warn, err).",
+            "description": "Роли светлой темы (`design/tokens.toml`: screen, panel, text, muted, frame, frameA, titleA, head, sel,\nselFg, selI, selIFg, fkBg, fkFg, ok, warn, err).",
             "type": "object"
           },
           "primary": {
