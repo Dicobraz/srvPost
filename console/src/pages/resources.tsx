@@ -1,9 +1,10 @@
-// Ресурсы — переговорные и оборудование (UI-10, ADM-16; тип — ADM-47): учётная запись вида resource, её тип
-// (помещение или оборудование) и правила бронирования. Имя и блокировку входа ведёт карточка учётной записи;
+// Ресурсы — переговорные и оборудование (UI-10, ADM-16; тип — ADM-47, фильтр — UI-21): учётная запись вида
+// resource, её тип (помещение или оборудование) и правила бронирования. Имя и блокировку входа ведёт карточка учётной записи;
 // представители ресурса — ответственные за бронирования.
 import { Create, List, Show, ShowButton, useForm } from "@refinedev/antd";
 import { type HttpError, useCustomMutation, useDelete, useList, useShow } from "@refinedev/core";
 import { Button, Descriptions, Divider, Form, Input, Popconfirm, Select, Space, Table } from "antd";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import type { Schemas } from "../api/client";
@@ -25,14 +26,24 @@ function TypeSelect(props: Parameters<typeof Select>[0]) {
   return <Select options={TYPES.map(([v, t]) => ({ value: v, label: t }))} style={{ width: 160 }} {...props} />;
 }
 
-/** Ресурсы организации. */
+/** Ресурсы организации; отбор по типу (UI-21) — локальный: список грузится целиком, у `GET /resources` нет параметров отбора. */
 export function ResourceList() {
   const readOnly = useReadOnly("resources");
+  const [type, setType] = useState<Schemas["ResourceTypeBody"]>();
   const { result, query } = useList<Resource>({ resource: "resources", pagination: { mode: "off" } });
   const { mutate: remove } = useDelete();
+  const rows = type ? result.data.filter((r) => (r.resource_type ?? "room") === type) : result.data;
   return (
     <List title="Ресурсы">
-      <Table<Resource> dataSource={result.data} loading={query.isLoading} rowKey="id" pagination={false}>
+      <TypeSelect
+        aria-label="Тип"
+        placeholder="Все типы"
+        allowClear
+        value={type}
+        onChange={(v) => setType(v as Schemas["ResourceTypeBody"] | undefined)}
+        style={{ width: 200, marginBottom: 16 }}
+      />
+      <Table<Resource> dataSource={rows} loading={query.isLoading} rowKey="id" pagination={false}>
         <Table.Column dataIndex="display_name" title="Название" />
         <Table.Column dataIndex="login" title="Адрес" />
         <Table.Column<Resource>
