@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use bytes::Bytes;
 use tp_contracts::TenantId;
+use tp_contracts::groups::GroupStore;
 use tp_contracts::membership::NodeId;
 use tp_contracts::queue::SubmitStatus;
 use tp_contracts::sieve::{DeliveryRules, ReplyBody, RulesInput, RulesOutcome};
@@ -388,8 +389,7 @@ async fn dsn_plain_for_foreign_and_silent_for_junk() {
     assert!(dsn.contains("delivery failed"), "{dsn}");
     assert!(
         !dsn.contains("mailbox full"),
-        "{dsn}",
-        "общий текст без причины узла"
+        "общий текст без причины узла: {dsn}"
     );
 
     // Письмо в «Спаме» (DMARC reject не пройден) — уведомления нет (backscatter): недоставленное переполненным
