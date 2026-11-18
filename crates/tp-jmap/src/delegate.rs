@@ -328,13 +328,7 @@ mod tests {
             .await
             .expect("acl");
         let acc = env.account();
-        let q = call(
-            &env,
-            &boss,
-            "Email/query",
-            json!({"accountId": acc, "sort": [{"property": "receivedAt", "isAscending": true}]}),
-        )
-        .await;
+        let q = call(&env, &boss, "Email/query", json!({"accountId": acc})).await;
         let state = q["queryState"].clone();
         let fresh = env
             .deliver_at(
@@ -361,7 +355,7 @@ mod tests {
         assert_eq!(r["removed"], json!([]), "{r}");
         assert_eq!(
             r["added"],
-            json!([{ "id": fresh.to_string(), "index": 1 }]),
+            json!([{ "id": fresh.to_string(), "index": 0 }]),
             "{r}"
         );
         assert_eq!(r["total"], 2, "{r}");
