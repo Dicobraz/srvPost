@@ -58,7 +58,7 @@ test("статус: знак роли рядом с текстом, цвет —
   const rgb = (hex: string) =>
     `rgb(${Number.parseInt(hex.slice(1, 3), 16)}, ${Number.parseInt(hex.slice(3, 5), 16)}, ${Number.parseInt(hex.slice(5, 7), 16)})`;
   for (const [i, role] of (Object.keys(labels) as (keyof typeof labels)[]).entries())
-    expect([tokens.mode.light[role], rgb(tokens.mode.light[role])]).toContain(tags[i].style.color);
+    expect([tokens.mode.light[role], rgb(tokens.mode.light[role])]).toContain((tags[i] as HTMLElement).style.color);
 });
 
 test("в коде консоли нет своих цветов: шестнадцатеричные литералы — только в design/tokens.toml", () => {
