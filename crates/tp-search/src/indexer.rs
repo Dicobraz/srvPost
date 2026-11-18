@@ -7,10 +7,14 @@
 //!
 //! Пачка событий переводится в изменения индекса: доставка, отправка, перенос в корзину — письмо
 //! индексируется заново по текущему состоянию ([`DocumentSource`]); перенос — прежний идентификатор
-//! удаляется, новый индексируется; окончательное удаление — письмо удаляется из индекса. Изменения
-//! копятся и фиксируются коммитом индекса пакетом: набралось [`IndexerConfig::commit_docs`] или с первого
-//! изменения прошло [`IndexerConfig::commit_interval`], и в конце пачки — до возврата `Ok`, после которого
-//! журнал фиксирует позицию. Сбой до фиксации — пачка придёт снова; обработка идемпотентна.
+//! удаляется, новый индексируется; окончательное удаление — письмо удаляется из индекса. Содержимое писем
+//! пачки читается одновременно — до [`IndexerConfig::fetch_concurrency`] штук: чтение (метаданные, BLOB,
+//! разбор) — узкое место индексации, а не изменение индекса, и последовательное чтение задерживает свежие
+//! письма за накопившимся хвостом наполнения (PERF-04). Изменения копятся и фиксируются коммитом индекса
+//! пакетом: набралось [`IndexerConfig::commit_docs`] или с первого изменения прошло
+//! [`IndexerConfig::commit_interval`], и в конце пачки — до возврата `Ok`, после которого журнал фиксирует
+//! позицию; коммиты разных учётных записей пакета идут одновременно (индексы независимы), тем же числом.
+//! Сбой до фиксации — пачка придёт снова; обработка идемпотентна.
 //!
 //! С хранилищем сегментов ([`Indexer::with_store`]) индекс перед записью сверяется с манифестом (нет на узле —
 //! загружается из BlobStore), а после коммита выгружается и манифест записывается (SRCH-05). Манифест изменил
@@ -31,6 +35,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures::StreamExt as _;
+use futures::TryStreamExt as _;
+use futures::stream;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::time::Instant;
@@ -57,6 +64,10 @@ pub struct IndexerConfig {
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]
     pub commit_interval: Duration,
+    /// Сколько писем пачки читается из источника одновременно (`8`; меньше одного — по одному): чтение —
+    /// метаданные, BLOB и разбор — основное время индексации письма. Тем же числом ограничены одновременные
+    /// коммиты индексов разных учётных записей.
+    pub fetch_concurrency: usize,
     /// Пауза перед повтором пачки раздела после первой ошибки (`1s`); каждая следующая ошибка подряд
     /// удваивает её до [`Self::retry_max`].
     #[serde(with = "duration")]
@@ -74,6 +85,7 @@ impl Default for IndexerConfig {
         Self {
             commit_docs: 1000,
             commit_interval: Duration::from_secs(2),
+            fetch_concurrency: 8,
             retry_initial: Duration::from_secs(1),
             retry_max: Duration::from_secs(15),
         }
@@ -251,24 +263,45 @@ impl Indexer {
         self
     }
 
-    /// Изменения индекса по событию.
-    async fn ops(&self, scope: AccountScope, kind: &CoreEventKind) -> Result<Vec<IndexOp>> {
-        Ok(match kind {
+    /// Письмо, которое событие индексирует по текущему состоянию; `None` — событие писем не читает.
+    fn fetches(kind: &CoreEventKind) -> Option<MessageId> {
+        match kind {
             CoreEventKind::Delivered { message }
             | CoreEventKind::Submitted {
                 message: Some(message),
             }
-            | CoreEventKind::Trashed { message } => vec![self.current(scope, *message).await?],
-            CoreEventKind::Moved {
-                from_message,
-                message,
-                ..
-            } => {
+            | CoreEventKind::Trashed { message }
+            | CoreEventKind::Moved { message, .. } => Some(*message),
+            // Окончательное удаление, флаги и папки — без чтения письма.
+            CoreEventKind::Submitted { message: None }
+            | CoreEventKind::Purged { .. }
+            | CoreEventKind::FlagsChanged { .. }
+            | CoreEventKind::MailboxCreated
+            | CoreEventKind::MailboxDeleted => None,
+        }
+    }
+
+    /// Изменения индекса по событию и прочитанному письму (`None` — письма уже нет или не читалось).
+    fn ops(kind: &CoreEventKind, doc: Option<IndexDoc>) -> Vec<IndexOp> {
+        match kind {
+            CoreEventKind::Delivered { message }
+            | CoreEventKind::Submitted {
+                message: Some(message),
+            }
+            | CoreEventKind::Trashed { message }
+            | CoreEventKind::Moved { message, .. } => {
                 let mut ops = Vec::with_capacity(2);
-                if from_message != message {
+                if let CoreEventKind::Moved {
+                    from_message, ..
+                } = kind
+                    && from_message != message
+                {
                     ops.push(IndexOp::Delete(*from_message));
                 }
-                ops.push(self.current(scope, *message).await?);
+                ops.push(match doc {
+                    Some(doc) => IndexOp::Upsert(Box::new(doc)),
+                    None => IndexOp::Delete(*message),
+                });
                 ops
             }
             CoreEventKind::Purged { message } => vec![IndexOp::Delete(*message)],
@@ -277,26 +310,30 @@ impl Indexer {
             | CoreEventKind::FlagsChanged { .. }
             | CoreEventKind::MailboxCreated
             | CoreEventKind::MailboxDeleted => Vec::new(),
-        })
+        }
     }
 
-    /// Письмо по текущему состоянию: документ или удаление, если письма уже нет.
-    async fn current(&self, scope: AccountScope, message: MessageId) -> Result<IndexOp> {
-        Ok(match self.source.document(scope, message).await? {
-            Some(doc) => IndexOp::Upsert(Box::new(doc)),
-            None => IndexOp::Delete(message),
-        })
-    }
-
-    /// Коммит накопленных изменений: по коммиту на учётную запись.
+    /// Коммит накопленных изменений: по коммиту на учётную запись, одновременно — не больше
+    /// `fetch_concurrency` (у каждой свой индекс и блокировка; память — буфер записи Tantivy на коммит).
     async fn flush(&self, pending: &mut Pending) -> Result<()> {
-        for ((tenant, account), ops) in std::mem::take(pending) {
-            let scope = AccountScope { tenant, account };
-            let index = self.commit(scope, ops).await?;
-            // Учёт в кэше — без блокировки индекса: вытеснение захватывает её само.
-            if let (Some(cache), Some(index)) = (&self.cache, index) {
-                cache.touch(scope, &index).await;
-            }
+        let items = std::mem::take(pending);
+        if items.is_empty() {
+            return Ok(());
+        }
+        let mut commits = stream::iter(items)
+            .map(|((tenant, account), ops)| async move {
+                let scope = AccountScope { tenant, account };
+                let index = self.commit(scope, ops).await?;
+                // Учёт в кэше — без блокировки индекса: вытеснение захватывает её само.
+                if let (Some(cache), Some(index)) = (&self.cache, index) {
+                    cache.touch(scope, &index).await;
+                }
+                Ok::<(), Error>(())
+            })
+            .buffer_unordered(self.cfg.fetch_concurrency.max(1));
+        // Ошибка — пачка повторится: изменения идемпотентны, начатые коммиты завершаются сами.
+        while let Some(res) = commits.next().await {
+            res?;
         }
         Ok(())
     }
@@ -378,22 +415,53 @@ impl EventSink for Indexer {
 
 impl Indexer {
     /// Пачка событий → изменения индекса, коммит пакетами.
-    /// PERF-04: интервал коммита — от последнего flush'а, не от первого изменения пачки: в бэклоге
-    /// (fill стенда, 100k событий) `commit_interval` от первого изменения делал видимость свежего
-    /// письма `commit_interval` × пачки бэклога (Д.7 №10: p95 68 с > 60 с). Теперь flush — по
-    /// `commit_docs` или через `commit_interval` после предыдущего flush'а; пачка без новых
-    /// изменений закрывается финальным flush'ем как прежде.
+    ///
+    /// PERF-04: письма пачки читаются из источника заранее — окном `fetch_concurrency`, результаты —
+    /// по порядку событий (порядок операций индекса сохраняется). Последовательное чтение — узкое
+    /// место конвейера: на наполнении стенда (85 тыс. писем) он отставал от журнала на всё время
+    /// прогона, и письма зонда не находились поиском за 180 с («не найдено 54/55», Д.7 №10).
+    /// Коммит — по `commit_docs` или через `commit_interval` от первого изменения пакета (видимость
+    /// письма — не позже интервала после его обработки) и в конце пачки.
     async fn process(&self, batch: &[LoggedEvent]) -> Result<()> {
         let mut pending = Pending::new();
-        let (mut count, mut last_flush) = (0, None::<Instant>);
+        let (mut count, mut started) = (0, None::<Instant>);
+        let plan: Vec<(AccountScope, Option<MessageId>)> = batch
+            .iter()
+            .map(|logged| {
+                let e = &logged.event;
+                (
+                    AccountScope {
+                        tenant: e.tenant,
+                        account: e.account,
+                    },
+                    Self::fetches(&e.kind),
+                )
+            })
+            .collect();
+        let mut docs = stream::iter(plan)
+            .map(|(scope, message)| async move {
+                match message {
+                    Some(message) => self.source.document(scope, message).await,
+                    None => Ok(None),
+                }
+            })
+            .buffered(self.cfg.fetch_concurrency.max(1));
         for logged in batch {
             let e = &logged.event;
             let scope = AccountScope {
                 tenant: e.tenant,
                 account: e.account,
             };
-            let ops = self.ops(scope, &e.kind).await?;
+            // Чтение этого события — по порядку; ошибка чтения — пачка повторится целиком.
+            let doc = match docs.next().await {
+                Some(Ok(doc)) => doc,
+                Some(Err(e)) => return Err(e),
+                // Не бывает: элемент потока — на каждое событие пачки.
+                None => None,
+            };
+            let ops = Self::ops(&e.kind, doc);
             if !ops.is_empty() {
+                started.get_or_insert_with(Instant::now);
                 count += ops.len();
                 pending
                     .entry((scope.tenant, scope.account))
@@ -401,10 +469,10 @@ impl Indexer {
                     .extend(ops);
             }
             if count >= self.cfg.commit_docs.max(1)
-                || last_flush.is_some_and(|t| t.elapsed() >= self.cfg.commit_interval)
+                || started.is_some_and(|t| t.elapsed() >= self.cfg.commit_interval)
             {
                 self.flush(&mut pending).await?;
-                (count, last_flush) = (0, Some(Instant::now()));
+                (count, started) = (0, None);
             }
         }
         self.flush(&mut pending).await
@@ -443,6 +511,32 @@ mod tests {
 
         fn remove(&self, message: MessageId) {
             self.docs.lock().expect("lock").remove(&message);
+        }
+    }
+
+    /// Письма в памяти с задержкой выдачи каждого: чтение письма индексатором на узле — метаданные,
+    /// BLOB и разбор (PERF-04: это и есть узкое место конвейера индексации).
+    #[derive(Default)]
+    struct Paced {
+        docs: Mutex<HashMap<MessageId, IndexDoc>>,
+        delay: Duration,
+    }
+
+    impl Paced {
+        fn put(&self, doc: IndexDoc) {
+            self.docs.lock().expect("lock").insert(doc.message, doc);
+        }
+    }
+
+    #[async_trait]
+    impl DocumentSource for Paced {
+        async fn document(&self, _: AccountScope, message: MessageId) -> Result<Option<IndexDoc>> {
+            tokio::time::sleep(self.delay).await;
+            Ok(self.docs.lock().expect("lock").get(&message).cloned())
+        }
+
+        async fn messages(&self, _: AccountScope) -> Result<Vec<MessageId>> {
+            Ok(self.docs.lock().expect("lock").keys().copied().collect())
         }
     }
 
@@ -661,7 +755,9 @@ mod tests {
             ..MemSource::default()
         });
         let cfg = IndexerConfig {
-            commit_docs: 10_000,
+            // PERF-04: поток коммитов в пачке — по `commit_docs` (50 < 80 писем); `commit_interval`
+            // страхует паузы выдачи дольше интервала — отсчитывается от последнего flush'а.
+            commit_docs: 50,
             commit_interval: interval,
             ..IndexerConfig::default()
         };
@@ -685,10 +781,10 @@ mod tests {
         assert_eq!(indexes.open(a).expect("open").expect("index").docs(), 80);
 
         // Письмо видно в поиске не позже интервала коммита после выдачи, хотя вся пачка (80 × 20 мс)
-        // обрабатывается дольше: коммит идёт пакетами по времени, а не в конце пачки. Задержка считается
-        // в выдачах писем: каждая занимает не меньше `step`, поэтому за интервал их не больше
-        // `interval / step`, ещё одна — на срабатывание коммита и одна — на наблюдение. Длительность самого
-        // коммита (fsync) в счёт не входит: во время коммита выдач нет.
+        // обрабатывается дольше: коммиты идут потоком по `commit_docs`, интервал — от последнего
+        // flush'а страхует паузы. Задержка считается в выдачах писем: каждая занимает не меньше `step`,
+        // поэтому между коммитами их не больше `interval / step`, ещё одна — на срабатывание и одна —
+        // на наблюдение. Длительность самого коммита (fsync) в счёт не входит: во время него выдач нет.
         let seen = source.seen.lock().expect("lock").clone();
         assert_eq!(seen.len(), 80);
         let window = (interval.as_millis() / step.as_millis()) as usize + 2;
@@ -705,10 +801,8 @@ mod tests {
         }
     }
 
-    /// PERF-04: в бэклоге (пачки больше `commit_docs`) письмо из конца журнала видно не позже
-    /// `commit_interval` после его обработки, независимо от длины пачки: коммит — по `commit_docs`,
-    /// интервал — от flush'а. Прежде интервал считался от первого изменения пачки, и письмо стояло
-    /// в очереди `commit_interval` × пачки бэклога.
+    /// PERF-04: письмо из конца большого бэклога (одна пачка больше `commit_docs`) попадает в индекс
+    /// при обработке пачки — коммиты идут и внутри пачки, а не только в её конце.
     #[tokio::test]
     async fn backlog_visibility_within_interval() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -729,7 +823,11 @@ mod tests {
         for i in 0..3000 {
             let d = mail(inbox, &format!("fill {i}"));
             source.put(d.clone());
-            log.append(event(a, inbox, CoreEventKind::Delivered { message: d.message }));
+            log.append(event(
+                a,
+                inbox,
+                CoreEventKind::Delivered { message: d.message },
+            ));
         }
         source.put(probe.clone());
         log.append(event(a, inbox, CoreEventKind::Delivered { message: probe.message }));
@@ -745,6 +843,106 @@ mod tests {
         assert_eq!(indexes.open(a).expect("open").expect("index").docs(), 3001);
     }
 
+    /// PERF-04 (воспроизведение затора): хвост наполнения стенда в одном разделе и письмо зонда в
+    /// конце. Чтение письма — метаданные, BLOB, разбор — узкое место конвейера: при последовательном
+    /// чтении (по одному) пачка занимает число писем × задержку чтения, и зонд «не найдено за 180 с»
+    /// (Д.7 №10, прогоны 17.11: «не найдено 54/55»). Письма читаются одновременно
+    /// (`fetch_concurrency`), поэтому пачка обрабатывается многократно быстрее.
+    #[tokio::test]
+    async fn backlog_drains_with_parallel_fetch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let indexes = Arc::new(manager(&dir));
+        let search = Search::new(indexes.clone(), QueryConfig::default());
+        let source = Arc::new(Paced {
+            delay: Duration::from_millis(25),
+            ..Paced::default()
+        });
+        let cfg = IndexerConfig {
+            fetch_concurrency: 8,
+            // Один коммит в конце пачки: меряется чтение, а не частые коммиты.
+            commit_docs: 100_000,
+            commit_interval: Duration::from_secs(3600),
+            ..IndexerConfig::default()
+        };
+        let indexer = Indexer::new(indexes.clone(), source.clone(), cfg);
+        let (a, b, c, d) = (scope(), scope(), scope(), scope());
+        let inbox = MailboxId::new();
+        let log = MemEventLog::new(1);
+        // Наполнение: 4 ящика × 40 писем, события вперемешку — как доставки разных ящиков в разделе.
+        for i in 0..40 {
+            for s in [&a, &b, &c, &d] {
+                let doc = mail(inbox, &format!("Наполнение {i}"));
+                source.put(doc.clone());
+                log.append(event(*s, inbox, CoreEventKind::Delivered { message: doc.message }));
+            }
+        }
+        let probe = mail(inbox, "Зонд zqperfect04");
+        source.put(probe.clone());
+        log.append(event(a, inbox, CoreEventKind::Delivered { message: probe.message }));
+        let batch = log
+            .read(Partition(0), EventPos(0), 10_000)
+            .await
+            .expect("read");
+        let started = Instant::now();
+        indexer.handle(&batch).await.expect("handle");
+        let elapsed = started.elapsed();
+        assert_eq!(
+            subjects(&search, a, "zqperfect04").await,
+            [probe.message],
+            "письмо зонда должно быть в индексе"
+        );
+        for (s, docs) in [(a, 41), (b, 40), (c, 40), (d, 40)] {
+            assert_eq!(indexes.open(s).expect("open").expect("index").docs(), docs);
+        }
+        // Последовательное чтение — не меньше 161 × 25 мс ≈ 4 с; окно 8 — примерно впятеро быстрее.
+        // Порог — половина последовательного времени: запас на медленную машину CI и защита от
+        // возврата к последовательному чтению (тогда тест проваливается).
+        assert!(
+            elapsed < Duration::from_millis(2_000),
+            "пачка обрабатывалась {elapsed:?} — чтение не параллельно?"
+        );
+    }
+
+    /// Одно письмо в пачке дважды (доставка и сразу корзина): чтения идут одновременно, а применяется
+    /// текущее состояние письма — в индексе один документ, в папке корзины.
+    #[tokio::test]
+    async fn repeated_message_in_batch_is_current_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let indexes = Arc::new(manager(&dir));
+        let search = Search::new(indexes.clone(), QueryConfig::default());
+        let source = Arc::new(MemSource::default());
+        let indexer = Indexer::new(indexes.clone(), source.clone(), IndexerConfig::default());
+        let a = scope();
+        let (inbox, trash) = (MailboxId::new(), MailboxId::new());
+        let log = MemEventLog::new(1);
+        let report = mail(inbox, "Отчёт с дублем");
+        // Текущее состояние — уже корзина: оба чтения пачки вернут его.
+        source.put(IndexDoc {
+            mailbox: trash,
+            ..report.clone()
+        });
+        log.append(event(a, inbox, CoreEventKind::Delivered { message: report.message }));
+        log.append(event(a, inbox, CoreEventKind::Trashed { message: report.message }));
+        let batch = log
+            .read(Partition(0), EventPos(0), 100)
+            .await
+            .expect("read");
+        indexer.handle(&batch).await.expect("handle");
+        assert_eq!(indexes.open(a).expect("open").expect("index").docs(), 1);
+        let in_trash = search
+            .query(
+                a,
+                &[trash],
+                &TextQuery::And(Vec::new()),
+                SearchSort::NewestFirst,
+                10,
+            )
+            .await
+            .expect("trash");
+        assert_eq!(in_trash, [report.message]);
+        assert_eq!(subjects(&search, a, "отчет").await, [report.message]);
+    }
+
     #[test]
     fn config_defaults_and_durations() {
         assert_eq!(
@@ -756,6 +954,9 @@ mod tests {
         assert_eq!(c.commit_interval, Duration::from_millis(500));
         assert!(crate::tests::from_pairs::<IndexerConfig>(&[("commit_interval", "5")]).is_err());
         assert!(crate::tests::from_pairs::<IndexerConfig>(&[("batch", "5")]).is_err());
+        let c = crate::tests::from_pairs::<IndexerConfig>(&[("fetch_concurrency", "16")])
+            .expect("fetch");
+        assert_eq!(c.fetch_concurrency, 16);
         let c = crate::tests::from_pairs::<IndexerConfig>(&[
             ("retry_initial", "100ms"),
             ("retry_max", "1m"),
