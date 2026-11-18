@@ -4815,7 +4815,7 @@ mod tests {
         args.org = None;
         let show = json(exec(&c, true, branding(BrandingAction::Show)).await);
         assert_eq!(
-            show["effective"]["product_name"], "Почта Ромашка",
+            show["effective"]["product_name"], "Ромашка",
             "без --org — уровень установки"
         );
 
@@ -4839,7 +4839,7 @@ mod tests {
         assert_eq!(public.product_name.as_deref(), Some("Ромашка-Орг"));
         assert!(public.logo.is_none());
         let public = anon.public_branding(None).await.expect("public");
-        assert_eq!(public.product_name.as_deref(), Some("Почта Ромашка"));
+        assert_eq!(public.product_name.as_deref(), Some("Ромашка"));
     }
 
     /// PNG 12×6 (сплошной #177CAA) для знака в тестах.

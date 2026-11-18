@@ -438,7 +438,7 @@ fn contrast_ru(v: f64) -> String {
     one.strip_suffix(".0").unwrap_or(&one).replace('.', ",")
 }
 
-/// Пара по-русски: «светлая тема: выделение sel #F5E663 на панели panel #FFFFFF — 1,3:1, нужно 3:1».
+/// Пара по-русски: «светлая тема: выделение sel #F5E663 на панель panel #FFFFFF — 1,3 : 1, нужно 3 : 1».
 fn issue_ru(issue: &ContrastIssue) -> String {
     let theme = match issue.theme {
         Some(Theme::Light) => "светлая тема",
@@ -446,7 +446,7 @@ fn issue_ru(issue: &ContrastIssue) -> String {
         None => "подсветка CLI",
     };
     let bg = match issue.theme {
-        Some(_) => format!("{} {}", role_label(&issue.bg), issue.bg),
+        Some(_) => format!("{} {} {}", role_label(&issue.bg), issue.bg, issue.bg_color),
         None => format!("фон терминала {}", issue.bg_color),
     };
     format!(
@@ -1355,46 +1355,40 @@ mod tests {
         assert_eq!(s, StatusCode::NOT_FOUND);
     }
 
-    /// Приёмка ADM-48: смена установки, под которой не читается свой текст организации, — 422 с организацией;
-    /// тот же набор без организаций — 200. Набор, сохранённый в обход проверки, в `effective` — без нарушений.
+    /// Приёмка ADM-48: смена установки, после которой набор организации не читается (его пары — поверх
+    /// страховки отрисовки установки), — 422 с организацией; тот же набор без организаций — 200.
+    /// Набор, сохранённый в обход проверки, в `effective` — без нарушений.
     #[tokio::test]
     async fn installation_change_over_orgs() {
         let env = Env::new();
         let org = org_path(TenantId::DEFAULT);
-        // Свой текст организации читается на светлой панели по умолчанию.
+        // Своё выделение организации — на тёмной панели по умолчанию читается (3,2 : 1).
         let (s, _, b) = env
             .call(
                 "PUT",
                 &org,
                 Some("org"),
-                Some(json!({"light": {"text": "#161616"}})),
+                Some(json!({"dark": {"sel": "#676767"}})),
             )
             .await;
         assert_eq!(s, StatusCode::OK, "{b}");
 
-        // Тёмная панель установки — текст организации не читается: 422 с организацией.
+        // Панель тёмной темы чуть светлее — выделение организации ниже порога: 422 с организацией.
+        // Свои пары установки в порядке, поэтому в `errors` — только организация.
         let (s, h, b) = env
             .call(
                 "PUT",
                 BRANDING_PREFIX,
                 Some("root"),
-                Some(json!({"light": {"panel": "#0F1317"}})),
+                Some(json!({"dark": {"panel": "#1A2025"}})),
             )
             .await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
         assert_eq!(h[header::CONTENT_TYPE], "application/problem+json");
-        // Сначала — пары самого набора установки (`org` = null), затем — каждой организации.
-        let errors = b["errors"].as_array().expect("errors");
-        assert!(
-            errors.iter().any(|e| e["org"] == Value::Null),
-            "сам набор установки: {errors:?}"
-        );
-        let e = errors
-            .iter()
-            .find(|e| e["org"] == TenantId::DEFAULT.to_string())
-            .expect("организация в errors");
-        assert_eq!(e["theme"], "light");
-        assert_eq!(e["role"], "text");
+        let e = &b["errors"][0];
+        assert_eq!(e["org"], TenantId::DEFAULT.to_string());
+        assert_eq!(e["theme"], "dark");
+        assert_eq!(e["role"], "sel");
         assert_eq!(e["bg"], "panel");
         let detail = b["detail"].as_str().expect("detail");
         assert!(detail.contains(&TenantId::DEFAULT.to_string()), "{detail}");
@@ -1407,7 +1401,7 @@ mod tests {
                 "PUT",
                 BRANDING_PREFIX,
                 Some("root"),
-                Some(json!({"light": {"panel": "#0F1317"}})),
+                Some(json!({"dark": {"panel": "#1A2025"}})),
             )
             .await;
         assert_eq!(s, StatusCode::OK, "{b}");
