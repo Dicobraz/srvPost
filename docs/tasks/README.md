@@ -611,7 +611,7 @@
 | [TUI-06](TUI-06.md) | тема текстового интерфейса по токенам — пять режимов, палитра консоли Linux, знак IT TASK | tui | A | tui-03 | done | TUI-01,DES-01 |
 | [TUI-07](TUI-07.md) | мышь в текстовом интерфейсе — щелчки, прокрутка, граница панелей, плавный курсор | tui | A | tui-04 | done | TUI-06,DEPS-15 |
 | [TUI-12](TUI-12.md) | уровень 3 консоли — KDFONTOP через tp-sys (плавный курсор) | tui | B | tui-08 | done | TUI-07 |
-| [UI-19](UI-19.md) | веб-консоль на токенах фирменного стиля — тема antd, шрифты в статике | console | A | console-10 | ready | DES-01 |
+| [UI-19](UI-19.md) | веб-консоль на токенах фирменного стиля — тема antd, шрифты в статике | console | A | console-10 | done | DES-01 |
 | [CTR-85](CTR-85.md) | очередь исходящей почты — список записей и повтор доставки в контракте `QueueStore` | contracts | B | contracts-57 | done | — |
 | [ADM-45](ADM-45.md) | Admin API очереди — `GET /orgs/{org}/queue`, `POST /orgs/{org}/queue/{id}/retry` | admin | A | admin-31 | done | CTR-85 |
 | [UI-20](UI-20.md) | консоль — экран «Очередь» | console | A | console-11 | done | ADM-45 |
@@ -925,6 +925,7 @@
 | [DEP-56](DEP-56.md) | Rspamd — балл за признак ответа; ключи меток и BATV в поставке | deploy | A | deploy-43 | todo | SMTP-51 |
 | [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | todo | APP-77,DEP-56 |
 | [DEPS-19](DEPS-19.md) | зависимости каталога признаков и TI — `ring` (Ed25519), `regex`, `publicsuffix`, `winnow`; `zip`, `infer`, `ipnet` в крейты | deps | B | deps-19 | done | — |
+| [DEPS-20](DEPS-20.md) | — | — | — | deps-20 | done | — |
 | [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | todo | CTR-94 |
 | [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | todo | CTR-95 |
 | [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | todo | CTR-95,DEPS-19,SIEVE-14 |
