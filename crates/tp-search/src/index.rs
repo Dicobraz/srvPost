@@ -32,7 +32,9 @@ use tp_contracts::{AccountId, Error, MailboxId, MessageId, Result, TenantId};
 use crate::analyzers::{self, TOKENIZER};
 
 /// Версия схемы индекса (манифест индекса, CONTRACTS.md#Search): индекс со схемой старше перестраивается.
-pub const SCHEMA_VERSION: u32 = 1;
+/// 2 — `id` стало fast-полем (PERF-05): выдача запроса читает идентификаторы из столбца сегмента,
+/// не распаковывая сохранённые документы (в них — тело письма).
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Наименьший буфер записи Tantivy на поток, байт.
 const MIN_WRITER_MEMORY: usize = 15 << 20;
@@ -122,7 +124,9 @@ pub(crate) fn schema() -> (Schema, Fields) {
     let stored = text.clone().set_stored();
     let mut b = Schema::builder();
     let fields = Fields {
-        id: b.add_text_field("id", STRING | STORED),
+        // `id` — fast-поле: выдача запроса читает идентификаторы из столбца (PERF-05); сохранённый
+        // документ (с телом письма) распаковывает только `snippet`.
+        id: b.add_text_field("id", STRING.set_fast("raw") | STORED),
         mailbox: b.add_text_field("mailbox", STRING),
         received_at: b.add_date_field("received_at", DateOptions::default().set_fast()),
         subject: b.add_text_field("subject", stored.clone()),
