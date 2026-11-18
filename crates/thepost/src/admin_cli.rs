@@ -31,6 +31,7 @@ use tp_admin::app_passwords::{AppPasswordInfo, IssuedAppPassword, NewAppPassword
 use tp_admin::audit::{AuditPage, AuditParams};
 use tp_admin::delivery::{DeliveryParams, DeliveryResults};
 use tp_admin::groups::{GroupInfo, GroupPatch, NewGroup};
+use tp_admin::resources::{NewResource, ResourceInfo, ResourcePatch, ResourceTypeBody};
 use tp_admin::retention::{PageQuery, RestoredMessage, TrashPage};
 use tp_admin::server::WhoAmI;
 use tp_admin::sieve::{Script, ScriptBody, ScriptText, VacationBody};
@@ -186,6 +187,12 @@ pub enum ApiAction {
         /// Действие.
         #[command(subcommand)]
         action: Box<GroupAction>,
+    },
+    /// Ресурсы бронирования организации: переговорные и оборудование.
+    Resources {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<ResourceAction>,
     },
     /// Корзина учётной записи: просмотр и восстановление писем.
     Trash {
@@ -393,6 +400,58 @@ pub enum GroupAction {
         /// Участник — вложенная группа: идентификатор (UUID), имя или адрес (можно повторять).
         #[arg(long = "group", value_name = "ГРУППА", requires = "set")]
         groups: Vec<String>,
+    },
+}
+
+/// Тип ресурса для `--type` и `set-type`: переговорная или оборудование.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ResourceTypeArg {
+    /// Помещение (переговорная).
+    Room,
+    /// Оборудование.
+    Equipment,
+}
+
+impl ResourceTypeArg {
+    fn body(self) -> ResourceTypeBody {
+        match self {
+            Self::Room => ResourceTypeBody::Room,
+            Self::Equipment => ResourceTypeBody::Equipment,
+        }
+    }
+}
+
+/// Тип ресурса по-русски: «помещение» или «оборудование».
+fn resource_type_name(t: ResourceTypeBody) -> &'static str {
+    match t {
+        ResourceTypeBody::Room => "помещение",
+        ResourceTypeBody::Equipment => "оборудование",
+    }
+}
+
+/// Действия с ресурсами бронирования; ресурс — идентификатор (UUID) или имя входа.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ResourceAction {
+    /// Ресурсы организации по возрастанию имени входа: тип и правила бронирования.
+    List,
+    /// Новый ресурс: учётная запись в принятом домене организации и правила бронирования по умолчанию
+    /// (автоматическое принятие без пересечений).
+    Create {
+        /// Имя входа — адрес в принятом домене организации.
+        login: String,
+        /// Отображаемое имя (по умолчанию — имя входа).
+        #[arg(long)]
+        name: Option<String>,
+        /// Тип ресурса: room (переговорная, по умолчанию) или equipment (оборудование).
+        #[arg(long = "type", value_enum, default_value_t = ResourceTypeArg::Room)]
+        resource_type: ResourceTypeArg,
+    },
+    /// Смена типа ресурса (имя и правила бронирования не меняются; у ресурса из каталога — 409).
+    SetType {
+        /// Ресурс: идентификатор (UUID) или имя входа.
+        resource: String,
+        /// Новый тип: room (переговорная) или equipment (оборудование).
+        resource_type: ResourceTypeArg,
     },
 }
 
@@ -1119,6 +1178,7 @@ pub async fn execute(client: &Client, args: &ApiArgs, action: ApiAction) -> CliR
         }
         ApiAction::Policy { action } => policy_command(client, args, *action).await,
         ApiAction::Group { action } => group_command(client, args, *action).await,
+        ApiAction::Resources { action } => resource_command(client, args, *action).await,
         ApiAction::Trash { action } => trash_command(client, args, action).await,
         ApiAction::Audit { action } => audit_command(client, args, *action).await,
         ApiAction::Delivery { action } => delivery_command(client, args, *action).await,
@@ -1572,6 +1632,109 @@ fn group_record(g: &GroupInfo) -> String {
             "Скрыта из GAL",
             if g.hidden_from_gal { "да" } else { "нет" }.to_owned(),
         ),
+    ])
+}
+
+/// `thepost admin resources …`.
+async fn resource_command(
+    client: &Client,
+    args: &ApiArgs,
+    action: ResourceAction,
+) -> CliResult<String> {
+    let org = client.org(args.org.clone()).await?;
+    match action {
+        ResourceAction::List => {
+            let list = resources(client, &org).await?;
+            let rows: Vec<Vec<String>> = list.iter().map(resource_row).collect();
+            out(
+                args,
+                &list,
+                style::table(args.theme(), RESOURCE_COLUMNS, &rows),
+            )
+        }
+        ResourceAction::Create {
+            login,
+            name,
+            resource_type,
+        } => {
+            let body = NewResource {
+                login,
+                display_name: name,
+                resource_type: resource_type.body(),
+                booking_policy: None,
+            };
+            let r: ResourceInfo = client
+                .call(RESOURCES_CREATE, &[org.as_str()], &[], Some(&body))
+                .await
+                .map_err(|e| e.hint(409, "thepost admin resources list"))?;
+            out(args, &r, resource_record(&r))
+        }
+        ResourceAction::SetType {
+            resource,
+            resource_type,
+        } => {
+            let id = resource_id(client, &org, &resource).await?;
+            let params = [org.as_str(), id.as_str()];
+            let before: ResourceInfo = client.call(RESOURCE_GET, &params, &[], NO_BODY).await?;
+            let patch = ResourcePatch {
+                resource_type: resource_type.body(),
+            };
+            let r: ResourceInfo = client
+                .call(RESOURCE_PATCH, &params, &[], Some(&patch))
+                .await?;
+            out(
+                args,
+                &r,
+                style::changes(args.theme(), RESOURCE_PATCH, &before, &r),
+            )
+        }
+    }
+}
+
+const RESOURCE_COLUMNS: &[&str] = &["ИДЕНТИФИКАТОР", "ИМЯ ВХОДА", "ИМЯ", "ТИП"];
+
+/// Ресурсы организации.
+async fn resources(client: &Client, org: &str) -> CliResult<Vec<ResourceInfo>> {
+    Ok(client.call(RESOURCES_LIST, &[org], &[], NO_BODY).await?)
+}
+
+/// Идентификатор ресурса: UUID как есть, иначе ресурс с таким именем входа (без учёта регистра).
+async fn resource_id(client: &Client, org: &str, resource: &str) -> CliResult<String> {
+    if resource.parse::<AccountId>().is_ok() {
+        return Ok(resource.to_owned());
+    }
+    let want = resource.to_lowercase();
+    resources(client, org)
+        .await?
+        .iter()
+        .find(|r| r.account.login.to_lowercase() == want)
+        .map(|r| r.account.id.clone())
+        .ok_or_else(|| format!("ресурс {resource} не найден"))
+}
+
+/// Ресурс — строка таблицы [`RESOURCE_COLUMNS`].
+fn resource_row(r: &ResourceInfo) -> Vec<String> {
+    let name = if r.account.display_name.is_empty() {
+        "—".to_owned()
+    } else {
+        r.account.display_name.clone()
+    };
+    vec![
+        r.account.id.clone(),
+        r.account.login.clone(),
+        name,
+        resource_type_name(r.resource_type).to_owned(),
+    ]
+}
+
+/// Ресурс — строки «подпись: значение».
+fn resource_record(r: &ResourceInfo) -> String {
+    record(&[
+        ("Идентификатор", r.account.id.clone()),
+        ("Имя входа", r.account.login.clone()),
+        ("Имя", r.account.display_name.clone()),
+        ("Тип", resource_type_name(r.resource_type).to_owned()),
+        ("Из каталога", optional(r.account.external_id.as_ref())),
     ])
 }
 
@@ -2283,6 +2446,7 @@ mod tests {
     use std::sync::Arc;
 
     use serde_json::{Value, json};
+    use tp_admin::sharing::SharingStores;
     use tp_admin::{AdminConfig, AdminRole, Deps, InitRequest, RoleBinding};
     use tp_contracts::TenantId;
     use tp_contracts::auth::Principal;
@@ -2292,7 +2456,7 @@ mod tests {
         MemBlobStore, MemDeliveryLog, MemEventBus, MemGroups, MemLocalAdminTokens, MemMetadata,
         MemModeration, MemPolicies, MemQuota, MemSieve, MemTransport, MemTrash, SystemClock,
     };
-    use tp_testkit::{MemAddressBook, MemMailboxAudit, MemSenderLists, MemSyncGate};
+    use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate};
 
     use super::*;
 
@@ -2613,6 +2777,25 @@ mod tests {
             &[
                 "thepost", "admin", "account", "list", "--prefix", "a", "--limit", "10",
             ],
+            &["thepost", "admin", "resources", "list"],
+            &["thepost", "admin", "resources", "create", "r@b.test"],
+            &[
+                "thepost",
+                "admin",
+                "resources",
+                "create",
+                "r@b.test",
+                "--type",
+                "equipment",
+            ],
+            &[
+                "thepost",
+                "admin",
+                "resources",
+                "set-type",
+                "r@b.test",
+                "room",
+            ],
             &["thepost", "admin", "init", "--email", "a@b.test"],
         ] {
             Cli::try_parse_from(args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
@@ -2646,6 +2829,16 @@ mod tests {
                 "thepost", "admin", "account", "list", "--login", "a@b.test", "--after", "a@b.test",
             ],
             &["thepost", "admin", "domain", "list"],
+            &[
+                "thepost",
+                "admin",
+                "resources",
+                "create",
+                "r@b.test",
+                "--type",
+                "car",
+            ],
+            &["thepost", "admin", "resources", "set-type", "r@b.test"],
             &["thepost", "admin", "transport", "domain", "add", "b.test"],
             &["thepost", "admin", "transport", "source", "set", "gw"],
             &[
@@ -2866,7 +3059,14 @@ mod tests {
                 .expect("admin")
                 .with_transport(Arc::new(MemTransport::new()))
                 .with_sieve(Arc::new(MemSieve::new()), check_script)
-                .with_local_tokens(Arc::new(MemLocalAdminTokens::new())),
+                .with_local_tokens(Arc::new(MemLocalAdminTokens::new()))
+                .with_sharing(SharingStores {
+                    acl: Arc::new(MemDav::new()),
+                    delegates: Arc::new(meta.clone()),
+                    resources: Arc::new(meta.clone()),
+                    policy: Arc::new(meta.clone()),
+                    collections: Arc::new(MemDav::new()),
+                }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -4165,5 +4365,114 @@ mod tests {
         .await
         .expect_err("адрес");
         assert!(err.contains("--egress-ip"), "{err}");
+    }
+
+    /// Приёмка ADM-47: ресурсы бронирования в CLI — создание без типа (переговорная) и с типом (оборудование),
+    /// колонка «Тип» в `resources list`, смена типа по адресу, неизвестный адрес — ошибка.
+    #[tokio::test]
+    async fn booking_resources_against_admin_api() {
+        let (_admin, url) = admin_api().await;
+        let c = client(&url, "oidc");
+        exec(
+            &c,
+            false,
+            domain_action(DomainAction::Create {
+                name: "res.test".into(),
+                relay: None,
+            }),
+        )
+        .await
+        .expect("domain");
+        let resources = |action: ResourceAction| ApiAction::Resources {
+            action: Box::new(action),
+        };
+        let create = |login: &str, t: ResourceTypeArg| {
+            resources(ResourceAction::Create {
+                login: login.into(),
+                name: None,
+                resource_type: t,
+            })
+        };
+
+        // Без типа — помещение; с типом — оборудование.
+        let room = exec(&c, true, create("room@res.test", ResourceTypeArg::Room))
+            .await
+            .expect("create room");
+        let room: Value = serde_json::from_str(&room).expect("json");
+        assert_eq!(room["resource_type"], "room");
+        assert_eq!(room["booking_policy"]["auto_accept"], true);
+        let projector = exec(
+            &c,
+            true,
+            create("projector@res.test", ResourceTypeArg::Equipment),
+        )
+        .await
+        .expect("create projector");
+        let projector: Value = serde_json::from_str(&projector).expect("json");
+        assert_eq!(projector["resource_type"], "equipment");
+
+        // Список — колонка «Тип».
+        let listed = exec(&c, false, resources(ResourceAction::List))
+            .await
+            .expect("resources list");
+        for part in [
+            "ИМЯ ВХОДА",
+            "ТИП",
+            "projector@res.test",
+            "оборудование",
+            "room@res.test",
+            "помещение",
+        ] {
+            assert!(listed.contains(part), "{part}: {listed}");
+        }
+
+        // Смена типа по адресу (без учёта регистра); вывод — было/стало; тип сохраняется.
+        let set_type = resources(ResourceAction::SetType {
+            resource: "ROOM@res.test".into(),
+            resource_type: ResourceTypeArg::Equipment,
+        });
+        let changed = exec(&c, false, set_type).await.expect("set-type");
+        assert!(
+            changed.contains("resource_type") && changed.contains("equipment"),
+            "{changed}"
+        );
+        let list = exec(&c, true, resources(ResourceAction::List))
+            .await
+            .expect("list json");
+        let list: Value = serde_json::from_str(&list).expect("json");
+        let types: Vec<(&str, &str)> = list
+            .as_array()
+            .expect("list")
+            .iter()
+            .filter_map(|r| Some((r["login"].as_str()?, r["resource_type"].as_str()?)))
+            .collect();
+        assert_eq!(
+            types,
+            [
+                ("projector@res.test", "equipment"),
+                ("room@res.test", "equipment")
+            ],
+            "{list}"
+        );
+
+        // Неизвестный адрес — ошибка; имя занято — 409 с подсказкой.
+        let err = exec(
+            &c,
+            false,
+            resources(ResourceAction::SetType {
+                resource: "nope@res.test".into(),
+                resource_type: ResourceTypeArg::Room,
+            }),
+        )
+        .await
+        .expect_err("нет ресурса");
+        assert!(err.contains("не найден"), "{err}");
+        let err = exec(&c, false, create("room@res.test", ResourceTypeArg::Room))
+            .await
+            .expect_err("имя занято");
+        assert!(
+            err.contains("409") && err.contains("thepost admin resources list"),
+            "{err}"
+        );
     }
 }

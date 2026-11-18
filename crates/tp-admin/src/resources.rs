@@ -7,7 +7,10 @@
 //! - `GET …/resources/{account}` — ресурс с правилами; `DELETE` — удаление: правила снимаются, учётная запись
 //!   отключается со сроком хранения «сейчас», окончательно её удаляет обслуживание (роль maintenance) — как
 //!   отключённый ящик (`…/disabled-accounts`, до удаления её можно восстановить);
-//! - `PUT …/resources/{account}/booking-policy` — правила бронирования целиком.
+//! - `PUT …/resources/{account}/booking-policy` — правила бронирования целиком;
+//! - `PATCH …/resources/{account}` — тип ресурса: помещение (`room`) или оборудование (`equipment`, ADM-47):
+//!   правилам бронирования тип безразличен, клиентам — CalDAV `calendar-user-type` и JMAP `Principal.type`
+//!   (CTR-88).
 //!
 //! Имя и блокировку входа ресурса меняет `PATCH …/accounts/{account}`, представителей (ответственных за
 //! бронирования) — [`crate::sharing`]. Хранилища — [`Admin::with_sharing`]; без них маршруты отвечают 503.
@@ -23,7 +26,9 @@ use axum::routing::{get, put};
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, Time};
 use tp_contracts::config::duration;
-use tp_contracts::meta::{Account, AccountKind, AccountScope, AccountState};
+use tp_contracts::meta::{
+    Account, AccountKind, AccountScope, AccountState, AccountUpsert, ResourceType,
+};
 use tp_contracts::sharing::{Bookers, BookingPolicy, DayOfWeek, WorkingHours};
 use tp_contracts::{AccountId, Error, GroupId, Result, TenantId};
 use utoipa::{OpenApi, ToSchema};
@@ -220,12 +225,45 @@ impl TryFrom<BookingPolicyBody> for BookingPolicy {
     }
 }
 
-/// Ресурс: учётная запись и правила бронирования.
+/// Тип ресурса: помещение или оборудование (CTR-88; [`ResourceType`] контракта): правилам бронирования тип
+/// безразличен, клиентам — CalDAV `calendar-user-type` (`ROOM`, `RESOURCE`) и JMAP `Principal.type` (`location`,
+/// `resource`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceTypeBody {
+    /// Помещение (переговорная) — по умолчанию.
+    #[default]
+    Room,
+    /// Оборудование (проектор, автомобиль).
+    Equipment,
+}
+
+impl From<ResourceType> for ResourceTypeBody {
+    fn from(t: ResourceType) -> Self {
+        match t {
+            ResourceType::Room => Self::Room,
+            ResourceType::Equipment => Self::Equipment,
+        }
+    }
+}
+
+impl From<ResourceTypeBody> for ResourceType {
+    fn from(t: ResourceTypeBody) -> Self {
+        match t {
+            ResourceTypeBody::Room => Self::Room,
+            ResourceTypeBody::Equipment => Self::Equipment,
+        }
+    }
+}
+
+/// Ресурс: учётная запись, тип и правила бронирования.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ResourceInfo {
     /// Учётная запись ресурса.
     #[serde(flatten)]
     pub account: AccountInfo,
+    /// Тип ресурса: помещение или оборудование.
+    pub resource_type: ResourceTypeBody,
     /// Правила бронирования; `null` — не заданы (приглашения не обрабатываются автоматически).
     pub booking_policy: Option<BookingPolicyBody>,
 }
@@ -239,9 +277,20 @@ pub struct NewResource {
     /// Отображаемое имя («Переговорная 5.12»); нет — имя входа.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Тип ресурса; нет — `room`.
+    #[serde(default)]
+    pub resource_type: ResourceTypeBody,
     /// Правила бронирования; нет — по умолчанию.
     #[serde(default)]
     pub booking_policy: Option<BookingPolicyBody>,
+}
+
+/// Изменение ресурса: тип — переговорная (`room`) или оборудование (`equipment`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResourcePatch {
+    /// Тип ресурса.
+    pub resource_type: ResourceTypeBody,
 }
 
 const RESOURCES: &str = "/api/v1/orgs/{org}/resources";
@@ -251,7 +300,12 @@ const BOOKING_POLICY: &str = "/api/v1/orgs/{org}/resources/{account}/booking-pol
 /// Маршруты ресурсов.
 pub(crate) fn routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
     r.route(RESOURCES, get(list_resources).post(create_resource))
-        .route(RESOURCE, get(get_resource).delete(delete_resource))
+        .route(
+            RESOURCE,
+            get(get_resource)
+                .patch(patch_resource)
+                .delete(delete_resource),
+        )
         .route(BOOKING_POLICY, put(put_booking_policy))
 }
 
@@ -262,6 +316,7 @@ pub(crate) fn routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
         list_resources,
         create_resource,
         get_resource,
+        patch_resource,
         delete_resource,
         put_booking_policy
     ),
@@ -270,8 +325,10 @@ pub(crate) fn routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
         Weekday,
         WorkingHoursBody,
         BookingPolicyBody,
+        ResourceTypeBody,
         ResourceInfo,
-        NewResource
+        NewResource,
+        ResourcePatch
     ))
 )]
 pub(crate) struct Doc;
@@ -306,8 +363,10 @@ async fn resource_info(a: &Admin, acc: Account) -> Result<ResourceInfo> {
         account: acc.id,
     };
     let booking_policy = s.resources.booking_policy(scope).await?.map(Into::into);
+    let resource_type = acc.resource_type.unwrap_or_default().into();
     Ok(ResourceInfo {
         account: account_info(a, acc).await?,
+        resource_type,
         booking_policy,
     })
 }
@@ -333,9 +392,9 @@ async fn list_resources(
     Ok(Json(out))
 }
 
-/// Создаёт ресурс: локальную учётную запись вида `resource` в принятом домене организации и правила бронирования.
-/// Имя занято — 409; домен не принят организацией, недопустимые правила или неизвестная учётная запись или группа в
-/// `bookers` — 400; хранилища не подключены — 503.
+/// Создаёт ресурс: локальную учётную запись вида `resource` в принятом домене организации и правила бронирования
+/// (тип — `resource_type`, нет — помещение). Имя занято — 409; домен не принят организацией, недопустимые правила
+/// или неизвестная учётная запись или группа в `bookers` — 400; хранилища не подключены — 503.
 #[utoipa::path(post, path = "/api/v1/orgs/{org}/resources", tag = "resources",
     params(("org" = String, Path, description = "Организация (UUID)")),
     request_body = NewResource,
@@ -354,6 +413,7 @@ async fn create_resource(
         &body.login,
         body.display_name.as_deref(),
         AccountKind::Resource,
+        Some(body.resource_type.into()),
     )
     .await?;
     let scope = AccountScope {
@@ -374,6 +434,47 @@ async fn get_resource(
 ) -> ApiResult<Json<ResourceInfo>> {
     stores(&a)?;
     let acc = resource(&a, org, id).await?;
+    Ok(Json(resource_info(&a, acc).await?))
+}
+
+/// Меняет тип ресурса: переговорная (`room`) или оборудование (`equipment`); имя, правила бронирования и прочее —
+/// без изменений (правилам тип безразличен). Изменение пишет в журнал аудита слой доступа. Нет или не ресурс — 404;
+/// неизвестное значение типа или поле — 400; тип ресурса из каталога ведёт каталог — 409.
+#[utoipa::path(patch, path = "/api/v1/orgs/{org}/resources/{account}", tag = "resources",
+    params(("org" = String, Path, description = "Организация (UUID)"), ("account" = String, Path, description = "Ресурс (UUID)")),
+    request_body = ResourcePatch,
+    responses((status = 200, body = ResourceInfo), (status = 400, body = Problem), (status = 404, body = Problem),
+        (status = 409, body = Problem), (status = 503, body = Problem)))]
+async fn patch_resource(
+    State(a): State<Arc<Admin>>,
+    Path((org, id)): Path<(TenantId, AccountId)>,
+    Json(body): Json<ResourcePatch>,
+) -> std::result::Result<Json<ResourceInfo>, Refused> {
+    stores(&a)?;
+    let acc = resource(&a, org, id).await?;
+    if acc.external_id.is_some() {
+        return Err(Refused::Problem(
+            StatusCode::CONFLICT,
+            "тип ресурса из каталога перезаписывает синхронизация каталога: измените его в каталоге".to_owned(),
+        ));
+    }
+    let acc =
+        a.d.accounts
+            .upsert(
+                org,
+                AccountUpsert {
+                    domain: acc.domain,
+                    login: acc.login,
+                    display_name: acc.display_name,
+                    external_id: acc.external_id,
+                    enabled: acc.enabled,
+                    aliases: acc.aliases,
+                    kind: AccountKind::Resource,
+                    hidden_from_gal: acc.hidden_from_gal,
+                    resource_type: Some(body.resource_type.into()),
+                },
+            )
+            .await?;
     Ok(Json(resource_info(&a, acc).await?))
 }
 
@@ -687,5 +788,151 @@ mod tests {
             assert!(parse_hhmm(bad).is_err(), "{bad}");
         }
         assert_eq!(parse_hhmm("23:59").map(hhmm).ok().as_deref(), Some("23:59"));
+    }
+
+    /// Приёмка ADM-47: тип ресурса — `room` без типа в запросе и `equipment` с ним; `PATCH` меняет тип и пишет
+    /// аудит; чужая организация — 404; неизвестный тип — 400 problem+json.
+    #[tokio::test]
+    async fn resource_type_flow() {
+        use axum::http::header;
+        use tp_contracts::meta::{AccountUpsert, ResourceType};
+
+        let env = Env::new();
+        accept_domain(&env).await;
+        // Без типа — помещение; с типом — оборудование.
+        let (s, _, b) = env
+            .call(
+                "POST",
+                &base(),
+                Some("org"),
+                Some(json!({"login": "Room-512@example.test"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::CREATED, "{b}");
+        assert_eq!(b["resource_type"], "room");
+        let room = b["id"].as_str().expect("id").to_owned();
+        let (s, _, b) = env
+            .call(
+                "POST",
+                &base(),
+                Some("org"),
+                Some(json!({"login": "projector@example.test", "resource_type": "equipment"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::CREATED, "{b}");
+        assert_eq!(b["resource_type"], "equipment");
+
+        // PATCH меняет тип и пишет аудит; тип — в учётной записи.
+        let one = format!("{}/{room}", base());
+        let (s, _, b) = env
+            .call(
+                "PATCH",
+                &one,
+                Some("org"),
+                Some(json!({"resource_type": "equipment"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["resource_type"], "equipment");
+        assert_eq!(b["login"], "room-512@example.test");
+        let last = env.audit.records().pop().expect("audit");
+        assert_eq!(
+            (last.method.as_str(), last.route.as_str(), last.status),
+            ("PATCH", RESOURCE, 200)
+        );
+        let id: AccountId = room.parse().expect("uuid");
+        let acc = env
+            .meta
+            .get(TenantId::DEFAULT, id)
+            .await
+            .expect("get")
+            .expect("account");
+        assert_eq!(acc.resource_type, Some(ResourceType::Equipment));
+        let (_, _, b) = env.call("GET", &one, Some("org"), None).await;
+        assert_eq!(b["resource_type"], "equipment");
+        let (s, _, b) = env
+            .call(
+                "PATCH",
+                &one,
+                Some("org"),
+                Some(json!({"resource_type": "room"})),
+            )
+            .await;
+        assert_eq!((s, &b["resource_type"]), (StatusCode::OK, &json!("room")));
+
+        // Неизвестное значение, не то поле и пустое тело — 400 problem+json, тип не меняется.
+        for bad in [
+            json!({"resource_type": "car"}),
+            json!({"resource_type": 1}),
+            json!({}),
+            json!({"display_name": "Другое"}),
+        ] {
+            let (s, h, b) = env.call("PATCH", &one, Some("org"), Some(bad)).await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+            assert_eq!(h[header::CONTENT_TYPE], "application/problem+json");
+        }
+        let (_, _, b) = env.call("GET", &one, Some("org"), None).await;
+        assert_eq!(b["resource_type"], "room");
+
+        // Не ресурс и нет ресурса — 404; тип ресурса из каталога ведёт каталог — 409.
+        let staff = env.account("boss@example.org").await;
+        for target in [staff.account.to_string(), AccountId::new().to_string()] {
+            let (s, _, _) = env
+                .call(
+                    "PATCH",
+                    &format!("{}/{}", base(), target),
+                    Some("org"),
+                    Some(json!({"resource_type": "equipment"})),
+                )
+                .await;
+            assert_eq!(s, StatusCode::NOT_FOUND);
+        }
+        let dir = env
+            .meta
+            .upsert(
+                TenantId::DEFAULT,
+                AccountUpsert {
+                    domain: tp_contracts::DomainId::new(),
+                    login: "hall@example.org".into(),
+                    display_name: "Актовый зал".into(),
+                    external_id: Some("guid-1".into()),
+                    enabled: true,
+                    aliases: Vec::new(),
+                    kind: AccountKind::Resource,
+                    hidden_from_gal: false,
+                    resource_type: None,
+                },
+            )
+            .await
+            .expect("upsert");
+        let (s, _, b) = env
+            .call(
+                "PATCH",
+                &format!("{}/{}", base(), dir.id),
+                Some("org"),
+                Some(json!({"resource_type": "equipment"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::CONFLICT, "{b}");
+        assert!(b["detail"].as_str().expect("detail").contains("каталог"));
+
+        // Чужая организация — 404: ресурс другой организации не виден (администратору инсталляции).
+        let other = format!("/api/v1/orgs/{}/resources/{}", env.other_tenant, room);
+        let (s, _, _) = env
+            .call(
+                "PATCH",
+                &other,
+                Some("root"),
+                Some(json!({"resource_type": "equipment"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        // Операция — в спецификации: её подхватят консоль, CLI и текстовый интерфейс.
+        let (_, _, spec) = env.call("GET", "/api/openapi.json", None, None).await;
+        let op = &spec["paths"][RESOURCE]["patch"];
+        assert_eq!(op["operationId"], "patch_resource");
+        let schema = &spec["components"]["schemas"]["ResourceTypeBody"];
+        assert_eq!(schema["enum"], json!(["room", "equipment"]), "{schema}");
     }
 }

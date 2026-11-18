@@ -177,6 +177,26 @@ pub const GROUP_DELETE: Op = Op {
     method: "DELETE",
     path: "/api/v1/orgs/{org}/groups/{group}",
 };
+/// Ресурсы бронирования организации.
+pub const RESOURCES_LIST: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/resources",
+};
+/// Новый ресурс бронирования.
+pub const RESOURCES_CREATE: Op = Op {
+    method: "POST",
+    path: "/api/v1/orgs/{org}/resources",
+};
+/// Ресурс бронирования.
+pub const RESOURCE_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/resources/{account}",
+};
+/// Смена типа ресурса бронирования.
+pub const RESOURCE_PATCH: Op = Op {
+    method: "PATCH",
+    path: "/api/v1/orgs/{org}/resources/{account}",
+};
 /// Корзина ящика.
 pub const TRASH_LIST: Op = Op {
     method: "GET",
@@ -273,6 +293,10 @@ pub const OPERATIONS: &[Op] = &[
     GROUP_GET,
     GROUP_PATCH,
     GROUP_DELETE,
+    RESOURCES_LIST,
+    RESOURCES_CREATE,
+    RESOURCE_GET,
+    RESOURCE_PATCH,
     TRASH_LIST,
     TRASH_RESTORE,
     TRASH_HIDDEN_LIST,
