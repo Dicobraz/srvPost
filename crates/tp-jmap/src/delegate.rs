@@ -309,13 +309,17 @@ mod tests {
     /// не сообщаются.
     #[tokio::test]
     async fn query_changes_of_delegate() {
+        use time::{Duration, OffsetDateTime};
+
         let env = Env::new().await;
         let inbox = env.mailbox(SpecialUse::Inbox);
         let archive = env.mailbox(SpecialUse::Archive);
-        env.deliver(
+        let t0 = OffsetDateTime::now_utc() - Duration::days(1);
+        env.deliver_at(
             inbox,
             &mail("Первое", "a@x.org", "", "текст"),
             Default::default(),
+            t0,
         )
         .await;
         let boss = env.user("boss@example.org").await;
@@ -333,16 +337,18 @@ mod tests {
         .await;
         let state = q["queryState"].clone();
         let fresh = env
-            .deliver(
+            .deliver_at(
                 inbox,
                 &mail("Второе", "b@x.org", "", "ещё"),
                 Default::default(),
+                t0 + Duration::hours(1),
             )
             .await;
-        env.deliver(
+        env.deliver_at(
             archive,
             &mail("Скрытое", "c@x.org", "", "тайна"),
             Default::default(),
+            t0 + Duration::hours(2),
         )
         .await;
         let r = call(
