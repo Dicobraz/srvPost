@@ -1322,6 +1322,10 @@ mod tests {
         assert!(mail.starts_with("250"), "{mail}");
         let rcpt = smtp_round(&mut s, "RCPT TO:<user@example.org>").await;
         assert!(rcpt.starts_with("451"), "{rcpt}");
+        // Сессия закрывается до остановки узла: drain роли ждёт активные сессии до `drain_deadline`.
+        let quit = smtp_round(&mut s, "QUIT").await;
+        assert!(quit.starts_with("221"), "{quit}");
+        drop(s);
 
         shutdown.cancel();
         let report = running.wait().await.expect("wait");
