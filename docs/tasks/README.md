@@ -897,11 +897,11 @@
 | [APP-73](APP-73.md) | e2e узла — ответ ресурса внешнему организатору письмом iMIP | app | A | app-70 | done | APP-71 |
 | [CTR-91](CTR-91.md) | брендинг заказчика в контракте — `BrandingStore`, роли цветов, уровни установки и организации | contracts | B | contracts-62 | done | — |
 | [META-84](META-84.md) | брендинг заказчика в PostgreSQL — миграция 0043 и `BrandingStore` в `PgMeta` | meta | A | meta-57 | done | CTR-91 |
-| [ADM-48](ADM-48.md) | брендинг заказчика в Admin API — чтение, запись, сброс, знак, контраст, открытый маршрут | admin | B | admin-34 | ready | CTR-91,DES-01,ADM-44 |
-| [APP-75](APP-75.md) | узел — брендинг заказчика (`BrandingStore` и BLOB в Admin API) | app | A | app-72 | todo | META-84,ADM-48 |
-| [UI-22](UI-22.md) | консоль — брендинг заказчика: тема из действующего брендинга, знак на входе и в шапке, настройка | console | A | console-13 | todo | UI-19,ADM-48 |
-| [TUI-08](TUI-08.md) | текстовый интерфейс — тема поверх действующего брендинга, знак на экране входа | tui | A | tui-05 | todo | TUI-06,ADM-48 |
-| [DOC-11](DOC-11.md) | INSTALL — брендинг заказчика | docs | A | docs-11 | todo | ADM-48 |
+| [ADM-48](ADM-48.md) | брендинг заказчика в Admin API — чтение, запись, сброс, знак, контраст, открытый маршрут | admin | B | admin-34 | done | CTR-91,DES-01,ADM-44 |
+| [APP-75](APP-75.md) | узел — брендинг заказчика (`BrandingStore` и BLOB в Admin API) | app | A | app-72 | ready | META-84,ADM-48 |
+| [UI-22](UI-22.md) | консоль — брендинг заказчика: тема из действующего брендинга, знак на входе и в шапке, настройка | console | A | console-13 | ready | UI-19,ADM-48 |
+| [TUI-08](TUI-08.md) | текстовый интерфейс — тема поверх действующего брендинга, знак на экране входа | tui | A | tui-05 | ready | TUI-06,ADM-48 |
+| [DOC-11](DOC-11.md) | INSTALL — брендинг заказчика | docs | A | docs-11 | ready | ADM-48 |
 | [CTR-93](CTR-93.md) | контракт политики доверия — типы абонентов, функции, уровни, потолок, безопасные умолчания | contracts | B | contracts-64 | done | CTR-92 |
 | [META-85](META-85.md) | политика доверия в PostgreSQL — `TrustStore` в `PgMeta`, внешний текст автоответа | meta | A | meta-58 | ready | CTR-93 |
 | [ADM-49](ADM-49.md) | политика доверия в Admin API — маршруты уровней, проверка потолка, партнёры, CLI | admin | B | admin-35 | ready | CTR-93,ADM-44 |
@@ -919,7 +919,7 @@
 | [MS-21](MS-21.md) | приём письма — беседа и политики беседы в той же транзакции | mailstore | A | mailstore-15 | todo | CTR-94 |
 | [SMTP-51](SMTP-51.md) | ответ на наше письмо — метка в Message-ID, BATV, признак ответа, память беседы | smtp | A | smtp-31 | todo | CTR-94,DEPS-18,SMTP-50 |
 | [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | todo | CTR-94,MS-21 |
-| [JMAP-49](JMAP-49.md) | доступ к чужим ящикам почты в JMAP — делегированные Email/query и Email/get по ACL | jmap | A | jmap-33 | ready | JMAP-32,CTR-82 |
+| [JMAP-49](JMAP-49.md) | доступ к чужим ящикам почты в JMAP — делегированные Email/query и Email/get по ACL | jmap | A | jmap-33 | done | JMAP-32,CTR-82 |
 | [ADM-50](ADM-50.md) | удержание беседы в Admin API — удержать, снять, перечислить, выгрузить; CLI | admin | B | admin-36 | todo | CTR-94,ADM-44 |
 | [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | app-74 | todo | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
 | [DEP-56](DEP-56.md) | Rspamd — балл за признак ответа; ключи меток и BATV в поставке | deploy | A | deploy-43 | todo | SMTP-51 |
