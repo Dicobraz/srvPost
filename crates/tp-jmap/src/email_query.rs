@@ -408,7 +408,7 @@ fn query_key(filter: &Option<Value>, spec: &[(Part, bool)]) -> String {
 /// представителя пропускаются (`boxes`, JMAP-49), как не попавшие в полную выгрузку.
 async fn fetch_candidates(
     ctx: &Ctx<'_>,
-    ids: &[MessageId],
+    ids: &HashSet<MessageId>,
     boxes: &Option<Vec<MailboxId>>,
 ) -> MethodResult<Vec<Message>> {
     if ids.is_empty() {
@@ -425,7 +425,7 @@ async fn fetch_candidates(
     let got: Vec<Result<Option<Message>>> = stream::iter(ids)
         .map(|id| {
             let store = store.clone();
-            async move { store.get(scope, id).await }
+            async move { store.get(scope, *id).await }
         })
         .buffer_unordered(n)
         .collect()
