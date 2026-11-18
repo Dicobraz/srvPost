@@ -46,7 +46,16 @@ impl Delivery {
             rcpts,
             raw,
         } = match self
-            .pre_submit(&crate::server::next_id(), tenant, mail_from, rcpts, raw)
+            .pre_submit(
+                &crate::server::next_id(),
+                tenant,
+                // Вошедшего пользователя у выпуска отложенной отправки нет: право отправки проверил JMAP при
+                // постановке (CTR-82).
+                None,
+                mail_from,
+                rcpts,
+                raw,
+            )
             .await?
         {
             Pre::Done(SubmitStatus::Failed(reply)) if reply.starts_with('4') => {
@@ -99,8 +108,11 @@ impl LocalRelease for Delivery {
             return Ok(vec![None; rcpts.len()]);
         }
         let id = crate::server::next_id();
-        // Уведомление отправителю — по итогам записи очереди (обработчик), не здесь.
-        let statuses = self.dispatch(&id, None, from, &local, raw, false).await?;
+        // Уведомление отправителю — по итогам записи очереди (обработчик), не здесь. Вошедшего пользователя
+        // у выпуска нет — сеанс закончился до постановки (CTR-82).
+        let statuses = self
+            .dispatch(&id, None, None, from, &local, raw, false)
+            .await?;
         tracing::info!(%id, count = local.len(), "smtp: запись очереди выпущена локальным получателям");
         Ok(rcpts
             .iter()

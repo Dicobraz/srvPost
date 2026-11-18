@@ -150,10 +150,13 @@ impl ItipSender for ImipSender {
     async fn send(&self, msg: &ItipOutgoing) -> Result<Submitted> {
         msg.validate()?;
         let raw = message(msg, OffsetDateTime::now_utc())?;
+        // Вошедшего пользователя нет: письмо iMIP отправляет календарь от имени учётной записи
+        // `sender`, `From` — один из её адресов (проверяет вызывающий; CTR-82).
         self.outbound
             .submit(
                 msg.sender.tenant,
                 Some(msg.sender.account),
+                None,
                 &msg.from,
                 &msg.to,
                 Bytes::from(raw),

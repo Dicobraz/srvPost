@@ -56,6 +56,8 @@
 //! Отправка вне сессии SMTP (JMAP `EmailSubmission/set`) — [`Delivery::submit`] и `impl Outbound for Delivery`
 //! (CMP-04, контракт `tp_contracts::queue::Outbound`, CTR-28): локальные получатели доставляются сразу тем же
 //! `ingest`, внешние — в очередь (без очереди — `SubmitStatus::Failed` с `451 4.3.0`, SMTP-28); статус по получателю.
+//! Вошедший пользователь (`Outbound::submit`, CTR-82) — субъект прав отправки приглашений (с группами) и
+//! отправитель правил потока (`FlowInput::principal`).
 //! Отложенная отправка и её отмена (`Outbound::schedule`, `cancel_scheduled`; SMTP-24) — `scheduled`.
 //! Лимиты писем и адресатов в час учётной записи отправителя — общие с submission ([`Delivery::with_send_limits`],
 //! [`crate::limits`], SMTP-43).
@@ -392,7 +394,8 @@ impl Delivery {
     /// для каждой учётной записи получателя, если `From` письма совпадает с `ORGANIZER` (сообщения организатора) или
     /// `ATTENDEE` (ответы участника) и ему можно доверять:
     /// - submission и [`Delivery::submit`] (решение 78, SMTP-36) — `From` принадлежит учётной записи отправителя
-    ///   (вошедшей в сеанс submission; у [`Delivery::submit`] — по отправителю конверта): её адрес, псевдоним
+    ///   (вошедшей в сеанс submission или вошедшему пользователю [`Delivery::submit`] — CTR-82, с группами;
+    ///   без сеанса — отправителю конверта): её адрес, псевдоним
     ///   (`Account::addresses`) или право Send As / Send on Behalf ([`Delivery::with_authz`]);
     /// - smtp-in (iMIP, RFC 6047, SMTP-33; в том числе через шлюз Edge) — письмо прошло DMARC.
     ///
@@ -614,8 +617,9 @@ impl Delivery {
     /// Право учётной записи `account` организации узла на адрес отправителя `from` (решение 78, SMTP-45): её адрес
     /// или псевдоним (`Account::addresses`) — [`SendRight::SendAs`], иначе право Send As / Send on Behalf из ACL
     /// узла (`Authorizer::send_right`, [`Delivery::with_authz`]; та же проверка, что у JMAP). `None` — адрес чужой.
-    /// Субъект проверки прав — `principal` сеанса submission; без него (отправка вне сессии SMTP) — учётная запись
-    /// без групп (CTR-82).
+    /// Субъект проверки прав — `principal` сеанса submission или вошедший пользователь [`Delivery::submit`]
+    /// (CTR-82: с группами); без него (отправка без сеанса, выпуск отложенной отправки) — учётная запись
+    /// отправителя конверта без групп.
     async fn sender_right(
         &self,
         account: AccountId,
@@ -1969,6 +1973,7 @@ impl Delivery {
         &self,
         id: &str,
         tenant: TenantId,
+        user: Option<&Principal>,
         mail_from: &str,
         rcpts: &[String],
         mut raw: Bytes,
@@ -2022,7 +2027,7 @@ impl Delivery {
         let input = FlowInput {
             tenant,
             direction: FlowDirection::Submission,
-            principal: None,
+            principal: user.cloned(),
             source: None,
             envelope: FlowEnvelope {
                 mail_from: mail_from.to_owned(),
@@ -2100,12 +2105,16 @@ impl Delivery {
     }
 
     /// Доставка письма отправки после [`Delivery::pre_submit`]: локальным получателям — в ящики (группы, правила
-    /// Sieve, пересылки), внешним — в очередь. Статус — по каждому адресу `rcpts`. `bounce` — уведомить отправителя
+    /// Sieve, пересылки), внешним — в очередь. `user` — вошедший пользователь отправки (CTR-82: субъект прав
+    /// Send As / Send on Behalf приглашений, с группами; `None` — отправка без сеанса, выпуск отложенной отправки).
+    /// Статус — по каждому адресу `rcpts`. `bounce` — уведомить отправителя
     /// о недоставленных; выпуск отложенной отправки ([`LocalRelease`]) уведомляет сам, по итогам записи очереди.
+    #[allow(clippy::too_many_arguments)] // CTR-82: вошедший пользователь; конвенция репо (как apply_rules)
     async fn dispatch(
         &self,
         id: &str,
         owner: Option<AccountId>,
+        user: Option<&Principal>,
         mail_from: &str,
         rcpts: &[String],
         raw: Bytes,
@@ -2193,7 +2202,7 @@ impl Delivery {
             Some(account) => {
                 let origin = ItipOrigin::Internal {
                     account,
-                    principal: None,
+                    principal: user,
                 };
                 self.apply_itip(id, &full, origin, &itip_to, &failed).await
             }
@@ -2266,6 +2275,10 @@ impl Delivery {
     /// внешние — в очередь исходящей почты ([`Deps::outbound`]) письмом `raw` без изменений. Пересылки модулей
     /// на локальные адреса — сразу в ящики, на внешние — в очередь.
     ///
+    /// `user` — вошедший пользователь отправки (CTR-82, контракт [`Outbound::submit`]): по нему проверяется
+    /// принадлежность `From` приглашения (права Send As / Send on Behalf с группами,
+    /// [`Delivery::sender_right`]); `None` — отправка без сеанса (права проверил вызывающий).
+    ///
     /// Неизвестный локальный адрес и переполненный ящик — статус [`SubmitStatus::Failed`] и уведомление о
     /// недоставке отправителю (как для входящей почты). Узел без очереди: внешние получатели —
     /// `SubmitStatus::Failed` с временной ошибкой [`NO_OUTBOUND`] без уведомления (статус получает отправитель),
@@ -2280,6 +2293,7 @@ impl Delivery {
         &self,
         tenant: TenantId,
         owner: Option<AccountId>,
+        user: Option<&Principal>,
         mail_from: &str,
         rcpts: &[String],
         raw: Bytes,
@@ -2293,7 +2307,10 @@ impl Delivery {
             mail_from,
             rcpts,
             raw,
-        } = match self.pre_submit(&id, tenant, mail_from, rcpts, raw).await? {
+        } = match self
+            .pre_submit(&id, tenant, user, mail_from, rcpts, raw)
+            .await?
+        {
             Pre::Done(status) => return Ok(Submitted::all(requested, status)),
             Pre::Go(m) => m,
         };
@@ -2312,7 +2329,7 @@ impl Delivery {
             return Ok(Submitted::all(requested, status));
         }
         let statuses = self
-            .dispatch(&id, owner, mail_from, rcpts, raw, true)
+            .dispatch(&id, owner, user, mail_from, rcpts, raw, true)
             .await?;
         // Статус — по получателям запроса: адрес, убранный правилом потока, считается обработанным.
         let statuses = requested
@@ -2732,7 +2749,7 @@ impl Outbound for Delivery {
         rcpts: &[String],
         raw: Bytes,
     ) -> Result<()> {
-        let sent = Delivery::submit(self, tenant, owner, mail_from, rcpts, raw).await?;
+        let sent = Delivery::submit(self, tenant, owner, None, mail_from, rcpts, raw).await?;
         // Узел без очереди и ни одной доставки: письмо никуда не попало — ошибка, повтор безопасен.
         // Иначе внешним получателям — только `Failed` в журнале (повтор задвоил бы локальную доставку).
         let lost = |s: &SubmitStatus| matches!(s, SubmitStatus::Failed(r) if r == NO_OUTBOUND);
@@ -2746,11 +2763,12 @@ impl Outbound for Delivery {
         &self,
         tenant: TenantId,
         owner: Option<AccountId>,
+        user: Option<&Principal>,
         mail_from: &str,
         rcpts: &[String],
         raw: Bytes,
     ) -> Result<Submitted> {
-        Delivery::submit(self, tenant, owner, mail_from, rcpts, raw).await
+        Delivery::submit(self, tenant, owner, user, mail_from, rcpts, raw).await
     }
 
     async fn schedule(
@@ -3124,8 +3142,9 @@ pub trait PartnerDomains: Send + Sync + 'static {
 enum ItipOrigin<'a> {
     /// smtp-in (iMIP, SMTP-33): письмо прошло DMARC.
     Imip { dmarc_pass: bool },
-    /// Почтовый клиент (submission, [`Delivery::submit`]; решение 78): учётная запись отправителя и субъект сеанса
-    /// submission.
+    /// Почтовый клиент (submission, [`Delivery::submit`]; решение 78): учётная запись отправителя конверта и
+    /// субъект проверки прав — вошедший пользователь сеанса submission или [`Delivery::submit`] (CTR-82, с
+    /// группами), `None` — отправка без сеанса.
     Internal {
         account: AccountId,
         principal: Option<&'a Principal>,

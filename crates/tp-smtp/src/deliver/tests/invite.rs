@@ -25,16 +25,17 @@ fn invite(from: &str, organizer: &str) -> String {
     )
 }
 
-/// Права отправки от чужого адреса: (имя входа, адрес `From`) → право.
+/// Права отправки от чужого адреса: (субъект — имя входа или группа, адрес `From`) → право; субъект проверки —
+/// имя входа и группы `Principal::groups`, как у `tp_auth::AclAuthorizer`.
 #[derive(Default)]
 pub(super) struct SendRights(Mutex<HashMap<(String, String), SendRight>>);
 
 impl SendRights {
-    pub(super) fn grant(&self, login: &str, from: &str, right: SendRight) {
+    pub(super) fn grant(&self, subject: &str, from: &str, right: SendRight) {
         self.0
             .lock()
             .expect("lock")
-            .insert((login.to_owned(), from.to_owned()), right);
+            .insert((subject.to_owned(), from.to_owned()), right);
     }
 }
 
@@ -45,12 +46,13 @@ impl Authorizer for SendRights {
     }
 
     async fn send_right(&self, p: &Principal, from: &str) -> Result<Option<SendRight>> {
-        Ok(self
-            .0
-            .lock()
-            .expect("lock")
-            .get(&(p.login.to_lowercase(), from.to_lowercase()))
-            .copied())
+        let table = self.0.lock().expect("lock");
+        for subject in std::iter::once(&p.login).chain(p.groups.iter()) {
+            if let Some(right) = table.get(&(subject.to_lowercase(), from.to_lowercase())) {
+                return Ok(Some(*right));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -78,12 +80,30 @@ async fn submission_reply(env: &Env, d: &Delivery, raw: &str) -> Reply {
     d.data(&e, Bytes::from(raw.to_owned())).await
 }
 
-/// Отправка вне сессии SMTP (JMAP `EmailSubmission`) от alice.
+/// Отправка вне сессии SMTP (JMAP `EmailSubmission`) от alice без вошедшего пользователя.
 async fn submit(d: &Delivery, raw: &str) {
     let sent = d
         .submit(
             TenantId::DEFAULT,
             None,
+            None,
+            ALICE,
+            &[BOB.to_owned()],
+            Bytes::from(raw.to_owned()),
+        )
+        .await
+        .expect("submit");
+    assert_eq!(sent.rcpts, [(BOB.to_owned(), SubmitStatus::Delivered)]);
+}
+
+/// Отправка вне сессии SMTP (JMAP `EmailSubmission`) от вошедшего `user` (CTR-82): конверт — alice,
+/// как у JMAP Send on Behalf.
+async fn submit_user(d: &Delivery, user: &Principal, raw: &str) {
+    let sent = d
+        .submit(
+            TenantId::DEFAULT,
+            None,
+            Some(user),
             ALICE,
             &[BOB.to_owned()],
             Bytes::from(raw.to_owned()),
@@ -214,6 +234,26 @@ async fn submit_checks_envelope_sender_account() {
     assert_eq!(env.inbox(BOB).await.len(), 3);
 }
 
+/// CTR-82: право Send on Behalf, выданное группе, даёт отправку приглашения через JMAP члену группы —
+/// вошедший пользователь идёт в `Outbound::submit`, права проверяются с его группами. Без вошедшего (отправка
+/// без сеанса) право группы не распознаётся — приглашение остаётся письмом (отчёт smtp-16, #633).
+#[tokio::test]
+async fn group_granted_on_behalf_reaches_calendar() {
+    let env = Env::new(DecisionHooks::default()).await;
+    let rights = Arc::new(SendRights::default());
+    rights.grant("team", "boss@example.org", SendRight::SendOnBehalf);
+    let (d, itip) = delivery(&env, Some(rights));
+    // Вошедший — alice, член группы team (конверт — она же, как у JMAP Send on Behalf), `From` — boss.
+    let mut alice = super::org_policy::principal(&env).await;
+    alice.groups.insert("team".into());
+    submit_user(&d, &alice, &invite("boss@example.org", "boss@example.org")).await;
+    assert_eq!(reached(&env, &itip).await, ["boss@example.org"]);
+    assert_eq!(env.inbox(BOB).await.len(), 1);
+    // Тот же член группы без вошедшего пользователя: у отправителя конверта (alice) групп нет — только письмо.
+    submit(&d, &invite("boss@example.org", "boss@example.org")).await;
+    assert_eq!(env.inbox(BOB).await.len(), 2);
+}
+
 #[tokio::test]
 async fn external_sender_of_submit_is_not_internal() {
     let env = Env::new(DecisionHooks::default()).await;
@@ -223,6 +263,7 @@ async fn external_sender_of_submit_is_not_internal() {
     let sent = d
         .submit(
             TenantId::DEFAULT,
+            None,
             None,
             "sender@example.net",
             &[BOB.to_owned()],

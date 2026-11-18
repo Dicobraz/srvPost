@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use bytes::Bytes;
 use time::OffsetDateTime;
+use tp_contracts::auth::Principal;
 use tp_contracts::queue::{Outbound, SubmitStatus, Submitted};
 use tp_contracts::{AccountId, Error, QueueId, Result, TenantId};
 
@@ -23,6 +24,8 @@ pub struct Queued {
     pub tenant: TenantId,
     /// Учётная запись отправителя (CTR-74).
     pub owner: Option<AccountId>,
+    /// Вошедший пользователь `submit` (CTR-82); `enqueue` и `schedule` — `None`.
+    pub user: Option<Principal>,
     /// Отправитель конверта.
     pub mail_from: String,
     /// Получатели в порядке вызова.
@@ -97,6 +100,7 @@ impl MemOutbound {
         &self,
         tenant: TenantId,
         owner: Option<AccountId>,
+        user: Option<Principal>,
         mail_from: &str,
         rcpts: &[String],
         raw: Bytes,
@@ -108,6 +112,7 @@ impl MemOutbound {
         st.queued.push(Queued {
             tenant,
             owner,
+            user,
             mail_from: mail_from.to_owned(),
             rcpts: rcpts.to_vec(),
             raw,
@@ -126,7 +131,7 @@ impl Outbound for MemOutbound {
         rcpts: &[String],
         raw: Bytes,
     ) -> Result<()> {
-        self.accept(tenant, owner, mail_from, rcpts, raw)
+        self.accept(tenant, owner, None, mail_from, rcpts, raw)
     }
 
     async fn schedule(
@@ -148,6 +153,7 @@ impl Outbound for MemOutbound {
             message: Queued {
                 tenant,
                 owner,
+                user: None,
                 mail_from: mail_from.to_owned(),
                 rcpts: rcpts.to_vec(),
                 raw,
@@ -179,11 +185,12 @@ impl Outbound for MemOutbound {
         &self,
         tenant: TenantId,
         owner: Option<AccountId>,
+        user: Option<&Principal>,
         mail_from: &str,
         rcpts: &[String],
         raw: Bytes,
     ) -> Result<Submitted> {
-        self.accept(tenant, owner, mail_from, rcpts, raw)?;
+        self.accept(tenant, owner, user.cloned(), mail_from, rcpts, raw)?;
         let st = lock(&self.state);
         Ok(Submitted {
             rcpts: rcpts
@@ -217,6 +224,7 @@ mod tests {
             .submit(
                 TenantId::DEFAULT,
                 Some(owner),
+                None,
                 "x@example.org",
                 &rcpts,
                 Bytes::from_static(b"m"),

@@ -590,14 +590,19 @@ now) -> Vec<QueueItem { id, state, queued_at, next_attempt, from, size, rcpts: V
 Тело — один объект BLOB: ссылку учитывает вызывающий до `enqueue` и освобождает после `complete` = `true`.
 Расписание повторов, срок доставки и DSN — `tp-smtp` (DSN ставится в очередь до `complete(.., Failed)`).
 Постановка письма протоколами — `Outbound` (CTR-28): `enqueue(tenant, owner: Option<AccountId>, mail_from, rcpts, raw: Bytes)`;
-`submit(..) -> Submitted { rcpts: Vec<(String, SubmitStatus::{ Delivered, Queued, Failed(reply) })> }` — статус по получателю в порядке
-запроса (по умолчанию — `enqueue`, все `Queued`). Реализации — `tp_smtp::queue::Queue` (тело в BLOB, ссылка, подпись DKIM `with_dkim`),
+`submit(tenant, owner, user: Option<&Principal>, ..) -> Submitted { rcpts: Vec<(String, SubmitStatus::{ Delivered, Queued, Failed(reply) })> }`
+— статус по получателю в порядке запроса; метод обязателен, реализации по умолчанию нет (CTR-82: реализация не может «забыть» вошедшего
+пользователя). Реализации — `tp_smtp::queue::Queue` (тело в BLOB, ссылка, подпись DKIM `with_dkim`; все получатели — в очередь),
 `tp_smtp::Delivery` (локальные — сразу в ящики); потребители — submission SMTP, пересылки модулей, JMAP `EmailSubmission/set`.
-Маршрут правила потока (`FlowOutcome::route`) не передаётся — политика по домену назначения. In-memory — `MemOutbound`;
-набор `suite::outbound_submit`. `owner` (CTR-74, решение 46) — учётная запись отправителя у `enqueue`, `submit`, `schedule`: реализация
-передаёт её в `BlobIndex::acquire` и `QueueStore::enqueue` (шард её ящика); `None` — DSN, пересылка, письмо модуля. Submission SMTP —
-вошедшая учётная запись, JMAP и iTIP — учётная запись отправки, `tp_smtp::Delivery` для локальной отправки — владелец адреса отправителя
-конверта. `schedule` обязателен.
+Маршрут правила потока (`FlowOutcome::route`) не передаётся — политика по домену назначения. In-memory — `MemOutbound` (запоминает и
+`user`); набор `suite::outbound_submit`. `owner` (CTR-74, решение 46) — учётная запись отправителя у `enqueue`, `submit`, `schedule`:
+реализация передаёт её в `BlobIndex::acquire` и `QueueStore::enqueue` (шард её ящика); `None` — DSN, пересылка, письмо модуля.
+Submission SMTP — вошедшая учётная запись, JMAP и iTIP — учётная запись отправки, `tp_smtp::Delivery` для локальной отправки —
+владелец адреса отправителя конверта. `user` (CTR-82) — вошедший пользователь отправки, только `submit`: субъект прав Send As /
+Send on Behalf (`Authorizer::send_right` с группами `Principal::groups` — право, выданное группе, узнаётся и вне проверок протокола;
+`tp_smtp::Delivery` проверяет по нему принадлежность `From` приглашения, SMTP-36/#633); JMAP передаёт вошедшего, `None` — письмо
+модуля, iMIP и выпуск отложенной отправки (права отправителя проверил вызывающий; авторизация отправки — по аутентифицированному
+субъекту, RFC 6409). `schedule` и `submit` обязательны.
 
 ## Identity и EmailSubmission
 CTR-30, RFC 8621 §6–7. Адреса отправителя (код — `identity.rs`): `Identity { id, name, email, reply_to, bcc: Vec<IdentityAddress { name?,
@@ -761,7 +766,8 @@ iMIP (RFC 6047), занятость. iCalendar контракты не разб�
   `Delivery::with_itip`), `tp-dav` (DAV-13), `tp-jmap` (JMAP-31). Заглушка — `FakeItip` (`set(to, outcome)`, `fail_next`, `calls`).
 - `ItipSender::send(&ItipOutgoing { sender: AccountScope, from (ORGANIZER или ATTENDEE учётной записи), to: Vec (внешние), method, ics,
   subject, text }) -> Submitted` — письмо iMIP (`multipart/alternative`: `text/plain` и `text/calendar; method=…`) через
-  `queue::Outbound::submit` (очередь и DKIM); `validate()` → `Invalid`. Реализация — `tp-dav` поверх `Outbound` (сборка — APP-28);
+  `queue::Outbound::submit` (очередь и DKIM; вошедшего нет — CTR-82, `From` — адрес самой учётной записи `sender`);
+  `validate()` → `Invalid`. Реализация — `tp-dav` поверх `Outbound` (сборка — APP-28);
   in-memory — `MemItipSender` (`sent`, `fail_next`; все `Queued`).
 - Входящие планирования (`schedule-inbox`, RFC 6638 §2.2) в `DavStore` (методы с реализацией по умолчанию — `Internal`):
   `inbox_put(scope, name, InboxMessage { method, uid, from, body }) -> Put` (создать или перезаписать, `id` сохраняется; UID не уникален;
@@ -1302,3 +1308,15 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   автоответа `Vacation::{external_subject, external_text_body, external_html_body}`. Несовместимо: `ItipMessage::sender`,
   `RulesInput` (вызывающие — `tp-smtp`, `tp-dav`, `tp-sieve`, `tp-testkit` — в той же волне). In-memory — `MemTrust`; набор
   `suite::trust`. PostgreSQL — META-85, Admin API — ADM-49.
+- 2026-11-18 — CTR-82 (волна contracts-54): `Outbound::submit` получает `user: Option<&Principal>` — вошедший пользователь
+  отправки: субъект прав Send As / Send on Behalf с группами (`Authorizer::send_right`; отчёт smtp-16, #633 — право, выданное
+  группе, не распознавалось: `tp_smtp::Delivery` проверял принадлежность `From` приглашения по учётной записи отправителя конверта
+  без групп). Реализации по умолчанию больше нет (как у CTR-72/CTR-74: реализация не может «забыть» вошедшего); `tp_smtp::queue::Queue`
+  реализует явно (все получатели — в очередь, `user` не используется), `tp_smtp::Delivery` проверяет по `user` приглашения и передаёт
+  его в `FlowInput::principal`. Вызовы: JMAP — вошедший, iMIP `tp-dav` и выпуск отложенной отправки (`LocalRelease`) — `None`
+  (права проверил вызывающий; авторизация отправки — по аутентифицированному субъекту, RFC 6409, как Send As группам в Exchange).
+  `enqueue` и `schedule` пользователя не получают — права отправителя у них проверяет вызывающий протокол. Несовместимо: сигнатура
+  `Outbound::submit` без значения по умолчанию; места вызова (`tp-smtp`, `tp-jmap`, `tp-dav`, `tp-testkit`, `thepost`) переведены;
+  `MemOutbound::Queued` запоминает `user`. По сравнению с карточкой: трейт живёт в `queue.rs` (не `delivery.rs` — это журнал
+  доставки); тест приёмки (право Send on Behalf группе → приглашение через JMAP-путь в календарь) — `tp-smtp` `deliver::tests::invite`
+  на заглушке прав с группами и `FakeItip`.

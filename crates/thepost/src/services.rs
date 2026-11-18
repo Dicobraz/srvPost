@@ -1716,6 +1716,7 @@ mod tests {
                 .submit(
                     t,
                     None,
+                    None,
                     sender,
                     &[BOB.to_owned()],
                     bytes::Bytes::from(invite(sender, uid)),
@@ -1947,6 +1948,7 @@ mod tests {
             let sent = delivery
                 .submit(
                     t,
+                    None,
                     None,
                     "ext@remote.example",
                     &["news@example.org".to_owned()],
