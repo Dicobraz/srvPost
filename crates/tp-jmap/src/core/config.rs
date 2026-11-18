@@ -39,6 +39,9 @@ pub struct JmapConfig {
     pub max_query_limit: u32,
     /// Наибольшее число результатов одного текстового условия в `Email/query` (запрос к `SearchIndex`).
     pub max_search_results: u32,
+    /// Кандидатов текстового условия в `Email/query` читается точными чтениями вместо полной выгрузки
+    /// писем папок (PERF-07); больше — полная выгрузка.
+    pub query_candidates_max: u32,
     /// Сколько первых байтов письма читать для заголовков (`references`, `headers`, `header:*`).
     pub header_window: u64,
     /// Получателей конверта в одной отправке `EmailSubmission/set`; больше — `tooManyRecipients`.
@@ -87,7 +90,7 @@ pub struct QueryCacheConfig {
     pub ttl: Duration,
     /// Изменений писем в журнале для инкрементального обновления `Email/query`; больше — полная пересборка.
     pub patch_max: usize,
-    /// Параллельных точных чтений писем в пересборке `Email/get`.
+    /// Параллельных точных чтений писем: пересборка `Email/get` и кандидаты `Email/query` (PERF-07).
     pub max_parallel_get: usize,
 }
 
@@ -195,6 +198,7 @@ impl Default for JmapConfig {
             max_changes: 5_000,
             max_query_limit: 1_000,
             max_search_results: 10_000,
+            query_candidates_max: 256,
             header_window: 262_144,
             max_submission_recipients: 100,
             push_min_ping: Duration::from_secs(10),
