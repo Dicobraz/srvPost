@@ -51,6 +51,9 @@ calamine = "0.38.0"
 anstream = "1.0.0"
 anstyle = "1.0.14"
 calcard = "0.3.14"
+# Метка ответа в Message-ID исходящих: AEAD XChaCha20-Poly1305, случайный nonce 24 байта (решение 125 в, DEPS-18);
+# на chacha20 0.10 из дерева (proptest) — второй копии нет.
+chacha20poly1305 = "0.11.0"
 # Подпись профиля .mobileconfig (CMS SignedData, RFC 5652; JMAP-22): типы и DER, без builder —
 # подпись ключом TLS через aws-lc-rs (builder тянет rsa: RUSTSEC-2023-0071 без исправления).
 cms = { version = "0.2.3", default-features = false, features = ["std"] }
@@ -63,6 +66,8 @@ evdev = "0.13.2"
 flate2 = "1.1.10"
 futures = "0.3.34"
 hex = "0.4.3"
+# BATV prvs= в MAIL FROM исходящих: HMAC-SHA1 (решение 125 г, draft-levine-smtp-batv-01); версия та же, что у sqlx.
+hmac = "0.13.0"
 imap-codec = { version = "2.0.0-alpha.9", features = ["starttls", "ext_id", "ext_condstore_qresync", "ext_namespace"] }
 # Сигнатуры форматов для пропуска сжатия BLOB (BLOB-13); без std: OLE-документы не распознаются, они сжимаемы.
 infer = { version = "0.22.0", default-features = false, features = ["alloc"] }
@@ -124,6 +129,8 @@ seccompiler = "0.5.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 serde_yaml_ng = "0.10.0"
+# BATV: SHA-1 под HMAC; поколение digest 0.11, как hmac 0.13 и sha2 (копия 0.10 у axum/tungstenite остаётся).
+sha1 = "0.11.0"
 sha2 = "0.11.1"
 smtp-proto = "0.2.5"
 socket2 = "0.6.5"
