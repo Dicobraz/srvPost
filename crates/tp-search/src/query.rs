@@ -11,12 +11,13 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tantivy::collector::TopDocs;
+use tantivy::columnar::StrColumn;
 use tantivy::query::{
     AllQuery, BooleanQuery, EmptyQuery, Occur, PhraseQuery, Query, TermQuery, TermSetQuery,
 };
 use tantivy::schema::{Field, IndexRecordOption, Value};
 use tantivy::snippet::{SnippetGenerator, collapse_overlapped_ranges};
-use tantivy::{DateTime, DocAddress, Order, Searcher, TantivyDocument, Term};
+use tantivy::{DateTime, DocAddress, Order, TantivyDocument, Term};
 use tp_contracts::meta::AccountScope;
 use tp_contracts::search::{SearchIndex, SearchSort, Snippet, TextField, TextQuery};
 use tp_contracts::{Error, MailboxId, MessageId, Result};
@@ -160,18 +161,40 @@ fn run(
             .map(|(_, a)| a)
             .collect(),
     };
-    found
-        .into_iter()
-        .map(|a| message_id(&searcher, f.id, a))
-        .collect()
+    // Идентификаторы выдачи — из fast-поля `id` (PERF-05): обращение к столбцу сегмента — константа;
+    // сохранённый документ (тело письма — 75 КиБ в модели Д.3) не распаковывается.
+    let name = searcher.schema().get_field_name(f.id);
+    let mut term = String::new();
+    let mut ids = Vec::with_capacity(found.len());
+    for address in found {
+        let column = searcher
+            .segment_reader(address.segment_ord)
+            .fast_fields()
+            .str(name)
+            .map_err(tantivy_err)?
+            .ok_or_else(|| Error::internal("search index: id is not a fast field"))?;
+        ids.push(message_id(&column, address, &mut term)?);
+    }
+    Ok(ids)
 }
 
-fn message_id(searcher: &Searcher, id: Field, address: DocAddress) -> Result<MessageId> {
-    let doc: TantivyDocument = searcher.doc(address).map_err(tantivy_err)?;
-    doc.get_first(id)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| Error::internal("search index: document without id"))?
+/// Идентификатор письма из fast-поля `id`; `term` — переиспользуемый буфер словаря.
+fn message_id(column: &StrColumn, address: DocAddress, term: &mut String) -> Result<MessageId> {
+    let ord = column
+        .ords()
+        .first(address.doc_id)
+        .ok_or_else(|| Error::internal("search index: document without id"))?;
+    let found = column
+        .ord_to_str(ord, term)
+        .map_err(|e| tantivy_err(e.into()))?;
+    if !found {
+        return Err(Error::internal("search index: id is not in the dictionary"));
+    }
+    let id: MessageId = term
         .parse()
+        .map_err(|_| Error::internal("search index: id is not a message id"))?;
+    term.clear();
+    Ok(id)
 }
 
 /// Запрос Tantivy для [`TextQuery`]. `positive` — только условия вне `Not` (термы для подсветки).
@@ -610,6 +633,45 @@ mod tests {
                 .expect("preview")
                 .starts_with("<mark>Отчёт</mark> готов, <mark>отчёты</mark>")
         );
+    }
+
+    /// Целевой план выдачи (PERF-05): `id` — fast-поле, идентификатор выдачи читается из столбца
+    /// сегмента; сохранённый документ (там тело письма — 75 КиБ в модели Д.3) при запросе не
+    /// распаковывается. p95 запроса — обход постингов, а не разжатие всей выдачи.
+    #[tokio::test]
+    async fn hits_take_ids_from_fast_field() {
+        let c = Corpus::new().await;
+        let indexes = c.search.indexes.clone();
+        let index = tokio::task::spawn_blocking(move || indexes.open(c.scope))
+            .await
+            .expect("join")
+            .expect("open")
+            .expect("index");
+        let searcher = index.searcher();
+        let f = index.fields();
+        let name = searcher.schema().get_field_name(f.id);
+        for name_of_mail in ["01-plain-ascii", "20-mixed-pdf"] {
+            let id = c.id(name_of_mail);
+            let by_id = TermQuery::new(index.id_term(id), IndexRecordOption::Basic);
+            let (_, address) = *searcher
+                .search(&by_id, &TopDocs::with_limit(1).order_by_score())
+                .expect("search")
+                .first()
+                .expect("hit");
+            let column = searcher
+                .segment_reader(address.segment_ord)
+                .fast_fields()
+                .str(name)
+                .expect("fast fields")
+                .expect("id is a fast field");
+            let ord = column
+                .ords()
+                .first(address.doc_id)
+                .expect("row in the id column");
+            let mut term = String::new();
+            column.ord_to_str(ord, &mut term).expect("term");
+            assert_eq!(term, id.to_string(), "{name_of_mail}");
+        }
     }
 
     #[tokio::test]
