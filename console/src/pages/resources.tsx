@@ -40,7 +40,7 @@ export function ResourceList() {
         placeholder="Все типы"
         allowClear
         value={type}
-        onChange={setType}
+        onChange={(v) => setType(v as Schemas["ResourceTypeBody"] | undefined)}
         style={{ width: 200, marginBottom: 16 }}
       />
       <Table<Resource> dataSource={rows} loading={query.isLoading} rowKey="id" pagination={false}>
