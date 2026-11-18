@@ -859,8 +859,8 @@ async fn post(cx: &Cx<'_>, body: Body) -> Result<Response> {
     let ids: Vec<AccountId> = accounts
         .iter()
         .zip(&allowed)
-        .filter_map(|(a, ok)| a.filter(|_| *ok))
-        .copied()
+        .filter(|(_, ok)| **ok)
+        .filter_map(|(a, _)| *a)
         .collect();
     let busy = if ids.is_empty() {
         Vec::new()

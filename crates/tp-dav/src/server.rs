@@ -73,7 +73,6 @@ impl fmt::Debug for Deps {
 }
 
 /// Состояние маршрутов.
-#[derive(Debug)]
 pub(crate) struct Dav {
     pub d: Deps,
     pub cfg: DavConfig,
@@ -84,6 +83,18 @@ pub(crate) struct Dav {
     /// Политики доверия (CTR-93, DAV-44); `None` — умолчания [`TrustMatrix::default`] (точки решения сервера:
     /// занятость `schedule-outbox` и уровень выдачи прав `POST` sharing).
     pub(crate) trust: Option<Arc<dyn TrustStore>>,
+}
+
+impl fmt::Debug for Dav {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Dav")
+            .field("d", &self.d)
+            .field("cfg", &self.cfg)
+            .field("schedule", &self.schedule.is_some())
+            .field("stores", &self.stores.is_some())
+            .field("trust", &self.trust.is_some())
+            .finish()
+    }
 }
 
 impl Dav {
