@@ -216,6 +216,14 @@ async fn connection(
     let trusted = source.is_some();
     let mut probe = None;
     let refuse = if busy {
+        tracing::warn!(
+            client = %ip,
+            role = mode.name(),
+            code = 421,
+            reason = "max_connections",
+            limit = config.limits.max_connections,
+            "smtp: 421: достигнут предел одновременных соединений слушателя"
+        );
         Some(reply(421, [4, 3, 2], "Too many connections, try later"))
     } else if let Some(r) = deps
         .limiter
@@ -223,6 +231,13 @@ async fn connection(
         .filter(|l| !trusted && !l.check_ip(ip).is_allowed())
         .map(|_| reply(421, [4, 7, 0], "Too many connections from your address"))
     {
+        tracing::warn!(
+            client = %ip,
+            role = mode.name(),
+            code = 421,
+            reason = "rate_limit_ip",
+            "smtp: 421: частота соединений с адреса превышена"
+        );
         Some(r)
     } else if mode == Mode::Inbound && !trusted {
         match screen.admit(&config.screen, ip) {

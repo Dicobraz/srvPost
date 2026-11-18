@@ -165,6 +165,13 @@ impl Screen {
         {
             drop(st);
             self.count(v, "cached");
+            tracing::info!(
+                client = %ip,
+                code = v.reply().code,
+                reason = v.as_str(),
+                action = "cached",
+                "smtp: экран соединений: отказ из кэша нарушителей"
+            );
             return Admission::Reject {
                 violation: v,
                 cached: true,
@@ -254,7 +261,13 @@ impl Screen {
 /// Журнал и метрика нарушения (сессия и экран).
 pub(crate) fn violation(metrics: Option<&SmtpMetrics>, ip: IpAddr, v: Violation, enforce: bool) {
     let action = if enforce { "rejected" } else { "logged" };
-    tracing::info!(client = %ip, reason = v.as_str(), action, "smtp: экран соединений");
+    tracing::info!(
+        client = %ip,
+        code = v.reply().code,
+        reason = v.as_str(),
+        action,
+        "smtp: экран соединений"
+    );
     if let Some(m) = metrics {
         m.screen(v.as_str(), action);
     }
