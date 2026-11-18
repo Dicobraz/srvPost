@@ -74,6 +74,7 @@ pub use trash::{TrashConfig, TrashPass, TrashStats};
 /// list_cache:
 ///   max_bytes: 67108864
 ///   patch_max: 200
+///   patch_share: 10
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
