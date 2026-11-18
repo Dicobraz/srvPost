@@ -850,7 +850,11 @@ impl Services {
             })
             // Очередь исходящей почты (ADM-45): список записей и повтор доставки — `QueueStore` поверх `PgMeta`
             // (META-82); без этого `GET /orgs/{org}/queue` и `POST …/retry` отвечают 503.
-            .with_queue(Arc::new(self.meta.clone())))
+            .with_queue(Arc::new(self.meta.clone()))
+            // Брендинг установки и организаций (ADM-48): наборы уровней — `BrandingStore` поверх `PgMeta`
+            // (META-84), байты знаков — BLOB узла (`BrandLogo::path`, без распаковки: знак записан как есть);
+            // без этого маршруты брендинга и открытый маршрут отвечают 503.
+            .with_branding(Arc::new(self.meta.clone()), self.blob.clone()))
     }
 
     /// Обучение антиспама (подписчик журнала событий `smtp-learn` роли maintenance): письмо, перенесённое в «Спам»
