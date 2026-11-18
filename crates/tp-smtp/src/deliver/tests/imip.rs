@@ -23,31 +23,21 @@ fn imip(method: &str, organizer: &str, attendee: &str) -> String {
     )
 }
 
-/// Домены-партнёры организации окружения (`TenantId::DEFAULT`).
-struct Partners(BTreeSet<&'static str>);
-
-#[async_trait]
-impl PartnerDomains for Partners {
-    async fn is_partner(&self, tenant: TenantId, domain: &str) -> Result<bool> {
-        Ok(tenant == TenantId::DEFAULT && self.0.contains(domain))
-    }
-}
-
 /// Доставка с проверками отправителя (`example.com`: SPF `192.0.2.0/24`, DMARC `none`) и приёмом iTIP; `example.com`
 /// — домен-партнёр организации.
-fn delivery(env: &Env) -> (Delivery, FakeItip) {
-    with_partners(env, &["example.com"])
+async fn delivery(env: &Env) -> (Delivery, FakeItip) {
+    with_partners(env, &["example.com"]).await
 }
 
-/// Доставка [`delivery`] с доменами-партнёрами `partners`.
-fn with_partners(env: &Env, partners: &[&'static str]) -> (Delivery, FakeItip) {
+/// Доставка [`delivery`] с доменами-партнёрами `partners` (политика организации, SMTP-50).
+async fn with_partners(env: &Env, partners: &[&'static str]) -> (Delivery, FakeItip) {
     let check = fx::checker();
     fx::publish_sender(check.cache(), "none");
     let itip = FakeItip::new();
     let mut d = env
         .delivery(false)
         .with_itip(Arc::new(itip.clone()))
-        .with_partners(Arc::new(Partners(partners.iter().copied().collect())));
+        .with_trust(Arc::new(trust(partners, GroupPost::Closed, &[]).await));
     d.deps.authcheck = Some(Arc::new(check));
     (d, itip)
 }
@@ -116,26 +106,26 @@ async fn smtp_in_sender_kind_by_from_domain() {
     };
     // Без партнёров.
     let env = Env::new(DecisionHooks::default()).await;
-    let (d, itip) = with_partners(&env, &[]);
+    let (d, itip) = with_partners(&env, &[]).await;
     assert_eq!(send(&d, &request).await, 250);
     assert_eq!(kind(&itip), PeerKind::External);
     // Партнёр.
-    let (d, itip) = delivery(&env);
+    let (d, itip) = delivery(&env).await;
     assert_eq!(send(&d, &request).await, 250);
     assert_eq!(kind(&itip), PeerKind::Partner);
     // Домен своей организации письмом снаружи — внешний, и в списке партнёров тоже.
     let env = Env::new(DecisionHooks::default()).await;
     accept(&env, "example.com", TenantId::DEFAULT).await;
-    let (d, itip) = delivery(&env);
+    let (d, itip) = delivery(&env).await;
     assert_eq!(send(&d, &request).await, 250);
     assert_eq!(kind(&itip), PeerKind::External);
     // Другая организация установки (MSSP): соседняя; партнёр — партнёр.
     let env = Env::new(DecisionHooks::default()).await;
     accept(&env, "example.com", TenantId::new()).await;
-    let (d, itip) = with_partners(&env, &[]);
+    let (d, itip) = with_partners(&env, &[]).await;
     assert_eq!(send(&d, &request).await, 250);
     assert_eq!(kind(&itip), PeerKind::Neighbor);
-    let (d, itip) = delivery(&env);
+    let (d, itip) = delivery(&env).await;
     assert_eq!(send(&d, &request).await, 250);
     assert_eq!(kind(&itip), PeerKind::Partner);
     // Письмо в любом случае — в ящике.
@@ -155,7 +145,7 @@ async fn send(d: &Delivery, raw: &str) -> u16 {
 #[tokio::test]
 async fn request_reply_cancel_reach_itip_and_stay_in_inbox() {
     let env = Env::new(DecisionHooks::default()).await;
-    let (d, itip) = delivery(&env);
+    let (d, itip) = delivery(&env).await;
     let request = imip("REQUEST", "sender@example.com", "bob@example.org");
     let reply = imip("REPLY", "bob@example.org", "Sender@Example.com");
     let cancel = imip("CANCEL", "sender@example.com", "bob@example.org");
@@ -182,7 +172,7 @@ async fn request_reply_cancel_reach_itip_and_stay_in_inbox() {
 #[tokio::test]
 async fn mail_without_itip_does_not_call() {
     let env = Env::new(DecisionHooks::default()).await;
-    let (d, itip) = delivery(&env);
+    let (d, itip) = delivery(&env).await;
     assert_eq!(send(&d, fx::MAIL).await, 250);
     // Календарь-вложение без параметра `method` — не iMIP.
     let plain =
@@ -195,7 +185,7 @@ async fn mail_without_itip_does_not_call() {
 #[tokio::test]
 async fn forged_sender_is_ignored() {
     let env = Env::new(DecisionHooks::default()).await;
-    let (d, itip) = delivery(&env);
+    let (d, itip) = delivery(&env).await;
     // Отправитель — не организатор приглашения и не участник ответа.
     let request = imip("REQUEST", "boss@example.com", "bob@example.org");
     let reply = imip("REPLY", "bob@example.org", "boss@example.com");
@@ -286,7 +276,7 @@ async fn imip_sent_by_delegate_with_record_reaches_itip() {
 #[tokio::test]
 async fn itip_refusal_and_failure_do_not_affect_delivery() {
     let env = Env::new(DecisionHooks::default()).await;
-    let (d, itip) = delivery(&env);
+    let (d, itip) = delivery(&env).await;
     let request = imip("REQUEST", "sender@example.com", "bob@example.org");
     itip.set("bob@example.org", ItipOutcome::Ignored("stale".into()));
     assert_eq!(send(&d, &request).await, 250);
@@ -298,7 +288,7 @@ async fn itip_refusal_and_failure_do_not_affect_delivery() {
 #[tokio::test]
 async fn each_recipient_account_once_without_subaddress() {
     let env = Env::new(DecisionHooks::default()).await;
-    let (d, itip) = delivery(&env);
+    let (d, itip) = delivery(&env).await;
     let request = imip("REQUEST", "sender@example.com", "bob@example.org");
     let mut e = fx::envelope("192.0.2.10:1000");
     e.rcpts = vec![
@@ -313,8 +303,8 @@ async fn each_recipient_account_once_without_subaddress() {
 }
 
 /// Доставка [`delivery`] с журналом доставки.
-fn tracked(env: &Env) -> (Delivery, FakeItip, MemDeliveryLog) {
-    let (d, itip) = delivery(env);
+async fn tracked(env: &Env) -> (Delivery, FakeItip, MemDeliveryLog) {
+    let (d, itip) = delivery(env).await;
     let log = MemDeliveryLog::new();
     let node = NodeId::new("node-1").expect("node");
     (
@@ -336,7 +326,7 @@ fn itip_events(log: &MemDeliveryLog) -> Vec<DeliveryEvent> {
 #[tokio::test]
 async fn request_is_tracked() {
     let env = Env::new(DecisionHooks::default()).await;
-    let (d, _itip, log) = tracked(&env);
+    let (d, _itip, log) = tracked(&env).await;
     let request = imip("REQUEST", "sender@example.com", "bob@example.org");
     assert_eq!(send(&d, &request).await, 250);
     let events = itip_events(&log);
@@ -356,7 +346,7 @@ async fn request_is_tracked() {
 #[tokio::test]
 async fn ignored_is_tracked_with_reason() {
     let env = Env::new(DecisionHooks::default()).await;
-    let (d, itip, log) = tracked(&env);
+    let (d, itip, log) = tracked(&env).await;
     let request = imip("REQUEST", "sender@example.com", "bob@example.org");
     itip.set("bob@example.org", ItipOutcome::Ignored("stale".into()));
     assert_eq!(send(&d, &request).await, 250);

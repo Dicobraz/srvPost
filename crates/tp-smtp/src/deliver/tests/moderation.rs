@@ -16,12 +16,17 @@ use crate::groups::Groups;
 const T: TenantId = TenantId::DEFAULT;
 
 impl Env {
-    fn moderating(&self, outbound: bool) -> Delivery {
-        self.delivery(outbound).with_groups(Groups::new(
-            Arc::new(self.groups.clone()),
-            Arc::new(self.blobs.clone()),
-            Arc::new(self.index.clone()),
-        ))
+    async fn moderating(&self, outbound: bool) -> Delivery {
+        // Группы открыты чужим (SMTP-50): письма внешних в группы — по матрице доверия; модерация — самой
+        // группы (её модераторы).
+        let open = trust(&[], GroupPost::Open, &[]).await;
+        self.delivery(outbound)
+            .with_trust(Arc::new(open))
+            .with_groups(Groups::new(
+                Arc::new(self.groups.clone()),
+                Arc::new(self.blobs.clone()),
+                Arc::new(self.index.clone()),
+            ))
     }
 
     /// Группа `address` с участниками `members` и модератором carol.
@@ -79,7 +84,7 @@ impl Env {
 #[tokio::test]
 async fn approved_message_delivered_to_each_member_once() {
     let env = Env::new(DecisionHooks::default()).await;
-    let d = env.moderating(true);
+    let d = env.moderating(true).await;
     let team = DistributionGroup {
         id: GroupId::new(),
         tenant: T,
@@ -128,16 +133,17 @@ async fn approved_message_delivered_to_each_member_once() {
     assert_eq!(env.groups.take_held(T, h.id).await, Err(Error::NotFound));
 }
 
-/// Отклонено: отправителю — DSN (RFC 3464) с причиной модератора и адресом группы через очередь, участникам ничего;
-/// ссылка письма очереди на объект снята.
+/// Отклонено: своему отправителю — DSN (RFC 3464) с причиной модератора и адресом группы во «Входящие»,
+/// участникам ничего; ссылка письма очереди на объект снята. Чужому отправителю уведомления нет — только журнал
+/// (SMTP-50, решение 124 г: источник backscatter).
 #[tokio::test]
-async fn rejected_message_bounces_to_sender() {
+async fn rejected_message_bounces_to_own_sender_only() {
     let env = Env::new(DecisionHooks::default()).await;
-    let d = env.moderating(true);
+    let d = env.moderating(true).await;
     let g = env
         .moderated(
             "news@example.org",
-            vec![env.member("alice@example.org").await],
+            vec![env.member("bob@example.org").await],
         )
         .await;
     let h = env.take(&d, &g, "reject-1").await;
@@ -147,13 +153,22 @@ async fn rejected_message_bounces_to_sender() {
         assert!(matches!(d.reject(T, &h, bad).await, Err(Error::Invalid(_))));
     }
     assert!(env.queued().is_empty());
+    // Чужой отправитель — без уведомления.
     d.reject(T, &h, "off-topic").await.expect("reject");
-    let queued = env.queued();
-    assert_eq!(queued.len(), 1, "{queued:?}");
-    let (from, rcpts, raw) = &queued[0];
-    assert_eq!(from, "");
-    assert_eq!(rcpts, &vec!["sender@example.net".to_owned()]);
-    let dsn = String::from_utf8_lossy(raw);
+    assert!(env.queued().is_empty(), "{:?}", env.queued());
+    assert!(env.inbox("alice@example.org").await.is_empty());
+    assert!(env.inbox("bob@example.org").await.is_empty());
+    assert_eq!(env.refs(&h), 0);
+
+    // Свой отправитель — DSN с причиной модератора во «Входящие».
+    let mut held = env.take(&d, &g, "reject-2").await;
+    held.sender = "alice@example.org".into();
+    held.sender_account = Some(env.scope("alice@example.org").await.account);
+    d.reject(T, &held, "off-topic").await.expect("reject");
+    assert!(env.queued().is_empty(), "{:?}", env.queued());
+    let dsn = env.inbox("alice@example.org").await;
+    assert_eq!(dsn.len(), 1, "{dsn:?}");
+    let dsn = dsn[0].clone();
     assert!(dsn.contains("multipart/report"), "{dsn}");
     assert!(
         dsn.contains("Final-Recipient: rfc822; news@example.org"),
@@ -161,17 +176,15 @@ async fn rejected_message_bounces_to_sender() {
     );
     assert!(dsn.contains("Status: 5.7.1"), "{dsn}");
     assert!(dsn.contains("off-topic"), "{dsn}");
-    assert!(dsn.contains("Subject: reject-1"), "{dsn}");
-    assert!(env.inbox("alice@example.org").await.is_empty());
-    assert_eq!(env.refs(&h), 0);
-    assert_eq!(env.groups.take_held(T, h.id).await, Err(Error::NotFound));
+    assert!(dsn.contains("Subject: reject-2"), "{dsn}");
+    assert_eq!(env.groups.take_held(T, held.id).await, Err(Error::NotFound));
 }
 
 /// Общий набор `Moderation` tp-testkit на реальных письмах очереди.
 #[tokio::test]
 async fn moderation_suite() {
     let env = Env::new(DecisionHooks::default()).await;
-    let d = env.moderating(true);
+    let d = env.moderating(true).await;
     let g = env
         .moderated(
             "news@example.org",
@@ -218,11 +231,12 @@ async fn rule_held(env: &Env, raw: &Bytes, n: u8) -> HeldMessage {
 }
 
 /// Письмо правила потока (CTR-43, без группы): одобрено — локальному получателю в ящик, внешнему — в очередь
-/// от исходного отправителя; отказ — DSN с исходными получателями.
+/// от исходного отправителя; отказ — DSN с исходными получателями своему отправителю (чужому — без уведомления,
+/// SMTP-50).
 #[tokio::test]
 async fn flow_rule_message_delivered_to_original_recipients() {
     let env = Env::new(DecisionHooks::default()).await;
-    let d = env.moderating(true);
+    let d = env.moderating(true).await;
     let raw = Bytes::from_static(b"From: s@example.net\r\nSubject: rule\r\n\r\nbody\r\n");
     let approve = rule_held(&env, &raw, 1).await;
     env.groups.hold(T, approve.clone()).await.expect("hold");
@@ -235,12 +249,19 @@ async fn flow_rule_message_delivered_to_original_recipients() {
     assert_eq!(queued[0].1, vec!["x@remote.example".to_owned()]);
     assert_eq!(&queued[0].2[..], &raw[..]);
 
+    // Чужой отправитель — отказ без уведомления.
     let decline = rule_held(&env, &raw, 2).await;
     d.reject(T, &decline, "not allowed").await.expect("reject");
-    let queued = env.queued();
-    assert_eq!(queued.len(), 2, "{queued:?}");
-    let dsn = String::from_utf8_lossy(&queued[1].2);
-    assert_eq!(queued[1].1, vec!["s@example.net".to_owned()]);
+    assert_eq!(env.queued().len(), 1, "{:?}", env.queued());
+
+    // Свой — DSN во «Входящие» с исходными получателями.
+    let mut decline = rule_held(&env, &raw, 3).await;
+    decline.sender = "alice@example.org".into();
+    decline.sender_account = Some(env.scope("alice@example.org").await.account);
+    d.reject(T, &decline, "not allowed").await.expect("reject");
+    let dsn = env.inbox("alice@example.org").await;
+    assert_eq!(dsn.len(), 1, "{dsn:?}");
+    let dsn = dsn[0].clone();
     assert!(
         dsn.contains("Final-Recipient: rfc822; bob@example.org"),
         "{dsn}"
@@ -279,8 +300,8 @@ fn letter(tag: &str, from: &str) -> Bytes {
 
 impl Env {
     /// Доставка с группами (очередь модерации) и правилом потока `flow`.
-    fn flow_moderating(&self, flow: Arc<RuleFlow>) -> Delivery {
-        self.moderating(true).with_mail_flow(
+    async fn flow_moderating(&self, flow: Arc<RuleFlow>) -> Delivery {
+        self.moderating(true).await.with_mail_flow(
             flow,
             Arc::new(self.blobs.clone()),
             Arc::new(self.index.clone()),
@@ -312,7 +333,7 @@ async fn flow_rule_moderation_holds_then_approve_or_reject() {
         },
         matched: vec!["Внешним — с одобрения".into()],
     });
-    let d = env.flow_moderating(flow);
+    let d = env.flow_moderating(flow).await;
     let e = envelope(Mode::Inbound, &["bob@example.org"]);
     assert_eq!(
         d.data(&e, letter("smtp30-a", "sender@example.net"))
@@ -405,7 +426,7 @@ async fn flow_rule_moderation_submission_and_submit() {
         },
         matched: vec!["Проверка отправки".into()],
     });
-    let d = env.flow_moderating(flow);
+    let d = env.flow_moderating(flow).await;
     let mut e = envelope(Mode::Submission, &["bob@example.org", "x@remote.example"]);
     let mut principal = tp_testkit::principal(T, "alice@example.org");
     principal.account = alice;
@@ -475,7 +496,7 @@ async fn flow_rule_moderation_fallback_and_rule_name() {
         },
         matched: vec!["R".into()],
     });
-    let nobody = env.flow_moderating(flow);
+    let nobody = env.flow_moderating(flow).await;
     assert_eq!(nobody.data(&e, Bytes::from_static(MAIL)).await.code, 451);
     assert!(env.inbox("carol@example.org").await.is_empty());
     assert!(
@@ -499,7 +520,7 @@ async fn flow_rule_moderation_fallback_and_rule_name() {
         },
         matched: Vec::new(),
     });
-    let d = env.flow_moderating(flow);
+    let d = env.flow_moderating(flow).await;
     assert_eq!(d.data(&e, Bytes::from_static(MAIL)).await.code, 250);
     let held = env
         .groups

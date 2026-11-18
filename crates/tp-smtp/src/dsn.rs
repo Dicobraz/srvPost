@@ -6,6 +6,12 @@
 //! Отправитель — `MAILER-DAEMON@<hostname>`, конверт — пустой (`<>`): на уведомление уведомления нет.
 //! `Auto-Submitted: auto-replied` (RFC 3834).
 //!
+//! Получателю не своей организации уведомление идёт с общей диагностикой ([`Report::plain`], решение 124:
+//! закреплено; RFC 3464 §4.2, RFC 5321 §6.2): [`Recipient::reply`] — только код и общий текст, без имён узлов,
+//! внутренних адресов после раскрытия групп и имён фильтров; `Reporting-MTA` — внешнее имя узла
+//! ([`Report::hostname`]). Отказ по политике (закрытая группа, неизвестный адрес) не уведомляется вовсе — он
+//! произошёл в сессии до `250` (RFC 5321 §6.2): у получателя [`Recipient::notify`] = ложь.
+//!
 //! Куда идёт уведомление, решает [`DsnSink`]: [`crate::Delivery`] — локальному отправителю в «Входящие»,
 //! внешнему — в очередь; [`crate::queue::Queue`] — всегда в очередь.
 
@@ -17,6 +23,7 @@ use mail_builder::headers::content_type::ContentType;
 use mail_builder::headers::date::Date;
 use mail_builder::headers::raw::Raw;
 use mail_builder::mime::MimePart;
+use mail_parser::MimeHeaders;
 use time::OffsetDateTime;
 use tp_contracts::queue::DsnRet;
 use tp_contracts::{Result, TenantId};
@@ -55,6 +62,9 @@ pub struct Recipient {
     pub status: String,
     /// Ответ сервера (`Diagnostic-Code: smtp; …`) или причина.
     pub reply: String,
+    /// Уведомлять отправителя об этом получателе (SMTP-50): отказ по политике — в сессии до `250`, уведомления
+    /// потом нет (RFC 5321 §6.2, источник backscatter — как EOP отбрасывает сомнительное без NDR).
+    pub notify: bool,
 }
 
 impl Recipient {
@@ -68,6 +78,7 @@ impl Recipient {
             action,
             status,
             reply,
+            notify: true,
         }
     }
 }
@@ -99,7 +110,7 @@ fn status_of(reply: &str, action: Action) -> String {
 /// Уведомление о доставке.
 #[derive(Debug, Clone, Copy)]
 pub struct Report<'a> {
-    /// Имя узла (`Reporting-MTA`, адрес `MAILER-DAEMON@…`).
+    /// Имя узла (`Reporting-MTA`, адрес `MAILER-DAEMON@…`) — внешнее имя узла.
     pub hostname: &'a str,
     /// Кому — отправитель исходного письма.
     pub to: &'a str,
@@ -119,6 +130,9 @@ pub struct Report<'a> {
     pub ret: DsnRet,
     /// Уникальная часть `Message-ID` и границ MIME (идентификатор записи очереди, транзакции).
     pub id: &'a str,
+    /// Общая диагностика — получателю не своей организации (решение 124, RFC 3464 §4.2): `Diagnostic-Code` —
+    /// только код и общий текст, без имён узлов, внутренних адресов и имён фильтров.
+    pub plain: bool,
 }
 
 /// Куда отправить уведомление.
@@ -144,6 +158,25 @@ fn headers_of(raw: &[u8]) -> &[u8] {
     match raw.windows(4).position(|w| w == b"\r\n\r\n") {
         Some(i) => &raw[..i + 4],
         None => raw,
+    }
+}
+
+/// Ответ получателя в уведомлении: общий (`plain`) — код (`550 5.1.1`) и общий текст по итогу, без подробностей
+/// узла; полный — как получен.
+fn reply_of(x: &Recipient, plain: bool) -> String {
+    if !plain {
+        return clean(&x.reply);
+    }
+    let code: Vec<&str> = x.reply.split_whitespace().take(2).collect();
+    let what = match x.action {
+        Action::Failed => "delivery failed",
+        Action::Delayed => "delivery delayed",
+        Action::Delivered => "delivered",
+    };
+    if code.is_empty() {
+        what.into()
+    } else {
+        format!("{} {what}", code.join(" "))
     }
 }
 
@@ -178,7 +211,7 @@ pub fn build(r: &Report<'_>) -> Vec<u8> {
         human.push_str(&format!(
             "  <{}>: {}\r\n",
             clean(&x.address),
-            clean(&x.reply)
+            reply_of(x, r.plain)
         ));
     }
     if let Some(until) = r.retry_until {
@@ -205,7 +238,7 @@ pub fn build(r: &Report<'_>) -> Vec<u8> {
         ));
         ds.push_str(&format!("Action: {}\r\n", x.action.as_str()));
         ds.push_str(&format!("Status: {}\r\n", x.status));
-        let reply = clean(&x.reply);
+        let reply = reply_of(x, r.plain);
         if reply
             .split_whitespace()
             .next()
@@ -247,6 +280,25 @@ pub fn build(r: &Report<'_>) -> Vec<u8> {
         .body(report)
         .write_to_vec()
         .unwrap_or_default()
+}
+
+/// Письмо — отчёт о прочтении (MDN, RFC 8098 §3.1): `multipart/report; report-type=disposition-notification`
+/// верхнего уровня. Такой отчёт из submission и [`crate::Delivery::submit`] получателю с выключенной клеткой
+/// `mdn` не отправляется (SMTP-50, решение 124).
+pub fn is_mdn(raw: &[u8]) -> bool {
+    let Some(msg) = mail_parser::MessageParser::default().parse_headers(raw) else {
+        return false;
+    };
+    let Some(ct) = msg.content_type() else {
+        return false;
+    };
+    ct.ctype().eq_ignore_ascii_case("multipart")
+        && ct
+            .subtype()
+            .is_some_and(|s| s.eq_ignore_ascii_case("report"))
+        && ct
+            .attribute("report-type")
+            .is_some_and(|t| t.trim().eq_ignore_ascii_case("disposition-notification"))
 }
 
 #[cfg(test)]

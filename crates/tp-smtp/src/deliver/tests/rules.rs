@@ -34,7 +34,8 @@ fn cfg() -> SmtpConfig {
     }
 }
 
-/// Доставка с правилами `FakeRules`, журналом доставки и пересылкой SRS.
+/// Доставка с правилами `FakeRules`, журналом доставки и пересылкой SRS. Автопересылка наружу открыта доменом
+/// `partner.example` (`auto_forward_domains`, SMTP-50); домен `example.net` — закрыт.
 async fn setup(outbound: bool, cfg: SmtpConfig) -> (Env, FakeRules, MemDeliveryLog, Delivery) {
     let env = Env::new(DecisionHooks::default()).await;
     let rules = FakeRules::new();
@@ -42,6 +43,14 @@ async fn setup(outbound: bool, cfg: SmtpConfig) -> (Env, FakeRules, MemDeliveryL
     let d = env
         .delivery_with(outbound, cfg)
         .with_rules(Arc::new(rules.clone()))
+        .with_trust(Arc::new(
+            trust(
+                &[],
+                tp_contracts::trust::GroupPost::Open,
+                &["partner.example"],
+            )
+            .await,
+        ))
         .with_tracking(Tracking::new(
             Arc::new(log.clone()),
             NodeId::new("node-1").expect("node"),

@@ -26,15 +26,20 @@ impl Book {
         }
     }
 
-    fn delivery(&self) -> Delivery {
-        self.env.delivery(true).with_groups(
-            Groups::new(
-                Arc::new(self.env.groups.clone()),
-                Arc::new(self.env.blobs.clone()),
-                Arc::new(self.env.index.clone()),
+    /// Доставка с группами и адресной книгой; группы открыты чужим (SMTP-50) — ограничения групп проверяются
+    /// своими правилами.
+    async fn delivery(&self) -> Delivery {
+        self.env
+            .delivery(true)
+            .with_trust(Arc::new(trust(&[], GroupPost::Open, &[]).await))
+            .with_groups(
+                Groups::new(
+                    Arc::new(self.env.groups.clone()),
+                    Arc::new(self.env.blobs.clone()),
+                    Arc::new(self.env.index.clone()),
+                )
+                .with_address_book(Arc::new(self.book.clone()), Arc::new(self.book.clone())),
             )
-            .with_address_book(Arc::new(self.book.clone()), Arc::new(self.book.clone())),
-        )
     }
 
     async fn group(
@@ -124,7 +129,7 @@ async fn dynamic_group_expands_by_filter_at_send_time() {
     b.dynamic(g, "msk", false).await;
     b.office("alice@example.org", "msk").await;
     b.office("bob@example.org", "spb").await;
-    let d = b.delivery();
+    let d = b.delivery().await;
     let e = envelope(Mode::Inbound, &["msk@example.org"]);
     assert_eq!(d.rcpt(&e, "msk@example.org").await.code, 250);
     assert_eq!(d.data(&e, Bytes::from_static(MAIL)).await.code, 250);
@@ -154,7 +159,7 @@ async fn contacts_go_to_outbound_queue() {
     b.dynamic(msk, "msk", true).await;
     b.contact("agent@agency.example", "msk", Vec::new()).await;
     b.office("carol@example.org", "msk").await;
-    let d = b.delivery();
+    let d = b.delivery().await;
     // Отправка вне сессии SMTP: участники — в ящики, контакты — в очередь внешней доставки.
     let sent = d
         .submit(
@@ -217,7 +222,7 @@ async fn nested_dynamic_group_and_contacts_of_nested_groups() {
         .expect("inner");
     g.members.push(GroupMember::Group(all));
     b.env.groups.put(g).await.expect("put");
-    let d = b.delivery();
+    let d = b.delivery().await;
     let e = envelope(Mode::Submission, &["everyone@example.org"]);
     assert_eq!(d.data(&e, Bytes::from_static(MAIL)).await.code, 250);
     assert_eq!(b.env.inbox("bob@example.org").await.len(), 1);
@@ -244,7 +249,7 @@ async fn sender_restriction_of_dynamic_group_and_by_dynamic_group() {
         },
     )
     .await;
-    let d = b.delivery();
+    let d = b.delivery().await;
     // Динамическая группа с ограничением «только свои»: внешний отправитель — отказ, как у группы каталога.
     let outside = envelope(Mode::Inbound, &[]);
     let r = d.rcpt(&outside, "msk@example.org").await;
