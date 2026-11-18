@@ -422,10 +422,13 @@ async fn fetch_candidates(
         .max(1)
         .min(ids.len());
     let (store, scope) = (ctx.jmap.d.messages.clone(), ctx.scope);
+    // Список копируется: стрим владеет элементами — будущее `Send` при любом времени жизни займа
+    // (та же форма, что в `Email/get`).
+    let ids: Vec<MessageId> = ids.iter().copied().collect();
     let got: Vec<Result<Option<Message>>> = stream::iter(ids)
         .map(|id| {
             let store = store.clone();
-            async move { store.get(scope, *id).await }
+            async move { store.get(scope, id).await }
         })
         .buffer_unordered(n)
         .collect()
