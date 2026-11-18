@@ -414,13 +414,8 @@ async fn fetch_candidates(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let n = ctx
-        .jmap
-        .cfg
-        .query_cache
-        .max_parallel_get
-        .max(1)
-        .min(ids.len());
+    let len = ids.len();
+    let n = ctx.jmap.cfg.query_cache.max_parallel_get.max(1).min(len);
     let (store, scope) = (ctx.jmap.d.messages.clone(), ctx.scope);
     // Список копируется: стрим владеет элементами — будущее `Send` при любом времени жизни займа
     // (та же форма, что в `Email/get`).
@@ -433,7 +428,7 @@ async fn fetch_candidates(
         .buffer_unordered(n)
         .collect()
         .await;
-    let mut out = Vec::with_capacity(ids.len());
+    let mut out = Vec::with_capacity(len);
     for r in got {
         match r {
             Ok(Some(m)) if boxes.as_ref().is_none_or(|b| b.contains(&m.mailbox)) => {
