@@ -1,9 +1,9 @@
 // Знак IT TASK (решение 119): design/logo.svg — куб и надпись; на тёмном фоне надпись белая (logo-white.svg).
-// Файл читается из design/ при сборке (`?raw`) и вшивается адресом data: — без запросов наружу.
+// Файлы читаются из design/ виртуальным модулем Vite (vite.config.ts) и вшиваются адресом data: — без запросов наружу.
 import type { CSSProperties } from "react";
 
-import logoRaw from "../../design/logo.svg?raw";
-import logoWhiteRaw from "../../design/logo-white.svg?raw";
+import logoRaw from "design/logo.svg";
+import logoWhiteRaw from "design/logo-white.svg";
 
 import { useDark } from "../theme";
 
