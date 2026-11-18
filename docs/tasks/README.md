@@ -884,7 +884,7 @@
 | [CTR-88](CTR-88.md) | тип ресурса бронирования — помещение или оборудование — в контракте | contracts | B | contracts-59 | done | — |
 | [META-81](META-81.md) | тип ресурса бронирования в PostgreSQL — миграция и хранилище | meta | A | meta-54 | done | CTR-88 |
 | [ADM-47](ADM-47.md) | тип ресурса бронирования в Admin API и CLI | admin | A | admin-33 | done | CTR-88,ADM-44 |
-| [UI-21](UI-21.md) | консоль — тип ресурса бронирования | console | A | console-12 | ready | ADM-47 |
+| [UI-21](UI-21.md) | консоль — тип ресурса бронирования | console | A | console-12 | done | ADM-47 |
 | [DAV-38](DAV-38.md) | `calendar-user-type` по типу ресурса — `ROOM` или `RESOURCE` | dav | A | dav-17 | done | CTR-88,DAV-19 |
 | [JMAP-45](JMAP-45.md) | `Principal.type` по типу ресурса — `location` или `resource` | jmap | A | jmap-28 | done | CTR-88 |
 | [META-82](META-82.md) | просмотр очереди и повтор доставки в PostgreSQL — `QueueStore::list` и `retry` | meta | A | meta-55 | done | CTR-85 |
@@ -909,7 +909,7 @@
 | [TUI-09](TUI-09.md) | текстовый интерфейс — раздел «Доверие»: матрица, уровни, партнёры | tui | A | tui-06 | todo | TUI-03,ADM-49 |
 | [SMTP-50](SMTP-50.md) | матрица доверия в SMTP — тип абонента, автоответ, MDN, DSN, группы, автопересылка | smtp | A | smtp-30 | ready | CTR-93,SMTP-49 |
 | [DAV-44](DAV-44.md) | матрица доверия в CalDAV и CardDAV — iTIP извне, занятость, общий доступ, публикация, GAL | dav | A | dav-21 | ready | CTR-93,DAV-43 |
-| [JMAP-47](JMAP-47.md) | матрица доверия в JMAP — принципалы и занятость своей организации, общий доступ, публикация, внешний автоответ | jmap | A | jmap-30 | ready | CTR-93 |
+| [JMAP-47](JMAP-47.md) | матрица доверия в JMAP — принципалы и занятость своей организации, общий доступ, публикация, внешний автоответ | jmap | A | jmap-30 | done | CTR-93 |
 | [SIEVE-14](SIEVE-14.md) | `processcalendar` (RFC 9671), расширение `vnd.thepost.peer`, админский скрипт — только сужение | sieve | A | sieve-07 | ready | CTR-93 |
 | [APP-76](APP-76.md) | узел — политика доверия в точках решения (SMTP, DAV, JMAP, Sieve, Admin API) | app | A | app-73 | todo | META-85,ADM-49,SMTP-50,DAV-44,JMAP-47,SIEVE-14 |
 | [DOC-12](DOC-12.md) | ADMIN-GUIDE — сверка раздела «Кто с кем и что может» с кодом | docs | A | docs-12 | todo | APP-76 |
