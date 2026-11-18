@@ -285,21 +285,26 @@ impl fmt::Debug for BrandingStores {
 
 /// Маршруты брендинга за слоем доступа.
 pub(crate) fn routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
-    r.route(BRANDING_PREFIX, get(get_installation).put(put_installation))
-        .route(
-            LOGO_ROUTE,
-            put(put_installation_logo).delete(reset_installation_logo),
-        )
-        .route(
-            ORG_ROUTE,
-            get(get_org_branding)
-                .put(put_org_branding)
-                .delete(reset_org_branding),
-        )
-        .route(
-            ORG_LOGO_ROUTE,
-            put(put_org_branding_logo).delete(reset_org_branding_logo),
-        )
+    r.route(
+        BRANDING_PREFIX,
+        get(get_installation)
+            .put(put_installation)
+            .delete(reset_installation),
+    )
+    .route(
+        LOGO_ROUTE,
+        put(put_installation_logo).delete(reset_installation_logo),
+    )
+    .route(
+        ORG_ROUTE,
+        get(get_org_branding)
+            .put(put_org_branding)
+            .delete(reset_org_branding),
+    )
+    .route(
+        ORG_LOGO_ROUTE,
+        put(put_org_branding_logo).delete(reset_org_branding_logo),
+    )
 }
 
 /// Открытые маршруты без входа (как `POST /api/v1/session`): вне слоя доступа.
@@ -341,6 +346,23 @@ pub(crate) fn public_routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
     ))
 )]
 pub(crate) struct Doc;
+
+/// Отказ с готовым ответом (422 контраста, 413/415/422 знака) — в боксе, чтобы `Err` оставался компактным
+/// ([clippy::result_large_err]); сам ответ отдаёт [`IntoResponse`].
+#[derive(Debug)]
+pub(crate) struct RefusedResponse(Box<Response>);
+
+impl From<Response> for RefusedResponse {
+    fn from(r: Response) -> Self {
+        Self(Box::new(r))
+    }
+}
+
+impl IntoResponse for RefusedResponse {
+    fn into_response(self) -> Response {
+        *self.0
+    }
+}
 
 /// Хранилище брендинга; не подключено — 503.
 fn stores(a: &Admin) -> std::result::Result<&BrandingStores, Error> {
@@ -486,33 +508,34 @@ async fn get_installation(
 async fn put_installation(
     State(a): State<Arc<Admin>>,
     Json(body): Json<BrandingBody>,
-) -> std::result::Result<Json<BrandingView>, Response> {
+) -> std::result::Result<Json<BrandingView>, RefusedResponse> {
+    let err = |e: Error| RefusedResponse::from(ApiError(e).into_response());
     let s = match stores(&a) {
         Ok(s) => s,
-        Err(e) => return Err(ApiError(e).into_response()),
+        Err(e) => return Err(err(e)),
     };
     let new = match branding_of_put(&a, BrandingScope::Installation, body).await {
         Ok(n) => n,
-        Err(e) => return Err(ApiError(e).into_response()),
+        Err(e) => return Err(err(e)),
     };
     let orgs = match s.store.org_brandings().await {
         Ok(o) => o,
-        Err(e) => return Err(ApiError(e).into_response()),
+        Err(e) => return Err(err(e)),
     };
     let issues = installation_change_issues(Some(&new), &orgs);
     if !issues.is_empty() {
-        return Err(installation_refused(issues));
+        return Err(installation_refused(issues).into());
     }
     if let Err(e) = s
         .store
         .set_branding(BrandingScope::Installation, &new)
         .await
     {
-        return Err(ApiError(e).into_response());
+        return Err(err(e));
     }
     match view(&a, None).await {
         Ok(v) => Ok(Json(v)),
-        Err(e) => Err(ApiError(e).into_response()),
+        Err(e) => Err(err(e)),
     }
 }
 
@@ -552,7 +575,7 @@ async fn put_installation_logo(
     State(a): State<Arc<Admin>>,
     headers: HeaderMap,
     body: Bytes,
-) -> std::result::Result<Json<BrandingView>, Response> {
+) -> std::result::Result<Json<BrandingView>, RefusedResponse> {
     put_logo(&a, BrandingScope::Installation, &headers, &body).await
 }
 
@@ -606,18 +629,19 @@ async fn put_org_branding(
     State(a): State<Arc<Admin>>,
     Path(org): Path<TenantId>,
     Json(body): Json<BrandingBody>,
-) -> std::result::Result<Json<BrandingView>, Response> {
+) -> std::result::Result<Json<BrandingView>, RefusedResponse> {
+    let err = |e: Error| RefusedResponse::from(ApiError(e).into_response());
     let s = match stores(&a) {
         Ok(s) => s,
-        Err(e) => return Err(ApiError(e).into_response()),
+        Err(e) => return Err(err(e)),
     };
     let new = match branding_of_put(&a, BrandingScope::Org(org), body).await {
         Ok(n) => n,
-        Err(e) => return Err(ApiError(e).into_response()),
+        Err(e) => return Err(err(e)),
     };
     let levels = match s.store.branding_levels(Some(org)).await {
         Ok(l) => l,
-        Err(e) => return Err(ApiError(e).into_response()),
+        Err(e) => return Err(err(e)),
     };
     let issues = BrandingLevels {
         installation: levels.installation,
@@ -637,14 +661,15 @@ async fn put_org_branding(
                 detail: format!("контраст ниже порога: {detail}"),
                 errors: issues.iter().map(&BrandingIssue::from).collect(),
             },
-        ));
+        )
+        .into());
     }
     if let Err(e) = s.store.set_branding(BrandingScope::Org(org), &new).await {
-        return Err(ApiError(e).into_response());
+        return Err(err(e));
     }
     match view(&a, Some(org)).await {
         Ok(v) => Ok(Json(v)),
-        Err(e) => Err(ApiError(e).into_response()),
+        Err(e) => Err(err(e)),
     }
 }
 
@@ -686,7 +711,7 @@ async fn put_org_branding_logo(
     Path(org): Path<TenantId>,
     headers: HeaderMap,
     body: Bytes,
-) -> std::result::Result<Json<BrandingView>, Response> {
+) -> std::result::Result<Json<BrandingView>, RefusedResponse> {
     put_logo(&a, BrandingScope::Org(org), &headers, &body).await
 }
 
@@ -722,8 +747,8 @@ async fn put_logo(
     scope: BrandingScope,
     headers: &HeaderMap,
     body: &[u8],
-) -> std::result::Result<Json<BrandingView>, Response> {
-    let err = |e: Error| ApiError(e).into_response();
+) -> std::result::Result<Json<BrandingView>, RefusedResponse> {
+    let err = |e: Error| RefusedResponse::from(ApiError(e).into_response());
     let s = match stores(a) {
         Ok(s) => s,
         Err(e) => return Err(err(e)),
@@ -742,7 +767,8 @@ async fn put_logo(
         return Err(problem_detail(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             &format!("знак — PNG (image/png), получен {ct:?}"),
-        ));
+        )
+        .into());
     }
     if body.len() as u64 > branding::MAX_LOGO_SIZE {
         return Err(problem_detail(
@@ -750,9 +776,10 @@ async fn put_logo(
             &format!(
                 "знак — не больше {} КБ, получено {} КБ",
                 branding::MAX_LOGO_SIZE / 1024,
-                (body.len() + 1023) / 1024
+                body.len().div_ceil(1024)
             ),
-        ));
+        )
+        .into());
     }
     let logo = match decode_png(body) {
         Ok(logo) => logo,
@@ -760,7 +787,8 @@ async fn put_logo(
             return Err(problem_detail(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 &format!("знак не принят: {detail}"),
-            ));
+            )
+            .into());
         }
     };
     let old = match s.store.branding(scope).await {
@@ -779,10 +807,10 @@ async fn put_logo(
     if let Err(e) = s.store.set_branding(scope, &branding).await {
         return Err(err(e));
     }
-    if let Some(old) = old {
-        if let Err(e) = delete_unused_logo(a, &old).await {
-            return Err(err(e));
-        }
+    if let Some(old) = old
+        && let Err(e) = delete_unused_logo(a, &old).await
+    {
+        return Err(err(e));
     }
     let tenant = match scope {
         BrandingScope::Installation => None,

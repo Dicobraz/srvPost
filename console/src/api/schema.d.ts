@@ -1557,21 +1557,36 @@ export interface components {
         BrandLogo: {
             /** @description SHA-256 содержимого (hex, 64 символа). */
             hash: string;
-            /** @description Высота, пикселей. */
+            /**
+             * Format: int32
+             * @description Высота, пикселей.
+             */
             height: number;
-            /** @description Размер, байт. */
+            /**
+             * Format: int64
+             * @description Размер, байт.
+             */
             size: number;
-            /** @description Ширина, пикселей. */
+            /**
+             * Format: int32
+             * @description Ширина, пикселей.
+             */
             width: number;
         };
         /** @description Набор брендинга одного уровня: каждое поле необязательно, незаданное берётся с уровня выше. */
         Branding: {
             /** @description Заданные роли CLI. */
-            cli?: { [key: string]: components["schemas"]["BrandColor"] };
+            cli?: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
             /** @description Заданные роли тёмной темы. */
-            dark?: { [key: string]: components["schemas"]["BrandColor"] };
+            dark?: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
             /** @description Заданные роли светлой темы. */
-            light?: { [key: string]: components["schemas"]["BrandColor"] };
+            light?: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
             logo?: components["schemas"]["BrandLogo"] | null;
             primary?: components["schemas"]["BrandColor"] | null;
             /** @description Название продукта; `null` — встроенное. */
@@ -1580,12 +1595,18 @@ export interface components {
         /** @description Замена набора уровня: все поля необязательны, уровень заменяется целиком; знак меняет `PUT …/branding/logo`. */
         BrandingBody: {
             /** @description Роли подсветки CLI (head, accent, ok, warn, err, muted, json_key, json_number, json_bool). */
-            cli?: { [key: string]: components["schemas"]["BrandColor"] };
+            cli?: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
             /** @description Роли тёмной темы. */
-            dark?: { [key: string]: components["schemas"]["BrandColor"] };
+            dark?: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
             /** @description Роли светлой темы (`design/tokens.toml`: screen, panel, text, muted, frame, frameA, titleA, head, sel,
  selFg, selI, selIFg, fkBg, fkFg, ok, warn, err). */
-            light?: { [key: string]: components["schemas"]["BrandColor"] };
+            light?: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
             primary?: components["schemas"]["BrandColor"] | null;
             /** @description Название продукта (1–64 символа без управляющих); `null` — не задано. */
             product_name?: string | null;
@@ -1611,7 +1632,10 @@ export interface components {
             detail: string;
             /** @description Пары ниже порога. */
             errors: components["schemas"]["BrandingIssue"][];
-            /** @description Код HTTP (422). */
+            /**
+             * Format: int32
+             * @description Код HTTP (422).
+             */
             status: number;
             /** @description Краткое описание кода. */
             title: string;
@@ -1817,11 +1841,6 @@ export interface components {
             /** @description Почтовые контакты. */
             contacts: string[];
         };
-        /**
-         * @description Содержимое ящика учётной записи, к которой подключается отключённый ящик.
-         * @enum {string}
-         */
-        ExistingMode: "keep" | "delete";
         /** @description Действующий брендинг ([`BrandingLevels::effective`]): название и знак с ближайшего уровня, все цвета ролей. */
         EffectiveBranding: {
             logo?: components["schemas"]["BrandLogo"] | null;
@@ -1830,6 +1849,11 @@ export interface components {
             /** @description Название продукта; `null` — встроенное. */
             product_name?: string | null;
         };
+        /**
+         * @description Содержимое ящика учётной записи, к которой подключается отключённый ящик.
+         * @enum {string}
+         */
+        ExistingMode: "keep" | "delete";
         /** @description Фильтр динамической группы. */
         FilterBody: {
             /** @description Включать почтовые контакты, подходящие под фильтр. */
@@ -1924,21 +1948,24 @@ export interface components {
              */
             subject?: string | null;
         };
-        /** @description Выпущенный пароль: значение показывается один раз. */
-        IssuedAppPassword: components["schemas"]["AppPasswordInfo"] & {
-            /** @description Значение пароля. */
-            password: string;
-        };
         /** @description Отказ смены набора установки: пары ниже порога у самого набора или у действующей палитры организации. */
         InstallationBrandingProblem: {
             /** @description Пары с организациями по-русски, через «; ». */
             detail: string;
             /** @description Пары ниже порога. */
             errors: components["schemas"]["OrgBrandingIssue"][];
-            /** @description Код HTTP (422). */
+            /**
+             * Format: int32
+             * @description Код HTTP (422).
+             */
             status: number;
             /** @description Краткое описание кода. */
             title: string;
+        };
+        /** @description Выпущенный пароль: значение показывается один раз. */
+        IssuedAppPassword: components["schemas"]["AppPasswordInfo"] & {
+            /** @description Значение пароля. */
+            password: string;
         };
         /** @description Запись аудита ящика. */
         MailboxAuditEntry: {
@@ -2019,13 +2046,6 @@ export interface components {
             /** @description Запрашиваемые области через пробел; нет — `openid`. */
             scope?: string | null;
         };
-        /** @description Организация. */
-        Organization: components["schemas"]["Policies"] & {
-            /** @description Организация по умолчанию. */
-            default: boolean;
-            /** @description Идентификатор. */
-            id: string;
-        };
         /** @description Пара ниже порога при смене набора установки; `org` — организация, чья палитра ломается (`null` — сам набор). */
         OrgBrandingIssue: {
             /** @description Фон: роль или цвет фона терминала. */
@@ -2043,14 +2063,27 @@ export interface components {
             /** @description Тема (`light`, `dark`); `null` — роли CLI. */
             theme: string | null;
         };
+        /** @description Организация. */
+        Organization: components["schemas"]["Policies"] & {
+            /** @description Организация по умолчанию. */
+            default: boolean;
+            /** @description Идентификатор. */
+            id: string;
+        };
         /** @description Цвета всех ролей — заданные и выведенные (ключи — имена ролей из `design/tokens.toml`). */
         Palette: {
             /** @description Подсветка вывода CLI. */
-            cli: { [key: string]: components["schemas"]["BrandColor"] };
+            cli: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
             /** @description Роли тёмной темы. */
-            dark: { [key: string]: components["schemas"]["BrandColor"] };
+            dark: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
             /** @description Роли светлой темы. */
-            light: { [key: string]: components["schemas"]["BrandColor"] };
+            light: {
+                [key: string]: components["schemas"]["BrandColor"];
+            };
         };
         /** @description Вход администратора по паролю. */
         PasswordLogin: {
@@ -2129,11 +2162,6 @@ export interface components {
             /** @description Краткое описание кода. */
             title: string;
         };
-        /**
-         * @description Значение `trash.purge`.
-         * @enum {string}
-         */
-        PurgeMode: "hide" | "erase";
         /** @description Действующий брендинг для экрана входа: название, цвета всех ролей и ссылка на знак — без организации. */
         PublicBranding: {
             /** @description Ссылка на знак (`/api/v1/public/branding/logo/<hash>`); `null` — встроенный знак IT TASK. */
@@ -2143,6 +2171,11 @@ export interface components {
             /** @description Название продукта; `null` — встроенное. */
             product_name?: string | null;
         };
+        /**
+         * @description Значение `trash.purge`.
+         * @enum {string}
+         */
+        PurgeMode: "hide" | "erase";
         /** @description Запись очереди исходящей почты. */
         QueueEntry: {
             /** @description Отправитель конверта; пустой — уведомление о недоставке. */
@@ -2730,14 +2763,76 @@ export interface operations {
             };
         };
     };
-    get_org_branding: {
+    put_installation: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                /** @description Организация (UUID) */
-                org: string;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrandingBody"];
             };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description контраст ниже порога (сам набор или организация) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstallationBrandingProblem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_installation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -2750,6 +2845,151 @@ export interface operations {
                     "application/json": components["schemas"]["BrandingView"];
                 };
             };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_installation_logo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Файл PNG: до 256 КБ, до 1024×1024 пикселей */
+        requestBody: {
+            content: {
+                "image/png": string;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description больше 256 КБ */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не image/png */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не PNG, битый файл или больше 1024×1024 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_installation_logo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3156,603 +3396,6 @@ export interface operations {
             };
             /** @description предел действующих паролей */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    put_installation: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["BrandingBody"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingView"];
-                };
-            };
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description не администратор установки */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description контраст ниже порога (сам набор или организация) */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["InstallationBrandingProblem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    reset_installation: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingView"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description не администратор установки */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    put_installation_logo: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description Файл PNG: до 256 КБ, до 1024×1024 пикселей */
-        requestBody?: {
-            content: {
-                "image/png": string;
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingView"];
-                };
-            };
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description не администратор установки */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description больше 256 КБ */
-            413: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description не image/png */
-            415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description не PNG, битый файл или больше 1024×1024 */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    reset_installation_logo: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingView"];
-                };
-            };
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description не администратор установки */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    put_org_branding: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Организация (UUID) */
-                org: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["BrandingBody"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingView"];
-                };
-            };
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description контраст ниже порога */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingProblem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    reset_org_branding: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Организация (UUID) */
-                org: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingView"];
-                };
-            };
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    put_org_branding_logo: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Организация (UUID) */
-                org: string;
-            };
-            cookie?: never;
-        };
-        /** @description Файл PNG: до 256 КБ, до 1024×1024 пикселей */
-        requestBody?: {
-            content: {
-                "image/png": string;
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingView"];
-                };
-            };
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description больше 256 КБ */
-            413: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description не image/png */
-            415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description не PNG, битый файл или больше 1024×1024 */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    reset_org_branding_logo: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Организация (UUID) */
-                org: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrandingView"];
-                };
-            };
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    public_branding: {
-        parameters: {
-            query?: {
-                /** @description Почтовый домен из имени входа (домены публичны через MX); неизвестный — как без домена. */
-                domain?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicBranding"];
-                };
-            };
-            /** @description не изменился */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    public_branding_logo: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description SHA-256 знака (hex; ссылка из действующего брендинга) */
-                hash: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description файл PNG */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "image/png": unknown;
-                };
-            };
-            /** @description не изменился */
-            304: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5084,6 +4727,297 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_org_branding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_org_branding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrandingBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description контраст ниже порога */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingProblem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_org_branding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_org_branding_logo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        /** @description Файл PNG: до 256 КБ, до 1024×1024 пикселей */
+        requestBody: {
+            content: {
+                "image/png": string;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description больше 256 КБ */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не image/png */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не PNG, битый файл или больше 1024×1024 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_org_branding_logo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7978,6 +7912,105 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    public_branding: {
+        parameters: {
+            query?: {
+                /** @description Почтовый домен из имени входа (домены публичны через MX); неизвестный — как без домена. */
+                domain?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicBranding"];
+                };
+            };
+            /** @description не изменился */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    public_branding_logo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description SHA-256 знака (hex; ссылка из действующего брендинга) */
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description файл PNG */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
+                };
+            };
+            /** @description не изменился */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

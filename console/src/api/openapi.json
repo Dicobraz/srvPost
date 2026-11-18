@@ -3530,7 +3530,8 @@
                 "$ref": "#/components/schemas/BrandingBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -3662,7 +3663,8 @@
               }
             }
           },
-          "description": "Файл PNG: до 256 КБ, до 1024×1024 пикселей"
+          "description": "Файл PNG: до 256 КБ, до 1024×1024 пикселей",
+          "required": true
         },
         "responses": {
           "200": {
@@ -6448,7 +6450,8 @@
                 "$ref": "#/components/schemas/BrandingBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -6591,7 +6594,8 @@
               }
             }
           },
-          "description": "Файл PNG: до 256 КБ, до 1024×1024 пикселей"
+          "description": "Файл PNG: до 256 КБ, до 1024×1024 пикселей",
+          "required": true
         },
         "responses": {
           "200": {
