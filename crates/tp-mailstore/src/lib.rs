@@ -37,6 +37,7 @@ pub mod fuzz;
 #[cfg(test)]
 mod fuzz_regress;
 mod ingest;
+pub mod list_cache;
 pub mod meta;
 mod ops;
 pub mod quota;
@@ -45,6 +46,7 @@ pub mod trash;
 mod worker;
 
 pub use disabled::{DisabledConfig, DisabledMailboxes, DisabledPass};
+pub use list_cache::{CachedMessages, ListCacheConfig, ListCacheStats};
 pub use quota::QuotaWarnConfig;
 pub use split::MimeLimits;
 pub use trash::{TrashConfig, TrashPass, TrashStats};
@@ -69,6 +71,9 @@ pub use trash::{TrashConfig, TrashPass, TrashStats};
 /// mime:
 ///   max_depth: 64
 ///   max_parts: 10000
+/// list_cache:
+///   max_bytes: 67108864
+///   patch_max: 200
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -81,6 +86,9 @@ pub struct Config {
     pub quota: QuotaWarnConfig,
     /// Пределы разбора MIME.
     pub mime: MimeLimits,
+    /// Кэш списка писем папки ([`CachedMessages`], PERF-01): подключается приложением к
+    /// зависимостям протоколов (`MessageStore`).
+    pub list_cache: ListCacheConfig,
 }
 
 /// Зависимости [`Store`]: реализации контрактов, выбранные приложением.

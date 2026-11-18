@@ -1,5 +1,6 @@
 //! Метрики сервисов приложения, которые не регистрируют сами крейты (APP-04): счётчики кэша индексов поиска
-//! и индексатора, переключение СУБД (APP-14). Значения читаются на каждый запрос `/metrics` — без своих таймеров.
+//! и индексатора, кэша списков папок (`mailstore.list_cache`, PERF-06), переключение СУБД (APP-14).
+//! Значения читаются на каждый запрос `/metrics` — без своих таймеров.
 //!
 //! Метрики критериев Д.7 (APP-34): пул соединений узла и слушатель LISTEN (`tp_platform::DbMetrics`), время
 //! фиксаций с NOTIFY и число слушателей ([`register_db`]), «сироты» BLOB ([`register_orphans`]).
@@ -16,7 +17,7 @@ use prometheus_client::metrics::TypedMetric;
 use prometheus_client::metrics::family::Family;
 use tp_blob::OrphanMetrics;
 use tp_contracts::acquire::AcquireObserver;
-use tp_mailstore::TrashStats;
+use tp_mailstore::{CachedMessages, ListCacheStats, TrashStats};
 use tp_meta::commits::{HISTOGRAM_BUCKETS, Histogram};
 use tp_meta::failover::{Failover, FailoverMetrics};
 use tp_meta::pool::DbPool;
@@ -151,6 +152,51 @@ pub fn register_search_cache(metrics: &Metrics, cache: Arc<IndexCache>) {
         ),
     ];
     register(metrics, &cache, IndexCache::stats, defs);
+}
+
+/// Регистрирует показатели кэша списков папок (`mailstore.list_cache`, PERF-06, общий для IMAP и JMAP):
+/// `tp_list_cache_{hits,patches,rebuilds,evictions}_total`, `tp_list_cache_{entries,bytes}`. Кэш включён —
+/// показатели есть и показывают работу (Д.7); выключен (`max_bytes: 0`) — не регистрируются.
+pub fn register_list_cache(metrics: &Metrics, cache: Arc<CachedMessages>) {
+    let defs: [StatDef<ListCacheStats>; 6] = [
+        (
+            "tp_list_cache_hits",
+            "Список папки возвращён из кэша без изменений",
+            |s| s.hits,
+            true,
+        ),
+        (
+            "tp_list_cache_patches",
+            "Список папки обновлён по журналу изменений",
+            |s| s.patches,
+            true,
+        ),
+        (
+            "tp_list_cache_rebuilds",
+            "Список папки пересобран из хранилища",
+            |s| s.rebuilds,
+            true,
+        ),
+        (
+            "tp_list_cache_evictions",
+            "Записи кэша, вытесненные по бюджету или сроку",
+            |s| s.evictions,
+            true,
+        ),
+        (
+            "tp_list_cache_entries",
+            "Папок в кэше узла",
+            |s| u64::try_from(s.entries).unwrap_or(u64::MAX),
+            false,
+        ),
+        (
+            "tp_list_cache_bytes",
+            "Память записей кэша узла, байт",
+            |s| u64::try_from(s.bytes).unwrap_or(u64::MAX),
+            false,
+        ),
+    ];
+    register(metrics, &cache, CachedMessages::stats, defs);
 }
 
 /// Регистрирует `tp_search_indexer_failures_total` и `tp_search_indexer_retrying` (CMP-06, CMP-09).
@@ -520,6 +566,57 @@ pub fn register_purge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tp_contracts::meta::{MessageQuery, MessageStore, SpecialUse};
+    use tp_testkit::{MemMetadata, SystemClock};
+
+    /// PERF-06: показатели кэша списков папок в /metrics — счётчики (`_total`) и текущие значения;
+    /// попадание из кэша видно как `hits` при нулевой пересборке после первого чтения.
+    #[tokio::test]
+    async fn list_cache_stats_exported() {
+        let metrics = Metrics::default();
+        let meta = Arc::new(MemMetadata::new(Arc::new(SystemClock)));
+        let scope = meta.account("a@example.org").await.expect("acc");
+        let inbox = meta
+            .mailbox_by_role(scope, SpecialUse::Inbox)
+            .expect("inbox");
+        let cache = Arc::new(CachedMessages::new(
+            meta.clone(),
+            meta.clone(),
+            meta.clone(),
+            tp_mailstore::ListCacheConfig::default(),
+        ));
+        register_list_cache(&metrics, cache.clone());
+        let text = metrics.encode().expect("encode");
+        for line in [
+            "tp_list_cache_hits_total 0",
+            "tp_list_cache_patches_total 0",
+            "tp_list_cache_rebuilds_total 0",
+            "tp_list_cache_evictions_total 0",
+            "tp_list_cache_entries 0",
+            "tp_list_cache_bytes 0",
+        ] {
+            assert!(text.contains(line), "{line}: {text}");
+        }
+
+        // Первое чтение — пересборка и запись в кэше; повторное — попадание.
+        let first = MessageStore::list(cache.as_ref(), scope, inbox, MessageQuery::All, 100)
+            .await
+            .expect("list");
+        let second = MessageStore::list(cache.as_ref(), scope, inbox, MessageQuery::All, 100)
+            .await
+            .expect("list");
+        assert_eq!(first, second);
+        let s = cache.stats();
+        assert_eq!((s.rebuilds, s.hits, s.patches, s.entries), (1, 1, 0, 1));
+        let text = metrics.encode().expect("encode");
+        for line in [
+            "tp_list_cache_rebuilds_total 1",
+            "tp_list_cache_hits_total 1",
+            "tp_list_cache_entries 1",
+        ] {
+            assert!(text.contains(line), "{line}: {text}");
+        }
+    }
 
     /// APP-52: ошибка шага увеличивает счётчик ошибок и не меняет время успеха; успешный шаг — время и удалённые
     /// записи. Ряды всех шагов есть до первого прохода.

@@ -39,7 +39,6 @@
       when:
         - inventory_hostname in groups['generator']
         - ansible_connection | default('ssh') is search('(docker|docker_api)$')
-        - hostvars[inventory_hostname].ansible_host is not match('^[0-9A-Fa-f.]*[.:][0-9A-Fa-f.:]*$')
 
     - name: Generator address from ansible_host or node facts (FIX-12)
       ansible.builtin.set_fact:

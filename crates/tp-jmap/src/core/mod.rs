@@ -39,6 +39,7 @@ use crate::sharing::{Access, SharingDeps};
 pub mod config;
 pub mod error;
 pub mod http;
+pub(crate) mod query_cache;
 pub mod request;
 #[cfg(test)]
 mod tests;
@@ -188,6 +189,8 @@ pub struct Jmap {
     pub(crate) org: Option<Arc<dyn OrgStore>>,
     /// Общий доступ к календарям и адресным книгам (JMAP-32); `None` — только свои коллекции.
     pub(crate) sharing: Option<SharingDeps>,
+    /// Кэш списков идентификаторов `Email/query` и ответов `Email/get` (PERF-02).
+    pub(crate) caches: Mutex<query_cache::Caches>,
     stop: watch::Sender<bool>,
     /// Открытые соединения push: закрытие по `AccountDisabled` (JMAP-41).
     pub(crate) push: crate::disable::Sessions,
@@ -272,6 +275,11 @@ impl Ctx<'_> {
     pub async fn state(&self) -> MethodResult<ModSeq> {
         Ok(self.jmap.state(self.scope).await?)
     }
+
+    /// Состояние учётной записи и версии папок (токен кэша `query_cache`).
+    pub async fn state_full(&self) -> MethodResult<(ModSeq, query_cache::Token)> {
+        Ok(self.jmap.state_full(self.scope).await?)
+    }
 }
 
 type Slots = Mutex<HashMap<(TenantId, AccountId), u32>>;
@@ -295,6 +303,12 @@ impl Drop for Inflight<'_> {
 }
 
 impl Jmap {
+    /// Блокировка кэша `/query` и `/get` писем; операции кэша без `await` — не удерживать через точки
+    /// ожидания.
+    pub(crate) fn caches(&self) -> std::sync::MutexGuard<'_, query_cache::Caches> {
+        self.caches.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Сервер поверх зависимостей. URI capability модуля, совпадающий со встроенным или другим модулем,
     /// и повтор имени метода — `Error::Conflict`.
     pub fn new(d: Deps, cfg: JmapConfig) -> Result<Self> {
@@ -313,11 +327,13 @@ impl Jmap {
                 methods.push(m);
             }
         }
+        let caches = query_cache::Caches::new(cfg.query_cache.clone());
         Ok(Self {
             d,
             cfg,
             inflight: Mutex::new(HashMap::new()),
             uploads: Mutex::new(HashMap::new()),
+            caches: Mutex::new(caches),
             uploaded: crate::blob::Uploads::default(),
             mail_flow: None,
             profile_signer: None,
@@ -746,10 +762,25 @@ impl Jmap {
     /// Текущее состояние учётной записи (наибольший `ModSeq`): от наибольшего `ModSeq` папок
     /// дочитывается журнал изменений папок (удаление пустой папки не меняет ни одну папку).
     pub(crate) async fn state(&self, scope: AccountScope) -> Result<ModSeq> {
+        Ok(self.state_full(scope).await?.0)
+    }
+
+    /// Состояние учётной записи и версии папок ([`query_cache::Token`]): у каждой папки — её
+    /// `highest_modseq`. Изменение письма меняет версию его папки, поэтому совпадение всех версий
+    /// (и состава папок) — тот же набор писем и метаданных. Статус папки уже читается для состояния,
+    /// версии берутся из тех же ответов — лишних запросов нет.
+    pub(crate) async fn state_full(
+        &self,
+        scope: AccountScope,
+    ) -> Result<(ModSeq, query_cache::Token)> {
         let mut base = ModSeq::ZERO;
+        let mut token: query_cache::Token = Vec::new();
         for mb in self.d.mailboxes.list(scope).await? {
-            base = base.max(self.d.mailboxes.status(scope, mb.id).await?.highest_modseq);
+            let s = self.d.mailboxes.status(scope, mb.id).await?;
+            base = base.max(s.highest_modseq);
+            token.push((mb.id, s.highest_modseq));
         }
+        token.sort_unstable_by_key(|(id, _)| *id);
         loop {
             match self
                 .d
@@ -758,8 +789,8 @@ impl Jmap {
                 .await
             {
                 Ok(c) if c.has_more => base = c.new_state,
-                Ok(c) => return Ok(c.new_state),
-                Err(Error::Conflict) => return Ok(base),
+                Ok(c) => return Ok((c.new_state, token)),
+                Err(Error::Conflict) => return Ok((base, token)),
                 Err(e) => return Err(e),
             }
         }
