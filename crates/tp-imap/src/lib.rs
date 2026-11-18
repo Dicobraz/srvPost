@@ -10,6 +10,7 @@
 //! - `write` — APPEND, COPY, MOVE, EXPUNGE, CLOSE (UIDPLUS).
 //! - `qresync` — QRESYNC: `SELECT … (QRESYNC …)`, `VANISHED`.
 //! - `idle` — IDLE и уведомления о выбранной папке (`EXISTS`, `EXPUNGE`, `FETCH FLAGS`).
+//! - `snapshot` — снимки папок для сеансов: список писем папки — общий `Arc` на папку (PERF-03).
 //! - `ext` — NAMESPACE (общие папки), QUOTA, ACL ([`Extensions`]).
 //! - `compress` — `COMPRESS=DEFLATE`.
 //! - `disable` — заблокированная учётная запись: сигнал `AccountDisabled` закрывает сессии IMAP и POP3.
@@ -32,6 +33,7 @@ pub mod proto;
 mod qresync;
 mod search;
 pub mod session;
+mod snapshot;
 mod store;
 mod write;
 

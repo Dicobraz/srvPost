@@ -9,8 +9,10 @@ use serde_json::{Map, Value};
 use tp_admin::server::WhoAmI;
 
 use crate::cli;
+use crate::cursor::CursorView;
 use crate::engine::{self, Context, Form, Request, ScreenKind};
 use crate::layout::{self, Act, Layout, Rows};
+use crate::mouse::MouseState;
 use crate::node::{ConfigFile, Param, SaveError, Saved};
 use crate::schema::{Kind, Operation, catalog};
 use crate::theme::Theme;
@@ -331,7 +333,7 @@ impl ListView {
         self.rows.get(self.sel)
     }
 
-    fn select(&mut self, sel: usize) {
+    pub(crate) fn select(&mut self, sel: usize) {
         self.sel = sel.min(self.rows.len().saturating_sub(1));
         if self.sel < self.top {
             self.top = self.sel;
@@ -400,7 +402,7 @@ impl ConfigView {
         self.rows().get(self.sel).copied()
     }
 
-    fn select(&mut self, sel: usize) {
+    pub(crate) fn select(&mut self, sel: usize) {
         let n = self.rows().len();
         self.sel = sel.min(n.saturating_sub(1));
         if self.sel < self.top {
@@ -501,6 +503,8 @@ pub struct Main {
     pub focus: Panel,
     /// Выделенная строка дерева.
     pub tree: usize,
+    /// Ширина левой панели, колонок (границу панелей тянет мышь; по умолчанию — [`crate::ui::LEFT`]).
+    pub left: u16,
     /// Раздел правой панели.
     pub section: String,
     /// Правая панель.
@@ -588,7 +592,7 @@ enum Pending {
 
 /// Запросы в пути и строка состояния.
 #[derive(Debug, Clone, Default, PartialEq)]
-struct Bus {
+pub(crate) struct Bus {
     pending: BTreeMap<u64, Pending>,
     seq: u64,
     status: Option<(Level, String)>,
@@ -637,7 +641,11 @@ pub struct App {
     pub stage: Stage,
     /// Интерфейс запущен на узле с доступом к `config.yaml` (раздел «Конфигурация узла» правит файл).
     pub node: bool,
-    bus: Bus,
+    /// Состояние мыши: позиция, двойной щелчок, перетаскивание границы (TUI-07).
+    pub mouse: MouseState,
+    /// Плавный курсор текущего кадра (TUI-07): ставит цикл терминала.
+    pub cursor: Option<CursorView>,
+    pub(crate) bus: Bus,
 }
 
 impl App {
@@ -647,6 +655,8 @@ impl App {
             theme,
             stage: Stage::Login(login),
             node: false,
+            mouse: MouseState::default(),
+            cursor: None,
             bus: Bus::default(),
         }
     }
@@ -727,6 +737,7 @@ impl App {
             orgs: Vec::new(),
             focus: Panel::Main,
             tree: 0,
+            left: crate::ui::LEFT,
             section: String::new(),
             view: View::Info {
                 title: String::new(),
@@ -1278,7 +1289,7 @@ fn main_key(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-fn view_key(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect> {
+pub(crate) fn view_key(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect> {
     let busy = !bus.pending.is_empty();
     match &mut m.view {
         View::List(l) => {

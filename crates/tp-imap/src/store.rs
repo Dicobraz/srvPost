@@ -93,7 +93,7 @@ impl<T: Transport> Session<T> {
         let mailbox = selected.mailbox;
         let targets: Vec<(usize, u32, MessageId)> = indexes
             .iter()
-            .map(|&i| (i, selected.messages[i].0.0, selected.messages[i].1))
+            .map(|&i| (i, selected.messages[i].uid.0, selected.messages[i].id))
             .collect();
         let unchanged_since = modifiers
             .iter()

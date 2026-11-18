@@ -25,6 +25,7 @@ use tp_testkit::{
 use crate::config::ImapConfig;
 use crate::ext::Extensions;
 use crate::session::{Deps, Session, SessionCtx, Transport};
+use crate::snapshot::Snapshots;
 
 mod audit;
 mod compress;
@@ -37,6 +38,7 @@ mod pop3;
 mod qresync;
 mod search;
 mod session;
+mod snapshot;
 mod store;
 mod write;
 
@@ -90,6 +92,9 @@ pub(crate) struct Env {
     pub audit: MemMailboxAudit,
     pub principal: Principal,
     pub config: ImapConfig,
+    /// Снимки папок клиентов: общий, как у [`crate::session::Server`] (PERF-03). Для своей секции
+    /// `imap.snapshot` тест заменяет поле до создания клиентов.
+    pub snapshots: Arc<Snapshots>,
     pub shutdown: CancellationToken,
 }
 
@@ -141,6 +146,8 @@ impl Env {
         let auth = FakeAuthenticator::default();
         auth.add_password(LOGIN, PASSWORD, principal.clone());
         auth.add_token("good-token", principal.clone());
+        let config = ImapConfig::default();
+        let snapshots = Arc::new(Snapshots::new(config.snapshot.clone()));
         Self {
             meta,
             store,
@@ -152,7 +159,8 @@ impl Env {
             hook,
             audit: MemMailboxAudit::new(),
             principal,
-            config: ImapConfig::default(),
+            config,
+            snapshots,
             shutdown: CancellationToken::new(),
         }
     }
@@ -192,7 +200,17 @@ impl Env {
     /// Клиент новой сессии с зависимостями расширений.
     pub async fn client_ext(&self, tls: bool, ext: Extensions) -> Client {
         let (server, client) = tokio::io::duplex(1 << 20);
-        let session = Session::new(self.ctx(), TestConn { io: server, tls }).with_extensions(ext);
+        let session = Session::new(self.ctx(), TestConn { io: server, tls })
+            .with_extensions(ext)
+            .with_snapshots(self.snapshots.clone());
+        Self::spawn(session, client).await
+    }
+
+    /// Клиент новой сессии с общими снимками `snapshots` (тесты кэша снимков).
+    pub async fn client_snapshots(&self, snapshots: Arc<Snapshots>, tls: bool) -> Client {
+        let (server, client) = tokio::io::duplex(1 << 20);
+        let session =
+            Session::new(self.ctx(), TestConn { io: server, tls }).with_snapshots(snapshots);
         Self::spawn(session, client).await
     }
 

@@ -366,6 +366,7 @@ impl<T: Transport> Session<T> {
             return Ok(());
         };
         let mailbox = selected.mailbox;
+        // Снимок общий из кэша: `clone` — копия `Arc`, не списка писем (PERF-03).
         let snapshot = selected.messages.clone();
         let scope = self.mailbox_scope().ok_or(Error::Forbidden)?;
         let key = SearchKey::And(cmd.criteria);
@@ -404,15 +405,17 @@ impl<T: Transport> Session<T> {
         let largest = |n: Option<u32>| NonZeroU32::new(n.unwrap_or(1)).unwrap_or(NonZeroU32::MIN);
         let ctx = Ctx {
             last_seq: largest(u32::try_from(snapshot.len()).ok()),
-            last_uid: largest(snapshot.last().map(|(u, _)| u.0)),
+            last_uid: largest(snapshot.last().map(|m| m.uid.0)),
             text,
         };
         let mut nums = Vec::new();
         let mut highest = 0u64;
-        for (i, (_, id)) in snapshot.iter().enumerate() {
+        for (i, row) in snapshot.iter().enumerate() {
             let seq = u32::try_from(i + 1).unwrap_or(u32::MAX);
             // Письмо удалено другой сессией — не найдено.
-            let Some(m) = by_id.get(id) else { continue };
+            let Some(m) = by_id.get(&row.id) else {
+                continue;
+            };
             if matches(&key, m, seq, &ctx) {
                 nums.push(if cmd.uid { m.uid.0 } else { seq });
                 highest = highest.max(m.modseq.0);

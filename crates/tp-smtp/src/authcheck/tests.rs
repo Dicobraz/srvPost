@@ -87,19 +87,30 @@ pub(crate) fn checker() -> AuthCheck {
 
 /// Домен отправителя `example.com`: SPF — `192.0.2.0/24`, DMARC — политика `policy`.
 pub(crate) fn publish_sender(cache: &DnsCache, policy: &str) {
+    publish_sender_domain(cache, "example.com", policy);
+}
+
+/// Домен отправителя `domain`: SPF — `192.0.2.0/24`, DMARC — политика `policy` (второй домен теста —
+/// организация доставки).
+pub(crate) fn publish_sender_domain(cache: &DnsCache, domain: &str, policy: &str) {
     let spf = TxtRecord::from(SpfRecord::parse(b"v=spf1 ip4:192.0.2.0/24 -all"));
-    txt(cache, "example.com.", spf);
+    txt(cache, &format!("{domain}."), spf);
     let dmarc = format!("v=DMARC1; p={policy}");
     txt(
         cache,
-        "_dmarc.example.com.",
+        &format!("_dmarc.{domain}."),
         TxtRecord::from(DmarcRecord::parse(dmarc.as_bytes())),
     );
-    // Обход дерева DMARC (DMARCbis) спрашивает и `_dmarc.com.`: записи нет.
+    // Обход дерева DMARC (DMARCbis) спрашивает и `_dmarc.<TLD>.`: записи нет (кэш-промах резолвера без
+    // серверов — временный сбой, он срывает оценку DMARC домена).
     let none = TxtRecord::Error(mail_auth::Error::Dns(
         mail_auth::DnsError::InvalidRecordType,
     ));
-    txt(cache, "_dmarc.com.", none);
+    txt(
+        cache,
+        &format!("_dmarc.{}.", domain.rsplit('.').next().unwrap_or(domain)),
+        none,
+    );
 }
 
 pub(crate) const MAIL: &str =

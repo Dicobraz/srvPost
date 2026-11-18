@@ -46,13 +46,16 @@ mail-auth.workspace = true
 mail-parser.workspace = true
 prometheus-client.workspace = true
 reqwest.workspace = true
+ring.workspace = true
 rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+winnow.workspace = true
 x509-parser.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 tp-testkit.workspace = true

@@ -197,7 +197,7 @@ impl<T: Transport> Session<T> {
             return Ok(());
         };
         let mailbox = selected.mailbox;
-        let present: Vec<u32> = selected.messages.iter().map(|m| m.0.0).collect();
+        let present: Vec<u32> = selected.messages.iter().map(|m| m.uid.0).collect();
         let scope = self.mailbox_scope().ok_or(Error::Forbidden)?;
         let st = self.ctx.deps.mailboxes.status(scope, mailbox).await?;
         let largest = st.uid_next.0.saturating_sub(1).max(1);

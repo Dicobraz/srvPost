@@ -73,6 +73,8 @@ imap-codec = { version = "2.0.0-alpha.9", features = ["starttls", "ext_id", "ext
 infer = { version = "0.22.0", default-features = false, features = ["alloc"] }
 insta = { version = "1.49.0", features = ["json"] }
 instant-acme = "0.8.5"
+# Префиксы IP списков TI (решение 126, tp-smtp); та же версия, что уже в дереве через hickory и hyper-util.
+ipnet = "2.12.2"
 jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }
 landlock = "0.4.7"
 ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
@@ -96,13 +98,22 @@ opentelemetry_sdk = "0.33.1"
 ppp = "2.3.0"
 prometheus-client = "0.25.1"
 proptest = "1.12.0"
+# Регистрируемый домен по Public Suffix List — признак «новый домен» (решение 126, tp-smtp). Сам список —
+# данные пакета (MPL-2.0, раздаём без изменений), читается во время работы; punycode (idna) — домены бывают в IDN.
+publicsuffix = "2.3.0"
 quick-xml = "0.42.0"
 rand = "0.10.3"
 ratatui = "0.30.2"
 # Картинки в терминале (решение 119): kitty graphics, sixel, iTerm2, полублоки — курсор мыши и знак IT TASK.
 # Без chafa (системная libchafa, LGPL) и кодеков image по умолчанию: image — только PNG (его ratatui-image включает всегда).
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
+# Шаблоны признаков каталога аномалий и списков TI (решение 126, tp-sieve/tp-smtp): линейное время на
+# недоверенном вводе; та же версия, что уже в дереве через tantivy.
+regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+# Подпись Ed25519 пакета признаков поставщика (решение 126, как карты Rspamd; thepost); без второй
+# криптобиблиотеки — та же версия, что уже в дереве через rustls.
+ring = "0.17.14"
 rpassword = "7.5.5"
 rsasl = { version = "2.3.1", default-features = false, features = ["config_builder", "provider", "plain", "login", "oauthbearer", "xoauth2"] }
 # Статика веб-консоли внутри бинарного файла (SRS 5.2); tp-admin, фича `console`. Сжатие и MIME не нужны.
@@ -143,6 +154,9 @@ tracing-opentelemetry = "0.34.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 utoipa = "6.0.0"
 uuid = { version = "1.29.0", features = ["v7", "serde"] }
+# Разбор подмножества шаблонов STIX 2.1 (решение 126, thepost): ipv4/ipv6-addr, domain-name, url, file:hashes;
+# крейтов STIX нет — только равенство значений. Та же версия, что уже в дереве через toml.
+winnow = "1.0.4"
 x509-parser = "0.18.1"
 # Сертификаты в CMS SignedData (JMAP-22); реэкспорт der и spki — кодирование DER для cms.
 x509-cert = { version = "0.2.5", default-features = false }
