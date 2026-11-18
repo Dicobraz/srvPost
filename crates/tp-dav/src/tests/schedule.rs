@@ -17,14 +17,17 @@ use tp_contracts::queue::Outbound;
 use tp_contracts::schedule::{
     ItipDelivery, ItipMessage, ItipMethod, ItipOutcome, ItipOutgoing, ItipSender,
 };
-use tp_contracts::trust::PeerKind;
+use tp_contracts::trust::{
+    Detail, InviteMode, PeerKind, Toggle, TrustLevel, TrustPolicy, TrustStore,
+};
 use tp_contracts::{DomainId, TenantId};
 use tp_testkit::{
     FakeAuthenticator, ManualClock, MemDav, MemGroups, MemItipSender, MemMetadata, MemOutbound,
+    MemTrust,
 };
 
 use super::{Resp, basic};
-use crate::{DavConfig, Deps, ImipSender, ItipInbox, ScheduleDeps, imip, itip, router_shared};
+use crate::{DavConfig, Deps, ImipSender, ItipInbox, ScheduleDeps, imip, itip, router_with_trust};
 
 const IVAN: &str = "ivan@example.org";
 const PETR: &str = "petr@example.org";
@@ -43,6 +46,8 @@ struct Sched {
     meta: MemMetadata,
     /// Группы рассылки (DAV-30).
     groups: MemGroups,
+    /// Политики доверия (DAV-44): тест задаёт их уровнями; без политик — умолчания.
+    trust: MemTrust,
 }
 
 impl Sched {
@@ -98,8 +103,10 @@ impl Sched {
         }
         let store = MemDav::new();
         let sender = MemItipSender::new();
-        let inbox = ItipInbox::new(Arc::new(store.clone()), cfg.clone());
-        let app = router_shared(
+        let trust = MemTrust::new().with_groups(Arc::new(groups.clone()));
+        let inbox = ItipInbox::new(Arc::new(store.clone()), cfg.clone())
+            .with_trust(Some(Arc::new(trust.clone()) as Arc<dyn TrustStore>));
+        let app = router_with_trust(
             Deps {
                 auth: Arc::new(auth),
                 store: Arc::new(store.clone()),
@@ -113,6 +120,7 @@ impl Sched {
                 group_store: Arc::new(groups.clone()),
             }),
             None,
+            Some(Arc::new(trust.clone()) as Arc<dyn TrustStore>),
             cfg,
         );
         Self {
@@ -124,6 +132,7 @@ impl Sched {
             accounts,
             meta,
             groups,
+            trust,
         }
     }
 
@@ -837,14 +846,16 @@ async fn deliver_each_method_idempotent() {
     }
 }
 
-/// Решение 123 → 124 (DAV-43, CTR-93): извне — партнёр, соседняя организация установки, внешний — любое
-/// сообщение iTIP остаётся письмом: новое приглашение и прочие методы — `MailOnly` (закреплено), а обновление,
-/// `REPLY` и `CANCEL` к существующему событию (`ApplyIfExisting`, RFC 5546 §6.1, RFC 6638 §11.2) до DAV-44
-/// исполняются как «только письмо»; своя организация (вошедший) — всё.
+/// Матрица доверия в приёме iTIP (DAV-44, решение 124): новое приглашение чужого — письмом с кнопкой, партнёру
+/// администратор включает автодобавление; обновление, `REPLY` и `CANCEL` чужих — только к существующему событию
+/// с тем же UID (RFC 5546 §6.1.1–6.1.2, §3.2.3, RFC 6638 §11.2); прочие методы чужим и выключенная клетка —
+/// письмом; свойства, способные навредить клиенту, из письма чужого не вносятся (CVE-2023-23397).
 #[tokio::test]
-async fn outside_stays_mail_until_dav44() {
+async fn outside_follows_trust_matrix() {
     let env = Sched::new().await;
     let outside = [PeerKind::Partner, PeerKind::Neighbor, PeerKind::External];
+
+    // Новое приглашение чужого (умолчание `Button`) — письмом с кнопкой: события нет, во входящих пусто.
     let request = itip_msg(
         "REQUEST",
         &meeting("m-43", ANNA, T10, 0, &attendee(PETR, "NEEDS-ACTION")),
@@ -859,84 +870,251 @@ async fn outside_stays_mail_until_dav44() {
         env.by_uid(PETR, "m-43").await.is_none(),
         "новое приглашение извне — письмом"
     );
-    // Сотрудник сам внёс встречу (клиент принял приглашение).
+    assert_eq!(env.inbox_len(PETR).await, 0);
+
+    // Партнёру включили автодобавление (`invite_new.partner = Auto`) — вносится как от своего, но без свойств,
+    // способных навредить клиенту: внешние `ATTACH` и звук `VALARM` по ссылке (CVE-2023-23397).
+    let mut policy = TrustPolicy::default();
+    policy.invite_new.partner = Some(InviteMode::Auto);
+    env.trust
+        .set_policy(TrustLevel::Org(env.tenant), &policy)
+        .await
+        .expect("policy");
+    let armed = itip_msg(
+        "REQUEST",
+        &meeting("m-43", ANNA, T10, 0, &attendee(PETR, "NEEDS-ACTION")).replace(
+            "END:VEVENT",
+            "ATTACH:https://evil.example/x.ics\r\nBEGIN:VALARM\r\nACTION:AUDIO\r\n\
+             TRIGGER:-PT15M\r\nATTACH:https://evil.example/sound.wav\r\nEND:VALARM\r\nEND:VEVENT",
+        ),
+    );
     assert_eq!(
-        env.deliver(PETR, ANNA, ItipMethod::Request, &request).await,
+        env.deliver_as(PeerKind::Partner, PETR, ANNA, ItipMethod::Request, &armed)
+            .await,
         ItipOutcome::Applied
     );
-    // Обновление извне (тот же ORGANIZER, SEQUENCE строго больше) — до DAV-44 письмом.
+    let body = env.body(PETR, "m-43").await;
+    assert!(
+        !body.contains("ATTACH"),
+        "вредные свойства не вносятся: {body}"
+    );
+    assert!(
+        body.contains("BEGIN:VALARM"),
+        "напоминание без ссылки остаётся: {body}"
+    );
+    assert_eq!(
+        env.by_uid(PETR, "m-43")
+            .await
+            .expect("событие")
+            .index
+            .busy
+            .len(),
+        1,
+        "событие внесено"
+    );
+    // Соседу и интернету автодобавления нет — та же клетка закреплена кнопкой (потолок контракта).
+    let second = itip_msg(
+        "REQUEST",
+        &meeting("m-43b", ANNA, T10, 0, &attendee(OLGA, "NEEDS-ACTION")),
+    );
+    for kind in [PeerKind::Neighbor, PeerKind::External] {
+        let out = env
+            .deliver_as(kind, OLGA, ANNA, ItipMethod::Request, &second)
+            .await;
+        assert!(matches!(out, ItipOutcome::Ignored(_)), "{kind:?}: {out:?}");
+    }
+    assert!(env.by_uid(OLGA, "m-43b").await.is_none());
+
+    // Обновление чужого (тот же ORGANIZER, SEQUENCE строго больше) — применяется (клетка `itip_updates`).
     let moved = itip_msg(
         "REQUEST",
         &meeting("m-43", ANNA, T14, 1, &attendee(PETR, "NEEDS-ACTION")),
     );
-    for kind in outside {
-        let out = env
-            .deliver_as(kind, PETR, ANNA, ItipMethod::Request, &moved)
-            .await;
-        assert!(matches!(out, ItipOutcome::Ignored(_)), "{kind:?}: {out:?}");
-    }
-    assert!(
-        !env.body(PETR, "m-43").await.contains(T14),
-        "время не переносится"
-    );
-    // Своя организация — обновление применяется.
     assert_eq!(
-        env.deliver(PETR, ANNA, ItipMethod::Request, &moved).await,
+        env.deliver_as(PeerKind::Partner, PETR, ANNA, ItipMethod::Request, &moved)
+            .await,
         ItipOutcome::Applied
     );
     assert!(
         env.body(PETR, "m-43").await.contains(T14),
         "время перенесено"
     );
-    // Отмена извне получателю из `ATTENDEE` — до DAV-44 письмом.
-    let cancel = itip_msg(
-        "CANCEL",
-        &meeting("m-43", ANNA, T10, 1, &attendee(PETR, "NEEDS-ACTION")),
+    // Сосед и интернет — то же правило, каждый со строго большим SEQUENCE.
+    for (kind, seq) in [(PeerKind::Neighbor, 2u32), (PeerKind::External, 3)] {
+        let again = itip_msg(
+            "REQUEST",
+            &meeting("m-43", ANNA, T14, seq, &attendee(PETR, "NEEDS-ACTION")),
+        );
+        let out = env
+            .deliver_as(kind, PETR, ANNA, ItipMethod::Request, &again)
+            .await;
+        assert_eq!(out, ItipOutcome::Applied, "{kind:?}: {out:?}");
+    }
+
+    // Встреча нашего организатора: `REPLY` внешнего участника — только его `PARTSTAT`, `SUMMARY` из письма не взят
+    // (RFC 5546 §3.2.3); от не-участника и к несуществующему UID — без изменений.
+    let mine = meeting("m-44", PETR, T10, 0, &attendee(ANNA, "NEEDS-ACTION"));
+    assert_eq!(env.put(PETR, "m44.ics", &[], &mine).await.status, 201);
+    let reply = itip_msg(
+        "REPLY",
+        &meeting("m-44", PETR, T10, 0, &attendee(ANNA, "ACCEPTED"))
+            .replace("SUMMARY:Планёрка", "SUMMARY:Подмена"),
     );
     for kind in outside {
         let out = env
-            .deliver_as(kind, PETR, ANNA, ItipMethod::Cancel, &cancel)
+            .deliver_as(kind, PETR, ANNA, ItipMethod::Reply, &reply)
             .await;
-        assert!(matches!(out, ItipOutcome::Ignored(_)), "{kind:?}: {out:?}");
+        assert_eq!(out, ItipOutcome::Applied, "{kind:?}: {out:?}");
     }
-    assert!(!env.body(PETR, "m-43").await.contains("STATUS:CANCELLED"));
-    assert_eq!(
-        env.deliver(PETR, ANNA, ItipMethod::Cancel, &cancel).await,
-        ItipOutcome::Applied
+    let body = env.body(PETR, "m-44").await;
+    assert!(body.contains("PARTSTAT=ACCEPTED"), "{}", body);
+    assert!(
+        body.contains("SUMMARY:Планёрка") && !body.contains("Подмена"),
+        "{body}"
     );
-    assert!(env.body(PETR, "m-43").await.contains("STATUS:CANCELLED"));
-    // Встреча нашего организатора: ответ участника извне — до DAV-44 письмом; ADD, COUNTER и REFRESH — тоже.
-    let mine = meeting("m-44", PETR, T10, 0, &attendee(ANNA, "NEEDS-ACTION"));
-    assert_eq!(env.put(PETR, "m44.ics", &[], &mine).await.status, 201);
+    let outsider = itip_msg(
+        "REPLY",
+        &meeting("m-44", PETR, T10, 0, &attendee(OLGA, "ACCEPTED")),
+    );
+    assert!(matches!(
+        env.deliver_as(PeerKind::External, PETR, OLGA, ItipMethod::Reply, &outsider)
+            .await,
+        ItipOutcome::Ignored(_)
+    ));
+    let unknown = itip_msg(
+        "REPLY",
+        &meeting("m-44b", PETR, T10, 0, &attendee(ANNA, "ACCEPTED")),
+    );
+    assert!(matches!(
+        env.deliver_as(PeerKind::External, PETR, ANNA, ItipMethod::Reply, &unknown)
+            .await,
+        ItipOutcome::Ignored(_)
+    ));
+
+    // `REFRESH` внешнего — ответа нет (только письмо, RFC 5546 §6.1.6); `ADD` и `COUNTER` — тоже.
     for (method, ics) in [
         (ItipMethod::Add, itip_msg("ADD", &mine)),
         (ItipMethod::Counter, itip_msg("COUNTER", &mine)),
         (ItipMethod::Refresh, itip_msg("REFRESH", &mine)),
-        (ItipMethod::Reply, itip_msg("REPLY", &mine)),
     ] {
-        for kind in outside {
-            let out = env.deliver_as(kind, PETR, ANNA, method, &ics).await;
-            assert!(
-                matches!(out, ItipOutcome::Ignored(_)),
-                "{kind:?} {method}: {out:?}"
-            );
-        }
+        let out = env
+            .deliver_as(PeerKind::External, PETR, ANNA, method, &ics)
+            .await;
+        assert!(matches!(out, ItipOutcome::Ignored(_)), "{method}: {out:?}");
     }
     assert_eq!(
         env.inbox_len(PETR).await,
         0,
-        "во входящих планирования пусто"
+        "REFRESH внешнего — ответа нет"
     );
-    // Свой участник отвечает — применяется.
-    let reply = itip_msg(
-        "REPLY",
-        &meeting("m-44", PETR, T10, 0, &attendee(ANNA, "ACCEPTED")),
+
+    // `CANCEL` не от организатора события — без изменений: подмена (организатор письма не отправитель) и отмена
+    // участником чужой встречи не применяются; отмена организатора — только участнику события (RFC 6638 §11.2).
+    let stranger = itip_msg(
+        "CANCEL",
+        &meeting("m-44", OLGA, T10, 1, &attendee(PETR, "NEEDS-ACTION")),
+    );
+    assert!(matches!(
+        env.deliver_as(
+            PeerKind::External,
+            PETR,
+            OLGA,
+            ItipMethod::Cancel,
+            &stranger
+        )
+        .await,
+        ItipOutcome::Ignored(_)
+    ));
+    let cancel = itip_msg(
+        "CANCEL",
+        &meeting("m-44", PETR, T10, 1, &attendee(ANNA, "NEEDS-ACTION")),
+    );
+    // Отправитель письма — участник, а не организатор события.
+    assert!(matches!(
+        env.deliver_as(PeerKind::External, PETR, ANNA, ItipMethod::Cancel, &cancel)
+            .await,
+        ItipOutcome::Ignored(_)
+    ));
+    assert!(!env.body(PETR, "m-44").await.contains("STATUS:CANCELLED"));
+    let cancel = itip_msg(
+        "CANCEL",
+        &meeting("m-43", ANNA, T14, 4, &attendee(PETR, "NEEDS-ACTION")),
     );
     assert_eq!(
-        env.deliver(PETR, ANNA, ItipMethod::Reply, &reply).await,
+        env.deliver_as(PeerKind::External, PETR, ANNA, ItipMethod::Cancel, &cancel)
+            .await,
         ItipOutcome::Applied
     );
-    assert!(env.body(PETR, "m-44").await.contains("PARTSTAT=ACCEPTED"));
+    assert!(env.body(PETR, "m-43").await.contains("STATUS:CANCELLED"));
+    // Событие с тем же UID у получателя есть, но он не участник — отмена чужого к нему не применяется.
+    let copy = meeting("m-47", ANNA, T10, 0, &attendee(OLGA, "NEEDS-ACTION"));
+    assert_eq!(env.put(PETR, "m47.ics", &[], &copy).await.status, 201);
+    let not_mine = itip_msg(
+        "CANCEL",
+        &meeting("m-47", ANNA, T10, 1, &attendee(PETR, "NEEDS-ACTION")),
+    );
+    assert!(matches!(
+        env.deliver_as(
+            PeerKind::External,
+            PETR,
+            ANNA,
+            ItipMethod::Cancel,
+            &not_mine
+        )
+        .await,
+        ItipOutcome::Ignored(_)
+    ));
+    assert!(!env.body(PETR, "m-47").await.contains("STATUS:CANCELLED"));
+
+    // Организация выключила `itip_updates` для интернета — `REPLY` и обновление извне не применяются.
+    let mut off = TrustPolicy::default();
+    off.itip_updates.external = Some(Toggle::Off);
+    env.trust
+        .set_policy(TrustLevel::Org(env.tenant), &off)
+        .await
+        .expect("policy");
+    let tentative = itip_msg(
+        "REPLY",
+        &meeting("m-44", PETR, T10, 0, &attendee(ANNA, "TENTATIVE")),
+    );
+    assert!(matches!(
+        env.deliver_as(
+            PeerKind::External,
+            PETR,
+            ANNA,
+            ItipMethod::Reply,
+            &tentative
+        )
+        .await,
+        ItipOutcome::Ignored(_)
+    ));
+    assert!(!env.body(PETR, "m-44").await.contains("PARTSTAT=TENTATIVE"));
+    let resurrect = itip_msg(
+        "REQUEST",
+        &meeting("m-43", ANNA, T10, 5, &attendee(PETR, "NEEDS-ACTION")),
+    );
+    assert!(matches!(
+        env.deliver_as(
+            PeerKind::External,
+            PETR,
+            ANNA,
+            ItipMethod::Request,
+            &resurrect
+        )
+        .await,
+        ItipOutcome::Ignored(_)
+    ));
+    assert!(
+        env.body(PETR, "m-43").await.contains("STATUS:CANCELLED"),
+        "отмена не отменяется и время не возвращается"
+    );
+    // Партнёру обновления не выключали — применяются.
+    assert_eq!(
+        env.deliver_as(PeerKind::Partner, PETR, ANNA, ItipMethod::Reply, &tentative)
+            .await,
+        ItipOutcome::Applied
+    );
+    assert!(env.body(PETR, "m-44").await.contains("PARTSTAT=TENTATIVE"));
 }
 
 /// RFC 5546 §6.1.6: `REFRESH` — только от участника существующего события, организатор которого — получатель.
@@ -1248,6 +1426,89 @@ async fn freebusy_two_users() {
     }
     let inbox = format!("{}inbox/", home(IVAN));
     assert_eq!(env.send(IVAN, "POST", &inbox, &[], "x").await.status, 405);
+}
+
+/// Занятость `schedule-outbox` — только принципалам своей организации (DAV-44, решение 124): адрес соседней
+/// организации узла — `3.7` без данных; уровень ответа своим — по клетке `freebusy` своей организации.
+#[tokio::test]
+async fn freebusy_own_organization_and_policy() {
+    let env = Sched::new().await;
+    assert_eq!(
+        env.put(PETR, "f1.ics", &[], &super::event("f-1", "Встреча"))
+            .await
+            .status,
+        201
+    );
+    // Учётная запись второй организации узла: в каталоге своей организации не находится.
+    env.meta
+        .upsert(
+            TenantId::new(),
+            AccountUpsert {
+                domain: DomainId::new(),
+                login: "bob@neighbor.example".into(),
+                display_name: "Сосед".into(),
+                external_id: None,
+                enabled: true,
+                aliases: Vec::new(),
+                kind: AccountKind::User,
+                hidden_from_gal: false,
+                resource_type: None,
+            },
+        )
+        .await
+        .expect("учётная запись соседа");
+    let outbox = format!("{}outbox/", home(IVAN));
+    let r = env
+        .send(
+            IVAN,
+            "POST",
+            &outbox,
+            &[("content-type", "text/calendar; charset=utf-8")],
+            &freebusy_request(&["bob@neighbor.example"]),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(
+        r.body.contains("3.7;Invalid calendar user") && !r.body.contains("calendar-data"),
+        "адрес соседней организации — 3.7 без данных: {}",
+        r.body
+    );
+
+    // Своим занятость отдаётся (клетка `freebusy` — «свободен/занят» по умолчанию).
+    let r = env
+        .send(
+            IVAN,
+            "POST",
+            &outbox,
+            &[("content-type", "text/calendar; charset=utf-8")],
+            &freebusy_request(&[PETR]),
+        )
+        .await;
+    assert!(r.body.contains("2.0;Success"), "{}", r.body);
+    assert!(r.body.contains("FREEBUSY"), "{}", r.body);
+
+    // Организация закрыла занятость своих — `3.7` без данных.
+    let mut policy = TrustPolicy::default();
+    policy.freebusy.own = Some(Detail::None);
+    env.trust
+        .set_policy(TrustLevel::Org(env.tenant), &policy)
+        .await
+        .expect("policy");
+    let r = env
+        .send(
+            IVAN,
+            "POST",
+            &outbox,
+            &[("content-type", "text/calendar; charset=utf-8")],
+            &freebusy_request(&[PETR]),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(
+        r.body.contains("3.7;Free/busy not available") && !r.body.contains("FREEBUSY"),
+        "политика ниже «свободен/занят» — без данных: {}",
+        r.body
+    );
 }
 
 // ---------- DAV-23: адреса учётной записи ----------

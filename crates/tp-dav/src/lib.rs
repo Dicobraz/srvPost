@@ -10,10 +10,14 @@
 //! в `DavStore` (CTR-60), строит её из каталога [`gal::sync`].
 //!
 //! Планирование встреч (DAV-13…16, RFC 6638; [`router_shared`] с [`ScheduleDeps`]): рассылка iTIP после `PUT` и
-//! `DELETE`, `schedule-inbox` и `schedule-outbox`, `Schedule-Tag`, запрос занятости.
+//! `DELETE`, `schedule-inbox` и `schedule-outbox`, `Schedule-Tag`, запрос занятости. Матрица доверия (CTR-93,
+//! решение 124; DAV-44): приём iTIP — по действующей матрице получателя ([`ItipInbox::with_trust`]), занятость
+//! `schedule-outbox` и уровень выдачи прав общего доступа — по матрице вошедшего ([`router_with_trust`]); без
+//! подключённых политик действуют умолчания [`tp_contracts::trust::TrustMatrix::default`].
 //!
 //! Общий доступ (DAV-17…19; права — [`Deps::sharing`], хранилища — [`router_shared`] с [`SharingStores`]): чужие
-//! календари и адресные книги по правам `SharingAuthorizer` (CTR-84), выдача прав `POST` (CalendarServer sharing), представители `calendar-proxy`, поиск
+//! календари и адресные книги по правам `SharingAuthorizer` (CTR-84), выдача прав `POST` (CalendarServer sharing),
+//! представители `calendar-proxy`, поиск
 //! принципалов и переговорных; бронирование ресурсов при приёме iTIP — [`ItipInbox::with_booking`].
 //!
 //! - [`config`] — секция `dav` ([`DavConfig`]);
@@ -60,5 +64,7 @@ pub use gal::GalDeps;
 pub use imip::ImipSender;
 pub use path::PREFIX;
 pub use schedule::ScheduleDeps;
-pub use server::{ALLOW, DAV_HEADER, DAV_HEADER_SHARING, Deps, router, router_shared};
+pub use server::{
+    ALLOW, DAV_HEADER, DAV_HEADER_SHARING, Deps, router, router_shared, router_with_trust,
+};
 pub use share::SharingStores;
