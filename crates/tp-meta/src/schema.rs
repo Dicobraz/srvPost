@@ -3,12 +3,15 @@
 //! Миграции встроены в бинарный файл (`migrations/*.sql`) и применяются `sqlx::migrate::Migrator`
 //! под рекомендательной блокировкой: параллельный старт узлов безопасен, повторное применение — пустая операция.
 //! Перед выпуском 1.0 миграции 0001…0044 свернуты в одну базовую схему (META-71, решение 106): версия 1 —
-//! базовая схема 1.0, обновление бета-установок — пересоздание базы. Изменения после 1.0 — версиями 2 и дальше.
+//! базовая схема 1.0, изменения после 1.0 — версиями 2 и дальше. Журнал миграций установки, обновлявшейся
+//! по одной миграции до свёртывания (beta.2), сворачивается при старте в одну свернувшую запись базовой
+//! схемы ([`fold_old_chain`], META-89) — обновление узла между релизами без пересоздания базы.
 
 use std::borrow::Cow;
 
-use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};
-use sqlx::{AssertSqlSafe, Postgres, SqlSafeStr, Transaction};
+use sqlx::migrate::{Migrate, MigrateError, Migration, MigrationType, Migrator};
+use sqlx::postgres::PgConnection;
+use sqlx::{AssertSqlSafe, Connection, Postgres, SqlSafeStr, Transaction};
 use tp_contracts::{Error, Result, TenantId};
 
 use crate::pool::DbPool;
@@ -20,39 +23,136 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[(
     include_str!("../migrations/0001_base.sql"),
 )];
 
-/// Мигратор схемы ядра.
-pub fn migrator() -> Migrator {
-    Migrator::with_migrations(
-        MIGRATIONS
-            .iter()
-            .map(|(version, desc, sql)| {
-                Migration::new(
-                    *version,
-                    Cow::Borrowed(*desc),
-                    MigrationType::Simple,
-                    // Контрольная сумма не зависит от окончаний строк в рабочей копии.
-                    AssertSqlSafe(sql.replace("\r\n", "\n")).into_sql_str(),
-                    false,
-                )
-            })
-            .collect(),
-    )
+/// Последняя версия свёрнутой цепочки миграций (META-71: `0001…0044` свернуты в базовую схему —
+/// версию 1). У установки, обновлявшейся миграциями по одной (beta.2), в журнале записаны все эти
+/// версии. Послевыпусковые версии (`2` и дальше) не пересекаются с ней у баз новой схемы: их записи
+/// стоят в журнале рядом с базовой схемой с её контрольной суммой — признак, по которому их цепочка
+/// отличима от свёрнутой ([`fold_old_chain`]).
+pub const FOLDED_LAST_VERSION: i64 = 44;
+
+/// Таблица журнала миграций — имя по умолчанию у мигратора sqlx.
+const MIGRATION_JOURNAL: &str = "_sqlx_migrations";
+
+/// Описание свернувшей записи журнала: базовая схема с пометкой «свёрнута» (META-89).
+const FOLDED_DESCRIPTION: &str = "base schema 1.0 — свёрнута цепочка 0001…0044";
+
+/// Список миграций резолвера; контрольная сумма — по тексту без `\r\n`, как у мигратора.
+fn resolved_migrations() -> Vec<Migration> {
+    MIGRATIONS
+        .iter()
+        .map(|(version, desc, sql)| {
+            Migration::new(
+                *version,
+                Cow::Borrowed(*desc),
+                MigrationType::Simple,
+                // Контрольная сумма не зависит от окончаний строк в рабочей копии.
+                AssertSqlSafe(sql.replace("\r\n", "\n")).into_sql_str(),
+                false,
+            )
+        })
+        .collect()
 }
 
-/// Применяет недостающие миграции ядра.
+/// Мигратор схемы ядра.
+pub fn migrator() -> Migrator {
+    Migrator::with_migrations(resolved_migrations())
+}
+
+/// Ошибка мигратора sqlx → ошибка границы крейта: обрыв и отказ СУБД — [`crate::schema::db_err`].
+fn migrate_err(e: MigrateError) -> Error {
+    match e {
+        MigrateError::Execute(e) | MigrateError::ExecuteMigration(e, _) => db_err(e),
+        e => {
+            tracing::error!(error = %e, "миграция схемы");
+            Error::internal(e.to_string())
+        }
+    }
+}
+
+/// Применяет недостающие миграции ядра; перед этим сворачивает журнал старой цепочки миграций
+/// ([`fold_old_chain`], META-89).
 /// Соединение — из пула `pool` через его наблюдателя.
 pub async fn migrate(pool: &DbPool) -> Result<()> {
     let mut conn = pool.acquire().await?;
+    fold_old_chain(&mut *conn).await?;
     migrator()
         .run_direct(None, &mut *conn, false)
         .await
-        .map_err(|e| match e {
-            MigrateError::Execute(e) | MigrateError::ExecuteMigration(e, _) => db_err(e),
-            e => {
-                tracing::error!(error = %e, "миграция схемы");
-                Error::internal(e.to_string())
-            }
-        })
+        .map_err(migrate_err)
+}
+
+/// Свёртывание журнала миграций старой цепочки (META-89). Установка, обновлённая до beta.2 по одной
+/// миграции, хранит в журнале записи версий `2…{FOLDED_LAST_VERSION}`, которых нет в резолвере, —
+/// мигратор sqlx отвечает «migration 2 was previously applied but is missing in the resolved
+/// migrations», и узел не стартует. Журнал — ровно вся старая цепочка `1…{FOLDED_LAST_VERSION}` с
+/// контрольной суммой первой записи не от базовой схемы (признак базы до свёртывания) — заменяется
+/// одной свернувшей записью базовой схемы с пометкой «свёрнута»: состояние базы после полной цепочки
+/// `0001…0044` побайтово равно базовой схеме (META-71), поэтому данные не трогаются.
+///
+/// Иначе журнал не меняется: чистая и «грязная» базы — на разбор мигратору; неполная старая цепочка
+/// (её схема не равна базовой — обновление беты, пересоздание базы) и база новой схемы без
+/// послевыпусковой версии в бинарнике («база новее бинарника») остаются ошибками мигратора.
+///
+/// Под рекомендательной блокировкой — как сам мигратор: параллельный старт узлов безопасен.
+async fn fold_old_chain(conn: &mut PgConnection) -> Result<()> {
+    conn.lock().await.map_err(migrate_err)?;
+    let folded = fold_old_chain_locked(conn).await;
+    conn.unlock().await.map_err(migrate_err)?;
+    folded
+}
+
+/// Тело [`fold_old_chain`] под блокировкой.
+async fn fold_old_chain_locked(conn: &mut PgConnection) -> Result<()> {
+    let Some(base) = resolved_migrations().into_iter().next() else {
+        return Ok(());
+    };
+    // Чистая база: таблицы журнала ещё нет — создать, как это делает мигратор.
+    conn.ensure_migrations_table(MIGRATION_JOURNAL)
+        .await
+        .map_err(migrate_err)?;
+    let applied: Vec<(i64, bool, Vec<u8>)> =
+        sqlx::query_as("SELECT version, success, checksum FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(db_err)?;
+    if applied.is_empty() || applied.iter().any(|&(_, success, _)| !success) {
+        // Чистая база либо «грязная» (прерванная миграция) — свёртывание не нужно, разбор у мигратора.
+        return Ok(());
+    }
+
+    let versions: Vec<i64> = applied.iter().map(|(version, _, _)| *version).collect();
+    let old_chain: Vec<i64> = (1..=FOLDED_LAST_VERSION).collect();
+    let first_checksum = &applied[0].2;
+    if versions != old_chain || first_checksum.as_slice() == base.checksum.as_ref() {
+        // Не вся старая цепочка либо база новой схемы (рядом с базовой схемой — послевыпусковые
+        // версии): отсутствие версии в бинарнике — ошибка мигратора.
+        return Ok(());
+    }
+
+    // Одна свернувшая запись — в одной транзакции: прерванное свёртывание не оставляет следа.
+    let mut tx = conn.begin().await.map_err(db_err)?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM {MIGRATION_JOURNAL}"
+    )))
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO {MIGRATION_JOURNAL} (version, description, success, checksum, execution_time) \
+         VALUES ($1, $2, TRUE, $3, -1)"
+    )))
+    .bind(base.version)
+    .bind(FOLDED_DESCRIPTION)
+    .bind(base.checksum.as_ref())
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    tx.commit().await.map_err(db_err)?;
+    tracing::warn!(
+        versions = versions.len(),
+        "записи свёрнутой цепочки миграций заменены одной свернувшей записью базовой схемы 1.0"
+    );
+    Ok(())
 }
 
 /// Транзакция в контексте организации: `app.tenant_id` (SET LOCAL) — RLS видит только её строки.

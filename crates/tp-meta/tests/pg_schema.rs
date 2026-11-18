@@ -1,12 +1,14 @@
-//! META-01: миграции на чистую БД, идемпотентность, RLS по организации.
+//! META-01: миграции на чистую БД, идемпотентность, RLS по организации. META-89: свёртывание журнала
+//! миграций старой цепочки у установки, обновлённой до свёртывания (beta.2).
 
 mod common;
 
 use std::str::FromStr;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::{AssertSqlSafe, Executor};
+use sqlx::{AssertSqlSafe, Executor, PgPool};
 use tp_contracts::{Error, TenantId};
+use tp_meta::pool::DbPool;
 use tp_meta::schema;
 
 #[tokio::test]
@@ -163,4 +165,179 @@ async fn unknown_tenant_insert_is_rejected() {
         .await
         .expect_err("fk");
     assert!(matches!(schema::db_err(err), Error::Invalid(_)));
+}
+
+/// Чистая БД и пул к ней: `(админ-пул, пул БД, имя БД)` — имя для удаления в конце теста.
+async fn fresh(url: &str) -> (PgPool, DbPool, String) {
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(url)
+        .await
+        .expect("подключение к TEST_DATABASE_URL");
+    let db = format!("tp_meta_{}", uuid::Uuid::now_v7().simple());
+    admin
+        .execute(AssertSqlSafe(format!("CREATE DATABASE {db}")))
+        .await
+        .expect("create database");
+    let opts = PgConnectOptions::from_str(url).expect("url").database(&db);
+    let pool = common::db(
+        PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .expect("подключение к чистой БД"),
+    );
+    (admin, pool, db)
+}
+
+/// Удаляет чистую БД теста.
+async fn drop_db(admin: PgPool, db: &str) {
+    admin
+        .execute(AssertSqlSafe(format!("DROP DATABASE {db} WITH (FORCE)")))
+        .await
+        .expect("drop database");
+}
+
+/// Заменяет журнал миграций записями версий `1…=last` с прежними (не базовыми) контрольными суммами —
+/// как у установки, обновлявшейся миграциями по одной (beta.2).
+async fn set_journal(pool: &DbPool, last: i64) {
+    let mut tx = pool.begin().await.expect("begin");
+    sqlx::query("DELETE FROM _sqlx_migrations")
+        .execute(&mut *tx)
+        .await
+        .expect("delete journal");
+    for v in 1..=last {
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             VALUES ($1, $2, TRUE, $3, -1)",
+        )
+        .bind(v)
+        .bind(format!("migration {v:04}"))
+        .bind(vec![v as u8, 1, 2])
+        .execute(&mut *tx)
+        .await
+        .expect("insert journal");
+    }
+    tx.commit().await.expect("commit");
+}
+
+/// META-89: узел, обновлённый до beta.2 (в журнале — записи старой цепочки 0001…0044), стартует
+/// бинарником с базовой схемой без сноса базы: журнал сворачивается в одну свернувшую запись с
+/// пометкой «свёрнута», данные до обновления остаются, повторный и параллельный старт — без ошибок.
+#[tokio::test]
+async fn pre_base_journal_is_folded_and_data_survives() {
+    let Some(url) = common::pg_url() else { return };
+    let (admin, pool, db) = fresh(&url).await;
+
+    // Накатить схему: состояние базы после полной цепочки 0001…0044 побайтово равно базовой схеме
+    // (META-71), поэтому подмена журнала на beta.2 воспроизводит обновляемый узел.
+    schema::migrate(&pool).await.expect("схема");
+    let tenant = common::tenant(&pool).await;
+    let (domain_id, domain_name) = common::domain(&pool, tenant).await;
+    set_journal(&pool, schema::FOLDED_LAST_VERSION).await;
+
+    // Бинарник с базовой схемой стартует: записи версий старой цепочки, которых в нём нет, — не ошибка.
+    schema::migrate(&pool)
+        .await
+        .expect("старт на журнале beta.2");
+
+    let mut conn = common::conn(&pool).await;
+    // В журнале — одна свернувшая запись базовой схемы с пометкой «свёрнута».
+    let (version, description): (i64, String) =
+        sqlx::query_as("SELECT version, description FROM _sqlx_migrations")
+            .fetch_one(&mut *conn)
+            .await
+            .expect("свернувшая запись");
+    assert_eq!(version, 1);
+    assert!(
+        description.contains("свёрнута"),
+        "пометка «свёрнута» в описании свернувшей записи: {description}"
+    );
+    // Данные до обновления на месте.
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM domains WHERE tenant_id = $1 AND domain_id = $2")
+            .bind(tenant.as_uuid())
+            .bind(domain_id.as_uuid())
+            .fetch_one(&mut *conn)
+            .await
+            .expect("домен до обновления");
+    assert_eq!(count, 1, "домен {domain_name} не потерян");
+    drop(conn);
+
+    // Повторный и параллельный старт: журнал не меняется.
+    schema::migrate(&pool).await.expect("повторный старт");
+    let runs: Vec<_> = (0..3)
+        .map(|_| {
+            let pool = pool.clone();
+            tokio::spawn(async move { schema::migrate(&pool).await })
+        })
+        .collect();
+    for run in runs {
+        run.await.expect("join").expect("параллельный старт");
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&mut *common::conn(&pool).await)
+        .await
+        .expect("журнал после повторных стартов");
+    assert_eq!(count, 1);
+
+    pool.close().await;
+    drop_db(admin, &db).await;
+}
+
+/// META-89: база новее бинарника — послевыпусковая версия, отсутствующая в резолвере, остаётся
+/// ошибкой: свёртывание применяется только к журналу старой цепочки с контрольной суммой не от
+/// базовой схемы.
+#[tokio::test]
+async fn missing_post_base_version_is_an_error() {
+    let Some(url) = common::pg_url() else { return };
+    let (admin, pool, db) = fresh(&url).await;
+    schema::migrate(&pool).await.expect("схема");
+
+    // База «следующего» бинарника: базовая схема и применённая поверх послевыпусковая миграция.
+    let mut conn = common::conn(&pool).await;
+    sqlx::query(
+        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+         VALUES ($1, 'post base', TRUE, $2, -1)",
+    )
+    .bind(schema::FOLDED_LAST_VERSION + 1)
+    .bind(vec![7u8; 4])
+    .execute(&mut *conn)
+    .await
+    .expect("запись послевыпусковой миграции");
+    drop(conn);
+
+    let err = schema::migrate(&pool)
+        .await
+        .expect_err("база новее бинарника");
+    let text = err.to_string();
+    assert!(
+        text.contains("was previously applied but is missing"),
+        "ошибка мигратора об отсутствующей версии: {text}"
+    );
+
+    pool.close().await;
+    drop_db(admin, &db).await;
+}
+
+/// META-89: неполная старая цепочка (бета обновлялась не до последней миграции свёртывания) не
+/// сворачивается молча: её схема не равна базовой — обновление такой беты, пересоздание базы.
+#[tokio::test]
+async fn partial_old_chain_is_not_folded() {
+    let Some(url) = common::pg_url() else { return };
+    let (admin, pool, db) = fresh(&url).await;
+    schema::migrate(&pool).await.expect("схема");
+    set_journal(&pool, schema::FOLDED_LAST_VERSION - 1).await;
+
+    let err = schema::migrate(&pool)
+        .await
+        .expect_err("неполная старая цепочка");
+    let text = err.to_string();
+    assert!(
+        text.contains("was previously applied but is missing"),
+        "ошибка мигратора об отсутствующей версии: {text}"
+    );
+
+    pool.close().await;
+    drop_db(admin, &db).await;
 }
