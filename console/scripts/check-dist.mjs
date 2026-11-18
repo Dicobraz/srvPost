@@ -1,14 +1,27 @@
 // Проверка собранной консоли (UI-19, приёмка): в console/dist нет ссылок на внешние адреса — консоль
 // работает без интернета (решение 119: шрифты и прочие ресурсы вшиты, CDN не используется нигде).
 // Ищем http(s):// и протокольно-относительные адреса в текстовых файлах dist. Разрешены только
-// строки, которые браузер не загружает: пространства имён XML (w3.org) и ссылки на документацию
-// в сообщениях библиотек (подсказка antd про CSS Logical Properties, коды ошибок react.dev).
+// строки, которые браузер не загружает: пространства имён XML (w3.org) и подсказки в сообщениях
+// библиотек — ссылки на документацию и исходники (react.dev, react-router, refine, rolldown,
+// github.com, fb.me, MDN), петлевой адрес — база разбора URL в oidc-client-ts — и адрес телеметрии
+// refine (сама телеметрия выключена: disableTelemetry: true в App.tsx, строка остаётся в сборке).
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const dist = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
-const INERT = [/^https?:\/\/(www\.)?w3\.org\//, /^https?:\/\/developer\.mozilla\.org\//, /^https?:\/\/react\.dev\//];
+const INERT = [
+  /^https?:\/\/(www\.)?w3\.org\//, // пространства имён XML/SVG
+  /^https?:\/\/developer\.mozilla\.org\//, // MDN в подсказках сообщений
+  /^https?:\/\/react\.dev\//, // документация React в сообщениях об ошибках
+  /^https?:\/\/rolldown\.rs\//, // документация bundler-а в сообщении CJS-обёртки
+  /^https?:\/\/reactrouter\.com\//, // документация react-router в сообщениях
+  /^https?:\/\/refine\.dev\/docs\//, // документация refine в сообщениях об ошибках
+  /^https?:\/\/telemetry\.refine\.dev\//, // телеметрия refine выключена (App.tsx), строка не выполняется
+  /^https?:\/\/(www\.)?github\.com\//, // ссылки на исходники и полифилы в сообщениях (react-router, react-markdown)
+  /^https?:\/\/fb\.me\//, // подсказки prop-types в предупреждениях
+  /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:[/?#]|$)/, // петлевой адрес — база `new URL(url, "http://127.0.0.1")` в oidc-client-ts
+];
 const TEXT = /\.(html|js|mjs|css|svg|txt|json|webmanifest)$/;
 
 const files = [];
