@@ -2,6 +2,8 @@
 //!
 //! Миграции встроены в бинарный файл (`migrations/*.sql`) и применяются `sqlx::migrate::Migrator`
 //! под рекомендательной блокировкой: параллельный старт узлов безопасен, повторное применение — пустая операция.
+//! Перед выпуском 1.0 миграции 0001…0044 свернуты в одну базовую схему (META-71, решение 106): версия 1 —
+//! базовая схема 1.0, обновление бета-установок — пересоздание базы. Изменения после 1.0 — версиями 2 и дальше.
 
 use std::borrow::Cow;
 
@@ -12,216 +14,17 @@ use tp_contracts::{Error, Result, TenantId};
 use crate::pool::DbPool;
 
 /// Миграции ядра: (версия, описание, SQL). Версии только добавляются; применённые не меняются.
-const MIGRATIONS: &[(i64, &str, &str)] = &[
-    (1, "schema", include_str!("../migrations/0001_schema.sql")),
-    (2, "nodes", include_str!("../migrations/0002_nodes.sql")),
-    (
-        3,
-        "shard credentials",
-        include_str!("../migrations/0003_shard_credentials.sql"),
-    ),
-    (
-        4,
-        "blob damaged",
-        include_str!("../migrations/0004_blob_damaged.sql"),
-    ),
-    (5, "queue", include_str!("../migrations/0005_queue.sql")),
-    (
-        6,
-        "retention",
-        include_str!("../migrations/0006_retention.sql"),
-    ),
-    (7, "acl", include_str!("../migrations/0007_acl.sql")),
-    (
-        8,
-        "index manifests",
-        include_str!("../migrations/0008_index_manifests.sql"),
-    ),
-    (
-        9,
-        "app passwords",
-        include_str!("../migrations/0009_app_passwords.sql"),
-    ),
-    (
-        10,
-        "distribution groups",
-        include_str!("../migrations/0010_distribution_groups.sql"),
-    ),
-    (
-        11,
-        "delivery and audit logs",
-        include_str!("../migrations/0011_delivery_audit.sql"),
-    ),
-    (
-        12,
-        "node roles",
-        include_str!("../migrations/0012_node_roles.sql"),
-    ),
-    (
-        13,
-        "blob compression",
-        include_str!("../migrations/0013_blob_compression.sql"),
-    ),
-    (
-        14,
-        "trash purge",
-        include_str!("../migrations/0014_trash_purge.sql"),
-    ),
-    (
-        15,
-        "node info and abuse blocks",
-        include_str!("../migrations/0015_node_info_abuse_blocks.sql"),
-    ),
-    (
-        16,
-        "transport",
-        include_str!("../migrations/0016_transport.sql"),
-    ),
-    (
-        17,
-        "transport rewrites",
-        include_str!("../migrations/0017_transport_rewrites.sql"),
-    ),
-    (
-        18,
-        "local admin tokens",
-        include_str!("../migrations/0018_local_admin_tokens.sql"),
-    ),
-    (
-        19,
-        "accounts login c",
-        include_str!("../migrations/0019_accounts_login_c.sql"),
-    ),
-    (
-        20,
-        "mailbox shards",
-        include_str!("../migrations/0020_mailbox_shards.sql"),
-    ),
-    (21, "dav", include_str!("../migrations/0021_dav.sql")),
-    (22, "sieve", include_str!("../migrations/0022_sieve.sql")),
-    (
-        23,
-        "vacation log",
-        include_str!("../migrations/0023_vacation_log.sql"),
-    ),
-    (
-        24,
-        "schedule",
-        include_str!("../migrations/0024_schedule.sql"),
-    ),
-    (
-        25,
-        "busy recurring",
-        include_str!("../migrations/0025_busy_recurring.sql"),
-    ),
-    (
-        26,
-        "rcpts per hour",
-        include_str!("../migrations/0026_rcpts_per_hour.sql"),
-    ),
-    (
-        27,
-        "submissions mailbox audit",
-        include_str!("../migrations/0027_submissions_mailbox_audit.sql"),
-    ),
-    (
-        28,
-        "audit export",
-        include_str!("../migrations/0028_audit_export.sql"),
-    ),
-    (
-        29,
-        "address book",
-        include_str!("../migrations/0029_address_book.sql"),
-    ),
-    (
-        30,
-        "contracts 38",
-        include_str!("../migrations/0030_contracts_38.sql"),
-    ),
-    (
-        31,
-        "account kind",
-        include_str!("../migrations/0031_account_kind.sql"),
-    ),
-    (
-        32,
-        "sync holds",
-        include_str!("../migrations/0032_sync_holds.sql"),
-    ),
-    (
-        33,
-        "card search pending",
-        include_str!("../migrations/0033_card_search_pending.sql"),
-    ),
-    (
-        34,
-        "audit search",
-        include_str!("../migrations/0034_audit_search.sql"),
-    ),
-    (
-        35,
-        "delivery itip",
-        include_str!("../migrations/0035_delivery_itip.sql"),
-    ),
-    (
-        36,
-        "archive removal",
-        include_str!("../migrations/0036_archive_removal.sql"),
-    ),
-    (
-        37,
-        "inbox log",
-        include_str!("../migrations/0037_inbox_log.sql"),
-    ),
-    (
-        38,
-        "account hidden from gal",
-        include_str!("../migrations/0038_account_hidden_from_gal.sql"),
-    ),
-    (
-        39,
-        "sharing",
-        include_str!("../migrations/0039_sharing.sql"),
-    ),
-    (
-        40,
-        "installation admins",
-        include_str!("../migrations/0040_installation_admins.sql"),
-    ),
-    (
-        41,
-        "account resource type",
-        include_str!("../migrations/0041_account_resource_type.sql"),
-    ),
-    (
-        42,
-        "share notifications",
-        include_str!("../migrations/0042_share_notifications.sql"),
-    ),
-    (
-        43,
-        "branding",
-        include_str!("../migrations/0043_branding.sql"),
-    ),
-    (
-        44,
-        "flow moderation",
-        include_str!("../migrations/0044_flow_moderation.sql"),
-    ),
-];
+const MIGRATIONS: &[(i64, &str, &str)] = &[(
+    1,
+    "base schema 1.0",
+    include_str!("../migrations/0001_base.sql"),
+)];
 
 /// Мигратор схемы ядра.
 pub fn migrator() -> Migrator {
-    migrator_until(i64::MAX)
-}
-
-/// Мигратор схемы ядра до версии `version` включительно — проверка миграции на данных прежней схемы.
-pub fn migrator_until(version: i64) -> Migrator {
     Migrator::with_migrations(
         MIGRATIONS
             .iter()
-            .filter(|(v, _, _)| *v <= version)
             .map(|(version, desc, sql)| {
                 Migration::new(
                     *version,

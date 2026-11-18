@@ -1,18 +1,13 @@
-//! Блокировки источников и учётных записей на PostgreSQL (META-27, META-39, CONTRACTS.md#AbuseBlocks); миграция записей
-//! узлов (адрес, площадка).
+//! Блокировки источников и учётных записей на PostgreSQL (META-27, META-39, CONTRACTS.md#AbuseBlocks).
 
 mod common;
 
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::{AssertSqlSafe, Executor};
 use time::OffsetDateTime;
 use tp_contracts::abuse::{AbuseBlocks, BlockSubject};
 use tp_contracts::bus::{Event, EventKind};
-use tp_contracts::membership::{Membership, NodeId, SiteId};
 use tp_contracts::{AccountId, Error, TenantId};
 use tp_meta::{MetaConfig, PgMeta, schema};
 use tp_testkit::MemEventBus;
@@ -145,63 +140,4 @@ async fn expired_rows_are_purged() {
     .expect("count");
     assert_eq!(rows, 1, "истёкшие строки удалены");
     assert_eq!(meta.active(tenant).await.expect("active").len(), 1);
-}
-
-#[tokio::test]
-async fn migration_keeps_node_records() {
-    let Some(url) = common::pg_url() else { return };
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&url)
-        .await
-        .expect("connect");
-    let db = format!("tp_meta_{}", uuid::Uuid::now_v7().simple());
-    admin
-        .execute(AssertSqlSafe(format!("CREATE DATABASE {db}")))
-        .await
-        .expect("create database");
-    let opts = PgConnectOptions::from_str(&url).expect("url").database(&db);
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_with(opts)
-        .await
-        .expect("connect clean");
-
-    // Схема до META-27 с записью узла.
-    schema::migrator_until(14)
-        .run(&pool)
-        .await
-        .expect("old schema");
-    sqlx::query(
-        "INSERT INTO nodes (node_id, roles, expires_at) VALUES ('old-node', '{imap}', now() + interval '1 hour')",
-    )
-    .execute(&pool)
-    .await
-    .expect("old row");
-    schema::migrate(&common::db(pool.clone()))
-        .await
-        .expect("migrate");
-
-    let meta = PgMeta::new(common::db(pool.clone()), MetaConfig::default());
-    let live = meta.live_info().await.expect("live_info");
-    assert_eq!(live.len(), 1);
-    assert_eq!(live[0].id, NodeId::new("old-node").expect("id"));
-    assert_eq!(live[0].addr, "");
-    assert_eq!(live[0].site, SiteId::default());
-    assert_eq!(live[0].roles.len(), 1);
-    let now = db_now(&meta).await;
-    meta.block(
-        TenantId::DEFAULT,
-        &BlockSubject::Ip("198.51.100.1".parse().expect("ip")),
-        now + Duration::from_secs(60),
-        "after migration",
-    )
-    .await
-    .expect("block");
-
-    pool.close().await;
-    admin
-        .execute(AssertSqlSafe(format!("DROP DATABASE {db} WITH (FORCE)")))
-        .await
-        .expect("drop database");
 }
