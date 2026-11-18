@@ -409,17 +409,17 @@ impl Env {
 
     /// Без настроек транспорта (маршруты транспорта — 503).
     pub fn without_transport() -> Self {
-        Self::build(config(), Vec::new(), false, true, true, true)
+        Self::build(config(), Vec::new(), false, true, true, true, true)
     }
 
     /// Без локального входа (`admin init`, вход по паролю и обмен — 503).
     pub fn without_local() -> Self {
-        Self::build(config(), Vec::new(), true, false, true, true)
+        Self::build(config(), Vec::new(), true, false, true, true, true)
     }
 
     /// Без общего доступа, представителей и ресурсов (их маршруты — 503).
     pub fn without_sharing() -> Self {
-        Self::build(config(), Vec::new(), true, true, false, true)
+        Self::build(config(), Vec::new(), true, true, false, true, true)
     }
 
     /// Без очереди исходящей почты (её маршруты — 503).

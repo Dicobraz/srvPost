@@ -135,7 +135,7 @@ pub struct EffectiveBrandingSchema {
 }
 
 /// Замена набора уровня: все поля необязательны, уровень заменяется целиком; знак меняет `PUT …/branding/logo`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BrandingBody {
     /// Название продукта (1–64 символа без управляющих); `null` — не задано.
@@ -1534,7 +1534,7 @@ mod tests {
         assert_eq!(domain.2, unknown.2, "неизвестный домен — тот же ответ");
         assert_eq!(domain.2, no_domain.2, "без домена — тот же ответ");
         assert_eq!(domain.1.get(header::ETAG), no_domain.1.get(header::ETAG));
-        assert_eq!(domain.1.get(header::CACHE_CONTROL), "public, max-age=300");
+        assert_eq!(domain.1[header::CACHE_CONTROL], "public, max-age=300");
         let body: Value = serde_json::from_slice(&domain.2).expect("body");
         assert_eq!(body["product_name"], "Почта АО Ромашка");
 
@@ -1547,10 +1547,7 @@ mod tests {
             .expect("request");
         let resp = env.router.clone().oneshot(req).await.expect("response");
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
-        assert_eq!(
-            resp.headers().get(header::CACHE_CONTROL),
-            "public, max-age=300"
-        );
+        assert_eq!(resp.headers()[header::CACHE_CONTROL], "public, max-age=300");
 
         // Знак по хэшу: PNG и immutable; неизвестный — 404; неверный хэш — 400.
         let (s, _, b) = put_logo_call(&env, LOGO_ROUTE, "root", "image/png", png(16, 16)).await;
@@ -1564,7 +1561,7 @@ mod tests {
             "public, max-age=31536000, immutable"
         );
         assert_eq!(bytes, png(16, 16));
-        let missing = logo_path(&BlobHash::from([7u8; 32]).to_string());
+        let missing = logo_path(&BlobHash([7u8; 32]).to_string());
         let (s, _, _) = call_raw(&env, "GET", &missing, None, None, Vec::new()).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         let (s, _, _) = call_raw(
@@ -1624,12 +1621,12 @@ mod tests {
         let spec = serde_json::to_value(crate::server::openapi_spec()).expect("spec");
         let paths = spec["paths"].as_object().expect("paths");
         for (path, methods) in [
-            (BRANDING_PREFIX, ["get", "put", "delete"]),
-            (LOGO_ROUTE, ["put", "delete"]),
-            (ORG_ROUTE, ["get", "put", "delete"]),
-            (ORG_LOGO_ROUTE, ["put", "delete"]),
-            (PUBLIC_ROUTE, ["get"]),
-            (PUBLIC_LOGO_ROUTE, ["get"]),
+            (BRANDING_PREFIX, ["get", "put", "delete"].as_slice()),
+            (LOGO_ROUTE, ["put", "delete"].as_slice()),
+            (ORG_ROUTE, ["get", "put", "delete"].as_slice()),
+            (ORG_LOGO_ROUTE, ["put", "delete"].as_slice()),
+            (PUBLIC_ROUTE, ["get"].as_slice()),
+            (PUBLIC_LOGO_ROUTE, ["get"].as_slice()),
         ] {
             let item = paths
                 .get(path)

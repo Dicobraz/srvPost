@@ -1602,8 +1602,10 @@ export interface components {
             dark?: {
                 [key: string]: components["schemas"]["BrandColor"];
             };
-            /** @description Роли светлой темы (`design/tokens.toml`: screen, panel, text, muted, frame, frameA, titleA, head, sel,
- selFg, selI, selIFg, fkBg, fkFg, ok, warn, err). */
+            /**
+             * @description Роли светлой темы (`design/tokens.toml`: screen, panel, text, muted, frame, frameA, titleA, head, sel,
+             *     selFg, selI, selIFg, fkBg, fkFg, ok, warn, err).
+             */
             light?: {
                 [key: string]: components["schemas"]["BrandColor"];
             };
