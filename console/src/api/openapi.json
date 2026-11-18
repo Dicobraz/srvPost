@@ -554,6 +554,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Заданные роли CLI.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "dark": {
@@ -561,6 +564,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Заданные роли тёмной темы.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "light": {
@@ -568,6 +574,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Заданные роли светлой темы.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "logo": {
@@ -600,9 +609,15 @@
             ]
           }
         },
+        "required": [
+          "light",
+          "dark",
+          "cli"
+        ],
         "type": "object"
       },
       "BrandingBody": {
+        "additionalProperties": false,
         "description": "Замена набора уровня: все поля необязательны, уровень заменяется целиком; знак меняет `PUT …/branding/logo`.",
         "properties": {
           "cli": {
@@ -610,6 +625,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Роли подсветки CLI (head, accent, ok, warn, err, muted, json_key, json_number, json_bool).",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "dark": {
@@ -617,6 +635,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Роли тёмной темы.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "light": {
@@ -624,6 +645,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Роли светлой темы (`design/tokens.toml`: screen, panel, text, muted, frame, frameA, titleA, head, sel,\nselFg, selI, selIFg, fkBg, fkFg, ok, warn, err).",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "primary": {
@@ -656,6 +680,7 @@
           },
           "contrast": {
             "description": "Контраст пары.",
+            "format": "double",
             "type": "number"
           },
           "field": {
@@ -664,6 +689,7 @@
           },
           "min": {
             "description": "Нужный контраст (текст — 4,5; рамки, заливки и CLI — 3).",
+            "format": "double",
             "type": "number"
           },
           "role": {
@@ -680,7 +706,6 @@
         },
         "required": [
           "field",
-          "theme",
           "role",
           "bg",
           "contrast",
@@ -1839,6 +1864,7 @@
           },
           "contrast": {
             "description": "Контраст пары.",
+            "format": "double",
             "type": "number"
           },
           "field": {
@@ -1847,6 +1873,7 @@
           },
           "min": {
             "description": "Нужный контраст.",
+            "format": "double",
             "type": "number"
           },
           "org": {
@@ -1869,9 +1896,7 @@
           }
         },
         "required": [
-          "org",
           "field",
-          "theme",
           "role",
           "bg",
           "contrast",
@@ -1913,6 +1938,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Подсветка вывода CLI.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "dark": {
@@ -1920,6 +1948,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Роли тёмной темы.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "light": {
@@ -1927,6 +1958,9 @@
               "$ref": "#/components/schemas/BrandColor"
             },
             "description": "Роли светлой темы.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           }
         },
@@ -6341,6 +6375,15 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "403": {
             "content": {
               "application/json": {
@@ -6393,6 +6436,15 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -6536,6 +6588,15 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -10731,10 +10792,7 @@
             "name": "domain",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],

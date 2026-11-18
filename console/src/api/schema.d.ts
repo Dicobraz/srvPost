@@ -1576,15 +1576,15 @@ export interface components {
         /** @description Набор брендинга одного уровня: каждое поле необязательно, незаданное берётся с уровня выше. */
         Branding: {
             /** @description Заданные роли CLI. */
-            cli?: {
+            cli: {
                 [key: string]: components["schemas"]["BrandColor"];
             };
             /** @description Заданные роли тёмной темы. */
-            dark?: {
+            dark: {
                 [key: string]: components["schemas"]["BrandColor"];
             };
             /** @description Заданные роли светлой темы. */
-            light?: {
+            light: {
                 [key: string]: components["schemas"]["BrandColor"];
             };
             logo?: components["schemas"]["BrandLogo"] | null;
@@ -1626,7 +1626,7 @@ export interface components {
             /** @description Роль переднего плана (имя из `design/tokens.toml`). */
             role: string;
             /** @description Тема (`light`, `dark`); `null` — роли CLI. */
-            theme: string | null;
+            theme?: string | null;
         };
         /** @description Отказ сохранения набора организации: пары ниже порога (RFC 9457 с расширением `errors`). */
         BrandingProblem: {
@@ -2059,11 +2059,11 @@ export interface components {
             /** @description Нужный контраст. */
             min: number;
             /** @description Организация (UUID); `null` — сам набор установки. */
-            org: string | null;
+            org?: string | null;
             /** @description Роль переднего плана. */
             role: string;
             /** @description Тема (`light`, `dark`); `null` — роли CLI. */
-            theme: string | null;
+            theme?: string | null;
         };
         /** @description Организация. */
         Organization: components["schemas"]["Policies"] & {
@@ -4758,6 +4758,14 @@ export interface operations {
                     "application/json": components["schemas"]["BrandingView"];
                 };
             };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4869,6 +4877,14 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrandingView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             403: {
@@ -7927,7 +7943,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Почтовый домен из имени входа (домены публичны через MX); неизвестный — как без домена. */
-                domain?: string | null;
+                domain?: string;
             };
             header?: never;
             path?: never;
