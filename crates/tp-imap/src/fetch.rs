@@ -734,10 +734,10 @@ impl<T: Transport> Session<T> {
         let messages = &self.selected.as_ref()?.messages;
         let mut out = Vec::new();
         if uid {
-            let Some(&(max, _)) = messages.last() else {
+            let Some(&m) = messages.last() else {
                 return Some(out);
             };
-            let max = NonZeroU32::new(max.0).unwrap_or(NonZeroU32::MIN);
+            let max = NonZeroU32::new(m.uid.0).unwrap_or(NonZeroU32::MIN);
             let ranges: Vec<(u32, u32)> = set
                 .0
                 .as_ref()
@@ -750,8 +750,8 @@ impl<T: Transport> Session<T> {
                     }
                 })
                 .collect();
-            for (i, (u, _)) in messages.iter().enumerate() {
-                if ranges.iter().any(|(a, b)| (*a..=*b).contains(&u.0)) {
+            for (i, m) in messages.iter().enumerate() {
+                if ranges.iter().any(|(a, b)| (*a..=*b).contains(&m.uid.0)) {
                     out.push(i);
                 }
             }
@@ -809,7 +809,7 @@ impl<T: Transport> Session<T> {
         let reads = items.iter().any(reads_content);
         let batch = self.ctx.config.limits.fetch_batch.max(1);
         for chunk in indexes.chunks(batch) {
-            let ids: Vec<MessageId> = chunk.iter().map(|&i| selected.messages[i].1).collect();
+            let ids: Vec<MessageId> = chunk.iter().map(|&i| selected.messages[i].id).collect();
             let list = self
                 .ctx
                 .deps
@@ -853,7 +853,7 @@ impl<T: Transport> Session<T> {
             }
             for &i in chunk {
                 // Письмо удалено другой сессией — пропускается.
-                let Some(msg) = by_id.get(&selected.messages[i].1) else {
+                let Some(msg) = by_id.get(&selected.messages[i].id) else {
                     continue;
                 };
                 let data = match self.fetch_one(msg, &items, mark_seen).await {
