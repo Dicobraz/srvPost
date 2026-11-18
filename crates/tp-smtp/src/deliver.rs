@@ -2149,7 +2149,7 @@ impl Delivery {
         let peer = self
             .message_peer(
                 env.mode,
-                app.is_some(),
+                app,
                 &full,
                 check.as_ref().is_some_and(|c| c.dmarc_pass),
             )
