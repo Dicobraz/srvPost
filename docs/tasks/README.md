@@ -278,7 +278,7 @@
 | [APP-47](APP-47.md) | шарды и реплики СУБД в узле | app | A | app-40 | ready | META-30,META-31,META-32,META-41 |
 | [APP-48](APP-48.md) | нагрузка узла: свободное место дисков кэша | app | A | app-40 | ready | SYS-13,APP-10 |
 | [META-61](META-61.md) | срок корзины уровня папки на шарде, отличном от основного | meta | A | meta-38 | done | META-30 |
-| [META-62](META-62.md) | повтор `enqueue` и пароля приложения при переключении СУБД | meta | A | meta-38 | done | META-40 |
+| [META-62](META-62.md) | — | — | — | meta-38 | done | — |
 | [DEP-30](DEP-30.md) | эталоны: прямые адреса и реплики СУБД | deploy | A | deploy-24 | ready | META-41,META-32 |
 | [DEP-31](DEP-31.md) | прогон pg-ha и «малого Enterprise» после правки community.postgresql | deploy | A | deploy-24 | ready | DEP-17,DEP-18 |
 | [DEP-32](DEP-32.md) | «малый Enterprise» на 5 ВМ и отказ одной ВМ | deploy | A | deploy-24 | ready | DEP-10,DEP-31 |
@@ -983,10 +983,15 @@
 | [DAV-43](DAV-43.md) | приём iTIP по матрице решения 123, бронирование — только внутри организации | dav | B | CTR-92,DAV-19,DAV-41,DAV-42 |
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
+| [FIX-17](FIX-17.md) | соединение DAV на учётную запись (beta.3 привязывает сессию к соединению) |  |  | — |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
+| [META-89](META-89.md) | # META-89 — обновление узла между релизами после свёртывания миграций (META-71) |  |  | — |
 | [PERF-06](PERF-06.md) | IMAP и JMAP |  |  | — |
+| [PERF-07](PERF-07.md) | 447 мс при пороге 200 мс (Д.7 №1) |  |  | — |
+| [PERF-08](PERF-08.md) | 108 мс, порог 100 мс — добить кэшем/прогревом (Д.7 №2) |  |  | — |
 | [PLT-35](PLT-35.md) | YAML ↔ JSON для правки config.yaml вне загрузчика | platform | A | — |
 | [PLT-36](PLT-36.md) | переменные THEPOST_* вне схемы не ломают проверку конфигурации | platform | A | — |
+| [SMTP-34-FIND-02](SMTP-34-FIND-02.md) | лимит или порог (Д.7 №3) |  |  | — |
 | [SMTP-47](SMTP-47.md) | результаты шлюза — печать ARC домена шлюза и `header.from` письма | smtp | A | SMTP-20,SMTP-33 |
 | [SMTP-48](SMTP-48.md) | iTIP — письмо с несколькими заголовками `From` не применяется | smtp | A | SMTP-33 |
 | [SMTP-49](SMTP-49.md) | тип отправителя письма с iTIP — по пути и домену `From` | smtp | B | CTR-92,SMTP-33,SMTP-36 |
