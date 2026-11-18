@@ -568,7 +568,7 @@
 | [DEP-52](DEP-52.md) | стенд: доверенные подсети вместо выключенного ограничения частоты | deploy | A | deploy-38 | done | PLT-32 |
 | [APP-60](APP-60.md) | thepost doctor: подсказки DNS для календарей и контактов | app | A | app-55 | done | DEP-21 |
 | [PLT-33](PLT-33.md) | обязательные параметры по ролям — edge без базы данных | platform | A | platform-22 | done | — |
-| [APP-61](APP-61.md) | узел edge запускается без базы данных и хранилища писем | app | A | app-56 | ready | — |
+| [APP-61](APP-61.md) | узел edge запускается без базы данных и хранилища писем | app | A | app-56 | done | — |
 | [APP-62](APP-62.md) | приглашения из почтового клиента в узле — права отправителя и iTIP для JMAP и DAV | app | A | app-57 | done | — |
 | [CTR-82](CTR-82.md) | вошедший пользователь в `Outbound::submit` — права отправителя через группы | contracts | B | contracts-54 | ready | — |
 | [META-78](META-78.md) | пересчёт поисковых строк контактов, записанных до миграции 0030 | meta | A | meta-51 | done | DAV-24 |
@@ -904,7 +904,7 @@
 | [SIEVE-14](SIEVE-14.md) | `processcalendar` (RFC 9671), расширение `vnd.thepost.peer`, админский скрипт — только сужение | sieve | A | sieve-07 | ready | CTR-93 |
 | [APP-76](APP-76.md) | узел — политика доверия в точках решения (SMTP, DAV, JMAP, Sieve, Admin API) | app | A | app-73 | todo | META-85,ADM-49,SMTP-50,DAV-44,JMAP-47,SIEVE-14 |
 | [DOC-12](DOC-12.md) | ADMIN-GUIDE — сверка раздела «Кто с кем и что может» с кодом | docs | A | docs-12 | todo | APP-76 |
-| [DEPS-18](DEPS-18.md) | зависимости метки ответа и BATV — `chacha20poly1305`, `hmac`, `sha1` в tp-smtp | deps | B | deps-18 | ready | — |
+| [DEPS-18](DEPS-18.md) | зависимости метки ответа и BATV — `chacha20poly1305`, `hmac`, `sha1` в tp-smtp | deps | B | deps-18 | done | — |
 | [CTR-94](CTR-94.md) | контракты ответа и беседы — запись об отправленном, ключи меток, беседа, удержание и действия по беседе | contracts | B | contracts-65 | ready | CTR-93 |
 | [META-86](META-86.md) | запись об отправленном и беседы в PostgreSQL — `SentLog`, `ThreadStore`, удержание и действия по беседе | meta | A | meta-59 | todo | CTR-94 |
 | [MS-21](MS-21.md) | приём письма — беседа и политики беседы в той же транзакции | mailstore | A | mailstore-15 | todo | CTR-94 |
