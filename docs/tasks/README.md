@@ -925,6 +925,7 @@
 | [DEP-56](DEP-56.md) | Rspamd — балл за признак ответа; ключи меток и BATV в поставке | deploy | A | deploy-43 | todo | SMTP-51 |
 | [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | todo | APP-77,DEP-56 |
 | [DEPS-19](DEPS-19.md) | зависимости каталога признаков и TI — `ring` (Ed25519), `regex`, `publicsuffix`, `winnow`; `zip`, `infer`, `ipnet` в крейты | deps | B | deps-19 | done | — |
+| [DEPS-20](DEPS-20.md) | — | — | — | deps-20 | done | — |
 | [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | todo | CTR-94 |
 | [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | todo | CTR-95 |
 | [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | todo | CTR-95,DEPS-19,SIEVE-14 |
