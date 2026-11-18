@@ -4,6 +4,11 @@
 //! Объект один на учётную запись (`id` = `singleton`): создать или удалить его нельзя (`singleton`), другой `id` —
 //! `notFound`. Состояние — [`SieveStore::state`](tp_contracts::sieve::SieveStore::state) (общее со скриптами Sieve);
 //! push — тип `VacationResponse` по сигналу `SieveChanged`.
+//!
+//! Внешний текст (CTR-93, JMAP-47): свойства `externalSubject`, `externalTextBody`, `externalHtmlBody` — расширение
+//! под capability [`THEPOST_VACATION`](crate::core::THEPOST_VACATION) (`urn:thepost:vacation`, как `ExternalMessage`
+//! Exchange): без неё в `using` клиент видит стандартный объект, внешние свойства неизвестны (`invalidProperties`) и
+//! внешний текст не меняется. Пустой внешний текст — чужим ответа нет ([`Vacation::has_external`]).
 
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
@@ -12,6 +17,7 @@ use tp_contracts::Error;
 use tp_contracts::sieve::Vacation;
 
 use crate::core::Ctx;
+use crate::core::THEPOST_VACATION;
 use crate::core::error::{MethodError, MethodResult, set_error};
 use crate::core::request::{GetArgs, SetArgs, SetOutcome, object, parse_args, select};
 use crate::email_get::utc_date;
@@ -19,8 +25,10 @@ use crate::email_get::utc_date;
 /// Идентификатор единственного объекта.
 const SINGLETON: &str = "singleton";
 
-fn vacation_object(v: &Vacation) -> Map<String, Value> {
-    object(json!({
+/// Объект `VacationResponse`; `ext` — внешний текст под [`THEPOST_VACATION`] (без неё клиент видит стандартный
+/// объект RFC 8621).
+fn vacation_object(v: &Vacation, ext: bool) -> Map<String, Value> {
+    let mut m = object(json!({
         "id": SINGLETON,
         "isEnabled": v.enabled,
         "fromDate": v.from.map_or(Value::Null, utc_date),
@@ -28,7 +36,13 @@ fn vacation_object(v: &Vacation) -> Map<String, Value> {
         "subject": v.subject,
         "textBody": v.text_body,
         "htmlBody": v.html_body,
-    }))
+    }));
+    if ext {
+        m.insert("externalSubject".into(), json!(v.external_subject));
+        m.insert("externalTextBody".into(), json!(v.external_text_body));
+        m.insert("externalHtmlBody".into(), json!(v.external_html_body));
+    }
+    m
 }
 
 /// `VacationResponse/get`.
@@ -41,7 +55,10 @@ pub(crate) async fn get(
     ctx.check_get_limit(a.ids.as_ref())?;
     let store = ctx.jmap.sieve_store()?;
     let state = store.state(ctx.scope).await?;
-    let me = vacation_object(&store.vacation(ctx.scope).await?);
+    let me = vacation_object(
+        &store.vacation(ctx.scope).await?,
+        ctx.uses(THEPOST_VACATION),
+    );
     let (mut list, mut not_found) = (Vec::new(), Vec::new());
     match &a.ids {
         None => list.push(me),
@@ -85,8 +102,9 @@ fn opt_string(v: &Value) -> Option<Option<String>> {
     }
 }
 
-/// Применяет патч к автоответу; ошибка — объект `SetError`.
-fn apply_patch(v: &mut Vacation, patch: &Value) -> Result<(), Value> {
+/// Применяет патч к автоответу; `ext` — внешние свойства под [`THEPOST_VACATION`] (без неё — неизвестны). Ошибка —
+/// объект `SetError`.
+fn apply_patch(v: &mut Vacation, patch: &Value, ext: bool) -> Result<(), Value> {
     let Value::Object(p) = patch else {
         return Err(set_error("invalidPatch", None, &[]));
     };
@@ -100,6 +118,13 @@ fn apply_patch(v: &mut Vacation, patch: &Value) -> Result<(), Value> {
             "subject" => opt_string(val).map(|s| v.subject = s).is_some(),
             "textBody" => opt_string(val).map(|s| v.text_body = s).is_some(),
             "htmlBody" => opt_string(val).map(|s| v.html_body = s).is_some(),
+            "externalSubject" if ext => opt_string(val).map(|s| v.external_subject = s).is_some(),
+            "externalTextBody" if ext => {
+                opt_string(val).map(|s| v.external_text_body = s).is_some()
+            }
+            "externalHtmlBody" if ext => {
+                opt_string(val).map(|s| v.external_html_body = s).is_some()
+            }
             _ => false,
         };
         if !ok {
@@ -146,8 +171,9 @@ pub(crate) async fn set(
             out.not_updated.insert(id, set_error("notFound", None, &[]));
             continue;
         }
+        let ext = ctx.uses(THEPOST_VACATION);
         let mut v = store.vacation(ctx.scope).await?;
-        if let Err(e) = apply_patch(&mut v, &patch) {
+        if let Err(e) = apply_patch(&mut v, &patch, ext) {
             out.not_updated.insert(id, e);
             continue;
         }
@@ -179,9 +205,25 @@ mod tests {
         "urn:ietf:params:jmap:vacationresponse",
     ];
 
+    /// Стандартная возможность плюс внешняя (JMAP-47): внешний текст автоответа.
+    const USING_EXT: &[&str] = &[
+        "urn:ietf:params:jmap:core",
+        "urn:ietf:params:jmap:vacationresponse",
+        crate::core::THEPOST_VACATION,
+    ];
+
     async fn call(env: &Env, method: &str, args: Value) -> Value {
         let resp = env
             .request(json!({"using": USING, "methodCalls": [[method, args, "c0"]]}))
+            .await;
+        let name = &resp["methodResponses"][0][0];
+        assert!(name == method || name == "error", "{resp}");
+        resp["methodResponses"][0][1].clone()
+    }
+
+    async fn call_ext(env: &Env, method: &str, args: Value) -> Value {
+        let resp = env
+            .request(json!({"using": USING_EXT, "methodCalls": [[method, args, "c0"]]}))
             .await;
         let name = &resp["methodResponses"][0][0];
         assert!(name == method || name == "error", "{resp}");
@@ -196,7 +238,18 @@ mod tests {
             .session(&env.principal, "https://mail.example.org")
             .await;
         assert!(s["capabilities"][USING[1]].is_object(), "{s}");
+        // Внешний текст автоответа — рядом со стандартной возможностью (JMAP-47).
+        assert!(s["capabilities"][USING_EXT[2]].is_object(), "{s}");
         assert_eq!(s["primaryAccounts"][USING[1]], env.account());
+        assert_eq!(s["primaryAccounts"][USING_EXT[2]], env.account());
+        // Без хранилища Sieve обеих возможностей нет.
+        let bare = Env::bare().await;
+        let s = bare
+            .jmap
+            .session(&bare.principal, "https://mail.example.org")
+            .await;
+        assert!(s["capabilities"][USING[1]].is_null(), "{s}");
+        assert!(s["capabilities"][USING_EXT[2]].is_null(), "{s}");
     }
 
     #[tokio::test]
@@ -331,6 +384,92 @@ mod tests {
         assert_eq!(
             resp["type"], "urn:ietf:params:jmap:error:unknownCapability",
             "{resp}"
+        );
+    }
+
+    /// Внешний текст автоответа (CTR-93, JMAP-47): свойства `external*` видны и меняются только под
+    /// `urn:thepost:vacation`; без неё клиент видит стандартный объект RFC 8621, внешние свойства неизвестны
+    /// (`invalidProperties`) и внешний текст не меняется.
+    #[tokio::test]
+    async fn external_text_under_capability() {
+        let env = Env::new().await;
+        let acc = env.account();
+
+        // Без `urn:thepost:vacation` объект стандартный: внешних свойств нет, задать их нельзя.
+        let r = call(&env, "VacationResponse/get", json!({"accountId": acc})).await;
+        assert!(r["list"][0]["externalSubject"].is_null(), "{r}");
+        let r = call(
+            &env,
+            "VacationResponse/set",
+            json!({"accountId": acc, "update": {"singleton": {"isEnabled": true,
+                "externalSubject": "Away", "externalTextBody": "Out of office"}}}),
+        )
+        .await;
+        assert_eq!(
+            r["notUpdated"]["singleton"]["type"], "invalidProperties",
+            "{r}"
+        );
+        assert_eq!(
+            r["notUpdated"]["singleton"]["properties"],
+            json!(["externalSubject", "externalTextBody"]),
+            "{r}"
+        );
+        let v = env.sieve.vacation(env.scope).await.expect("vacation");
+        assert!(
+            v.external_subject.is_none() && v.external_text_body.is_none(),
+            "{v:?}"
+        );
+
+        // Под возможностью — внешний текст сохраняется рядом со стандартным.
+        let r = call_ext(
+            &env,
+            "VacationResponse/set",
+            json!({"accountId": acc, "update": {"singleton": {"isEnabled": true,
+                "subject": "В отпуске", "externalSubject": "Away",
+                "externalTextBody": "Out of office until December 10"}}}),
+        )
+        .await;
+        assert!(
+            r["updated"]["singleton"].is_null() && r["notUpdated"].is_null(),
+            "{r}"
+        );
+        let v = env.sieve.vacation(env.scope).await.expect("vacation");
+        assert_eq!(v.external_subject.as_deref(), Some("Away"));
+        assert_eq!(
+            v.external_text_body.as_deref(),
+            Some("Out of office until December 10")
+        );
+
+        // Без возможности внешние свойства не видны и не меняются: стандартный патч внешний текст не трогает.
+        let r = call(&env, "VacationResponse/get", json!({"accountId": acc})).await;
+        assert_eq!(r["list"][0]["subject"], "В отпуске", "{r}");
+        assert!(r["list"][0]["externalSubject"].is_null(), "{r}");
+        let r = call(
+            &env,
+            "VacationResponse/set",
+            json!({"accountId": acc,
+                "update": {"singleton": {"subject": "В отпуске до 10 декабря"}}}),
+        )
+        .await;
+        assert!(r["notUpdated"].is_null(), "{r}");
+        let v = env.sieve.vacation(env.scope).await.expect("vacation");
+        assert_eq!(
+            v.subject.as_deref(),
+            Some("В отпуске до 10 декабря"),
+            "стандартный текст меняется"
+        );
+        assert_eq!(
+            v.external_text_body.as_deref(),
+            Some("Out of office until December 10"),
+            "внешний текст не меняется"
+        );
+
+        // С возможностью объект содержит и внешний текст.
+        let r = call_ext(&env, "VacationResponse/get", json!({"accountId": acc})).await;
+        assert_eq!(r["list"][0]["externalSubject"], "Away", "{r}");
+        assert_eq!(
+            r["list"][0]["externalTextBody"], "Out of office until December 10",
+            "{r}"
         );
     }
 }

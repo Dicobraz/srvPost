@@ -342,6 +342,7 @@ mod tests {
                 access: Access::Own,
                 created: &mut created,
                 implicit: Vec::new(),
+                using: &[],
             };
             let mut args = Map::new();
             args.insert("accountId".into(), json!(env.account()));

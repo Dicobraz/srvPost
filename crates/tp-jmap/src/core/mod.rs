@@ -31,6 +31,7 @@ use tp_contracts::senders::SenderLists;
 use tp_contracts::sieve::SieveStore;
 use tp_contracts::submission::SubmissionStore;
 use tp_contracts::transport::MailFlow;
+use tp_contracts::trust::{Effective, TrustMatrix, TrustStore, effective};
 use tp_contracts::{AccountId, Error, MailboxId, ModSeq, Result, TenantId};
 
 use crate::autoconfig::sign::ProfileSigner;
@@ -61,6 +62,10 @@ pub const SETTINGS: &str = "urn:thepost:params:jmap:settings";
 
 /// Capability автоответа (RFC 8621 §8); доступна при подключённом [`Jmap::with_sieve`].
 pub const VACATION: &str = "urn:ietf:params:jmap:vacationresponse";
+/// Capability внешнего текста автоответа The Post (JMAP-47, CTR-93): свойства `externalSubject`,
+/// `externalTextBody`, `externalHtmlBody` объекта `VacationResponse` видны и меняются только с ней; доступна при
+/// подключённом [`Jmap::with_sieve`].
+pub const THEPOST_VACATION: &str = "urn:thepost:vacation";
 /// Capability скриптов Sieve (RFC 9661); доступна при подключённом [`Jmap::with_sieve`].
 pub const SIEVE: &str = "urn:ietf:params:jmap:sieve";
 /// Capability контактов (RFC 9610); доступна при подключённом [`Jmap::with_dav`].
@@ -87,10 +92,11 @@ pub const ORG_CHART: &str = "urn:thepost:orgchart";
 /// Встроенные capability.
 const BUILTIN: [&str; 5] = [CORE, MAIL, SUBMISSION, WEBSOCKET, SETTINGS];
 /// Встроенные capability, доступные при подключённом хранилище (URI заняты всегда).
-const OPTIONAL: [&str; 10] = [
+const OPTIONAL: [&str; 11] = [
     SENDER_LISTS,
     ORG_CHART,
     VACATION,
+    THEPOST_VACATION,
     SIEVE,
     CONTACTS,
     CALENDARS,
@@ -189,6 +195,9 @@ pub struct Jmap {
     pub(crate) org: Option<Arc<dyn OrgStore>>,
     /// Общий доступ к календарям и адресным книгам (JMAP-32); `None` — только свои коллекции.
     pub(crate) sharing: Option<SharingDeps>,
+    /// Политики доверия (CTR-93, решение 124); `None` — действуют умолчания [`TrustMatrix::default`] (точки
+    /// решения JMAP — JMAP-47: занятость и общий доступ).
+    pub(crate) trust: Option<Arc<dyn TrustStore>>,
     /// Кэш списков идентификаторов `Email/query` и ответов `Email/get` (PERF-02).
     pub(crate) caches: Mutex<query_cache::Caches>,
     stop: watch::Sender<bool>,
@@ -208,6 +217,7 @@ impl fmt::Debug for Jmap {
             .field("sender_lists", &self.sender_lists.is_some())
             .field("org", &self.org.is_some())
             .field("sharing", &self.sharing.is_some())
+            .field("trust", &self.trust.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -223,9 +233,17 @@ pub(crate) struct Ctx<'a> {
     pub created: &'a mut HashMap<String, String>,
     /// Ответы неявных вызовов (`EmailSubmission/set` → `Email/set`): после ответа метода, с тем же callId.
     pub implicit: Vec<(String, Map<String, Value>)>,
+    /// Capability, объявленные запросом в `using` (RFC 8620 §3.3): расширенные свойства объекта видны и меняются
+    /// только под своей capability (`urn:thepost:vacation`, JMAP-47).
+    pub(crate) using: &'a [String],
 }
 
 impl Ctx<'_> {
+    /// Запрос объявил capability `uri`.
+    pub(crate) fn uses(&self, uri: &str) -> bool {
+        self.using.iter().any(|u| u == uri)
+    }
+
     /// Идентификатор учётной записи JMAP.
     pub fn account_id(&self) -> String {
         self.scope.account.to_string()
@@ -345,6 +363,7 @@ impl Jmap {
             sender_lists: None,
             org: None,
             sharing: None,
+            trust: None,
             stop: watch::channel(false).0,
             push: crate::disable::Sessions::default(),
         })
@@ -448,6 +467,36 @@ impl Jmap {
         self
     }
 
+    /// Подключает политики доверия (CONTRACTS.md#Trust, JMAP-47): действующая матрица учётной записи ограничивает
+    /// точки решения JMAP — занятость (`Principal/getAvailability`) и уровень выдачи `shareWith`. `None` — действуют
+    /// умолчания [`TrustMatrix::default`] (реализация — `tp-meta` (META-85), in-memory — `tp-testkit::MemTrust`).
+    #[must_use]
+    pub fn with_trust(mut self, trust: Option<Arc<dyn TrustStore>>) -> Self {
+        self.trust = trust;
+        self
+    }
+
+    /// Действующая матрица доверия учётной записи (CTR-93, решение 124): установка → организация → группы. Без
+    /// хранилища — умолчания ([`effective`] без политик); ошибка чтения политики — закрытая матрица
+    /// ([`TrustMatrix::closed`]; клетки своих — как в умолчаниях, клиенты JMAP — своя организация). Источники клеток
+    /// ([`Effective::source`]) — для пояснения потолка в отказах.
+    pub(crate) async fn trust_effective(&self, scope: AccountScope) -> Effective {
+        let Some(trust) = &self.trust else {
+            return effective(None, None, &[]);
+        };
+        match trust.effective_for(scope.tenant, scope.account).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "jmap: политика доверия не прочитана — закрытая матрица");
+                let closed = effective(None, None, &[]);
+                Effective {
+                    matrix: TrustMatrix::closed(),
+                    ..closed
+                }
+            }
+        }
+    }
+
     /// Списки отправителей для метода; не подключены — `unknownMethod`.
     pub(crate) fn sender_lists_store(&self) -> MethodResult<&Arc<dyn SenderLists>> {
         self.sender_lists
@@ -470,7 +519,7 @@ impl Jmap {
         match uri {
             SENDER_LISTS => self.sender_lists.is_some(),
             ORG_CHART => self.org.is_some(),
-            VACATION | SIEVE => self.sieve.is_some(),
+            VACATION | THEPOST_VACATION | SIEVE => self.sieve.is_some(),
             CONTACTS | CALENDARS | TASKS | PRINCIPALS | PRINCIPALS_OWNER => self.dav.is_some(),
             AVAILABILITY => self.dav.is_some() && self.freebusy.is_some(),
             _ => false,
@@ -571,6 +620,9 @@ impl Jmap {
             caps.insert(VACATION.into(), json!({}));
             account_caps.insert(VACATION.into(), json!({}));
             primary.insert(VACATION.into(), json!(account));
+            caps.insert(THEPOST_VACATION.into(), json!({}));
+            account_caps.insert(THEPOST_VACATION.into(), json!({}));
+            primary.insert(THEPOST_VACATION.into(), json!(account));
             caps.insert(SIEVE.into(), crate::sieve::session_capability());
             account_caps.insert(
                 SIEVE.into(),
@@ -707,9 +759,10 @@ impl Jmap {
                 access: Access::Own,
                 created: &mut created,
                 implicit: Vec::new(),
+                using: &req.using,
             };
             let result = match request::resolve_references(args, &responses, &mut budget) {
-                Ok(args) => self.call(&mut ctx, &name, args, &req.using).await,
+                Ok(args) => self.call(&mut ctx, &name, args).await,
                 Err(e) => Err(e),
             };
             let implicit = std::mem::take(&mut ctx.implicit);
@@ -737,11 +790,9 @@ impl Jmap {
         ctx: &mut Ctx<'_>,
         name: &str,
         args: Map<String, Value>,
-        using: &[String],
     ) -> MethodResult<Map<String, Value>> {
-        let uses = |uri: &str| using.iter().any(|u| u == uri);
         if let Some((_, cap)) = crate::METHODS.iter().find(|(m, _)| *m == name) {
-            if !uses(cap) {
+            if !ctx.uses(cap) {
                 return Err(MethodError::new("unknownMethod"));
             }
             return crate::call_builtin(ctx, name, args).await;
@@ -751,7 +802,7 @@ impl Jmap {
             .capabilities
             .iter()
             .find(|c| c.methods().contains(&name))
-            .filter(|c| uses(c.uri()))
+            .filter(|c| ctx.uses(c.uri()))
             .ok_or(MethodError::new("unknownMethod"))?;
         match cap.call(ctx.principal, name, Value::Object(args)).await? {
             Value::Object(m) => Ok(m),
