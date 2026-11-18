@@ -8,7 +8,7 @@
 //! приходились мегабайты (Д.7 №17: 981.6 KB на соединение, порог 64 KB).
 //!
 //! Кэш ([`Snapshots`]) при выдаче проверяет свежесть по журналу изменений папки
-//! ([`ChangeLog::message_changes`] от базового `ModSeq` записи): изменений нет — тот же [`Arc`]
+//! (`ChangeLog::message_changes` от базового `ModSeq` записи): изменений нет — тот же [`Arc`]
 //! (копии на соединение нет вовсе), есть, журнал недоступен или старее базы — полная пересборка;
 //! `ttl` — страховка от изменений вне журнала. Без инкрементальных патчей: `SELECT` читает папку
 //! один раз за соединение, а свежесть — чтение журнала папки с лимитом 1. Сессия правит свой
@@ -28,7 +28,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use tp_contracts::meta::{AccountScope, ChangeLog, Flag, MailboxStore, MessageQuery, MessageStore};
+use tp_contracts::meta::{AccountScope, Flag, MessageQuery};
 use tp_contracts::{AccountId, MailboxId, MessageId, ModSeq, Result, TenantId, Uid};
 
 use crate::config::SnapshotsConfig;
@@ -48,7 +48,7 @@ pub(crate) type Rows = Arc<Vec<Row>>;
 
 /// Оценка записи, байт: строки снимка и накладные записи.
 fn rows_bytes(rows: &[Row]) -> usize {
-    rows.len() * std::mem::size_of::<Row>() + 64
+    std::mem::size_of_val(rows) + 64
 }
 
 /// Запись кэша: снимок одной папки, база журнала, окно построения.
