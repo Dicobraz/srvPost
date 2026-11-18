@@ -635,6 +635,7 @@ Admin API — 500), `smtp-17` (FIX-01) → `app-44` (FIX-02, одобрение 
 | ✅ deps-15 (ветка `x/deps-15`) | DEPS-15 | B | deps-14 | 1 |
 | ✅ tui-03 | TUI-06 | A | tui-01, design-01 | 1 |
 | ✅ tui-04 | TUI-07 | A | tui-03, deps-15 | 1 |
+| tui-08 (ветка `x/tui-kdfontop`) | TUI-12 | B | tui-04 | 1 |
 | console-10 | UI-19 | A | design-01 | 1 |
 | ✅ contracts-57 (ветка `x/contracts-57`) | CTR-85 | B | — | 1 |
 | ✅ admin-31 | ADM-45 | A | contracts-57 | 1 |

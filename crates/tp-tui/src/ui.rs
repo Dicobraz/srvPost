@@ -13,7 +13,7 @@ use crate::app::{
     App, BODY_ROWS, CardView, ConfigEdit, ConfigView, LIST_ROWS, Level, ListView, LoginField,
     LoginForm, Main, Method, Overlay, Panel, Stage, TreeRow, View,
 };
-use crate::cursor::{self, CursorView};
+use crate::cursor::CursorView;
 use crate::engine::{self, Form};
 use crate::layout::{self, Layout};
 use crate::node::Access;
@@ -82,10 +82,11 @@ fn mouse_cursor(app: &App, area: Rect, buf: &mut Buffer) {
                 cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
             }
         }
-        Some(CursorView::Glyphs { anchor }) => {
-            // SS2 в символе ячейки — escape-последовательность: ширина принудительно одна ячейка,
-            // иначе diff посчитает её по символам и пропустит соседние ячейки.
-            for (i, s) in cursor::glyph_symbols().into_iter().enumerate() {
+        Some(CursorView::Glyphs { anchor, symbols }) => {
+            // SS2 в символе ячейки терминала — escape-последовательность: ширина принудительно одна
+            // ячейка, иначе diff посчитает её по символам и пропустит соседние ячейки; коды PUA консоли —
+            // обычные символы ширины 1.
+            for (i, s) in symbols.iter().enumerate() {
                 let (x, y) = (anchor.0 + i as u16 % 2, anchor.1 + i as u16 / 2);
                 if inside(x, y) {
                     buf[(x, y)].set_symbol(s).set_diff_option(
@@ -1557,17 +1558,33 @@ mod tests {
         assert!(!buf[(41, 5)].modifier.contains(Modifier::REVERSED));
     }
 
-    /// Уровень 3: блок 2×2 из четырёх глифов становится на ячейку острия.
+    /// Уровень 3: блок 2×2 из четырёх глифов становится на ячейку острия — терминальный набор DECDLD
+    /// и коды PUA консоли Linux.
     #[test]
     fn glyph_cursor_block() {
         let mut app = with_accounts();
-        app.cursor = Some(CursorView::Glyphs { anchor: (40, 5) });
-        let (_, buf) = screen(&app);
         let want = crate::cursor::glyph_symbols();
+        app.cursor = Some(CursorView::Glyphs {
+            anchor: (40, 5),
+            symbols: want.clone(),
+        });
+        let (_, buf) = screen(&app);
         for (i, s) in want.iter().enumerate() {
             let (x, y) = (40 + i as u16 % 2, 5 + i as u16 / 2);
-            assert_eq!(buf[(x, y)].symbol(), *s, "глиф {i}");
+            assert_eq!(buf[(x, y)].symbol(), s.as_str(), "глиф {i}");
         }
+        app.cursor = Some(CursorView::Glyphs {
+            anchor: (40, 5),
+            symbols: [
+                "\u{F500}".to_owned(),
+                "\u{F501}".to_owned(),
+                "\u{F502}".to_owned(),
+                "\u{F503}".to_owned(),
+            ],
+        });
+        let (_, buf) = screen(&app);
+        assert_eq!(buf[(40, 5)].symbol(), "\u{F500}");
+        assert_eq!(buf[(41, 6)].symbol(), "\u{F503}");
     }
 
     /// Уровни 1–2: стрелка картинкой протокола терминала (полублоки) в якорной ячейке.
