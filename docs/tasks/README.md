@@ -684,7 +684,7 @@
 | [PERF-01](PERF-01.md) | p95 944 мс при пороге 100 мс (Д.7 №2) |  |  | mailstore-16 | done | — |
 | [PERF-02](PERF-02.md) | # PERF-02 — JMAP Email/query p95 311 мс при пороге 200 мс (Д.7 №1) |  |  | jmap-32 | done | — |
 | [PERF-03](PERF-03.md) | 981 KB на соединение при пороге 64 KB (Д.7 №17) |  |  | mailstore-17 | done | — |
-| [PERF-04](PERF-04.md) | зонд «index» не находит письмо за 180 с (Д.7 №10) |  |  | mailstore-18 | ready | — |
+| [PERF-04](PERF-04.md) | зонд «index» не находит письмо за 180 с (Д.7 №10) |  |  | mailstore-18 | done | — |
 | [PERF-05](PERF-05.md) | 1.24 с на ящике 10 тыс. писем при пороге < 1 с на 100 тыс. (Д.7 №8) |  |  | mailstore-19 | ready | — |
 | [FIND-01](FIND-01.md) | # FIND-01 — SMTP отказы 421 под нагрузкой без причины в журнале узла |  |  | mailstore-19 | ready | — |
 
