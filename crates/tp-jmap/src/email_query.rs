@@ -3,6 +3,8 @@
 //! Нетекстовые условия (папка, даты, размер, ключевые слова, вложения, цепочки) проверяются по метаданным
 //! писем (`MessageStore`), текстовые (`text`, `from`, `to`, `cc`, `bcc`, `subject`, `body`, `header`) — запросом
 //! к `SearchIndex` на каждое условие; результаты пересекаются (SRS 4.6). Сортировка — по метаданным.
+//! Фильтр, любое совпадение которого проходит через текстовые термы (PERF-07), не выгружает все письма
+//! папок: метаданные читаются только для кандидатов — писем из результатов термов ([`restrict`]).
 //! Поиск по тексту (`text`, `body`) в чужом ящике — запись `AuditAction::Search` в журнал аудита до выполнения
 //! (решение 114, JMAP-43; [`crate::audit::search`]).
 
@@ -10,13 +12,14 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
+use futures::{StreamExt, stream};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tp_contracts::meta::{Address, Message, MessageQuery};
 use tp_contracts::search::{SearchSort, Snippet, TextField, TextQuery};
-use tp_contracts::{Error, MailboxId, MessageId, ModSeq};
+use tp_contracts::{Error, MailboxId, MessageId, ModSeq, Result};
 
 use crate::core::error::{MethodError, MethodResult, changes_error};
 use crate::core::query_cache::{QueryList, Token};
@@ -164,6 +167,47 @@ fn walk<'f>(f: &'f Filter, out: &mut Vec<&'f Cond>) {
     match f {
         Filter::Op(_, fs) => fs.iter().for_each(|f| walk(f, out)),
         Filter::Cond(c) => out.push(c),
+    }
+}
+
+/// Надмножество результатов запроса (PERF-07): объединение результатов текстовых термов, через которые
+/// обязано пройти любое подходящее письмо. `None` — сужения нет: условие без текстовых термов совпадает
+/// с любым письмом, `NOT` ищет в дополнении к результатам терма. В `text` — результаты термов,
+/// запрошенных в [`run`]; терма нет в карте (не запрашивался) — без сужения.
+fn restrict(
+    f: &Filter,
+    text: &HashMap<(TextField, String), HashSet<MessageId>>,
+) -> Option<HashSet<MessageId>> {
+    match f {
+        Filter::Cond(c) if c.terms.is_empty() => None,
+        Filter::Cond(c) => {
+            let mut out = HashSet::new();
+            for t in &c.terms {
+                out.extend(text.get(t)?.iter().copied());
+            }
+            Some(out)
+        }
+        // «И»: результат вложен в результат каждого условия — достаточно одного сужающего поддерева.
+        Filter::Op(Op::And, fs) => {
+            let (mut out, mut any) = (HashSet::new(), false);
+            for f in fs {
+                if let Some(s) = restrict(f, text) {
+                    out.extend(s);
+                    any = true;
+                }
+            }
+            any.then_some(out)
+        }
+        // «Или»: совпадение проходит хотя бы через одно условие — сужают все.
+        Filter::Op(Op::Or, fs) => {
+            let mut out = HashSet::new();
+            for f in fs {
+                out.extend(restrict(f, text)?);
+            }
+            Some(out)
+        }
+        // Отрицание — дополнение к результатам термов.
+        Filter::Op(Op::Not, _) => None,
     }
 }
 
@@ -359,6 +403,44 @@ fn query_key(filter: &Option<Value>, spec: &[(Part, bool)]) -> String {
     format!("{filter:?}|{spec:?}")
 }
 
+/// Метаданные писем-кандидатов точными чтениями (PERF-07): уникальный фильтр находит немного писем —
+/// вместо полной выгрузки папок читаются только кандидаты, параллельно. Письма нечитаемых папок
+/// представителя пропускаются (`boxes`, JMAP-49), как не попавшие в полную выгрузку.
+async fn fetch_candidates(
+    ctx: &Ctx<'_>,
+    ids: &HashSet<MessageId>,
+    boxes: &Option<Vec<MailboxId>>,
+) -> MethodResult<Vec<Message>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let len = ids.len();
+    let n = ctx.jmap.cfg.query_cache.max_parallel_get.max(1).min(len);
+    let (store, scope) = (ctx.jmap.d.messages.clone(), ctx.scope);
+    // Список копируется: стрим владеет элементами — будущее `Send` при любом времени жизни займа
+    // (та же форма, что в `Email/get`).
+    let ids: Vec<MessageId> = ids.iter().copied().collect();
+    let got: Vec<Result<Option<Message>>> = stream::iter(ids)
+        .map(|id| {
+            let store = store.clone();
+            async move { store.get(scope, id).await }
+        })
+        .buffer_unordered(n)
+        .collect()
+        .await;
+    let mut out = Vec::with_capacity(len);
+    for r in got {
+        match r {
+            Ok(Some(m)) if boxes.as_ref().is_none_or(|b| b.contains(&m.mailbox)) => {
+                out.push(m);
+            }
+            Ok(_) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(out)
+}
+
 /// Результаты запроса: идентификаторы писем по порядку; `threads` — условия или сортировка по цепочкам.
 /// Кэшируемые запросы ([`numeric_sort`], без текстовых термов, цепочек и свёртки) берут список из кэша
 /// ([`crate::core::query_cache`]), при изменениях — обновляют его по журналу ([`try_patch`]) вместо
@@ -408,6 +490,20 @@ async fn run(
     let spec = numeric_sort(&sort).filter(|_| {
         !uses_threads && !a.collapse_threads && conds.iter().all(|c| c.terms.is_empty())
     });
+    // Кандидаты текстовых термов (PERF-07): результат фильтра с текстом вложен в их результаты —
+    // метаданные читаются только для кандидатов. Цепочки и свёртка требуют писем вне результатов
+    // текста; кандидатов больше порога — полная выгрузка не хуже точных чтений.
+    let mut cand = if uses_threads || a.collapse_threads {
+        None
+    } else {
+        filter.as_ref().and_then(|f| restrict(f, &text))
+    };
+    if cand
+        .as_ref()
+        .is_some_and(|c| c.len() > ctx.jmap.cfg.query_candidates_max as usize)
+    {
+        cand = None;
+    }
     let scope = (ctx.scope.tenant, ctx.scope.account);
     // Кэш — только свой аккаунт: записи кэша лежат в пространстве владельца и охватывают все его папки
     // (JMAP-49).
@@ -448,11 +544,13 @@ async fn run(
         Some(b) => b,
         None => {
             // Папки чтения: одна из фильтра или все; у представителя — только общие с правом `r` (JMAP-49),
-            // нечитаемая папка фильтра — пустой результат.
-            let msgs = ctx
-                .jmap
-                .messages_of(ctx.scope, ctx.access.query_boxes(only))
-                .await?;
+            // нечитаемая папка фильтра — пустой результат. Кандидаты текста (PERF-07) читаются точными
+            // чтениями с тем же ограничением папок.
+            let boxes = ctx.access.query_boxes(only);
+            let msgs = match cand {
+                Some(c) => fetch_candidates(ctx, &c, &boxes).await?,
+                None => ctx.jmap.messages_of(ctx.scope, boxes).await?,
+            };
             let ev = Eval {
                 text,
                 threads: if uses_threads || a.collapse_threads {
@@ -1483,5 +1581,96 @@ mod tests {
             let (key_ids, _, _) = key_order(&msgs, None, &spec, &ev);
             assert_eq!(key_ids, order(&msgs, None, &sort, &ev, false));
         }
+    }
+
+    /// Кандидаты запроса (PERF-07): сужение выборки результатами текстовых термов. `AND` — достаточно
+    /// одного сужающего поддерева, `OR` — сужают все условия; `NOT` и условие без текстовых термов
+    /// не сужают.
+    #[test]
+    fn restrict_by_terms() {
+        use std::collections::{HashMap, HashSet};
+
+        use super::{Filter, parse_filter, restrict};
+        use tp_contracts::search::TextField;
+
+        fn f(v: serde_json::Value) -> Filter {
+            parse_filter(&v).expect("filter")
+        }
+        let a: tp_contracts::MessageId =
+            "00000000-0000-0000-0000-00000000000a".parse().expect("id");
+        let b: tp_contracts::MessageId =
+            "00000000-0000-0000-0000-00000000000b".parse().expect("id");
+        let text = HashMap::from([
+            ((TextField::Any, "α".into()), HashSet::from([a, b])),
+            ((TextField::Subject, "β".into()), HashSet::from([b])),
+        ]);
+        let r = |v| restrict(&f(v), &text);
+        assert_eq!(r(json!({"text": "α"})), Some(HashSet::from([a, b])));
+        // Условие из нескольких термов — объединение их результатов (пересечение не шире).
+        assert_eq!(
+            r(json!({"text": "α", "subject": "β"})),
+            Some(HashSet::from([a, b]))
+        );
+        // «И»: нетекстовое условие не мешает сужению текстовым.
+        assert_eq!(
+            r(json!({"operator": "AND", "conditions": [{"text": "α"}, {"hasKeyword": "$seen"}]})),
+            Some(HashSet::from([a, b]))
+        );
+        // «Или»: сужают все условия; нетекстовое условие выключает сужение.
+        assert_eq!(
+            r(json!({"operator": "OR", "conditions": [{"text": "α"}, {"subject": "β"}]})),
+            Some(HashSet::from([a, b]))
+        );
+        assert_eq!(
+            r(json!({"operator": "OR", "conditions": [{"text": "α"}, {"hasKeyword": "$seen"}]})),
+            None
+        );
+        // Отрицание терма — дополнение; нетекстовый фильтр не сужает.
+        assert_eq!(
+            r(json!({"operator": "NOT", "conditions": [{"text": "α"}]})),
+            None
+        );
+        assert_eq!(r(json!({"hasKeyword": "$seen"})), None);
+    }
+
+    /// Кандидатный путь (PERF-07) прозрачен: ответ с текстовым фильтром на точных чтениях — как при
+    /// полной выгрузке (порог `queryCandidatesMax`), пустые результаты терма — пустой список,
+    /// `NOT` по тексту — дополнение.
+    #[tokio::test]
+    async fn text_query_candidates() {
+        use crate::JmapConfig;
+
+        let env = Env::new().await;
+        let m = fixture(&env).await;
+        assert_eq!(
+            ids(&env, json!({"filter": {"text": "несуществуемое"}})).await,
+            json!([])
+        );
+        assert_eq!(
+            ids(
+                &env,
+                json!({"filter": {"text": "отчёт", "hasKeyword": "$seen"}})
+            )
+            .await,
+            json!([m[0]])
+        );
+        let few = JmapConfig {
+            query_candidates_max: 1,
+            ..Default::default()
+        };
+        let env = Env::with(few, Vec::new()).await;
+        let m = fixture(&env).await;
+        assert_eq!(
+            ids(&env, json!({"filter": {"text": "квартал"}})).await,
+            json!([m[1], m[0]])
+        );
+        assert_eq!(
+            ids(
+                &env,
+                json!({"filter": {"operator": "NOT", "conditions": [{"text": "квартал"}]}})
+            )
+            .await,
+            json!([m[3], m[2]])
+        );
     }
 }
