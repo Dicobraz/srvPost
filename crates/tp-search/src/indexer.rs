@@ -781,10 +781,14 @@ mod tests {
         // обрабатывается дольше: коммит идёт пакетами по времени от первого изменения, а не в конце
         // пачки. Задержка меряется по часам выдач (письма читаются одновременно, выдачи не отмечают
         // шаг `step`); запас сверх интервала — на сам коммит (fsync) и медленную машину CI.
+        // Наблюдать можно только письма, после чьей выдачи были ещё выдачи: последние
+        // `window` (окно параллельного чтения за интервал + запас) — не проверяются: их коммит
+        // (интервальный и финальный) случается после последнего снимка.
         let seen = source.seen.lock().expect("lock").clone();
         assert_eq!(seen.len(), 800);
+        let window = (interval.as_millis() / step.as_millis()) as usize * 8 + 8;
         let bound = interval * 4;
-        for (i, (message, at, _)) in seen.iter().enumerate() {
+        for (i, (message, at, _)) in seen.iter().enumerate().take(seen.len() - window) {
             let visible_at = seen
                 .iter()
                 .find(|(_, _, visible)| visible.contains(message))
