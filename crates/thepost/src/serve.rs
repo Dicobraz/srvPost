@@ -12,6 +12,9 @@
 //! узел покидает членство, служебный HTTP и фоновые задачи останавливаются последними.
 //!
 //! Проверка учётной записи и ограничения ролей (seccomp, Landlock) — до рантайма tokio (`startup`, из `main`).
+//!
+//! Узел без ролей со слоем данных (пресет edge, SRS 2.6, APP-61) стартует тем же порядком без шагов слоя
+//! данных: без PostgreSQL, BLOB, шины, модулей и членства кластера — [`start_edge`].
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -30,7 +33,7 @@ use tp_contracts::tls::InternalTls;
 use tp_contracts::{Error, Result};
 use tp_meta::events::EventConsumer;
 use tp_meta::{MetaConfig, PgMeta};
-use tp_platform::roles::RssGauge;
+use tp_platform::roles::{RssGauge, uses_data_layer};
 use tp_platform::{
     Config, DbMetrics, Health, LoadConfig, LoadInputs, Metrics, NodeLoad, PressureConfig, Reloader,
     RoleSpec, Roles, RolesReport, RuntimeConfig, ServiceHttpConfig, Telemetry, TelemetryConfig,
@@ -53,7 +56,7 @@ use crate::protocols::{
 use crate::roles::{ItipPurge, Maintenance, PendingRole, Purge, ScheduledVerify};
 use crate::secrets;
 use crate::sections::{self, BLOB, BlobSection, CLUSTER, ClusterSection, HttpSection};
-use crate::services::{Base, Services};
+use crate::services::{Base, EdgeServices, Services};
 
 /// Параметры запуска узла.
 pub struct ServeOptions {
@@ -87,8 +90,9 @@ pub struct Running {
     pub metrics: Metrics,
     /// Имя узла в членстве.
     pub node: NodeId,
-    /// Членство кластера (состав живых узлов).
-    pub members: Arc<dyn Membership>,
+    /// Членство кластера (состав живых узлов); `None` — узел без слоя данных (пресет edge, SRS 2.6) в членстве
+    /// не участвует.
+    pub members: Option<Arc<dyn Membership>>,
     /// Адрес служебного HTTP.
     pub service_addr: SocketAddr,
     /// Фактические адреса слушателей ролей.
@@ -119,6 +123,7 @@ impl Running {
 
 /// Запускает узел и возвращается, когда все компоненты созданы и роли запущены.
 /// Ошибка конфигурации, секретов, СУБД, BLOB или служебного HTTP — до запуска ролей.
+/// Узел без ролей со слоем данных (пресет edge, SRS 2.6, APP-61) стартует без PostgreSQL и BLOB.
 pub async fn start(opts: ServeOptions) -> Result<Running> {
     let registry = Arc::new(sections::registry_of(opts.modules)?);
     let path = opts.config.clone();
@@ -155,6 +160,51 @@ pub async fn start(opts: ServeOptions) -> Result<Running> {
         "запуск узла"
     );
 
+    // Слой данных — только ролям, которым он нужен (APP-61): узлу без таких ролей (пресет edge, SRS 2.6)
+    // PostgreSQL и BLOB не нужны — свой путь запуска.
+    let started = Started {
+        cfg,
+        reloader,
+        secrets: store,
+        telemetry,
+        metrics,
+        modules: opts.modules,
+    };
+    let set = started.cfg.roles().clone();
+    if !set.roles.iter().any(|r| uses_data_layer(&set, *r)) {
+        return start_edge(started, opts.shutdown).await;
+    }
+    start_data(started, opts.shutdown).await
+}
+
+/// Общее узла после разбора конфигурации, хранилища секретов и телеметрии — узел со слоем данных и без.
+struct Started {
+    /// Конфигурация узла (перечитывает `reloader`).
+    cfg: Arc<Config>,
+    /// Перечитывание конфигурации.
+    reloader: Reloader,
+    /// Хранилище секретов узла.
+    secrets: Arc<dyn SecretStore>,
+    /// Телеметрия; `None` — глобальный подписчик не устанавливался (тесты).
+    telemetry: Option<Telemetry>,
+    /// Реестр метрик.
+    metrics: Metrics,
+    /// Модули сборки (`ServeOptions::modules`); узлу без слоя данных модули не подключаются.
+    modules: &'static [modules::Builtin],
+}
+
+/// Узел со слоем данных (все роли, кроме smtp-in в режиме edge): PostgreSQL с миграциями, шина, BLOB, членство
+/// кластера и распределитель разделов, модули, сервисы ролей (SRS 2.1, 2.8).
+async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Running> {
+    let Started {
+        cfg,
+        reloader,
+        secrets: store,
+        telemetry,
+        metrics,
+        modules,
+    } = started;
+
     // Метрики Д.7 (APP-34): пулы узла (ожидание соединения — наблюдатель пула, META-55), слушатель LISTEN, время
     // фиксаций с NOTIFY.
     let db_metrics = DbMetrics::register(&metrics, &*cfg.section::<TelemetryConfig>("telemetry")?);
@@ -177,7 +227,7 @@ pub async fn start(opts: ServeOptions) -> Result<Running> {
     let bus = bus.bus;
     let meta = PgMeta::new(pool, meta_cfg).with_bus(bus.clone());
 
-    let ext = modules::activate_of(&cfg, &migrations, opts.modules).await?;
+    let ext = modules::activate_of(&cfg, &migrations, modules).await?;
     let store = ext.secret_store().unwrap_or(store);
     // Учёт BLOB роли maintenance — по всем шардам справочника (FIX-04): GC, «сироты» и сверка не удалят объект, на
     // который ссылается только другой шард. Кэш справочника сбрасывают `ShardsChanged`, `ConfigReloaded`, `Resync`;
@@ -235,25 +285,7 @@ pub async fn start(opts: ServeOptions) -> Result<Running> {
     )
     .await?;
     let acme = acme::prepare(&cfg, store.clone(), &sockets, aux.clone()).await?;
-    // Сертификаты нужны служебному HTTP (вне dev) и протоколам (STARTTLS, неявный TLS, HTTPS jmap и admin).
-    let certs = if !service.allow_plaintext || tls.cert_file.is_file() {
-        // Ключ — только секрет `tls.key` в хранилище секретов узла, перечитывается по новой версии (APP-35, PLT-31).
-        let certs = Arc::new(TlsCerts::load(&tls, store.clone()).await.map_err(|e| {
-            infra::context(
-                "tls",
-                match e {
-                    Error::Invalid(m) => Error::Invalid(format!(
-                        "сертификаты TLS: {m} (служебный HTTP без TLS — только profile: dev и service_http.allow_plaintext)"
-                    )),
-                    other => other,
-                },
-            )
-        })?);
-        tokio::spawn(certs.clone().run(aux.clone()));
-        Some(certs)
-    } else {
-        None
-    };
+    let certs = load_certs(&service, &tls, store.clone(), aux.clone()).await?;
     if let Some(acme) = &acme {
         acme.spawn(certs.clone(), aux.clone());
     }
@@ -498,7 +530,7 @@ pub async fn start(opts: ServeOptions) -> Result<Running> {
         let health = health.clone();
         let metrics = metrics.clone();
         let node = node.clone();
-        let shutdown = opts.shutdown.clone();
+        let shutdown = shutdown.clone();
         tokio::spawn(async move {
             let report = roles.run(&health, &metrics, shutdown).await;
             if let Err(e) = Membership::leave(&meta, &node).await {
@@ -523,12 +555,173 @@ pub async fn start(opts: ServeOptions) -> Result<Running> {
         health,
         metrics,
         node,
-        members,
+        members: Some(members),
         service_addr,
         listeners: bound,
         rpc,
         task,
     })
+}
+
+/// Узел без слоя данных (пресет edge, SRS 2.6, APP-61): единственная роль — smtp-in в режиме edge, без
+/// PostgreSQL, BLOB, шины, модулей, членства кластера и очереди. Приём — [`EdgeServices`]: ретрансляция в узел
+/// transport и реплика получателей — этап Ф3 (решение 2026-11-01). Конфигурация, секреты, телеметрия, ACME,
+/// сертификаты TLS, служебный HTTP и остановка (drain ролей, фоновые задачи — последними) — как у узла со слоем
+/// данных.
+async fn start_edge(started: Started, shutdown: CancellationToken) -> Result<Running> {
+    let Started {
+        cfg,
+        reloader,
+        secrets: store,
+        telemetry,
+        metrics,
+        ..
+    } = started;
+
+    let aux = CancellationToken::new();
+    let aux_guard = aux.clone().drop_guard();
+    let service = (*cfg.section::<ServiceHttpConfig>("service_http")?).clone();
+    let tls = cfg.section::<TlsConfig>("tls")?;
+    let bound = Bound::default();
+    // Сокеты от systemd (активация сокетов) — до открытия любых слушателей.
+    let sockets = Sockets::adopt(&cfg, bound.clone())?;
+    let acme = acme::prepare(&cfg, store.clone(), &sockets, aux.clone()).await?;
+    let certs = load_certs(&service, &tls, store.clone(), aux.clone()).await?;
+    if let Some(acme) = &acme {
+        acme.spawn(certs.clone(), aux.clone());
+    }
+
+    let services = EdgeServices::new(&cfg, &metrics)?;
+    // Лимиты частоты и доверенные подсети `ratelimit` без перезапуска (PLT-32).
+    tokio::spawn(
+        services
+            .limiter
+            .clone()
+            .follow(reloader.subscribe(), aux.clone()),
+    );
+
+    // Уровень нагрузки узла по ресурсам cgroups (PLT-15): роли читают его из `RoleCtx::load`.
+    let resources = pressure::watch_resources(
+        &*cfg.section::<ResourcesConfig>("resources")?,
+        &*cfg.section::<PressureConfig>(pressure::PRESSURE)?,
+    )
+    .await;
+    let load = NodeLoad::start(
+        (*cfg.section::<LoadConfig>("load")?).clone(),
+        resources.subscribe(),
+        Some(reloader.subscribe()),
+        &metrics,
+        aux.clone(),
+    );
+    let runtime = (*cfg.section::<RuntimeConfig>("runtime")?).clone();
+    let mut roles = Roles::new(
+        runtime.clone(),
+        cfg.roles().clone(),
+        &NodeResources::detect(),
+    )
+    .with_updates(reloader.subscribe())
+    .with_load(load.shared());
+    // Без слоя данных бывает только smtp-in в режиме edge (`uses_data_layer`): остальным ролям нужен слой
+    // данных, и узел идёт путём `start_data`.
+    let deps = services.smtp_server(certs.clone());
+    let spec = RoleSpec {
+        service: Arc::new(SmtpRole::new(Mode::Inbound, deps, sockets.clone())),
+        config: section_watch(reloader.subscribe(), sections::SMTP)?,
+    };
+    roles.add(Role::SmtpIn, move |_limits| spec);
+    drop(services);
+
+    let health = Health::default();
+    sockets.warn_unused(&listen_addrs(&cfg));
+    let listener = sockets.take_or(service.listen, || service_http::bind(&service))?;
+    let service_addr = listener
+        .local_addr()
+        .map_err(|e| Error::Internal(format!("service_http: {e}")))?;
+    // Проверка секции и сертификатов — до запуска ролей: ошибка не оставляет полузапущенный узел.
+    service
+        .check(cfg.profile())
+        .map_err(|e| infra::context("service_http", e))?;
+    let router = service_http::router(health.clone(), metrics.clone());
+    let profile = cfg.profile();
+    let http_shutdown = aux.clone();
+    let http = tokio::spawn(async move {
+        if let Err(e) =
+            service_http::serve(listener, router, &service, profile, certs, http_shutdown).await
+        {
+            tracing::error!(error = %e, "служебный HTTP остановлен");
+        }
+    });
+
+    let node = infra::node_id(&cfg)?;
+    let rss = RssGauge::register(&metrics);
+    let rss_shutdown = aux.clone();
+    // RSS — с каждым снимком ресурсов по PSI, без PSI — с интервалом `runtime.rss_interval`.
+    tokio::spawn(async move { rss.run_on(&resources, &runtime, rss_shutdown).await });
+    let telemetry = telemetry.map(Arc::new);
+    let telemetry_task = telemetry
+        .clone()
+        .map(|t| tokio::spawn(apply_telemetry(reloader.subscribe(), t, aux.clone())));
+    tokio::spawn(reloader.run(aux.clone()));
+
+    drop(aux_guard.disarm());
+    let task = {
+        let health = health.clone();
+        let metrics = metrics.clone();
+        tokio::spawn(async move {
+            let report = roles.run(&health, &metrics, shutdown).await;
+            aux.cancel();
+            if let Err(e) = http.await {
+                tracing::warn!(error = %e, "служебный HTTP: задача прервана");
+            }
+            if let Some(task) = telemetry_task {
+                let _ = task.await;
+            }
+            if let Some(t) = telemetry.and_then(|t| Arc::try_unwrap(t).ok()) {
+                t.shutdown();
+            }
+            tracing::info!(?report, "узел остановлен");
+            report
+        })
+    };
+    Ok(Running {
+        health,
+        metrics,
+        node,
+        members: None,
+        service_addr,
+        listeners: bound,
+        rpc: None,
+        task,
+    })
+}
+
+/// Сертификаты TLS узла: нужны служебному HTTP (вне dev) и протоколам (STARTTLS, неявный TLS, HTTPS jmap и
+/// admin). Ключ — только секрет `tls.key` в хранилище секретов узла, перечитывается по новой версии (APP-35,
+/// PLT-31); перечитывание — фоновой задачей до `aux`. В dev с `service_http.allow_plaintext` и без файла
+/// сертификата — `None` (без TLS).
+async fn load_certs(
+    service: &ServiceHttpConfig,
+    tls: &TlsConfig,
+    store: Arc<dyn SecretStore>,
+    aux: CancellationToken,
+) -> Result<Option<Arc<TlsCerts>>> {
+    if !service.allow_plaintext || tls.cert_file.is_file() {
+        let certs = Arc::new(TlsCerts::load(tls, store).await.map_err(|e| {
+            infra::context(
+                "tls",
+                match e {
+                    Error::Invalid(m) => Error::Invalid(format!(
+                        "сертификаты TLS: {m} (служебный HTTP без TLS — только profile: dev и service_http.allow_plaintext)"
+                    )),
+                    other => other,
+                },
+            )
+        })?);
+        tokio::spawn(certs.clone().run(aux));
+        Ok(Some(certs))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Сборка сервисов включённых ролей ядра.
@@ -997,6 +1190,27 @@ mod tests {
         line
     }
 
+    /// Ответ SMTP-сервера на команду `cmd` (пустая — приветствие): все строки многоточечного ответа.
+    async fn smtp_round(s: &mut tokio::net::TcpStream, cmd: &str) -> String {
+        if !cmd.is_empty() {
+            s.write_all(format!("{cmd}\r\n").as_bytes())
+                .await
+                .expect("write");
+        }
+        let mut out = String::new();
+        let mut reader = tokio::io::BufReader::new(s);
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read");
+            // Продолжение многоточечного ответа — `NNN-` (RFC 5321, 4.2).
+            let more = line.as_bytes().get(3) == Some(&b'-');
+            out.push_str(&line);
+            if !more {
+                return out;
+            }
+        }
+    }
+
     #[test]
     fn node_info_takes_roles_addr_and_site_from_config() {
         let id = NodeId::new("node-a").expect("node");
@@ -1045,6 +1259,87 @@ mod tests {
         let path = write_config(dir.path(), "domain: example.org\n");
         let (o, _) = opts(path, None);
         let e = start(o).await.expect_err("invalid").to_string();
+        assert!(e.contains("database.url") && e.contains("blob.url"), "{e}");
+    }
+
+    /// APP-61 (SRS 2.6): узел пресета edge — роль smtp-in в режиме edge — стартует без `database.url` и
+    /// `blob.url`, доходит до ready и принимает SMTP-сессии; ретрансляция в узел transport — этап Ф3, до неё
+    /// получатель и письмо — временный отказ `4xx` (повторы выполняет отправитель, RFC 5321). В членство
+    /// кластера узел edge не входит и запросов узел → узел не принимает.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn edge_node_serves_without_database_and_blob() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            &format!(
+                "domain: example.org\nprofile: dev\nroles: [edge]\n\
+                 service_http:\n  listen: 127.0.0.1:0\n  allow_plaintext: true\n\
+                 cluster:\n  node_id: app-edge-{pid}\n\
+                 smtp:\n  inbound:\n    - listen: 127.0.0.1:0\n\
+                 runtime:\n  drain_deadline: 5s\n",
+                pid = std::process::id(),
+            ),
+        );
+        let (o, shutdown) = opts(path, None);
+        let running = start(o).await.expect("start");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while !running.health.is_ready() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "узел edge не готов: {:?}",
+                running.health.roles_status()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let roles: Vec<String> = running
+            .health
+            .roles_status()
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect();
+        assert_eq!(roles, [Role::SmtpIn.as_str().to_owned()], "{roles:?}");
+        assert_eq!(
+            http_status(running.service_addr, "/healthz/ready").await,
+            200
+        );
+        assert_eq!(
+            http_status(running.service_addr, "/healthz/live").await,
+            200
+        );
+        assert!(running.members.is_none(), "edge не входит в членство");
+        assert!(running.rpc.is_none(), "edge не принимает запросы узлов");
+
+        // Приём отвечает временным отказом: письмо не теряется, повторы — за отправителем.
+        let smtp = running.listeners.get(Role::SmtpIn.as_str());
+        let mut s = tokio::net::TcpStream::connect(smtp[0])
+            .await
+            .expect("connect");
+        let greeting = smtp_round(&mut s, "").await;
+        assert!(greeting.starts_with("220"), "{greeting}");
+        let ehlo = smtp_round(&mut s, "EHLO client.example.net").await;
+        assert!(ehlo.starts_with("250"), "{ehlo}");
+        let mail = smtp_round(&mut s, "MAIL FROM:<sender@example.net>").await;
+        assert!(mail.starts_with("250"), "{mail}");
+        let rcpt = smtp_round(&mut s, "RCPT TO:<user@example.org>").await;
+        assert!(rcpt.starts_with("451"), "{rcpt}");
+
+        shutdown.cancel();
+        let report = running.wait().await.expect("wait");
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert!(report.cancelled.is_empty(), "{report:?}");
+    }
+
+    /// APP-61: узел с ролями со слоем данных (пресет mailbox) без адресов PostgreSQL и BLOB — ошибка
+    /// конфигурации.
+    #[tokio::test]
+    async fn mailbox_preset_without_data_layer_urls_is_config_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            "domain: example.org\nprofile: dev\nroles: [mailbox]\n",
+        );
+        let (o, _) = opts(path, None);
+        let e = start(o).await.expect_err("нет слоя данных").to_string();
         assert!(e.contains("database.url") && e.contains("blob.url"), "{e}");
     }
 
@@ -1123,7 +1418,13 @@ mod tests {
         assert!(first_line(pop3[0]).await.starts_with("+OK"));
         // APP-15: запись узла в членстве — роли ядра и площадка из секции `cluster`; без `cluster.addr` адреса
         // нет и запросов других узлов узел не принимает (APP-18).
-        let live = running.members.live_info().await.expect("live_info");
+        let live = running
+            .members
+            .as_ref()
+            .expect("членство кластера")
+            .live_info()
+            .await
+            .expect("live_info");
         let me = live
             .iter()
             .find(|n| n.id == running.node)
@@ -1391,7 +1692,14 @@ mod tests {
         let (a, b) = (rpc(0), rpc(1));
 
         // Адреса узлов — в составе кластера.
-        let live = nodes[0].0.members.live_info().await.expect("live_info");
+        let live = nodes[0]
+            .0
+            .members
+            .as_ref()
+            .expect("членство кластера")
+            .live_info()
+            .await
+            .expect("live_info");
         for (running, _, port) in &nodes {
             let me = live
                 .iter()
