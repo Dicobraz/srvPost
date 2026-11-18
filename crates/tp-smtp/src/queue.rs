@@ -32,9 +32,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use time::OffsetDateTime;
+use tp_contracts::auth::Principal;
 use tp_contracts::blob::{Acquire, BlobIndex, BlobStore, Commit};
 use tp_contracts::queue::{
     Claimed, DsnNotify, DsnRet, OutMessage, OutRcpt, Outbound, QueueStore, QueuedRcpt, RcptStatus,
+    SubmitStatus, Submitted,
 };
 use tp_contracts::role::{RoleCtx, RoleService};
 use tp_contracts::{AccountId, BlobKey, Error, QueueId, Result, TenantId};
@@ -257,6 +259,22 @@ impl Outbound for Queue {
         self.schedule(tenant, owner, mail_from, rcpts, raw, now)
             .await
             .map(drop)
+    }
+
+    /// Очередь без локальной доставки: все получатели — в очередь ([`SubmitStatus::Queued`]). Вошедший
+    /// пользователь (`user`, CTR-82) не используется — права отправителя проверяет вызывающий протокол.
+    async fn submit(
+        &self,
+        tenant: TenantId,
+        owner: Option<AccountId>,
+        user: Option<&Principal>,
+        mail_from: &str,
+        rcpts: &[String],
+        raw: Bytes,
+    ) -> Result<Submitted> {
+        let _ = user;
+        self.enqueue(tenant, owner, mail_from, rcpts, raw).await?;
+        Ok(Submitted::all(rcpts, SubmitStatus::Queued))
     }
 
     /// Отложенная отправка (SMTP-24): запись со сроком выпуска `release_at` — [`QueueWorker`] не захватит её раньше.

@@ -2,10 +2,11 @@
 //!
 //! - Identity — адрес учётной записи (имя входа) с отображаемым именем из `AccountStore`; адреса и подписи
 //!   ведёт каталог, поэтому `Identity/set` отвечает `forbidden`.
-//! - `EmailSubmission/set`, создание: письмо отправляется сразу ([`Outbound::submit`](tp_contracts::queue::Outbound::submit),
-//!   `undoStatus` = `final`) или, при `sendAt` в будущем (не дальше `maxDelayedSend` — `jmap.submission.max_delayed_send`,
-//!   иначе `invalidProperties`), ставится в очередь со сроком выпуска ([`Outbound::schedule`](tp_contracts::queue::Outbound::schedule),
-//!   `undoStatus` = `pending`). Адрес `From` проверяет [`Authorizer::send_right`](tp_contracts::auth::Authorizer::send_right)
+//! - `EmailSubmission/set`, создание: письмо отправляется сразу ([`Outbound::submit`](tp_contracts::queue::Outbound::submit)
+//!   с вошедшим пользователем — CTR-82, `undoStatus` = `final`) или, при `sendAt` в будущем (не дальше `maxDelayedSend` —
+//!   `jmap.submission.max_delayed_send`, иначе `invalidProperties`), ставится в очередь со сроком выпуска
+//!   ([`Outbound::schedule`](tp_contracts::queue::Outbound::schedule), `undoStatus` = `pending`). Адрес `From` проверяет
+//!   [`Authorizer::send_right`](tp_contracts::auth::Authorizer::send_right)
 //!   (свои адреса, Send As, Send on Behalf — с заголовком `Sender`). До очереди — `DecisionHooks::on_submission`
 //!   (`Deny` — `forbiddenToSend`; дополнения: заголовки в начало письма, копии в папки и внешним адресам; у отложенного
 //!   письма копии внешним адресам выпускаются тем же сроком, копии в папки кладутся при постановке).
@@ -1096,8 +1097,17 @@ async fn submit_one(
     let body = Bytes::from(raw);
     match release_at {
         None => {
+            // Вошедший пользователь (CTR-82): реализация проверяет по нему принадлежность `From`
+            // приглашения — право, выданное группе, узнаётся и вне JMAP.
             record.delivery = outbound
-                .submit(p.tenant, Some(p.account), &mail_from, &rcpts, body.clone())
+                .submit(
+                    p.tenant,
+                    Some(p.account),
+                    Some(p),
+                    &mail_from,
+                    &rcpts,
+                    body.clone(),
+                )
                 .await?
                 .rcpts;
             if !external.is_empty() {
@@ -1549,9 +1559,10 @@ mod tests {
         assert_eq!(env.outbound.queued()[0].rcpts, rcpts);
     }
 
-    /// Очередь только с `enqueue` (реализация `submit` по умолчанию): все получатели — `queued`.
+    /// Очередь без локальной доставки (только `enqueue`/`schedule`, `submit` — постановка без статусов):
+    /// все получатели — `queued`. Реализации `submit` по умолчанию больше нет (CTR-82).
     #[tokio::test]
-    async fn delivery_status_default_queued() {
+    async fn delivery_status_queue_only() {
         struct Plain(tp_testkit::MemOutbound);
         #[async_trait]
         impl Outbound for Plain {
@@ -1564,6 +1575,20 @@ mod tests {
                 raw: Bytes,
             ) -> Result<()> {
                 self.0.enqueue(tenant, owner, mail_from, rcpts, raw).await
+            }
+
+            async fn submit(
+                &self,
+                tenant: TenantId,
+                owner: Option<tp_contracts::AccountId>,
+                user: Option<&tp_contracts::auth::Principal>,
+                mail_from: &str,
+                rcpts: &[String],
+                raw: Bytes,
+            ) -> Result<tp_contracts::queue::Submitted> {
+                self.0
+                    .submit(tenant, owner, user, mail_from, rcpts, raw)
+                    .await
             }
 
             async fn schedule(

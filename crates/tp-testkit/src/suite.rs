@@ -3891,16 +3891,17 @@ pub async fn queue_postpone(queue: &dyn QueueStore, tenant: TenantId) {
 
 // ---------- Outbound ----------
 
-/// Набор проверок [`Outbound`] (CTR-28): `submit` возвращает ровно один статус на каждого получателя `rcpts`
-/// в порядке запроса (адреса как переданы); `enqueue` принимает то же письмо. `rcpts` — не пусто, адреса, которые
-/// реализация примет (для `tp_smtp::Delivery` — известные локальные или внешние при подключённой очереди).
+/// Набор проверок [`Outbound`] (CTR-28): `submit` (без вошедшего пользователя, CTR-82) возвращает ровно один
+/// статус на каждого получателя `rcpts` в порядке запроса (адреса как переданы); `enqueue` принимает то же
+/// письмо. `rcpts` — не пусто, адреса, которые реализация примет (для `tp_smtp::Delivery` — известные локальные
+/// или внешние при подключённой очереди).
 pub async fn outbound_submit(ob: &dyn Outbound, tenant: TenantId, rcpts: &[String]) {
     assert!(!rcpts.is_empty(), "набор: нужен хотя бы один получатель");
     let raw = Bytes::from_static(
         b"From: suite@example.org\r\nTo: suite@example.org\r\nSubject: outbound suite\r\n\r\nbody\r\n",
     );
     let sent = ob
-        .submit(tenant, None, "suite@example.org", rcpts, raw.clone())
+        .submit(tenant, None, None, "suite@example.org", rcpts, raw.clone())
         .await
         .expect("submit");
     let got: Vec<&str> = sent.rcpts.iter().map(|(r, _)| r.as_str()).collect();

@@ -388,6 +388,7 @@ async fn internal_mail_goes_through_rules() {
         .submit(
             TenantId::DEFAULT,
             None,
+            None,
             "alice@example.org",
             &rcpts(&["bob@example.org"]),
             Bytes::from_static(MAIL),
@@ -486,6 +487,7 @@ async fn auto_reply_to_internal_sender_goes_to_mailbox() {
     d.submit(
         TenantId::DEFAULT,
         None,
+        None,
         "alice@example.org",
         &rcpts(&["bob@example.org"]),
         Bytes::from_static(ORIGINAL),
@@ -526,6 +528,7 @@ async fn auto_reply_redirected_back_stays_in_inbox() {
     d.submit(
         TenantId::DEFAULT,
         None,
+        None,
         "alice@example.org",
         &rcpts(&["bob@example.org"]),
         Bytes::from_static(ORIGINAL),
@@ -563,6 +566,7 @@ async fn no_reply_to_auto_reply_loop() {
     );
     d.submit(
         TenantId::DEFAULT,
+        None,
         None,
         "alice@example.org",
         &rcpts(&["bob@example.org"]),

@@ -40,6 +40,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::auth::Principal;
 use crate::bus::{Event, EventKind};
 use crate::error::{Error, Result};
 use crate::ids::{AccountId, BlobKey, QueueId, TenantId};
@@ -404,6 +405,13 @@ impl Submitted {
 /// `owner` — учётная запись отправителя организации `tenant` (CTR-74, решение 46): реализация передаёт её в
 /// `BlobIndex::acquire` и [`QueueStore::enqueue`] — тело и запись очереди ложатся на шард её ящика. `None` —
 /// отправителя-учётной записи нет (DSN, пересылка, письмо модуля).
+///
+/// `user` (CTR-82) — вошедший пользователь отправки (`submit`): субъект прав Send As / Send on Behalf
+/// (`Authorizer::send_right` с группами `Principal::groups`), как у сеанса submission (RFC 6409: авторизация
+/// отправки — по аутентифицированному субъекту, не по адресу конверта). `None` — отправка без сеанса
+/// пользователя (письмо модуля, iMIP, выпуск отложенной отправки); реализации без проверки прав параметр не
+/// используют. Только `submit`: `enqueue` и `schedule` ставят письмо в очередь, права отправителя проверяет
+/// вызывающий протокол.
 #[async_trait]
 pub trait Outbound: Send + Sync + 'static {
     /// Ставит письмо `raw` (RFC 5322) от `mail_from` получателям `rcpts` организации `tenant`. Ошибка — письмо не
@@ -440,90 +448,31 @@ pub trait Outbound: Send + Sync + 'static {
         ))
     }
 
-    /// Отправляет письмо и возвращает статус по каждому получателю в порядке `rcpts`. По умолчанию —
-    /// [`Outbound::enqueue`], все получатели [`SubmitStatus::Queued`].
+    /// Отправляет письмо от имени вошедшего пользователя `user` (CTR-82; `None` — отправка без сеанса, права
+    /// отправителя проверил вызывающий) и возвращает статус по каждому получателю в порядке `rcpts`. Без
+    /// реализации по умолчанию: реализация не может «забыть» вошедшего пользователя, как это было у прав
+    /// Send As / Send on Behalf, выданных группам (отчёт smtp-16, #633).
     async fn submit(
         &self,
         tenant: TenantId,
         owner: Option<AccountId>,
+        user: Option<&Principal>,
         mail_from: &str,
         rcpts: &[String],
         raw: Bytes,
-    ) -> Result<Submitted> {
-        self.enqueue(tenant, owner, mail_from, rcpts, raw).await?;
-        Ok(Submitted::all(rcpts, SubmitStatus::Queued))
-    }
+    ) -> Result<Submitted>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ids::{BlobHash, Gen};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     #[test]
     fn object_safe() {
         fn _queue(_: Arc<dyn QueueStore>) {}
         fn _outbound(_: Arc<dyn Outbound>) {}
-    }
-
-    /// `submit` по умолчанию: письмо в `enqueue`, все получатели в очереди в порядке запроса.
-    #[tokio::test]
-    async fn submit_default_queued() {
-        #[derive(Default)]
-        struct Plain(Mutex<Vec<(Option<AccountId>, Vec<String>)>>);
-        #[async_trait]
-        impl Outbound for Plain {
-            async fn enqueue(
-                &self,
-                _: TenantId,
-                owner: Option<AccountId>,
-                _: &str,
-                rcpts: &[String],
-                _: Bytes,
-            ) -> Result<()> {
-                self.0.lock().expect("lock").push((owner, rcpts.to_vec()));
-                Ok(())
-            }
-
-            async fn schedule(
-                &self,
-                _: TenantId,
-                _: Option<AccountId>,
-                _: &str,
-                _: &[String],
-                _: Bytes,
-                _: OffsetDateTime,
-            ) -> Result<QueueId> {
-                Err(Error::internal("not scheduled"))
-            }
-        }
-        let ob = Plain::default();
-        let owner = AccountId::new();
-        let rcpts = vec!["b@example.com".to_owned(), "a@example.org".to_owned()];
-        let sent = ob
-            .submit(
-                TenantId::DEFAULT,
-                Some(owner),
-                "x@example.org",
-                &rcpts,
-                Bytes::new(),
-            )
-            .await
-            .expect("submit");
-        assert_eq!(
-            sent.rcpts,
-            vec![
-                ("b@example.com".to_owned(), SubmitStatus::Queued),
-                ("a@example.org".to_owned(), SubmitStatus::Queued),
-            ]
-        );
-        assert_eq!(
-            *ob.0.lock().expect("lock"),
-            vec![(Some(owner), rcpts.clone())]
-        );
-        let canceled = ob.cancel_scheduled(TenantId::DEFAULT, QueueId::new()).await;
-        assert!(matches!(canceled, Err(Error::Internal(_))));
     }
 
     /// Фильтр списка очереди (CTR-85): состояние и подстрока адреса отправителя или получателя без учёта регистра.

@@ -42,6 +42,20 @@ impl Outbound for Queue {
         Ok(())
     }
 
+    /// Все получатели — в очередь (без локальной доставки); вошедший не используется.
+    async fn submit(
+        &self,
+        tenant: TenantId,
+        owner: Option<AccountId>,
+        _user: Option<&Principal>,
+        mail_from: &str,
+        rcpts: &[String],
+        raw: Bytes,
+    ) -> Result<Submitted> {
+        self.enqueue(tenant, owner, mail_from, rcpts, raw).await?;
+        Ok(Submitted::all(rcpts, SubmitStatus::Queued))
+    }
+
     async fn schedule(
         &self,
         _tenant: TenantId,
@@ -408,6 +422,7 @@ async fn subaddress_catch_all_and_rewrite() {
     let sent = d
         .submit(
             TenantId::DEFAULT,
+            None,
             None,
             "sender@old.example.org",
             &["partner@example.net".into()],
@@ -825,6 +840,7 @@ async fn submit_local_recipient_delivered_without_queue() {
         .submit(
             TenantId::DEFAULT,
             None,
+            None,
             "alice@example.org",
             &rcpts(&["Bob@Example.org"]),
             Bytes::from_static(OWN),
@@ -863,6 +879,7 @@ async fn submit_mixed_recipients() {
     let out = d
         .submit(
             TenantId::DEFAULT,
+            None,
             None,
             "carol@example.org",
             &list,
@@ -913,6 +930,7 @@ async fn submit_unknown_local_address_bounces() {
         .submit(
             TenantId::DEFAULT,
             None,
+            None,
             "alice@example.org",
             &rcpts(&["nobody@example.org", "bob@example.org"]),
             Bytes::from_static(OWN),
@@ -949,6 +967,7 @@ async fn submit_full_mailbox_bounces() {
         .submit(
             TenantId::DEFAULT,
             None,
+            None,
             "sender@example.net",
             &rcpts(&["bob@example.org"]),
             Bytes::from_static(MAIL),
@@ -978,6 +997,7 @@ async fn submit_mixed_without_queue() {
     let out = d
         .submit(
             TenantId::DEFAULT,
+            None,
             None,
             "alice@example.org",
             &rcpts(&["bob@example.org", "x@example.net"]),
@@ -1026,6 +1046,7 @@ async fn submit_mixed_without_queue() {
         .submit(
             TenantId::new(),
             None,
+            None,
             "alice@example.org",
             &rcpts(&["bob@example.org"]),
             Bytes::from_static(OWN),
@@ -1060,6 +1081,7 @@ async fn forward_to_local_address_without_queue() {
     let out = d
         .submit(
             TenantId::DEFAULT,
+            None,
             None,
             "alice@example.org",
             &rcpts(&["carol@example.org"]),
@@ -1267,6 +1289,7 @@ mod groups {
             .submit(
                 TenantId::DEFAULT,
                 None,
+                None,
                 "x@example.net",
                 &rcpts(&["staff@example.org"]),
                 Bytes::from_static(MAIL),
@@ -1322,6 +1345,7 @@ mod groups {
         let sent = d
             .submit(
                 TenantId::DEFAULT,
+                None,
                 None,
                 "alice@example.org",
                 &rcpts(&["news@example.org"]),
