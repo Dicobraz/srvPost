@@ -570,7 +570,7 @@
 | [PLT-33](PLT-33.md) | обязательные параметры по ролям — edge без базы данных | platform | A | platform-22 | done | — |
 | [APP-61](APP-61.md) | узел edge запускается без базы данных и хранилища писем | app | A | app-56 | done | — |
 | [APP-62](APP-62.md) | приглашения из почтового клиента в узле — права отправителя и iTIP для JMAP и DAV | app | A | app-57 | done | — |
-| [CTR-82](CTR-82.md) | вошедший пользователь в `Outbound::submit` — права отправителя через группы | contracts | B | contracts-54 | ready | — |
+| [CTR-82](CTR-82.md) | вошедший пользователь в `Outbound::submit` — права отправителя через группы | contracts | B | contracts-54 | done | — |
 | [META-78](META-78.md) | пересчёт поисковых строк контактов, записанных до миграции 0030 | meta | A | meta-51 | done | DAV-24 |
 | [APP-63](APP-63.md) | пересчёт поисковых строк старых контактов в узле | app | A | app-58 | done | META-78 |
 | [META-79](META-79.md) | срок следующего прохода GC BLOB по всем шардам | meta | A | meta-52 | ready | — |
@@ -614,7 +614,7 @@
 | [UI-19](UI-19.md) | веб-консоль на токенах фирменного стиля — тема antd, шрифты в статике | console | A | console-10 | ready | DES-01 |
 | [CTR-85](CTR-85.md) | очередь исходящей почты — список записей и повтор доставки в контракте `QueueStore` | contracts | B | contracts-57 | done | — |
 | [ADM-45](ADM-45.md) | Admin API очереди — `GET /orgs/{org}/queue`, `POST /orgs/{org}/queue/{id}/retry` | admin | A | admin-31 | done | CTR-85 |
-| [UI-20](UI-20.md) | консоль — экран «Очередь» | console | A | console-11 | ready | ADM-45 |
+| [UI-20](UI-20.md) | консоль — экран «Очередь» | console | A | console-11 | done | ADM-45 |
 | [CTR-86](CTR-86.md) | хранилище уведомлений о доступе (`ShareNotification`) в контракте | contracts | B | contracts-58 | done | — |
 | [CTR-87](CTR-87.md) | `Directory::contacts_since` без тела по умолчанию | contracts | B | contracts-58 | done | — |
 | [APP-69](APP-69.md) | представители (`DelegateStore`) в доставке — приглашения «от имени» по `schedule_on_behalf` | app | B | app-66 | done | — |
@@ -674,7 +674,7 @@
 | [FIX-11](FIX-11.md) | молча нерабочая запись /etc/hosts (имя вместо адреса) |  |  | deploy-46 | done | — |
 | [FIX-12](FIX-12.md) | адрес генератора в конфиге узла — ansible_host / факты / assert |  |  | deploy-47 | done | — |
 | [FIX-13](FIX-13.md) | чужой From в исходящей нагрузке, CRLF в файлах стенда, сэмплер без проверки старта |  |  | deploy-48 | done | — |
-| [FIX-14](FIX-14.md) | зонд доставки шлёт чужой From под AUTH (550) |  |  | deploy-49 | done | — |
+| [FIX-14](FIX-14.md) | — | — | — | deploy-49 | done | — |
 | [FIX-15](FIX-15.md) | условие сбора фактов FIX-12 падает; каталог drop-in openbao не создаётся |  |  | deploy-50 | done | — |
 
 ## Ф1 · Находки Д.7 2026-11-17 — производительность и наблюдаемость (этап 2)
@@ -685,8 +685,8 @@
 | [PERF-02](PERF-02.md) | # PERF-02 — JMAP Email/query p95 311 мс при пороге 200 мс (Д.7 №1) |  |  | jmap-32 | done | — |
 | [PERF-03](PERF-03.md) | 981 KB на соединение при пороге 64 KB (Д.7 №17) |  |  | mailstore-17 | done | — |
 | [PERF-04](PERF-04.md) | зонд «index» не находит письмо за 180 с (Д.7 №10) |  |  | mailstore-18 | done | — |
-| [PERF-05](PERF-05.md) | 1.24 с на ящике 10 тыс. писем при пороге < 1 с на 100 тыс. (Д.7 №8) |  |  | mailstore-19 | ready | — |
-| [FIND-01](FIND-01.md) | # FIND-01 — SMTP отказы 421 под нагрузкой без причины в журнале узла |  |  | mailstore-19 | ready | — |
+| [FIND-01](FIND-01.md) | # FIND-01 — SMTP отказы 421 под нагрузкой без причины в журнале узла |  |  | smtp-28 | done | — |
+| [PERF-05](PERF-05.md) | 1.24 с на ящике 10 тыс. писем при пороге < 1 с на 100 тыс. (Д.7 №8) |  |  | mailstore-19 | done | — |
 
 ## Ф1 · ACME: короткие сертификаты (ballot SC-081v3, RFC 9773)
 
