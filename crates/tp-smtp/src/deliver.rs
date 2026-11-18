@@ -2379,6 +2379,7 @@ impl Delivery {
     /// Петля перенаправлений (SMTP-34, [`crate::sieve`]): ящик уже есть в цепочке письма, цепочка длиннее
     /// `delivery.redirect_hops` или исчерпан `delivery.redirect_total` (`over`) — правила ящика не применяются,
     /// письмо — в папку по умолчанию, запись в журнал доставки.
+    #[allow(clippy::too_many_arguments)]
     async fn apply_rules(
         &self,
         id: &str,
