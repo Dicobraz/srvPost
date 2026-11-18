@@ -102,4 +102,17 @@ export const covered: Record<string, string> = {
   "GET /api/v1/orgs/{org}/sieve": "pages/sieve.tsx",
   "PUT /api/v1/orgs/{org}/sieve": "pages/sieve.tsx",
   "DELETE /api/v1/orgs/{org}/sieve": "pages/sieve.tsx",
+  // Брендинг (ADM-48): экран настройки — UI-22; открытый маршрут — экран входа (название и знак без входа).
+  "GET /api/v1/branding": "pages/organization.tsx",
+  "PUT /api/v1/branding": "pages/organization.tsx",
+  "DELETE /api/v1/branding": "pages/organization.tsx",
+  "PUT /api/v1/branding/logo": "pages/organization.tsx",
+  "DELETE /api/v1/branding/logo": "pages/organization.tsx",
+  "GET /api/v1/orgs/{org}/branding": "pages/organization.tsx",
+  "PUT /api/v1/orgs/{org}/branding": "pages/organization.tsx",
+  "DELETE /api/v1/orgs/{org}/branding": "pages/organization.tsx",
+  "PUT /api/v1/orgs/{org}/branding/logo": "pages/organization.tsx",
+  "DELETE /api/v1/orgs/{org}/branding/logo": "pages/organization.tsx",
+  "GET /api/v1/public/branding": "pages/login.tsx",
+  "GET /api/v1/public/branding/logo/{hash}": "pages/login.tsx",
 };

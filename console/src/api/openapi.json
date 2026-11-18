@@ -508,6 +508,268 @@
         },
         "type": "object"
       },
+      "BrandColor": {
+        "description": "Фирменный цвет `#RRGGBB` (верхний регистр).",
+        "type": "string"
+      },
+      "BrandLogo": {
+        "description": "Знак заказчика — PNG в BLOB.",
+        "properties": {
+          "hash": {
+            "description": "SHA-256 содержимого (hex, 64 символа).",
+            "type": "string"
+          },
+          "height": {
+            "description": "Высота, пикселей.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "size": {
+            "description": "Размер, байт.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "width": {
+            "description": "Ширина, пикселей.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hash",
+          "size",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "Branding": {
+        "description": "Набор брендинга одного уровня: каждое поле необязательно, незаданное берётся с уровня выше.",
+        "properties": {
+          "cli": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Заданные роли CLI.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "dark": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Заданные роли тёмной темы.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "light": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Заданные роли светлой темы.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "logo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BrandLogo",
+                "description": "Знак; `null` — встроенный."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "primary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BrandColor",
+                "description": "Основной цвет — источник незаданных ролей бренда этого уровня; `null` — не задан."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product_name": {
+            "description": "Название продукта; `null` — встроенное.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "light",
+          "dark",
+          "cli"
+        ],
+        "type": "object"
+      },
+      "BrandingBody": {
+        "additionalProperties": false,
+        "description": "Замена набора уровня: все поля необязательны, уровень заменяется целиком; знак меняет `PUT …/branding/logo`.",
+        "properties": {
+          "cli": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Роли подсветки CLI (head, accent, ok, warn, err, muted, json_key, json_number, json_bool).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "dark": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Роли тёмной темы.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "light": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Роли светлой темы (`design/tokens.toml`: screen, panel, text, muted, frame, frameA, titleA, head, sel,\nselFg, selI, selIFg, fkBg, fkFg, ok, warn, err).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "primary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BrandColor",
+                "description": "Основной цвет `#RRGGBB`; из него выводятся незаданные роли бренда уровня."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product_name": {
+            "description": "Название продукта (1–64 символа без управляющих); `null` — не задано.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "BrandingIssue": {
+        "description": "Пара ниже порога контраста (поле `field` — слот палитры: `light.sel`, `cli.head`).",
+        "properties": {
+          "bg": {
+            "description": "Фон: роль (`panel`) или цвет фона терминала (`#0C0C0C`).",
+            "type": "string"
+          },
+          "contrast": {
+            "description": "Контраст пары.",
+            "format": "double",
+            "type": "number"
+          },
+          "field": {
+            "description": "Слот палитры: `<тема>.<роль>` или `cli.<роль>`.",
+            "type": "string"
+          },
+          "min": {
+            "description": "Нужный контраст (текст — 4,5; рамки, заливки и CLI — 3).",
+            "format": "double",
+            "type": "number"
+          },
+          "role": {
+            "description": "Роль переднего плана (имя из `design/tokens.toml`).",
+            "type": "string"
+          },
+          "theme": {
+            "description": "Тема (`light`, `dark`); `null` — роли CLI.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "field",
+          "role",
+          "bg",
+          "contrast",
+          "min"
+        ],
+        "type": "object"
+      },
+      "BrandingProblem": {
+        "description": "Отказ сохранения набора организации: пары ниже порога (RFC 9457 с расширением `errors`).",
+        "properties": {
+          "detail": {
+            "description": "Пары по-русски, через «; ».",
+            "type": "string"
+          },
+          "errors": {
+            "description": "Пары ниже порога.",
+            "items": {
+              "$ref": "#/components/schemas/BrandingIssue"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "Код HTTP (422).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "Краткое описание кода.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "title",
+          "detail",
+          "errors"
+        ],
+        "type": "object"
+      },
+      "BrandingView": {
+        "description": "Свои значения уровня и действующий брендинг.",
+        "properties": {
+          "effective": {
+            "$ref": "#/components/schemas/EffectiveBranding",
+            "description": "Действующий брендинг для отрисовки."
+          },
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Branding",
+                "description": "Свой набор уровня; `null` — уровень не задан (всё с уровня выше)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "effective"
+        ],
+        "type": "object"
+      },
       "ClusterView": {
         "description": "Снимок уровня кластера.",
         "properties": {
@@ -1008,6 +1270,37 @@
         ],
         "type": "object"
       },
+      "EffectiveBranding": {
+        "description": "Действующий брендинг ([`BrandingLevels::effective`]): название и знак с ближайшего уровня, все цвета ролей.",
+        "properties": {
+          "logo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BrandLogo",
+                "description": "Знак; `null` — встроенный знак IT TASK."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "palette": {
+            "$ref": "#/components/schemas/Palette",
+            "description": "Все цвета ролей."
+          },
+          "product_name": {
+            "description": "Название продукта; `null` — встроенное.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "palette"
+        ],
+        "type": "object"
+      },
       "ExistingMode": {
         "description": "Содержимое ящика учётной записи, к которой подключается отключённый ящик.",
         "enum": [
@@ -1280,6 +1573,39 @@
         ],
         "type": "object"
       },
+      "InstallationBrandingProblem": {
+        "description": "Отказ смены набора установки: пары ниже порога у самого набора или у действующей палитры организации.",
+        "properties": {
+          "detail": {
+            "description": "Пары с организациями по-русски, через «; ».",
+            "type": "string"
+          },
+          "errors": {
+            "description": "Пары ниже порога.",
+            "items": {
+              "$ref": "#/components/schemas/OrgBrandingIssue"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "Код HTTP (422).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "Краткое описание кода.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "title",
+          "detail",
+          "errors"
+        ],
+        "type": "object"
+      },
       "IssuedAppPassword": {
         "allOf": [
           {
@@ -1529,6 +1855,55 @@
         ],
         "type": "object"
       },
+      "OrgBrandingIssue": {
+        "description": "Пара ниже порога при смене набора установки; `org` — организация, чья палитра ломается (`null` — сам набор).",
+        "properties": {
+          "bg": {
+            "description": "Фон: роль или цвет фона терминала.",
+            "type": "string"
+          },
+          "contrast": {
+            "description": "Контраст пары.",
+            "format": "double",
+            "type": "number"
+          },
+          "field": {
+            "description": "Слот палитры: `<тема>.<роль>` или `cli.<роль>`.",
+            "type": "string"
+          },
+          "min": {
+            "description": "Нужный контраст.",
+            "format": "double",
+            "type": "number"
+          },
+          "org": {
+            "description": "Организация (UUID); `null` — сам набор установки.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "Роль переднего плана.",
+            "type": "string"
+          },
+          "theme": {
+            "description": "Тема (`light`, `dark`); `null` — роли CLI.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "field",
+          "role",
+          "bg",
+          "contrast",
+          "min"
+        ],
+        "type": "object"
+      },
       "Organization": {
         "allOf": [
           {
@@ -1554,6 +1929,47 @@
           }
         ],
         "description": "Организация."
+      },
+      "Palette": {
+        "description": "Цвета всех ролей — заданные и выведенные (ключи — имена ролей из `design/tokens.toml`).",
+        "properties": {
+          "cli": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Подсветка вывода CLI.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "dark": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Роли тёмной темы.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "light": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BrandColor"
+            },
+            "description": "Роли светлой темы.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "light",
+          "dark",
+          "cli"
+        ],
+        "type": "object"
       },
       "PasswordLogin": {
         "additionalProperties": false,
@@ -1718,6 +2134,33 @@
         "required": [
           "status",
           "title"
+        ],
+        "type": "object"
+      },
+      "PublicBranding": {
+        "description": "Действующий брендинг для экрана входа: название, цвета всех ролей и ссылка на знак — без организации.",
+        "properties": {
+          "logo": {
+            "description": "Ссылка на знак (`/api/v1/public/branding/logo/<hash>`); `null` — встроенный знак IT TASK.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "palette": {
+            "$ref": "#/components/schemas/Palette",
+            "description": "Цвета всех ролей обеих тем и CLI."
+          },
+          "product_name": {
+            "description": "Название продукта; `null` — встроенное.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "palette"
         ],
         "type": "object"
       },
@@ -3010,6 +3453,337 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/branding": {
+      "delete": {
+        "operationId": "reset_installation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Сбрасывает набор установки (организации остаются со своими наборами). Не был задан — 404. Прежний знак\nудаляется из BLOB, если он больше не нужен ни одному уровню.",
+        "tags": [
+          "branding"
+        ]
+      },
+      "get": {
+        "operationId": "get_installation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Брендинг установки: свой набор и действующий. Уровень установки читает только администратор установки.",
+        "tags": [
+          "branding"
+        ]
+      },
+      "put": {
+        "operationId": "put_installation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationBrandingProblem"
+                }
+              }
+            },
+            "description": "контраст ниже порога (сам набор или организация)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Заменяет набор установки (без знака — знак сохраняется). Неверное название или цвет — 400; пары контраста\nсамого набора или действующей палитры хотя бы одной организации ниже порога — 422 problem+json с `errors`\n(`org` = `null` — сам набор установки); хранилище не подключено — 503.",
+        "tags": [
+          "branding"
+        ]
+      }
+    },
+    "/api/v1/branding/logo": {
+      "delete": {
+        "operationId": "reset_installation_logo",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Убирает знак уровня установки (название и цвета остаются); набор не задан или знака нет — 404.",
+        "tags": [
+          "branding"
+        ]
+      },
+      "put": {
+        "operationId": "put_installation_logo",
+        "requestBody": {
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Файл PNG: до 256 КБ, до 1024×1024 пикселей",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "больше 256 КБ"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не image/png"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не PNG, битый файл или больше 1024×1024"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Знак уровня установки: тело — файл PNG (`image/png`; иной тип — 415), до 256 КБ (413) и 1024×1024 (422);\nне PNG или битый файл — 422. Знак ставится и без названия и цветов уровня. Прежний знак удаляется, если он\nбольше не нужен ни одному уровню.",
+        "tags": [
+          "branding"
+        ]
+      }
+    },
     "/api/v1/orgs": {
       "get": {
         "operationId": "list_orgs",
@@ -5574,6 +6348,396 @@
         "summary": "Журнал аудита организации: записи по возрастанию `seq`, удовлетворяющие условиям; пустое условие — 400.",
         "tags": [
           "audit"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/branding": {
+      "delete": {
+        "operationId": "reset_org_branding",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Сбрасывает набор организации — действует брендинг установки. Не был задан — 404. Прежний знак удаляется из\nBLOB, если он больше не нужен ни одному уровню.",
+        "tags": [
+          "branding"
+        ]
+      },
+      "get": {
+        "operationId": "get_org_branding",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Брендинг организации: свой набор и действующий (организация поверх установки).",
+        "tags": [
+          "branding"
+        ]
+      },
+      "put": {
+        "operationId": "put_org_branding",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingProblem"
+                }
+              }
+            },
+            "description": "контраст ниже порога"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Заменяет набор организации (без знака — знак сохраняется). Контраст проверяется по действующему набору\nорганизации поверх текущего набора установки: пары ниже порога — 422 problem+json с `errors`; неверное\nназвание или цвет — 400; чужая организация — 403, неизвестная — 404.",
+        "tags": [
+          "branding"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/branding/logo": {
+      "delete": {
+        "operationId": "reset_org_branding_logo",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Убирает знак организации (название и цвета остаются); набор не задан или знака нет — 404.",
+        "tags": [
+          "branding"
+        ]
+      },
+      "put": {
+        "operationId": "put_org_branding_logo",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Файл PNG: до 256 КБ, до 1024×1024 пикселей",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "больше 256 КБ"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не image/png"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не PNG, битый файл или больше 1024×1024"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Знак организации: правила те же, что у знака установки (PNG до 256 КБ и 1024×1024, полный разбор `image`\nс `Limits`). Знак ставится и без названия и цветов уровня.",
+        "tags": [
+          "branding"
         ]
       }
     },
@@ -9615,6 +10779,122 @@
         "summary": "Учётные записи подразделения по старшинству.",
         "tags": [
           "addressbook"
+        ]
+      }
+    },
+    "/api/v1/public/branding": {
+      "get": {
+        "operationId": "public_branding",
+        "parameters": [
+          {
+            "description": "Почтовый домен из имени входа (домены публичны через MX); неизвестный — как без домена.",
+            "in": "query",
+            "name": "domain",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicBranding"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "не изменился"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Действующий брендинг для экрана входа — без входа: только название, цвета всех ролей и ссылка на знак.\nДомен имени входа даёт организацию (`TransportStore::cluster`); неизвестный домен, организация без своего\nнабора и запрос без `domain` — один и тот же ответ (брендинг установки). `ETag` (304 по `If-None-Match`),\n`Cache-Control: public, max-age=300`.",
+        "tags": [
+          "branding"
+        ]
+      }
+    },
+    "/api/v1/public/branding/logo/{hash}": {
+      "get": {
+        "operationId": "public_branding_logo",
+        "parameters": [
+          {
+            "description": "SHA-256 знака (hex; ссылка из действующего брендинга)",
+            "in": "path",
+            "name": "hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "файл PNG"
+          },
+          "304": {
+            "description": "не изменился"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Знак по хэшу содержимого (путь неизменяем): PNG из BLOB; нет — 404. `ETag` — хэш, `Cache-Control: public,\nmax-age=31536000, immutable`.",
+        "tags": [
+          "branding"
         ]
       }
     },

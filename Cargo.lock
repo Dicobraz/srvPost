@@ -6045,6 +6045,7 @@ dependencies = [
  "axum",
  "bytes",
  "futures",
+ "image",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",

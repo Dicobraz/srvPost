@@ -26,13 +26,14 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, LINK};
 use reqwest::{Method, StatusCode, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tp_admin::branding::{BrandingView, PublicBranding};
 use tp_admin::init::{AdminSession, PasswordLogin};
 use tp_admin::server::{Problem, WhoAmI};
 use tp_admin::sieve::ScriptProblem;
 use tp_contracts::TenantId;
 use tp_contracts::admin_token::is_local_admin_token;
 
-use crate::ops::{Op, SESSION, WHOAMI};
+use crate::ops::{Op, PUBLIC_BRANDING, PUBLIC_BRANDING_LOGO, SESSION, WHOAMI};
 
 /// Переменная окружения: адрес Admin API.
 pub const ENV_URL: &str = "THEPOST_ADMIN_URL";
@@ -366,6 +367,57 @@ impl Client {
             password,
         };
         self.call(SESSION, &[], &[], Some(&body)).await
+    }
+
+    /// Действующий брендинг для экрана входа (`GET /api/v1/public/branding`, без входа): по домену имени входа
+    /// `domain` (`None` — брендинг установки). Название, цвета всех ролей и ссылка на знак (TUI-08).
+    pub async fn public_branding(&self, domain: Option<&str>) -> Result<PublicBranding> {
+        let query = domain
+            .map(|d| vec![("domain".to_owned(), d.to_owned())])
+            .unwrap_or_default();
+        self.call(PUBLIC_BRANDING, &[], &query, NO_BODY).await
+    }
+
+    /// Знак брендинга по хэшу (`GET /api/v1/public/branding/logo/{hash}`, без входа): PNG.
+    pub async fn branding_logo(&self, hash: &str) -> Result<Vec<u8>> {
+        self.send(PUBLIC_BRANDING_LOGO, &[hash], &[], Option::<&()>::None)
+            .await
+            .map(|(_, bytes)| bytes)
+    }
+
+    /// Загрузка знака (PNG-файл) уровню установки или организации (`PUT …/branding/logo`).
+    pub async fn put_branding_logo(
+        &self,
+        op: Op,
+        params: &[&str],
+        png: Vec<u8>,
+    ) -> Result<BrandingView> {
+        let url = self.url(op, params, &[])?;
+        let mut req = self.http.request(Method::PUT, url);
+        if let Some(token) = &self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req
+            .header(CONTENT_TYPE, "image/png")
+            .body(png)
+            .send()
+            .await
+            .map_err(|e| format!("Admin API {}: {e}", self.base))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Admin API: ответ: {e}"))?
+            .to_vec();
+        if !status.is_success() {
+            return Err(problem(op, status, &bytes));
+        }
+        serde_json::from_slice(&bytes).map_err(|e| {
+            Error::Client(format!(
+                "{} {}: ответ не по спецификации Admin API: {e}",
+                op.method, op.path
+            ))
+        })
     }
 
     /// Текущий администратор и его роли.
