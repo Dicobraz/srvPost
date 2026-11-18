@@ -5,8 +5,8 @@
 //!    со сдвигом внутри ячейки; 2. sixel — та же картинка; кодирование и то и другое — `ratatui-image`,
 //!    своей реализации нет; 3. знакогенератор, как в Norton Commander 5: четыре глифа со стрелкой со сдвигом
 //!    ставятся блоком 2×2 поверх исходных символов — в терминалах с `DECDLD` (Windows Terminal, mlterm,
-//!    contour) глифы загружаются escape-последовательностью, на консоли Linux глифы готовятся для
-//!    `KDFONTOP`, но загрузка шрифта — ioctl, запрещённый вне `tp-sys` (вопрос владельцу, см. карточку);
+//!    contour) глифы загружаются escape-последовательностью, на консоли Linux — в шрифт консоли через
+//!    `KDFONTOP` (`tp_sys::console_font`, решение 119);
 //! 4. подсветка ячейки под мышью — инверсия.
 //!
 //! Уровень 1/2 требует от терминала пиксельных событий мыши (режим `1016` проверяется запросом `DECRQM`)
@@ -40,7 +40,7 @@ pub enum Level {
     Kitty,
     /// 2: та же картинка по sixel.
     Sixel,
-    /// 3: глифы 2×2 (DECDLD; на консоли Linux — когда владелец разрешит `KDFONTOP`).
+    /// 3: глифы 2×2 (`DECDLD`; на консоли Linux — шрифт консоли через `tp_sys::console_font`).
     Glyphs,
     /// 4: подсветка ячейки под мышью.
     Cell,
@@ -108,7 +108,9 @@ pub fn detect(caps: &Caps, flag: Option<&str>) -> Result<Level, String> {
         Level::Kitty
     } else if caps.sixel && caps.pixel_mouse {
         Level::Sixel
-    } else if caps.decdld {
+    } else if caps.decdld || (caps.console && caps.input) {
+        // Консоль Linux: DECDLD нет, глифы ставятся в шрифт консоли (KDFONTOP через tp-sys);
+        // без `/dev/input` пиксельных координат нет — уровень 4.
         Level::Glyphs
     } else {
         Level::Cell
@@ -354,10 +356,12 @@ pub enum CursorView {
         /// Ячейка острия (левый верх блока 2×2).
         anchor: (u16, u16),
     },
-    /// Глифы 2×2 от `anchor` (символы загруженного набора, [`GLYPHS`]).
+    /// Глифы 2×2 от `anchor` (символы загруженного набора — терминал или коды PUA консоли).
     Glyphs {
         /// Ячейка острия.
         anchor: (u16, u16),
+        /// Символы четырёх глифов в порядке печати.
+        symbols: [String; 4],
     },
     /// Подсветка ячейки под мышью.
     Cell,
@@ -367,7 +371,7 @@ impl CursorView {
     /// Ячейка острия.
     pub fn anchor(&self) -> Option<(u16, u16)> {
         match self {
-            Self::Image { anchor, .. } | Self::Glyphs { anchor } => Some(*anchor),
+            Self::Image { anchor, .. } | Self::Glyphs { anchor, .. } => Some(*anchor),
             Self::Cell => None,
         }
     }
@@ -379,7 +383,7 @@ impl PartialEq for CursorView {
             (Self::Image { mark: a, anchor: x }, Self::Image { mark: b, anchor: y }) => {
                 a == b && x == y
             }
-            (Self::Glyphs { anchor: x }, Self::Glyphs { anchor: y }) => x == y,
+            (Self::Glyphs { anchor: x, .. }, Self::Glyphs { anchor: y, .. }) => x == y,
             (Self::Cell, Self::Cell) => true,
             _ => false,
         }
@@ -390,7 +394,7 @@ impl std::fmt::Debug for CursorView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Image { anchor, .. } => write!(f, "Image({anchor:?})"),
-            Self::Glyphs { anchor } => write!(f, "Glyphs({anchor:?})"),
+            Self::Glyphs { anchor, .. } => write!(f, "Glyphs({anchor:?})"),
             Self::Cell => write!(f, "Cell"),
         }
     }
@@ -413,12 +417,22 @@ impl std::fmt::Debug for CursorMark {
 }
 
 /// Символы глифов блока 2×2 (в порядке печати) и назначение набора в G2.
-pub fn glyph_symbols() -> [&'static str; 4] {
-    GLYPHS
+pub fn glyph_symbols() -> [String; 4] {
+    GLYPHS.map(str::to_owned)
 }
 
 /// Назначение набора глифов в G2 (после загрузки DECDLD).
 pub const GLYPH_G2: &str = G2;
+
+/// Очередь загрузки глифов уровня 3: терминалу — escape-последовательность DECDLD, консоли Linux — четыре
+/// растра для `tp_sys::console_font` (KDFONTOP).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Download {
+    /// DECDLD-строка в терминал.
+    Escape(String),
+    /// Глифы 2×2 на консоль Linux.
+    Console([Glyph; 4]),
+}
 
 /// Плавный курсор: уровень, размер ячейки и стрелки со сдвигом — по одному на шаг квантования
 /// (кэш, у терминала не больше `steps²` картинок). Пишет DECDLD-загрузку глифов, когда шаг меняется.
@@ -430,8 +444,11 @@ pub struct SmoothCursor {
     pixel_mouse: bool,
     marks: HashMap<(u16, u16), CursorMark>,
     glyphs: Option<(u16, u16)>,
-    download: Option<String>,
+    download: Option<Download>,
     downloaded: bool,
+    /// Коды PUA глифов консоли Linux (уровень 3 через `tp_sys::console_font`); `None` — терминальный
+    /// DECDLD.
+    console: Option<[u16; 4]>,
 }
 
 impl std::fmt::Debug for SmoothCursor {
@@ -458,6 +475,27 @@ impl SmoothCursor {
             glyphs: None,
             download: None,
             downloaded: false,
+            console: None,
+        }
+    }
+
+    /// Уровень 3 на консоли Linux: открытый шрифт (`tp_sys::console_font`) даёт коды PUA глифов и размер
+    /// ячейки — стрелки идут в шрифт консоли ([`Download::Console`]); отказ открытия (`None`: нет
+    /// `CAP_SYS_TTY_CONFIG`, не vt-консоль) — уровень 4 (подсветка ячейки).
+    pub fn console_font(&mut self, font: Option<([u16; 4], (u16, u16))>) {
+        match font {
+            Some((codes, cell)) => {
+                self.console = Some(codes);
+                self.cell = (cell.0.max(1), cell.1.max(1));
+                // Ячейка другая — стрелки пересчитать.
+                self.glyphs = None;
+            }
+            None => {
+                self.console = None;
+                self.level = Level::Cell;
+                self.glyphs = None;
+                self.download = None;
+            }
         }
     }
 
@@ -504,11 +542,25 @@ impl SmoothCursor {
             Level::Glyphs => {
                 let shift = px.map_or((0, 0), |p| self.shift(p));
                 if self.glyphs != Some(shift) {
-                    self.download = Some(decdld(&arrow_quads(self.cell, shift)));
+                    let quads = arrow_quads(self.cell, shift);
+                    self.download = Some(match self.console {
+                        // Консоль: растры — в шрифт через tp-sys, ячейки печатают коды PUA.
+                        Some(_) => Download::Console(quads),
+                        None => Download::Escape(decdld(&quads)),
+                    });
                     self.glyphs = Some(shift);
                     self.downloaded = true;
                 }
-                Some(CursorView::Glyphs { anchor: cell })
+                let symbols = match self.console {
+                    Some(codes) => {
+                        codes.map(|c| char::from_u32(u32::from(c)).unwrap_or('?').to_string())
+                    }
+                    None => glyph_symbols(),
+                };
+                Some(CursorView::Glyphs {
+                    anchor: cell,
+                    symbols,
+                })
             }
             Level::Kitty | Level::Sixel => {
                 let shift = px.map_or((0, 0), |p| self.shift(p));
@@ -535,8 +587,8 @@ impl SmoothCursor {
         }
     }
 
-    /// Очередь DECDLD-загрузки глифов (вызывается после смены шага сдвига).
-    pub fn take_download(&mut self) -> Option<String> {
+    /// Очередь загрузки глифов (вызывается после смены шага сдвига).
+    pub fn take_download(&mut self) -> Option<Download> {
         self.download.take()
     }
 
@@ -575,11 +627,21 @@ mod tests {
             // терминал с DECDLD — уровень 3.
             (caps(false, false, false, true), None, Level::Glyphs),
             (caps(true, false, false, true), None, Level::Glyphs),
-            // консоль Linux с /dev/input — пока уровень 4 (KDFONTOP — вопрос владельцу).
+            // консоль Linux с /dev/input — уровень 3: глифы в шрифт консоли (KDFONTOP через tp-sys).
             (
                 Caps {
                     console: true,
                     input: true,
+                    ..caps(false, false, false, false)
+                },
+                None,
+                Level::Glyphs,
+            ),
+            // консоль без /dev/input: пиксельных координат нет — уровень 4.
+            (
+                Caps {
+                    console: true,
+                    input: false,
                     ..caps(false, false, false, false)
                 },
                 None,
@@ -736,11 +798,51 @@ mod tests {
         let mut c = SmoothCursor::new(Level::Glyphs, None, 2);
         assert!(c.view(Some((3, 3)), (5, 5)).is_some());
         let first = c.take_download().expect("загрузка");
+        let Download::Escape(first) = first else {
+            panic!("терминалу — escape-последовательность");
+        };
         assert!(first.starts_with("\x1bP0;"));
         assert!(c.take_download().is_none(), "тот же шаг — без загрузки");
         c.view(Some((5, 5)), (6, 6));
         assert!(c.take_download().is_some());
         assert!(c.downloaded());
+    }
+
+    /// Консоль Linux: глифы идут в шрифт (KDFONTOP через tp-sys), ячейки печатают коды PUA; отказ модуля —
+    /// уровень 4.
+    #[test]
+    fn console_glyphs_to_font() {
+        let codes = [0xF500u16, 0xF501, 0xF502, 0xF503];
+        let mut c = SmoothCursor::new(Level::Glyphs, None, 2);
+        c.console_font(Some((codes, (9, 18))));
+        assert_eq!(c.cell(), (9, 18), "ячейка — размер глифа шрифта");
+        let CursorView::Glyphs { symbols, .. } = c.view(Some((4, 4)), (2, 2)).expect("стрелка")
+        else {
+            panic!("не глифы");
+        };
+        assert_eq!(
+            symbols,
+            ["\u{F500}", "\u{F501}", "\u{F502}", "\u{F503}"].map(str::to_owned)
+        );
+        // Растры — в шрифт консоли: четыре глифа по 18 строк, по 2 байта на строку (ширина 9).
+        let Some(Download::Console(quads)) = c.take_download() else {
+            panic!("загрузка — в шрифт консоли");
+        };
+        for g in &quads {
+            assert_eq!((g.w, g.h), (9, 18));
+            assert_eq!(
+                g.rows.len(),
+                usize::from(g.h) * usize::from(g.w.div_ceil(8)),
+                "формат KDFONTOP: высота строк по ceil(ширина/8) байт"
+            );
+        }
+        assert!(c.take_download().is_none(), "тот же шаг — без загрузки");
+        c.view(Some((8, 8)), (3, 3));
+        assert!(matches!(c.take_download(), Some(Download::Console(_))));
+        // Отказ модуля — уровень 4.
+        c.console_font(None);
+        assert_eq!(c.view(Some((8, 8)), (3, 3)), Some(CursorView::Cell));
+        assert!(c.take_download().is_none());
     }
 
     /// Уровни 1–2: стрелка кодируется протоколом (полублоки в тесте) и кэшируется по сдвигу.

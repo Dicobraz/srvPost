@@ -6442,6 +6442,7 @@ dependencies = [
  "toml",
  "tp-admin",
  "tp-admin-client",
+ "tp-sys",
 ]
 
 [[package]]

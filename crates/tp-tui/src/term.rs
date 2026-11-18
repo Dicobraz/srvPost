@@ -122,12 +122,87 @@ pub async fn run(mut connect: Connect) -> Result<(), String> {
         input: false,
     };
     let level = cursor::detect(&caps, connect.mouse_cursor.take().as_deref())?;
-    let cursor = SmoothCursor::new(level, picker.as_ref(), cfg.shift_steps);
-    let _mouse = MouseCapture::set(io::stdout(), pixel, level == Level::Glyphs);
-    let result = event_loop(&mut terminal, connect, theme, cursor, cfg).await;
+    // Windows: уровень 3 консоли не открывается — привязки дальше не меняются.
+    #[allow(unused_mut)]
+    let mut cursor = SmoothCursor::new(level, picker.as_ref(), cfg.shift_steps);
+    // Уровень 3 на консоли Linux: глифы — в шрифт консоли через `tp-sys` (KDFONTOP), отказ — уровень 4.
+    #[allow(unused_mut)]
+    let mut console_font = ConsoleFont::new();
+    #[cfg(target_os = "linux")]
+    console_font.open(console.is_some(), &mut cursor).await;
+    // DECDLD-набор — только терминалу: консоль escape-последовательности шрифта не понимает.
+    let glyphs = cursor.level() == Level::Glyphs && console.is_none();
+    let _mouse = MouseCapture::set(io::stdout(), pixel, glyphs);
+    // Шрифт консоли уходит в цикл: возврат шрифта и карты Unicode (RAII) — при выходе из него.
+    let result = event_loop(&mut terminal, connect, theme, cursor, cfg, console_font).await;
     let restored = ratatui::try_restore().map_err(|e| format!("терминал: {e}"));
     drop(palette);
     result.and(restored)
+}
+
+/// Шрифт консоли Linux на время работы интерфейса (TUI-12, решение 119, вариант 1): уровень 3 плавного
+/// курсора ставит глифы в шрифт консоли (`tp_sys::console_font`, `KDFONTOP`); `Drop` возвращает шрифт и
+/// карту Unicode как были — при выходе, ошибке и панике. Вне Linux — пустая заглушка.
+struct ConsoleFont {
+    /// Открытый шрифт; `None` — уровень 4.
+    #[cfg(target_os = "linux")]
+    font: Option<tp_sys::console_font::ConsoleFont>,
+}
+
+impl ConsoleFont {
+    fn new() -> Self {
+        Self {
+            #[cfg(target_os = "linux")]
+            font: None,
+        }
+    }
+
+    /// Открыть шрифт (блокирующие ioctl — в `spawn_blocking`) и занять четыре кода PUA; отказ (не
+    /// vt-консоль, нет `CAP_SYS_TTY_CONFIG`) — курсор на уровень 4.
+    #[cfg(target_os = "linux")]
+    async fn open(&mut self, console: bool, cursor: &mut SmoothCursor) {
+        if !console || cursor.level() != Level::Glyphs {
+            return;
+        }
+        let opened = tokio::task::spawn_blocking(tp_sys::console_font::ConsoleFont::open)
+            .await
+            .ok()
+            .and_then(|r| r.ok());
+        match opened {
+            Some(font) => {
+                let (codes, cell) = (font.codes(), font.cell());
+                let _ = writeln!(
+                    io::stderr(),
+                    "шрифт консоли: глифы курсора — коды {codes:?}, ячейка {cell:?}"
+                );
+                cursor.console_font(Some((codes, cell)));
+                self.font = Some(font);
+            }
+            None => {
+                let _ = writeln!(
+                    io::stderr(),
+                    "шрифт консоли недоступен (нет прав или не vt-консоль) — курсор на уровне 4"
+                );
+                cursor.console_font(None);
+            }
+        }
+    }
+
+    /// Перерисовать четыре глифа в шрифте консоли; отказ — шрифт возвращается (`Drop`), курсор на
+    /// уровень 4.
+    #[cfg(target_os = "linux")]
+    fn set_glyphs(&mut self, quads: [cursor::Glyph; 4], cur: &mut SmoothCursor) {
+        if let Some(mut font) = self.font.take() {
+            let rows = quads.map(|g| g.rows);
+            match font.set_glyphs(&rows) {
+                Ok(()) => self.font = Some(font),
+                Err(e) => {
+                    let _ = writeln!(io::stderr(), "шрифт консоли: {e} — курсор на уровне 4");
+                    cur.console_font(None);
+                }
+            }
+        }
+    }
 }
 
 /// Палитра бренда на консоли Linux в 16 цветах; возвращается при сбросе и при панике.
@@ -193,6 +268,7 @@ async fn event_loop(
     theme: Theme,
     mut cur: SmoothCursor,
     cfg: MouseConfig,
+    mut console_font: ConsoleFont,
 ) -> Result<(), String> {
     let url = setting(connect.url, ENV_URL).unwrap_or_default();
     let token = setting(connect.token, ENV_TOKEN);
@@ -239,7 +315,7 @@ async fn event_loop(
         );
     }
     loop {
-        paint(terminal, &mut app, &mut cur)?;
+        paint(terminal, &mut app, &mut cur, &mut console_font)?;
         let Some(msg) = rx.recv().await else {
             return Ok(());
         };
@@ -309,20 +385,31 @@ async fn event_loop(
     }
 }
 
-/// Кадр: экран, курсор со сдвигом и загрузка глифов до отрисовки.
+/// Кадр: экран, курсор со сдвигом и загрузка глифов до отрисовки — терминалу escape-строкой DECDLD,
+/// консоли Linux — в шрифт через `tp-sys` (короткий ioctl `KDFONTOP`, как запись кадра в stdout).
 fn paint(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     cur: &mut SmoothCursor,
+    #[cfg(target_os = "linux")] console_font: &mut ConsoleFont,
+    #[cfg(not(target_os = "linux"))] _console_font: &mut ConsoleFont,
 ) -> Result<(), String> {
     let px = app.mouse.px;
     let pos = app.mouse.pos;
     // До первого события мыши курсора нет.
     app.cursor = pos.and_then(|p| cur.view(px, p));
-    if let Some(dcs) = cur.take_download() {
-        let mut out = io::stdout();
-        let _ = out.write_all(dcs.as_bytes());
-        let _ = out.flush();
+    match cur.take_download() {
+        Some(cursor::Download::Escape(dcs)) => {
+            let mut out = io::stdout();
+            let _ = out.write_all(dcs.as_bytes());
+            let _ = out.flush();
+        }
+        // Консоль: растры — в шрифт; отказ — шрифт возвращается (Drop), курсор на уровень 4.
+        #[cfg(target_os = "linux")]
+        Some(cursor::Download::Console(quads)) => console_font.set_glyphs(quads, cur),
+        #[cfg(not(target_os = "linux"))]
+        Some(cursor::Download::Console(_)) => {}
+        None => {}
     }
     terminal
         .draw(|f| ui::draw(f, app))

@@ -2,6 +2,8 @@
 //! ограничения ролей (seccomp, Landlock) (SRS 2.2, 2.7).
 
 pub mod confine;
+#[cfg(target_os = "linux")]
+pub mod console_font;
 pub mod fs_usage;
 pub mod psi;
 pub mod resources;
