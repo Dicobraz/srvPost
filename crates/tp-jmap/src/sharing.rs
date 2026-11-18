@@ -8,11 +8,13 @@
 //!   `TaskList`, `Task`, `AddressBook`, `ContactCard` с `accountId` владельца видят только эти коллекции
 //!   ([`Access`]). Почта чужих ящиков через JMAP не открывается.
 //! - `myRights` — действующие права субъекта ([`CollectionRights`]): свой аккаунт — все, чужой — по
-//!   [`SharingAuthorizer`]. `shareWith` — записи прав учётных записей организации по идентификатору `Principal`;
+//!   [`SharingAuthorizer`]. `shareWith` — записи прав учётных записей организации по идентификатору `Principal`
+//!   (только своя организация, JMAP-47: идентификатор соседней организации установки — `invalidProperties`);
 //!   виден и меняется при праве `admin` (`mayShare`). Записи групп и [`ANYONE`] JMAP не показывает и не меняет (их
 //!   выдаёт CalDAV, CardDAV, Admin API).
 //! - Выдачу прав проверяет [`SharingAuthorizer::check_grant`]: владелец или субъект с `admin`, в пределах политики
-//!   организации. Отказ — `forbidden`.
+//!   организации. Отказ — `forbidden`. Уровень выдачи — не выше клетки `sharing` своей организации
+//!   ([`TrustMatrix`], решение 124, [`Jmap::with_trust`]): право шире клетки — `forbidden` с пояснением потолка.
 //! - Изменение прав учётной записи записывает ей `ShareNotification` (RFC 9670 §5) в
 //!   [`ShareNotificationStore`] (общее для узлов, переживает перезапуск): `/get`, `/changes`, `/query`, `/set`
 //!   (только `destroy`); `/queryChanges` — `cannotCalculateChanges`.
@@ -42,6 +44,7 @@ use tp_contracts::sharing::{
     ShareNotificationChanges, ShareNotificationFilter, ShareNotificationStore, SharedCollection,
     SharedObjectType, SharingAuthorizer,
 };
+use tp_contracts::trust::Detail;
 use tp_contracts::{Error, ModSeq, Result};
 
 use crate::core::error::{MethodError, MethodResult, changes_error, set_error};
@@ -381,6 +384,22 @@ pub(crate) struct Grant {
     new: CollectionRights,
 }
 
+/// Уровень выдачи прав по клетке «Общий доступ и публикация» ([`Detail`], решение 124): запись, управление
+/// коллекцией и планирование от имени владельца — «всё», чтение — «подробности», только занятость —
+/// «свободен/занят», без прав — «нет».
+pub(crate) fn rights_detail(r: CollectionRights) -> Detail {
+    let e = r.effective();
+    if e.write || e.admin || e.schedule {
+        Detail::All
+    } else if e.read {
+        Detail::Details
+    } else if e.free_busy {
+        Detail::FreeBusy
+    } else {
+        Detail::None
+    }
+}
+
 /// Изменения `shareWith` из патча `/set`: `shareWith` целиком или `shareWith/<id>`; прочие ключи — в `rest`.
 pub(crate) fn split_share(v: &Value) -> (Map<String, Value>, Vec<(String, Value)>) {
     let Value::Object(m) = v else {
@@ -423,6 +442,9 @@ pub(crate) async fn prepare_share(
     if changes.is_empty() {
         return Ok(Ok(Vec::new()));
     }
+    // Потолок выдачи — клетка `sharing` своей организации (JMAP-47, решение 124): без политик — умолчание («всё»),
+    // ошибка чтения — закрытая матрица (клетка своих — как в умолчаниях).
+    let ceiling = ctx.jmap.trust_effective(ctx.scope).await;
     let current = account_entries(ctx, s, c).await?;
     let mut want: BTreeMap<String, CollectionRights> = BTreeMap::new();
     for (k, v) in changes {
@@ -473,6 +495,20 @@ pub(crate) async fn prepare_share(
             .map_or(CollectionRights::NONE, |(_, _, r)| *r);
         if old == new {
             continue;
+        }
+        // Уровень выдачи — не выше клетки `sharing` своей организации: шире — `forbidden` с пояснением потолка.
+        if rights_detail(new) > ceiling.matrix.sharing.own {
+            let level = ceiling
+                .source
+                .sharing
+                .own
+                .map_or(String::new(), |l| format!("; уровень {l}"));
+            let why = format!(
+                "права {} выше потолка общего доступа своей организации ({}){level}",
+                rights_detail(new),
+                ceiling.matrix.sharing.own
+            );
+            return Ok(Err(set_error("forbidden", Some(&why), &["shareWith"])));
         }
         match s
             .authz
@@ -846,8 +882,10 @@ mod tests {
     use serde_json::{Value, json};
     use tp_contracts::auth::Principal;
     use tp_contracts::dav::CollectionId;
-    use tp_contracts::meta::AccountScope;
+    use tp_contracts::ids::{DomainId, TenantId};
+    use tp_contracts::meta::{AccountKind, AccountScope, AccountUpsert};
     use tp_contracts::sharing::{CollectionAcl, CollectionRights as R};
+    use tp_contracts::trust::{Detail, TrustLevel, TrustPolicy, TrustStore};
 
     use crate::calendars::tests::create_calendar;
     use crate::contacts::tests::create_book;
@@ -1258,5 +1296,80 @@ mod tests {
         .await;
         assert_eq!(r["list"][0]["shareWith"], Value::Null, "{r}");
         assert_eq!(r["list"][0]["myRights"]["mayShare"], false, "{r}");
+    }
+
+    /// Выдача прав — только принципалам своей организации (JMAP-47, решение 124): идентификатор соседа по
+    /// установке — `invalidProperties`; уровень выдачи — не выше клетки `sharing` своей организации: шире
+    /// клетки — `forbidden`, в пределах клетки — выдаётся.
+    #[tokio::test]
+    async fn grants_only_within_organization_and_trust_ceiling() {
+        let env = Env::sharing().await;
+        let owner = env.principal.clone();
+        let acc = id(&owner);
+        let cal = create_calendar(&env, "Команда").await;
+        // Учётная запись второй организации узла — не принципал для общего доступа.
+        let neighbor = env
+            .meta
+            .upsert(
+                TenantId::new(),
+                AccountUpsert {
+                    domain: DomainId::new(),
+                    login: "bob@neighbor.example".into(),
+                    display_name: "Сосед".into(),
+                    external_id: None,
+                    enabled: true,
+                    aliases: Vec::new(),
+                    kind: AccountKind::User,
+                    hidden_from_gal: false,
+                    resource_type: None,
+                },
+            )
+            .await
+            .expect("upsert");
+        let r = call(
+            &env,
+            &owner,
+            "Calendar/set",
+            json!({"accountId": acc,
+                "update": {&cal: {"shareWith": {neighbor.id.to_string(): {"mayReadItems": true}}}}}),
+        )
+        .await;
+        assert_eq!(r["notUpdated"][&cal]["type"], "invalidProperties", "{r}");
+        assert_eq!(entries(&env, &owner, &cal).await, Vec::new(), "записей нет");
+
+        // Потолок: организация снизила общий доступ своих до «свободен/занят» — чтение шире клетки.
+        let mut policy = TrustPolicy::default();
+        policy.sharing.own = Some(Detail::FreeBusy);
+        env.trust
+            .set_policy(TrustLevel::Org(env.scope.tenant), &policy)
+            .await
+            .expect("policy");
+        let anna = env.user("anna@example.org").await;
+        let read = json!({"accountId": acc,
+            "update": {&cal: {"shareWith": {id(&anna): {"mayReadItems": true}}}}});
+        let r = call(&env, &owner, "Calendar/set", read).await;
+        assert_eq!(r["notUpdated"][&cal]["type"], "forbidden", "{r}");
+
+        // В пределах клетки — выдаётся: только занятость.
+        let r = call(
+            &env,
+            &owner,
+            "Calendar/set",
+            json!({"accountId": acc,
+                "update": {&cal: {"shareWith": {id(&anna): {"mayReadFreeBusy": true}}}}}),
+        )
+        .await;
+        assert!(r["notUpdated"].is_null(), "{r}");
+        assert_eq!(
+            entries(&env, &owner, &cal).await,
+            vec![(
+                "anna@example.org".to_owned(),
+                R {
+                    free_busy: true,
+                    ..R::NONE
+                }
+            )],
+            "выдача в пределах клетки"
+        );
     }
 }

@@ -25,7 +25,7 @@ use tp_testkit::{
     Clock, FakeAuthenticator, FakeSearch, FakeSharingAuthorizer, MemAddressBook, MemBlobIndex,
     MemBlobStore, MemDav, MemDeliveryLog, MemEventBus, MemGroups, MemItipSender, MemMailboxAudit,
     MemMetadata, MemOutbound, MemPolicies, MemQuota, MemSenderLists, MemSieve, MemSubmissions,
-    MemTrash, RecordingDecisionHook, SearchDoc, SystemClock,
+    MemTrash, MemTrust, RecordingDecisionHook, SearchDoc, SystemClock,
 };
 
 use crate::{Deps, Jmap, JmapConfig, SharingDeps};
@@ -153,6 +153,8 @@ pub struct Env {
     /// Действующие права на коллекции (`Jmap::with_sharing`, только [`Env::sharing`]): тест задаёт их таблицей,
     /// записи `shareWith` хранит [`Env::dav`].
     pub collections: FakeSharingAuthorizer,
+    /// Политики доверия (`Jmap::with_trust`): тест задаёт их уровнями; без политик — умолчания.
+    pub trust: MemTrust,
     pub jmap: Arc<Jmap>,
 }
 
@@ -297,6 +299,7 @@ impl Env {
         let sieve = MemSieve::new().with_bus(Arc::new(bus.clone()));
         let dav = MemDav::new().with_bus(Arc::new(bus.clone()));
         let imip = MemItipSender::new();
+        let trust = MemTrust::new().with_groups(Arc::new(groups.clone()));
         // Применённые сообщения остаются во входящих: по ним строятся `CalendarEventNotification`.
         let dav_cfg = tp_dav::DavConfig {
             schedule_keep_processed: true,
@@ -349,7 +352,10 @@ impl Env {
         )
         .with_org(
             stores.then(|| Arc::new(org.clone()) as Arc<dyn tp_contracts::addressbook::OrgStore>),
-        );
+        )
+        .with_trust(Some(
+            Arc::new(trust.clone()) as Arc<dyn tp_contracts::trust::TrustStore>
+        ));
         Self {
             meta,
             search,
@@ -373,6 +379,7 @@ impl Env {
             dav,
             imip,
             collections: FakeSharingAuthorizer::default(),
+            trust,
             jmap: Arc::new(jmap),
         }
     }

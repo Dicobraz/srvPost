@@ -17,6 +17,7 @@
 //! - `autoconfig` — автонастройка клиентов: `/.well-known/caldav`, `/.well-known/carddav`, Thunderbird, `.mobileconfig`
 //!   (подпись профиля ключом TLS — [`ProfileSigner`], [`Jmap::with_profile_signer`]);
 //! - `vacation` — VacationResponse/get, set: автоответ (RFC 8621 §8) поверх `SieveStore`, [`Jmap::with_sieve`];
+//!   внешний текст — свойства `external*` под `urn:thepost:vacation` (JMAP-47, CTR-93);
 //! - `calendar_event` — CalendarEvent/get, changes, set, copy: iCalendar в `DavStore`, JSCalendar — calcard,
 //!   индекс — `tp_dav::index`;
 //! - `calendar_query` — CalendarEvent/query, queryChanges: интервал по индексу и развёртке повторов calcard,
@@ -30,7 +31,8 @@
 //!   calcard, индекс — `tp_dav::index`;
 //! - `contacts` — AddressBook/get, changes, set (RFC 9610) поверх `DavStore`, [`Jmap::with_dav`];
 //! - `principal` — Principal/get, query (RFC 9670) и Principal/getAvailability поверх `AccountStore` и `FreeBusy`,
-//!   [`Jmap::with_freebusy`];
+//!   [`Jmap::with_freebusy`]: только своя организация (JMAP-47), занятость — по клетке `freebusy` матрицы доверия
+//!   ([`Jmap::with_trust`]);
 //! - `scheduling` — приглашения (JMAP-31): рассылка iTIP после `CalendarEvent/set` с `sendSchedulingMessages`
 //!   (`tp_dav::itip`, [`Jmap::with_schedule`]), ParticipantIdentity/get, CalendarEventNotification/get, changes, query, set
 //!   по входящим планирования;

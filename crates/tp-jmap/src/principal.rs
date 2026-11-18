@@ -5,6 +5,11 @@
 //! входа, `name` — отображаемое имя. Список только для чтения, состояние постоянно (`/changes`, `/set`,
 //! `/queryChanges` нет; `canCalculateChanges` — `false`).
 //!
+//! Только своя организация (JMAP-47, решение 124): все обращения — в контексте организации субъекта, принципалы
+//! соседних организаций установки не находятся и не отдаются (GAL и поиск — закреплено за своей организацией,
+//! `gal_allowed`; как адресные политики Exchange). Занятость — не выше клетки `freebusy` своей организации
+//! (`TrustMatrix`, [`Jmap::with_trust`]): выключена политикой — `forbidden` с пояснением.
+//!
 //! Отличия от RFC 9670 и черновика:
 //! - `type` — `individual`, `location` или `resource`: пользователь — `individual`, ресурс — по типу ресурса
 //!   (`Account::resource_type`, CTR-88: помещение — `location`, оборудование — `resource`); фильтр `type` с другим
@@ -26,6 +31,7 @@ use time::format_description::well_known::Rfc3339;
 use tp_contracts::ids::{AccountId, TenantId};
 use tp_contracts::meta::{Account, AccountKind, AccountState, AccountStore, ResourceType};
 use tp_contracts::schedule::{BusyKind, BusyPeriod, Period};
+use tp_contracts::trust::Detail;
 
 use crate::core::error::{MethodError, MethodResult};
 use crate::core::request::{
@@ -354,6 +360,27 @@ pub(crate) async fn get_availability(
     let Some(p) = find(ctx.jmap, tenant, &id).await? else {
         return Err(MethodError::with("notFound", "principal not found"));
     };
+    // Занятость — не выше клетки `freebusy` своей организации (JMAP-47, решение 124): матрица доверия участника,
+    // чья занятость запрошена. Ответ — «свободен/занят»; `showDetails` не поддерживается, поэтому выше клетки
+    // `free_busy` вопрос не встаёт, ниже — `forbidden` с пояснением потолка.
+    let effective = ctx
+        .jmap
+        .trust_effective(tp_contracts::meta::AccountScope {
+            tenant,
+            account: p.id,
+        })
+        .await;
+    if effective.matrix.freebusy.own < Detail::FreeBusy {
+        let level = effective
+            .source
+            .freebusy
+            .own
+            .map_or(String::new(), |l| format!(" (уровень {l})"));
+        return Err(MethodError::with(
+            "forbidden",
+            format!("занятость не отдаётся: политика доверия организации{level}"),
+        ));
+    }
     let periods = busy(ctx.jmap, tenant, &[p.id], range).await?;
     let list: Vec<Value> = periods
         .into_iter()
@@ -373,15 +400,20 @@ pub(crate) async fn get_availability(
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+    use std::collections::BTreeSet;
     use time::OffsetDateTime;
     use time::format_description::well_known::Rfc3339;
+
+    use tp_contracts::auth::Principal;
     use tp_contracts::dav::{
         Collection, CollectionKind, Component, DavStore, ObjectIndex, Precondition, Span,
     };
+    use tp_contracts::ids::{DomainId, TenantId};
     use tp_contracts::meta::{
-        AccountKind, AccountScope, AccountStore, AccountUpsert, ResourceType,
+        Account, AccountKind, AccountScope, AccountStore, AccountUpsert, ResourceType,
     };
     use tp_contracts::schedule::{BusyKind, BusyPeriod};
+    use tp_contracts::trust::{Detail, TrustLevel, TrustPolicy, TrustStore};
 
     use crate::testenv::Env;
 
@@ -433,6 +465,27 @@ mod tests {
         };
         env.meta.upsert(scope.tenant, data).await.expect("upsert");
         scope
+    }
+
+    /// Учётная запись второй организации узла (JMAP-47): сосед по установке.
+    async fn neighbor(env: &Env, login: &str) -> Account {
+        env.meta
+            .upsert(
+                TenantId::new(),
+                AccountUpsert {
+                    domain: DomainId::new(),
+                    login: login.into(),
+                    display_name: "Сосед".into(),
+                    external_id: None,
+                    enabled: true,
+                    aliases: Vec::new(),
+                    kind: AccountKind::User,
+                    hidden_from_gal: false,
+                    resource_type: None,
+                },
+            )
+            .await
+            .expect("upsert")
     }
 
     /// Событие с занятостью в календаре учётной записи (`transparent` — календарь вне занятости).
@@ -804,5 +857,107 @@ mod tests {
             let r = call(&env, "Principal/getAvailability", a).await;
             assert_eq!(r["type"], error, "{r}");
         }
+    }
+
+    /// Принципалы соседних организаций установки не находятся и не отдаются (JMAP-47, решение 124): каталог —
+    /// только своя организация (`gal_allowed`), как адресные политики Exchange.
+    #[tokio::test]
+    async fn principals_of_other_organization_are_invisible() {
+        let env = Env::new().await;
+        let acc = env.account();
+        let anna = user(
+            &env,
+            "anna@example.org",
+            "Анна",
+            true,
+            AccountKind::User,
+            None,
+        )
+        .await;
+        let bob = neighbor(&env, "bob@neighbor.example").await;
+        let day = json!({"accountId": acc, "id": bob.id.to_string(),
+            "utcStart": "2026-01-12T08:00:00Z", "utcEnd": "2026-01-12T10:00:00Z"});
+
+        // Сосед по установке не находится в каталоге своей организации: ни по идентификатору, ни поиском.
+        let g = call(
+            &env,
+            "Principal/get",
+            json!({"accountId": acc, "ids": [bob.id.to_string()]}),
+        )
+        .await;
+        assert_eq!(g["notFound"], json!([bob.id.to_string()]), "{g}");
+        let q = call(
+            &env,
+            "Principal/query",
+            json!({"accountId": acc, "filter": {"text": "bob"}}),
+        )
+        .await;
+        assert_eq!(q["ids"], json!([]), "{q}");
+        let r = call(&env, "Principal/getAvailability", day).await;
+        assert_eq!(r["type"], "notFound", "{r}");
+
+        // И наоборот: участник своей организации не отдаются вызывающему из соседней.
+        let foreign = Principal {
+            tenant: bob.tenant,
+            account: bob.id,
+            login: bob.login.clone(),
+            groups: BTreeSet::new(),
+            scopes: None,
+        };
+        let id = |s: AccountScope| s.account.to_string();
+        let req = json!({"using": USING, "methodCalls": [[
+            "Principal/get",
+            {"accountId": bob.id.to_string(), "ids": [id(anna)]},
+            "c0",
+        ]]});
+        let resp = env
+            .jmap
+            .api(&foreign, req.to_string().as_bytes())
+            .await
+            .map(|r| serde_json::to_value(r).expect("serialize"))
+            .unwrap_or_else(|p| p.to_json());
+        let g = &resp["methodResponses"][0][1];
+        assert_eq!(g["notFound"], json!([id(anna)]), "{resp}");
+    }
+
+    /// Занятость — по клетке `freebusy` своей организации (JMAP-47, решение 124): политика ниже
+    /// «свободен/занят» — `forbidden`, клетка разрешает — занятость отдаётся.
+    #[tokio::test]
+    async fn availability_follows_trust_policy() {
+        let env = Env::new().await;
+        let acc = env.account();
+        event(
+            &env,
+            env.scope,
+            "mine",
+            &[(
+                "2026-01-12T09:00:00Z",
+                "2026-01-12T10:00:00Z",
+                BusyKind::Busy,
+            )],
+        )
+        .await;
+        let day = json!({"accountId": acc, "id": acc,
+            "utcStart": "2026-01-12T08:00:00Z", "utcEnd": "2026-01-12T12:00:00Z"});
+
+        // Организация закрыла занятость своих — ответ «свободен/занят» не отдаётся никому.
+        let mut closed = TrustPolicy::default();
+        closed.freebusy.own = Some(Detail::None);
+        env.trust
+            .set_policy(TrustLevel::Org(env.scope.tenant), &closed)
+            .await
+            .expect("policy");
+        let r = call(&env, "Principal/getAvailability", day.clone()).await;
+        assert_eq!(r["type"], "forbidden", "{r}");
+
+        // Клетка «свободен/занят» — занятость отдаётся.
+        let mut freebusy = TrustPolicy::default();
+        freebusy.freebusy.own = Some(Detail::FreeBusy);
+        env.trust
+            .set_policy(TrustLevel::Org(env.scope.tenant), &freebusy)
+            .await
+            .expect("policy");
+        let r = call(&env, "Principal/getAvailability", day).await;
+        assert_eq!(r["list"].as_array().map(Vec::len), Some(1), "{r}");
     }
 }
