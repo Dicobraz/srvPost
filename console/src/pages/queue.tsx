@@ -20,10 +20,13 @@ const STATUS: Record<Status, { label: string; color: string }> = {
 
 const RCPT: Record<Rcpt["status"], string> = { pending: "ждёт", delivered: "доставлено", failed: "отказ" };
 
+/** Последняя ошибка получателя: у окончательного отказа — ответ сервера (`reply`), у ждущего повтора — временная неудача. */
+const reason = (r: Rcpt) => (r.status === "failed" ? r.reply ?? r.last_error : r.last_error);
+
 const rcpt = (r: Rcpt) => (
   <div key={r.address}>
     {`${r.address} — ${RCPT[r.status]}${r.attempts > 0 ? `, попыток: ${r.attempts}` : ""}`}
-    {r.last_error && <Typography.Text type="secondary">{` (${r.last_error})`}</Typography.Text>}
+    {reason(r) && <Typography.Text type="secondary">{` (${reason(r)})`}</Typography.Text>}
   </div>
 );
 
@@ -31,6 +34,7 @@ const rcpt = (r: Rcpt) => (
 export function QueuePage() {
   const [status, setStatus] = useState<Status>();
   const [address, setAddress] = useState("");
+  const [pending, setPending] = useState<string>();
   const readOnly = useReadOnly("queue");
   const { query } = useInfiniteList<Entry>({
     resource: "queue",
@@ -41,7 +45,7 @@ export function QueuePage() {
     ],
     queryOptions: { getNextPageParam: (last) => last.cursor?.next },
   });
-  const { mutate, mutation } = useCustomMutation<never, never, undefined>();
+  const { mutate } = useCustomMutation<never, never, undefined>();
   const retry = (e: Entry) =>
     mutate(
       {
@@ -50,7 +54,11 @@ export function QueuePage() {
         values: undefined,
         successNotification: { type: "success", message: "Повтор доставки запрошен" },
       },
-      { onSuccess: () => void query.refetch() },
+      {
+        onMutate: () => setPending(e.id),
+        onSettled: () => setPending(undefined),
+        onSuccess: () => void query.refetch(),
+      },
     );
   return (
     <List title="Очередь исходящей почты">
@@ -95,7 +103,7 @@ export function QueuePage() {
                 disabled={e.status === "active"}
                 onConfirm={() => retry(e)}
               >
-                <Button size="small" disabled={e.status === "active"} loading={mutation.isPending}>
+                <Button size="small" disabled={e.status === "active"} loading={pending === e.id}>
                   Повторить
                 </Button>
               </Popconfirm>
