@@ -222,10 +222,35 @@ pub async fn pipeline() {
     ));
     assert_eq!(reg.remove("absent"), Err(Error::NotFound));
     assert!(reg.stage("absent").is_none());
+    // Порядок модульного этапа можно менять между модулями; этап ядра Sieve — всегда последний.
+    let late = Probe::new(
+        "mod.late",
+        PipelinePoint::BeforeMailboxSieve,
+        0,
+        StageKind::Rules,
+        StageVerdict::Allow,
+    );
+    reg.register(PipelinePoint::BeforeMailboxSieve, late)
+        .expect("module late");
+    assert_eq!(
+        ids(&reg, PipelinePoint::BeforeMailboxSieve),
+        vec![
+            core_stage::JOURNAL,
+            "mod.pre",
+            "mod.late",
+            core_stage::SIEVE
+        ],
+        "равный порядок — порядок регистрации"
+    );
     reg.set_order("mod.pre", 100).expect("свой порядок");
     assert_eq!(
         ids(&reg, PipelinePoint::BeforeMailboxSieve),
-        vec![core_stage::JOURNAL, core_stage::SIEVE, "mod.pre"],
+        vec![
+            core_stage::JOURNAL,
+            "mod.late",
+            "mod.pre",
+            core_stage::SIEVE
+        ],
         "порядок модульного этапа изменился, ядро на месте"
     );
     reg.set_order("mod.pre", 0).expect("вернуть порядок");

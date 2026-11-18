@@ -42,6 +42,12 @@ pub struct MemJournal {
     state: Arc<Mutex<JournalState>>,
 }
 
+impl Default for MemJournal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemJournal {
     /// Пустой журнал.
     pub fn new() -> Self {

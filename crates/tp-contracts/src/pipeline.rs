@@ -595,7 +595,7 @@ mod tests {
         actions.validate().expect("addresses");
         assert!(matches!(
             ActionSet {
-                redirect: vec!["<evil@external.example>".into()],
+                redirect: vec!["evil@external@example".into()],
                 ..actions.clone()
             }
             .validate(),
