@@ -13,7 +13,7 @@ use tp_contracts::dav::{
     Collection, CollectionKind, Component, DavStore, ObjectIndex, Precondition, PutOutcome, Span,
 };
 use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert};
-use tp_contracts::schedule::{BusyKind, BusyPeriod, InboxMessage, ItipMethod, Period};
+use tp_contracts::schedule::{BusyKind, BusyPeriod, FreeBusy, InboxMessage, ItipMethod, Period};
 use tp_contracts::{AccountId, DomainId, Error, ModSeq, TenantId};
 use tp_meta::dav::DavConfig;
 use tp_meta::{MetaConfig, PgMeta, schema};

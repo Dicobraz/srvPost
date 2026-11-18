@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use time::OffsetDateTime;
-use tp_contracts::blob::{Acquire, BlobIndex, Commit};
+use tp_contracts::blob::{Acquire, BlobIndex, BlobStore, Commit};
 use tp_contracts::{BlobHash, BlobKey, Error, Gen, TenantId};
 use tp_meta::{MetaConfig, PgMeta, schema};
 use tp_testkit::MemBlobStore;
