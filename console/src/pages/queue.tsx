@@ -46,7 +46,8 @@ export function QueuePage() {
     queryOptions: { getNextPageParam: (last) => last.cursor?.next },
   });
   const { mutate } = useCustomMutation<never, never, undefined>();
-  const retry = (e: Entry) =>
+  const retry = (e: Entry) => {
+    setPending(e.id);
     mutate(
       {
         url: `/api/v1/orgs/{org}/queue/${encodeURIComponent(e.id)}/retry`,
@@ -55,11 +56,11 @@ export function QueuePage() {
         successNotification: { type: "success", message: "Повтор доставки запрошен" },
       },
       {
-        onMutate: () => setPending(e.id),
         onSettled: () => setPending(undefined),
         onSuccess: () => void query.refetch(),
       },
     );
+  };
   return (
     <List title="Очередь исходящей почты">
       <Space wrap style={{ marginBottom: 16 }}>
