@@ -239,6 +239,14 @@ impl Session {
         push(out, &r);
         self.auth_failures += 1;
         if self.auth_failures >= self.ctx.config.limits.max_auth_failures {
+            tracing::warn!(
+                client = %self.conn.client,
+                code = 421,
+                reason = "max_auth_failures",
+                failures = self.auth_failures,
+                limit = self.ctx.config.limits.max_auth_failures,
+                "smtp: 421: слишком много неудачных AUTH, соединение закрывается"
+            );
             push(
                 out,
                 &reply(421, [4, 7, 0], "Too many authentication failures"),

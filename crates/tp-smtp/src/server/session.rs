@@ -262,6 +262,13 @@ impl Session {
             let n = match n {
                 Ok(n) => n?,
                 Err(_) => {
+                    tracing::info!(
+                        client = %self.conn.client,
+                        code = 421,
+                        reason = "timeout",
+                        idle = ?wait,
+                        "smtp: 421: таймаут бездействия, соединение закрывается"
+                    );
                     push(
                         &mut out,
                         &reply(421, [4, 4, 2], "Timeout, closing connection"),
@@ -366,6 +373,14 @@ impl Session {
         self.errors += 1;
         push(out, &r);
         if self.errors >= self.ctx.config.limits.max_errors {
+            tracing::warn!(
+                client = %self.conn.client,
+                code = 421,
+                reason = "max_errors",
+                errors = self.errors,
+                limit = self.ctx.config.limits.max_errors,
+                "smtp: 421: слишком много ошибочных команд, соединение закрывается"
+            );
             push(
                 out,
                 &reply(421, [4, 7, 0], "Too many errors, closing connection"),
@@ -849,6 +864,12 @@ impl Session {
         if let Some(l) = &self.ctx.limiter
             && !l.check_ip(ip).is_allowed()
         {
+            tracing::warn!(
+                client = %addr,
+                code = 421,
+                reason = "rate_limit_ip",
+                "smtp: 421: частота соединений исходного клиента превышена (XCLIENT)"
+            );
             return Some(reply(
                 421,
                 [4, 7, 0],
