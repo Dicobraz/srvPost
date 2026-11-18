@@ -305,8 +305,9 @@ impl CachedMessages {
             match self.messages.get(scope, ch.id).await.ok().flatten() {
                 // Восстановлено в ту же папку (скрытие с восстановлением свёрнуто в `destroyed`).
                 Some(m) if m.mailbox == mailbox => {
-                    fresh.insert(m.id, m);
-                    gone.remove(&m.id);
+                    let id = m.id;
+                    fresh.insert(id, m);
+                    gone.remove(&id);
                 }
                 // Нет или живёт в другой папке — убрать.
                 _ => {
@@ -328,14 +329,16 @@ impl CachedMessages {
                 .ok()?;
             let got: HashSet<MessageId> = found.iter().map(|m| m.id).collect();
             for m in found {
-                fresh.insert(m.id, m);
-                gone.remove(&m.id);
+                let id = m.id;
+                fresh.insert(id, m);
+                gone.remove(&id);
             }
             for id in fetch.iter().filter(|id| !got.contains(id)) {
                 match self.messages.get(scope, *id).await.ok().flatten() {
                     Some(m) if m.mailbox == mailbox => {
-                        fresh.insert(m.id, m);
-                        gone.remove(&m.id);
+                        let id = m.id;
+                        fresh.insert(id, m);
+                        gone.remove(&id);
                     }
                     _ => {
                         fresh.remove(id);
