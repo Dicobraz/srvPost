@@ -1,21 +1,22 @@
 // Очередь исходящей почты организации (ADM-45): записи с получателями и попытками, фильтры, повтор доставки.
 import { List } from "@refinedev/antd";
 import { useCustomMutation, useInfiniteList } from "@refinedev/core";
-import { Button, Input, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
+import { Button, Input, Popconfirm, Select, Space, Table, Typography } from "antd";
 import { useState } from "react";
 
 import type { Schemas } from "../api/client";
 import { bytes, when } from "../components/format";
+import { StatusTag, type StatusRole } from "../components/status";
 import { useReadOnly } from "../providers/access";
 
 type Entry = Schemas["QueueEntry"];
 type Rcpt = Schemas["QueueRcptInfo"];
 type Status = Schemas["QueueStatus"];
 
-const STATUS: Record<Status, { label: string; color: string }> = {
-  ready: { label: "Ждёт попытки", color: "blue" },
-  retry: { label: "Повтор", color: "orange" },
-  active: { label: "Доставляется", color: "green" },
+const STATUS: Record<Status, { label: string; role: StatusRole }> = {
+  ready: { label: "Ждёт попытки", role: "info" },
+  retry: { label: "Повтор", role: "warn" },
+  active: { label: "Доставляется", role: "ok" },
 };
 
 const RCPT: Record<Rcpt["status"], string> = { pending: "ждёт", delivered: "доставлено", failed: "отказ" };
@@ -78,7 +79,7 @@ export function QueuePage() {
         <Table.Column<Entry> title="Получатели" render={(_, e) => e.rcpts.map(rcpt)} />
         <Table.Column<Entry>
           title="Состояние"
-          render={(_, e) => <Tag color={STATUS[e.status].color}>{STATUS[e.status].label}</Tag>}
+          render={(_, e) => <StatusTag role={STATUS[e.status].role}>{STATUS[e.status].label}</StatusTag>}
         />
         <Table.Column<Entry> title="Ближайшая попытка" render={(_, e) => when(e.next_attempt)} />
         <Table.Column<Entry> title="В очереди с" render={(_, e) => when(e.queued_at)} />

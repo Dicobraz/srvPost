@@ -62,6 +62,16 @@ server {
       cors_origins: ["https://console.example.org"]
   ```
 
+## Фирменный стиль
+
+Единственный источник цветов — `design/tokens.toml` (решение 119, UI-19): файл читается при сборке
+(`?raw` + `smol-toml`, `src/theme.ts`) и строит светлую и тёмную тему antd по системной настройке
+`prefers-color-scheme`; своих цветов в коде консоли нет, статусы — роли темы со знаками (● ▲ ×).
+Шрифты Bebas Neue (`@fontsource/bebas-neue`) и Evolventa (`design/fonts`, лицензии рядом) вшиты
+в сборку файлами `woff2`; знак IT TASK — `design/logo.svg` (белая надпись для тёмного фона —
+`design/logo-white.svg`). Внешних адресов в сборке нет — проверку делает `npm run build`
+(`scripts/check-dist.mjs`), консоль работает без интернета.
+
 ## Скрипты (их запускает job `console` в CI)
 
 | Команда | Что делает |
@@ -69,7 +79,7 @@ server {
 | `npm run typecheck` | проверка типов TypeScript |
 | `npm run lint` | ESLint |
 | `npm test` | тесты `vitest` на заглушке API |
-| `npm run build` | сборка в `console/dist` |
+| `npm run build` | сборка в `console/dist` и проверка: внешних адресов в сборке нет |
 | `npm run gen:api` | типы `src/api/schema.d.ts` из `src/api/openapi.json` |
 
 ## Схема Admin API

@@ -33,6 +33,11 @@ import { UnitsPage } from "./pages/units";
 import { accessControlProvider, allowed } from "./providers/access";
 import { authProvider } from "./providers/auth";
 import { dataProvider } from "./providers/data";
+import { brandTheme, DarkProvider, useSystemDark } from "./theme";
+import { installFonts } from "./fonts";
+
+// Шрифты — одним <style> из файлов сборки (без внешних адресов), до первой отрисовки.
+installFonts();
 
 dayjs.locale("ru");
 
@@ -46,118 +51,122 @@ function Home() {
 }
 
 export function App() {
+  // Тема — светлая и тёмная, строится из design/tokens.toml и следует системной настройке (UI-19).
+  const dark = useSystemDark();
   return (
-    <ConfigProvider locale={ruRU}>
+    <ConfigProvider locale={ruRU} theme={brandTheme(dark)}>
       <AntdApp>
-        <Refine
-          routerProvider={routerProvider}
-          dataProvider={dataProvider}
-          authProvider={authProvider}
-          accessControlProvider={accessControlProvider}
-          i18nProvider={i18nProvider}
-          notificationProvider={useNotificationProvider}
-          resources={[
-            { name: "organization", list: "/organization", meta: { label: "Организация" } },
-            {
-              name: "accounts",
-              list: "/accounts",
-              create: "/accounts/create",
-              show: "/accounts/:id",
-              meta: { label: "Учётные записи" },
-            },
-            {
-              name: "resources",
-              list: "/resources",
-              create: "/resources/create",
-              show: "/resources/:id",
-              meta: { label: "Ресурсы" },
-            },
-            { name: "disabled-accounts", list: "/disabled-accounts", meta: { label: "Отключённые ящики" } },
-            {
-              name: "groups",
-              list: "/groups",
-              create: "/groups/create",
-              edit: "/groups/:id",
-              meta: { label: "Группы рассылки" },
-            },
-            {
-              name: "contacts",
-              list: "/contacts",
-              create: "/contacts/create",
-              edit: "/contacts/:id",
-              meta: { label: "Адресная книга" },
-            },
-            { name: "units", list: "/units", meta: { label: "Оргструктура" } },
-            { name: "moderation", list: "/moderation", meta: { label: "Модерация" } },
-            { name: "queue", list: "/queue", meta: { label: "Очередь" } },
-            { name: "sieve", list: "/sieve", meta: { label: "Правила организации" } },
-            { name: "transport", list: "/transport", meta: { label: "Транспорт" } },
-            { name: "delivery", list: "/delivery", meta: { label: "Журнал доставки" } },
-            { name: "audit", list: "/audit", meta: { label: "Журнал аудита" } },
-            { name: "mailbox-audit", list: "/mailbox-audit", meta: { label: "Аудит ящиков" } },
-          ]}
-          // Без внешних обращений (SRS 5.2): телеметрия Refine выключена.
-          options={{ disableTelemetry: true, syncWithLocation: true, warnWhenUnsavedChanges: true }}
-        >
-          <Routes>
-            <Route
-              element={
-                <Authenticated key="app" fallback={<CatchAllNavigate to="/login" />}>
-                  <ThemedLayout Title={Title} Header={Header}>
-                    {/* Раздел или действие по маршруту, недоступные роли, — «Нет доступа» вместо отказов узла в таблице. */}
-                    <CanAccess fallback={<Forbidden />}>
-                      <Outlet />
-                    </CanAccess>
-                  </ThemedLayout>
-                </Authenticated>
-              }
-            >
-              <Route index element={<Home />} />
-              <Route path="/organization" element={<OrganizationPage />} />
-              <Route path="/accounts">
-                <Route index element={<AccountList />} />
-                <Route path="create" element={<AccountCreate />} />
-                <Route path=":id" element={<AccountShow />} />
-                <Route path=":id/trash" element={<AccountTrash />} />
-                <Route path=":id/sieve" element={<AccountSieve />} />
+        <DarkProvider value={dark}>
+          <Refine
+            routerProvider={routerProvider}
+            dataProvider={dataProvider}
+            authProvider={authProvider}
+            accessControlProvider={accessControlProvider}
+            i18nProvider={i18nProvider}
+            notificationProvider={useNotificationProvider}
+            resources={[
+              { name: "organization", list: "/organization", meta: { label: "Организация" } },
+              {
+                name: "accounts",
+                list: "/accounts",
+                create: "/accounts/create",
+                show: "/accounts/:id",
+                meta: { label: "Учётные записи" },
+              },
+              {
+                name: "resources",
+                list: "/resources",
+                create: "/resources/create",
+                show: "/resources/:id",
+                meta: { label: "Ресурсы" },
+              },
+              { name: "disabled-accounts", list: "/disabled-accounts", meta: { label: "Отключённые ящики" } },
+              {
+                name: "groups",
+                list: "/groups",
+                create: "/groups/create",
+                edit: "/groups/:id",
+                meta: { label: "Группы рассылки" },
+              },
+              {
+                name: "contacts",
+                list: "/contacts",
+                create: "/contacts/create",
+                edit: "/contacts/:id",
+                meta: { label: "Адресная книга" },
+              },
+              { name: "units", list: "/units", meta: { label: "Оргструктура" } },
+              { name: "moderation", list: "/moderation", meta: { label: "Модерация" } },
+              { name: "queue", list: "/queue", meta: { label: "Очередь" } },
+              { name: "sieve", list: "/sieve", meta: { label: "Правила организации" } },
+              { name: "transport", list: "/transport", meta: { label: "Транспорт" } },
+              { name: "delivery", list: "/delivery", meta: { label: "Журнал доставки" } },
+              { name: "audit", list: "/audit", meta: { label: "Журнал аудита" } },
+              { name: "mailbox-audit", list: "/mailbox-audit", meta: { label: "Аудит ящиков" } },
+            ]}
+            // Без внешних обращений (SRS 5.2): телеметрия Refine выключена.
+            options={{ disableTelemetry: true, syncWithLocation: true, warnWhenUnsavedChanges: true }}
+          >
+            <Routes>
+              <Route
+                element={
+                  <Authenticated key="app" fallback={<CatchAllNavigate to="/login" />}>
+                    <ThemedLayout Title={Title} Header={Header}>
+                      {/* Раздел или действие по маршруту, недоступные роли, — «Нет доступа» вместо отказов узла в таблице. */}
+                      <CanAccess fallback={<Forbidden />}>
+                        <Outlet />
+                      </CanAccess>
+                    </ThemedLayout>
+                  </Authenticated>
+                }
+              >
+                <Route index element={<Home />} />
+                <Route path="/organization" element={<OrganizationPage />} />
+                <Route path="/accounts">
+                  <Route index element={<AccountList />} />
+                  <Route path="create" element={<AccountCreate />} />
+                  <Route path=":id" element={<AccountShow />} />
+                  <Route path=":id/trash" element={<AccountTrash />} />
+                  <Route path=":id/sieve" element={<AccountSieve />} />
+                </Route>
+                <Route path="/resources">
+                  <Route index element={<ResourceList />} />
+                  <Route path="create" element={<ResourceCreate />} />
+                  <Route path=":id" element={<ResourceShow />} />
+                </Route>
+                <Route path="/groups">
+                  <Route index element={<GroupList />} />
+                  <Route path="create" element={<GroupCreate />} />
+                  <Route path=":id" element={<GroupEdit />} />
+                </Route>
+                <Route path="/disabled-accounts" element={<DisabledPage />} />
+                <Route path="/contacts">
+                  <Route index element={<ContactList />} />
+                  <Route path="create" element={<ContactCreate />} />
+                  <Route path=":id" element={<ContactEdit />} />
+                </Route>
+                <Route path="/units" element={<UnitsPage />} />
+                <Route path="/moderation" element={<ModerationPage />} />
+                <Route path="/queue" element={<QueuePage />} />
+                <Route path="/sieve" element={<OrgSieve />} />
+                <Route path="/transport" element={<TransportPage />} />
+                <Route path="/delivery" element={<DeliveryPage />} />
+                <Route path="/audit" element={<AuditPage />} />
+                <Route path="/mailbox-audit" element={<MailboxAuditPage />} />
+                <Route path="*" element={<ErrorComponent />} />
               </Route>
-              <Route path="/resources">
-                <Route index element={<ResourceList />} />
-                <Route path="create" element={<ResourceCreate />} />
-                <Route path=":id" element={<ResourceShow />} />
-              </Route>
-              <Route path="/groups">
-                <Route index element={<GroupList />} />
-                <Route path="create" element={<GroupCreate />} />
-                <Route path=":id" element={<GroupEdit />} />
-              </Route>
-              <Route path="/disabled-accounts" element={<DisabledPage />} />
-              <Route path="/contacts">
-                <Route index element={<ContactList />} />
-                <Route path="create" element={<ContactCreate />} />
-                <Route path=":id" element={<ContactEdit />} />
-              </Route>
-              <Route path="/units" element={<UnitsPage />} />
-              <Route path="/moderation" element={<ModerationPage />} />
-              <Route path="/queue" element={<QueuePage />} />
-              <Route path="/sieve" element={<OrgSieve />} />
-              <Route path="/transport" element={<TransportPage />} />
-              <Route path="/delivery" element={<DeliveryPage />} />
-              <Route path="/audit" element={<AuditPage />} />
-              <Route path="/mailbox-audit" element={<MailboxAuditPage />} />
-              <Route path="*" element={<ErrorComponent />} />
-            </Route>
-            <Route
-              path="/login"
-              element={
-                <Authenticated key="login" fallback={<LoginPage />}>
-                  <Home />
-                </Authenticated>
-              }
-            />
-          </Routes>
-          <DocumentTitleHandler />
-        </Refine>
+              <Route
+                path="/login"
+                element={
+                  <Authenticated key="login" fallback={<LoginPage />}>
+                    <Home />
+                  </Authenticated>
+                }
+              />
+            </Routes>
+            <DocumentTitleHandler />
+          </Refine>
+        </DarkProvider>
       </AntdApp>
     </ConfigProvider>
   );

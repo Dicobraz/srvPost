@@ -1,13 +1,14 @@
 // Журнал аудита (SRS 5.2): операции администраторов. Отбор по интервалу, администратору, методу и началу маршрута —
 // в хранилище (ADM-30); продолжение — `next` ответа.
 import { List } from "@refinedev/antd";
-import { Button, DatePicker, Form, Input, Select, Table, Tag } from "antd";
+import { Button, DatePicker, Form, Input, Select, Table } from "antd";
 import type { Dayjs } from "dayjs";
 import { useState } from "react";
 
 import type { Schemas } from "../api/client";
 import { useCursorPages } from "../components/cursor-pages";
 import { interval, moment } from "../components/format";
+import { StatusTag } from "../components/status";
 
 type Entry = Schemas["AuditEntry"];
 type Filters = { actor?: string; method?: string; route?: string; range?: [Dayjs | null, Dayjs | null] | null };
@@ -55,7 +56,7 @@ export function AuditPage() {
         <Table.Column<Entry> title="Роли" render={(_, e) => (e.roles.length ? e.roles.map((r) => ROLES[r] ?? r).join(", ") : "нет (отказ)")} />
         <Table.Column<Entry> title="Действие" render={(_, e) => `${e.method} ${e.route}`} />
         <Table.Column dataIndex="path" title="Путь" />
-        <Table.Column<Entry> title="Код" render={(_, e) => <Tag color={e.status < 400 ? "green" : "red"}>{e.status}</Tag>} />
+        <Table.Column<Entry> title="Код" render={(_, e) => <StatusTag role={e.status < 400 ? "ok" : "err"}>{e.status}</StatusTag>} />
       </Table>
       {pager}
     </List>

@@ -3,6 +3,7 @@ import { Button, Card, Divider, Form, Input, Layout, Typography } from "antd";
 import { useEffect, useState } from "react";
 
 import type { Schemas } from "../api/client";
+import { Brand } from "../components/logo";
 import { type LoginParams, type SessionInfo, sessionInfo } from "../providers/auth";
 
 /**
@@ -29,7 +30,10 @@ export function LoginPage() {
   return (
     <Layout style={{ minHeight: "100vh", justifyContent: "center", alignItems: "center" }}>
       <Card style={{ width: 400 }}>
-        <Typography.Title level={3}>The Post — вход</Typography.Title>
+        <Brand height={30} style={{ display: "block", margin: "8px auto 16px" }} />
+        <Typography.Title level={3} style={{ textAlign: "center" }}>
+          The Post — вход
+        </Typography.Title>
         {oidc && (
           <>
             <Button type="primary" block loading={isPending} onClick={() => login({ oidc })}>

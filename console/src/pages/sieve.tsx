@@ -2,7 +2,7 @@
 // Текст проверяет узел: при отказе 422 ошибки с позициями показываются под редактором.
 import { List, Show } from "@refinedev/antd";
 import { type BaseRecord, type HttpError, useCustom, useCustomMutation, useOne } from "@refinedev/core";
-import { Alert, Button, DatePicker, Form, Input, Popconfirm, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, DatePicker, Form, Input, Popconfirm, Space, Switch, Table, Tabs, Typography } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import dayjs, { type Dayjs } from "dayjs";
 import { useRef, useState } from "react";
@@ -10,6 +10,7 @@ import { useParams } from "react-router";
 
 import type { Schemas } from "../api/client";
 import { bytes } from "../components/format";
+import { StatusTag } from "../components/status";
 import { useReadOnly } from "../providers/access";
 
 type Script = Schemas["Script"];
@@ -121,7 +122,7 @@ function AccountScripts({ base, readOnly }: { base: string; readOnly: boolean })
       <Table<Script> dataSource={scripts} loading={list.query.isLoading} rowKey="name" pagination={false}>
         <Table.Column dataIndex="name" title="Имя" />
         <Table.Column<Script> title="Размер" render={(_, s) => bytes(s.size)} />
-        <Table.Column<Script> title="Состояние" render={(_, s) => (s.active ? <Tag color="green">активен</Tag> : "не выполняется")} />
+        <Table.Column<Script> title="Состояние" render={(_, s) => (s.active ? <StatusTag role="ok">активен</StatusTag> : "не выполняется")} />
         <Table.Column<Script>
           title="Действия"
           width={340}

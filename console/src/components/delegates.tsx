@@ -1,11 +1,12 @@
 // Представители учётной записи (ADM-16): читают или ведут все её календари и могут отправлять приглашения и ответы
 // от её имени; у ресурса — ответственные за бронирования. Назначение сверх политики общего доступа узел отклоняет.
 import { type HttpError, useCustom, useCustomMutation } from "@refinedev/core";
-import { Button, Form, Popconfirm, Select, Switch, Table, Tag } from "antd";
+import { Button, Form, Popconfirm, Select, Switch, Table } from "antd";
 
 import type { Schemas } from "../api/client";
 import { useReadOnly } from "../providers/access";
 import { AccountPick } from "./account-select";
+import { StatusTag } from "./status";
 
 type Delegate = Schemas["DelegateInfo"];
 type Values = Schemas["DelegateBody"] & { delegate: string };
@@ -81,7 +82,7 @@ export function Delegates({ account, resource = "accounts" }: { account: string;
         />
         <Table.Column<Delegate>
           title="Приглашения от имени"
-          render={(_, d) => (d.schedule_on_behalf ? <Tag color="blue">да</Tag> : "нет")}
+          render={(_, d) => (d.schedule_on_behalf ? <StatusTag role="info">да</StatusTag> : "нет")}
         />
         {!readOnly && (
           <Table.Column<Delegate>
