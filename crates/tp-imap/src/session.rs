@@ -34,7 +34,7 @@ use tp_contracts::meta::{AccountScope, ChangeLog, MailboxStore, MessageStore};
 use tp_contracts::retention::TrashStore;
 use tp_contracts::sasl::{Mechanism, SaslContext, SaslFailure, SaslServer, SaslStep};
 use tp_contracts::search::SearchIndex;
-use tp_contracts::{Error, MailboxId, MessageId, ModSeq, Result, Uid, UidValidity};
+use tp_contracts::{Error, MailboxId, ModSeq, Result, UidValidity};
 use tp_platform::{Conn, Listener};
 
 use crate::audit::Audit;
@@ -55,6 +55,7 @@ use crate::proto::types::secret::Secret;
 use crate::proto::{self, Body, Command, Expect, Input, Reader};
 use crate::qresync::QResync;
 use crate::search::SearchCmd;
+use crate::snapshot::{Rows, Snapshots};
 
 /// Канал сессии: поток байтов, признак TLS, апгрейд STARTTLS.
 pub trait Transport: Send + Sized + 'static {
@@ -158,8 +159,10 @@ pub(crate) struct Selected {
     /// UIDVALIDITY на момент выбора.
     #[allow(dead_code)]
     pub uid_validity: UidValidity,
-    /// Письма по возрастанию UID; номер последовательности — индекс + 1.
-    pub messages: Vec<(Uid, MessageId)>,
+    /// Письма по возрастанию UID; номер последовательности — индекс + 1. Общий снимок папки из
+    /// кэша снимков (`Snapshots`, PERF-03): копии на соединение нет, правки сессии (`sync`,
+    /// `EXPUNGE`) — через `Arc::make_mut`, после первого изменения снимок у сессии свой.
+    pub messages: Rows,
     /// Изменения папки до этого `ModSeq` клиенту сообщены (или были в снимке при выборе).
     pub modseq: ModSeq,
 }
@@ -172,6 +175,9 @@ pub struct Session<T: Transport> {
     pub(crate) peer: IpAddr,
     pub(crate) reader: Reader,
     pub(crate) out: Vec<u8>,
+    /// Снимки папок слушателя: общий для сеансов ([`Server::serve`]), у сессии без слушателя — свой
+    /// (тесты, POP3-стиль использования). Заполняется [`Session::with_snapshots`].
+    pub(crate) snapshots: Arc<Snapshots>,
     pub(crate) principal: Option<Principal>,
     pub(crate) selected: Option<Selected>,
     /// Клиент включил IMAP4rev2 (`ENABLE IMAP4rev2`): имена папок в UTF-8, без `RECENT`.
@@ -245,12 +251,14 @@ impl<T: Transport> Session<T> {
     pub fn new(ctx: Arc<SessionCtx>, conn: T) -> Self {
         let reader = reader(&ctx.config);
         let audit = Audit::new(ctx.deps.audit.clone(), "imap", Some(conn.peer()));
+        let snapshots = Arc::new(Snapshots::new(ctx.config.snapshot.clone()));
         Self {
             ctx,
             peer: conn.peer(),
             conn: Some(conn),
             reader,
             out: Vec::new(),
+            snapshots,
             principal: None,
             selected: None,
             rev2: false,
@@ -270,6 +278,12 @@ impl<T: Transport> Session<T> {
     /// Подключает зависимости расширений (QUOTA, ACL, общие папки).
     pub fn with_extensions(mut self, ext: Extensions) -> Self {
         self.ext = ext;
+        self
+    }
+
+    /// Подключает снимки папок слушателя (общие для сеансов): [`Server::serve`].
+    pub(crate) fn with_snapshots(mut self, snapshots: Arc<Snapshots>) -> Self {
+        self.snapshots = snapshots;
         self
     }
 
@@ -333,6 +347,11 @@ impl<T: Transport> Session<T> {
             .map_err(io_error)?;
         io.flush().await.map_err(io_error)?;
         self.out.clear();
+        // Буфер ответа не держит удвоенную ёмкость после больших ответов (PERF-03): порог
+        // отправки — `Limits::write_buffer`, ёмкость возвращается к нему, а не к удвоению.
+        if self.out.capacity() > self.ctx.config.limits.write_buffer {
+            self.out.shrink_to(self.ctx.config.limits.write_buffer);
+        }
         Ok(())
     }
 
@@ -347,7 +366,9 @@ impl<T: Transport> Session<T> {
     /// Следующее сообщение клиента; `None` — сессия закончена (клиент закрыл соединение, таймаут,
     /// остановка узла — `BYE` уже отправлен).
     pub(crate) async fn read_input(&mut self, expect: Expect) -> Result<Option<Input>> {
-        let mut buf = vec![0u8; 16 * 1024];
+        // Чтение частями по 4 КБ (как в `IDLE` и POP3): команде достаточно строк самой команды,
+        // литерал читается потоком за несколько чтений; буфер живёт только до возврата команды.
+        let mut buf = vec![0u8; 4 * 1024];
         let disabled = self.disabled();
         if disabled.is_cancelled() {
             self.account_disabled();
@@ -1106,6 +1127,8 @@ pub struct Server {
     ctx: Arc<SessionCtx>,
     ext: Extensions,
     sessions: Sessions,
+    /// Снимки папок: общий для сеансов слушателя (PERF-03).
+    snapshots: Arc<Snapshots>,
 }
 
 impl fmt::Debug for Server {
@@ -1119,10 +1142,12 @@ impl fmt::Debug for Server {
 impl Server {
     /// Сервер с контекстом сессий.
     pub fn new(ctx: SessionCtx) -> Self {
+        let snapshots = Arc::new(Snapshots::new(ctx.config.snapshot.clone()));
         Self {
             ctx: Arc::new(ctx),
             ext: Extensions::default(),
             sessions: Sessions::default(),
+            snapshots,
         }
     }
 
@@ -1160,6 +1185,7 @@ impl Server {
                     let ctx = self.ctx.clone();
                     let ext = self.ext.clone();
                     let open = self.sessions.clone();
+                    let snapshots = self.snapshots.clone();
                     let task = async move {
                         let peer = incoming.peer();
                         let conn = match incoming.establish().await {
@@ -1176,7 +1202,8 @@ impl Server {
                         let client = conn.info.client;
                         let session = Session::new(ctx, conn)
                             .with_extensions(ext)
-                            .with_sessions(open);
+                            .with_sessions(open)
+                            .with_snapshots(snapshots);
                         if let Err(e) = session.run().await {
                             tracing::debug!(%client, error = %e, "imap: сессия прервана");
                         }

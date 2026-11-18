@@ -609,7 +609,7 @@
 | [DES-01](DES-01.md) | файл токенов фирменного стиля и проверка контраста в CI | design | B | design-01 | done | — |
 | [DEPS-15](DEPS-15.md) | зависимости картинок и мыши текстового интерфейса — `ratatui-image`, `evdev` | deps | B | deps-15 | done | DEPS-14 |
 | [TUI-06](TUI-06.md) | тема текстового интерфейса по токенам — пять режимов, палитра консоли Linux, знак IT TASK | tui | A | tui-03 | done | TUI-01,DES-01 |
-| [TUI-07](TUI-07.md) | мышь в текстовом интерфейсе — щелчки, прокрутка, граница панелей, плавный курсор | tui | A | tui-04 | ready | TUI-06,DEPS-15 |
+| [TUI-07](TUI-07.md) | мышь в текстовом интерфейсе — щелчки, прокрутка, граница панелей, плавный курсор | tui | A | tui-04 | done | TUI-06,DEPS-15 |
 | [UI-19](UI-19.md) | веб-консоль на токенах фирменного стиля — тема antd, шрифты в статике | console | A | console-10 | ready | DES-01 |
 | [CTR-85](CTR-85.md) | очередь исходящей почты — список записей и повтор доставки в контракте `QueueStore` | contracts | B | contracts-57 | done | — |
 | [ADM-45](ADM-45.md) | Admin API очереди — `GET /orgs/{org}/queue`, `POST /orgs/{org}/queue/{id}/retry` | admin | A | admin-31 | done | CTR-85 |
@@ -673,6 +673,19 @@
 | [FIX-11](FIX-11.md) | молча нерабочая запись /etc/hosts (имя вместо адреса) |  |  | deploy-46 | done | — |
 | [FIX-12](FIX-12.md) | адрес генератора в конфиге узла — ansible_host / факты / assert |  |  | deploy-47 | done | — |
 | [FIX-13](FIX-13.md) | чужой From в исходящей нагрузке, CRLF в файлах стенда, сэмплер без проверки старта |  |  | deploy-48 | done | — |
+| [FIX-14](FIX-14.md) | зонд доставки шлёт чужой From под AUTH (550) |  |  | deploy-49 | done | — |
+| [FIX-15](FIX-15.md) | условие сбора фактов FIX-12 падает; каталог drop-in openbao не создаётся |  |  | deploy-50 | done | — |
+
+## Ф1 · Находки Д.7 2026-11-17 — производительность и наблюдаемость (этап 2)
+
+| Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
+|---|---|---|---|---|---|---|
+| [PERF-01](PERF-01.md) | p95 944 мс при пороге 100 мс (Д.7 №2) |  |  | mailstore-16 | done | — |
+| [PERF-02](PERF-02.md) | # PERF-02 — JMAP Email/query p95 311 мс при пороге 200 мс (Д.7 №1) |  |  | jmap-32 | done | — |
+| [PERF-03](PERF-03.md) | 981 KB на соединение при пороге 64 KB (Д.7 №17) |  |  | mailstore-17 | done | — |
+| [PERF-04](PERF-04.md) | зонд «index» не находит письмо за 180 с (Д.7 №10) |  |  | mailstore-18 | ready | — |
+| [PERF-05](PERF-05.md) | 1.24 с на ящике 10 тыс. писем при пороге < 1 с на 100 тыс. (Д.7 №8) |  |  | mailstore-19 | ready | — |
+| [FIND-01](FIND-01.md) | # FIND-01 — SMTP отказы 421 под нагрузкой без причины в журнале узла |  |  | mailstore-19 | ready | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
 
@@ -836,7 +849,7 @@
 | [MS-19](MS-19.md) | заголовки скрытого письма корзины | mailstore | A | mailstore-12 | done | CTR-80 |
 | [CTR-81](CTR-81.md) | действие «поиск» в журнале аудита ящика | contracts | B | contracts-53 | done | CTR-35 |
 | [IMAP-23](IMAP-23.md) | поиск по тексту в чужом ящике — в журнал аудита | imap | A | imap-13 | done | CTR-81 |
-| [JMAP-43](JMAP-43.md) | Email/query по тексту в чужом ящике — в журнал аудита | jmap | A | jmap-26 | ready | CTR-81 |
+| [JMAP-43](JMAP-43.md) | Email/query по тексту в чужом ящике — в журнал аудита | jmap | A | jmap-26 | done | CTR-81 |
 | [ADM-32](ADM-32.md) | темы скрытых писем и имена участников групп одним запросом | admin | A | admin-21 | done | CTR-63,MS-19,ADM-19,ADM-20 |
 | [IMAP-22](IMAP-22.md) | заблокированная учётная запись — закрытие сеансов IMAP и POP3 | imap | A | imap-12 | done | CTR-64 |
 | [JMAP-41](JMAP-41.md) | заблокированная учётная запись — закрытие push JMAP | jmap | A | jmap-24 | done | CTR-64 |
@@ -862,8 +875,8 @@
 | [META-81](META-81.md) | тип ресурса бронирования в PostgreSQL — миграция и хранилище | meta | A | meta-54 | done | CTR-88 |
 | [ADM-47](ADM-47.md) | тип ресурса бронирования в Admin API и CLI | admin | A | admin-33 | ready | CTR-88,ADM-44 |
 | [UI-21](UI-21.md) | консоль — тип ресурса бронирования | console | A | console-12 | todo | ADM-47 |
-| [DAV-38](DAV-38.md) | `calendar-user-type` по типу ресурса — `ROOM` или `RESOURCE` | dav | A | dav-17 | ready | CTR-88,DAV-19 |
-| [JMAP-45](JMAP-45.md) | `Principal.type` по типу ресурса — `location` или `resource` | jmap | A | jmap-28 | ready | CTR-88 |
+| [DAV-38](DAV-38.md) | `calendar-user-type` по типу ресурса — `ROOM` или `RESOURCE` | dav | A | dav-17 | done | CTR-88,DAV-19 |
+| [JMAP-45](JMAP-45.md) | `Principal.type` по типу ресурса — `location` или `resource` | jmap | A | jmap-28 | done | CTR-88 |
 | [META-82](META-82.md) | просмотр очереди и повтор доставки в PostgreSQL — `QueueStore::list` и `retry` | meta | A | meta-55 | done | CTR-85 |
 | [CTR-89](CTR-89.md) | `QueueStore::list` и `retry` без тел по умолчанию | contracts | B | contracts-60 | done | META-82 |
 | [META-83](META-83.md) | хранилище `ShareNotification` в PostgreSQL — миграция 0042 | meta | A | meta-56 | done | CTR-86 |
@@ -900,7 +913,7 @@
 | [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | app-74 | todo | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
 | [DEP-56](DEP-56.md) | Rspamd — балл за признак ответа; ключи меток и BATV в поставке | deploy | A | deploy-43 | todo | SMTP-51 |
 | [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | todo | APP-77,DEP-56 |
-| [DEPS-19](DEPS-19.md) | зависимости каталога признаков и TI — `ring` (Ed25519), `regex`, `publicsuffix`, `winnow`; `zip`, `infer`, `ipnet` в крейты | deps | B | deps-19 | ready | — |
+| [DEPS-19](DEPS-19.md) | зависимости каталога признаков и TI — `ring` (Ed25519), `regex`, `publicsuffix`, `winnow`; `zip`, `infer`, `ipnet` в крейты | deps | B | deps-19 | done | — |
 | [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | todo | CTR-94 |
 | [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | todo | CTR-95 |
 | [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | todo | CTR-95,DEPS-19,SIEVE-14 |
@@ -931,10 +944,10 @@
 | [SMTP-53](SMTP-53.md) | этап журналирования в конвейере — приём, отправка, конверт | smtp | A | smtp-33 | todo | CTR-96,CTR-97 |
 | [SMTP-54](SMTP-54.md) | конвейер как реестр этапов и итоговый контроль действий в доставке | smtp | A | smtp-33 | todo | CTR-96 |
 | [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | todo | CTR-97,META-88 |
-| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-78 | todo | CTR-97,META-88,BLOB-18 |
-| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-78 | todo | CTR-97 |
+| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | todo | CTR-97,META-88,BLOB-18 |
+| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | todo | CTR-97 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
-| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-49 | todo | APP-83,BLOB-18 |
+| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | todo | APP-83,BLOB-18 |
 
 ## Вне волн
 
@@ -959,6 +972,7 @@
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
+| [PERF-06](PERF-06.md) | IMAP и JMAP |  |  | — |
 | [PLT-35](PLT-35.md) | YAML ↔ JSON для правки config.yaml вне загрузчика | platform | A | — |
 | [PLT-36](PLT-36.md) | переменные THEPOST_* вне схемы не ломают проверку конфигурации | platform | A | — |
 | [SMTP-47](SMTP-47.md) | результаты шлюза — печать ARC домена шлюза и `header.from` письма | smtp | A | SMTP-20,SMTP-33 |

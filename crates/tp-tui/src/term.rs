@@ -1,13 +1,16 @@
 //! Запуск интерфейса в терминале: crossterm, клиент Admin API (`tp-admin-client`) и цикл событий; тема по
-//! окружению, знак бренда протоколом графики терминала, палитра консоли Linux на время работы.
+//! окружению, знак бренда протоколом графики терминала, палитра консоли Linux на время работы. Мышь (TUI-07):
+//! захват событий `crossterm` c пиксельным режимом `1016`, где терминал его принял, плавный курсор —
+//! [`crate::cursor`], на консоли Linux координаты из `/dev/input` ([`crate::input`]).
 
-use std::io;
+use std::io::{self, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyEventKind, MouseEvent};
+use crossterm::execute;
 use ratatui::DefaultTerminal;
-use ratatui_image::picker::Picker;
+use ratatui_image::picker::{Picker, ProtocolType};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tp_admin::server::WhoAmI;
@@ -15,7 +18,9 @@ use tp_admin_client::oidc::{DeviceLogin, prompt_text};
 use tp_admin_client::{Client, ENV_TOKEN, ENV_URL, Options, base_url, setting};
 
 use crate::app::{App, Effect, LoginField, LoginForm, LoginRequest, Page, Stage};
+use crate::cursor::{self, Caps, Level, SmoothCursor};
 use crate::engine::Request;
+use crate::mouse::MouseConfig;
 use crate::node::{self, ConfigFile, NodeConfig, SaveError, Saved};
 use crate::schema::Response;
 use crate::theme::{ConsolePalette, Theme, console_palette_needed};
@@ -23,6 +28,19 @@ use crate::ui;
 
 /// Как часто поток ввода проверяет, не закрыт ли интерфейс (ожидание клавиши не дольше).
 const INPUT_POLL: Duration = Duration::from_millis(200);
+
+/// Байты возврата мыши: режим `1016`, захват `crossterm`, загруженные глифы DECDLD.
+fn mouse_reset(pixel: bool, glyphs: bool) -> String {
+    let mut s = String::new();
+    if glyphs {
+        s.push_str(&cursor::decdld_erase());
+    }
+    if pixel {
+        s.push_str("\x1b[?1016l");
+    }
+    s.push_str("\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l");
+    s
+}
 
 /// Подключение к Admin API — те же значения, что у CLI `thepost admin` (адрес, CA, `--insecure`, токен).
 #[derive(Debug, Default)]
@@ -44,6 +62,11 @@ pub struct Connect {
     /// Режим темы (`--theme`): `auto`, `dark`, `light`, `256`, `16`, `mono`; нет — `THEPOST_TUI_THEME` и
     /// автоопределение по `NO_COLOR`, `COLORTERM`, `TERM`.
     pub theme: Option<String>,
+    /// Уровень плавного курсора (`--mouse-cursor`): `auto`, `1`–`4`, `kitty`, `sixel`, `glyphs`, `cell`,
+    /// `off`; нет — `THEPOST_TUI_MOUSE_CURSOR` и автоопределение по ответам терминала.
+    pub mouse_cursor: Option<String>,
+    /// Пороги мыши; нет — [`MouseConfig::default`].
+    pub mouse: Option<MouseConfig>,
 }
 
 enum Msg {
@@ -53,6 +76,9 @@ enum Msg {
     Done(u64, Result<Page, tp_admin_client::Error>),
     Config(Result<ConfigFile, String>),
     ConfigSaved(Result<Saved, SaveError>),
+    /// Мышь консоли Linux из `/dev/input`.
+    #[cfg(target_os = "linux")]
+    Mouse(crate::input::MouseEv),
     /// `SIGTERM` или закрытие окна: выйти штатно (терминал и палитра консоли возвращаются).
     Quit,
 }
@@ -62,13 +88,43 @@ pub async fn run(mut connect: Connect) -> Result<(), String> {
     let theme = Theme::from_env(connect.theme.take().as_deref())?;
     let mut terminal = ratatui::try_init().map_err(|e| format!("терминал: {e}"))?;
     let palette = console_palette(&theme);
-    // Опрос терминала — до потока ввода (ответ приходит в stdin).
-    let theme = if theme.mode().graphics() {
-        theme.with_mark(&Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()))
+    // Опрос терминала — до потока ввода (ответ приходит в stdin) и до захвата мыши.
+    let picker = if theme.mode().graphics() {
+        Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()))
+    } else {
+        None
+    };
+    let theme = if let Some(p) = &picker {
+        theme.with_mark(p)
     } else {
         theme
     };
-    let result = event_loop(&mut terminal, connect, theme).await;
+    let cfg = connect.mouse.take().unwrap_or_default();
+    let console = std::env::var("TERM").ok().filter(|t| t == "linux");
+    // Пиксельную мышь спрашиваем только у терминалов с картинками: остальные всё равно откажут.
+    let graphics = picker
+        .as_ref()
+        .is_some_and(|p| matches!(p.protocol_type(), ProtocolType::Kitty | ProtocolType::Sixel));
+    let pixel = graphics && cursor::probe_pixel_mouse(Duration::from_millis(cfg.query_timeout_ms));
+    let caps = Caps {
+        kitty: picker
+            .as_ref()
+            .is_some_and(|p| p.protocol_type() == ProtocolType::Kitty),
+        sixel: picker
+            .as_ref()
+            .is_some_and(|p| p.protocol_type() == ProtocolType::Sixel),
+        pixel_mouse: pixel,
+        decdld: cursor::decdld_supported(|k| std::env::var(k).ok()),
+        console: console.is_some(),
+        #[cfg(target_os = "linux")]
+        input: crate::input::available(),
+        #[cfg(not(target_os = "linux"))]
+        input: false,
+    };
+    let level = cursor::detect(&caps, connect.mouse_cursor.take().as_deref())?;
+    let cursor = SmoothCursor::new(level, picker.as_ref(), cfg.shift_steps);
+    let _mouse = MouseCapture::set(io::stdout(), pixel, level == Level::Glyphs);
+    let result = event_loop(&mut terminal, connect, theme, cursor, cfg).await;
     let restored = ratatui::try_restore().map_err(|e| format!("терминал: {e}"));
     drop(palette);
     result.and(restored)
@@ -84,10 +140,59 @@ fn console_palette(theme: &Theme) -> Option<ConsolePalette<io::Stdout>> {
     ConsolePalette::set(io::stdout(), theme.console_palette()).ok()
 }
 
+/// Захват мыши на время работы интерфейса: события `crossterm`, где терминал принял режим `1016` — события
+/// в пикселях; загруженные глифы DECDLD стираются. При сбросе и панике терминал возвращается в прежний режим.
+struct MouseCapture<W: Write> {
+    out: W,
+    pixel: bool,
+    glyphs: bool,
+}
+
+impl<W: Write> MouseCapture<W> {
+    fn set(mut out: W, pixel: bool, glyphs: bool) -> Self {
+        if pixel {
+            let _ = out.write_all(b"\x1b[?1016h");
+        }
+        if let Err(e) = execute!(&mut out, crossterm::event::EnableMouseCapture) {
+            let _ = writeln!(io::stderr(), "мышь: {e}");
+        }
+        if glyphs {
+            // Набор глифов назначается в G2 и печатается одиночным сдвигом SS2.
+            let _ = out.write_all(cursor::GLYPH_G2.as_bytes());
+        }
+        let _ = out.flush();
+        let c = Self { out, pixel, glyphs };
+        c.reset_on_panic();
+        c
+    }
+
+    fn reset_on_panic(&self) {
+        let (pixel, glyphs) = (self.pixel, self.glyphs);
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let mut out = io::stdout();
+            let _ = out.write_all(mouse_reset(pixel, glyphs).as_bytes());
+            let _ = out.flush();
+            prev(info);
+        }));
+    }
+}
+
+impl<W: Write> Drop for MouseCapture<W> {
+    fn drop(&mut self) {
+        let _ = self
+            .out
+            .write_all(mouse_reset(self.pixel, self.glyphs).as_bytes());
+        let _ = self.out.flush();
+    }
+}
+
 async fn event_loop(
     terminal: &mut DefaultTerminal,
     connect: Connect,
     theme: Theme,
+    mut cur: SmoothCursor,
+    cfg: MouseConfig,
 ) -> Result<(), String> {
     let url = setting(connect.url, ENV_URL).unwrap_or_default();
     let token = setting(connect.token, ENV_TOKEN);
@@ -98,12 +203,26 @@ async fn event_loop(
     }
     let mut app = App::new(theme, login);
     app.node = connect.node.is_some();
+    app.mouse.cfg = cfg;
     let node = connect.node;
     let options = connect.options;
     let oidc = connect.oidc.map(Arc::new);
     let (tx, mut rx) = mpsc::unbounded_channel();
     spawn_input(tx.clone());
     spawn_signal(tx.clone());
+    #[cfg(target_os = "linux")]
+    let console_screen = if std::env::var("TERM").as_deref() == Ok("linux") {
+        crate::input::screen(app.mouse.cfg.console_cell)
+    } else {
+        None
+    };
+    #[cfg(target_os = "linux")]
+    if let Some(screen) = console_screen {
+        let tx = tx.clone();
+        crate::input::spawn(screen, move |ev| {
+            let _ = tx.send(Msg::Mouse(ev));
+        });
+    }
     let mut client: Option<Client> = None;
     if let Some(token) = token {
         let effects = vec![Effect::Login(LoginRequest::Token { url, token })];
@@ -120,15 +239,45 @@ async fn event_loop(
         );
     }
     loop {
-        terminal
-            .draw(|f| ui::draw(f, &app))
-            .map_err(|e| format!("терминал: {e}"))?;
+        paint(terminal, &mut app, &mut cur)?;
         let Some(msg) = rx.recv().await else {
             return Ok(());
         };
         let effects = match msg {
             Msg::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => app.on_key(k),
+            Msg::Term(Event::Mouse(m)) => {
+                let ((col, row), px) = cur.point(&m);
+                app.on_mouse(
+                    &MouseEvent {
+                        column: col,
+                        row,
+                        ..m
+                    },
+                    px,
+                )
+            }
             Msg::Term(_) => Vec::new(),
+            #[cfg(target_os = "linux")]
+            Msg::Mouse(ev) => {
+                let (col, row) = console_screen.map_or((0, 0), |s| s.cell_of(ev.x, ev.y));
+                use crossterm::event::{MouseButton, MouseEventKind};
+                let kind = match ev.kind {
+                    crate::input::Kind::Move => MouseEventKind::Moved,
+                    crate::input::Kind::Down => MouseEventKind::Down(MouseButton::Left),
+                    crate::input::Kind::Up => MouseEventKind::Up(MouseButton::Left),
+                    crate::input::Kind::Wheel(v) if v > 0 => MouseEventKind::ScrollDown,
+                    crate::input::Kind::Wheel(_) => MouseEventKind::ScrollUp,
+                };
+                app.on_mouse(
+                    &MouseEvent {
+                        kind,
+                        column: col,
+                        row,
+                        modifiers: crossterm::event::KeyModifiers::NONE,
+                    },
+                    Some((ev.x, ev.y)),
+                )
+            }
             Msg::Login(Ok((c, who, server))) => {
                 client = Some(c);
                 app.on_login(Ok((who, server)))
@@ -158,6 +307,27 @@ async fn event_loop(
             node.as_ref(),
         );
     }
+}
+
+/// Кадр: экран, курсор со сдвигом и загрузка глифов до отрисовки.
+fn paint(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    cur: &mut SmoothCursor,
+) -> Result<(), String> {
+    let px = app.mouse.px;
+    let pos = app.mouse.pos;
+    // До первого события мыши курсора нет.
+    app.cursor = pos.and_then(|p| cur.view(px, p));
+    if let Some(dcs) = cur.take_download() {
+        let mut out = io::stdout();
+        let _ = out.write_all(dcs.as_bytes());
+        let _ = out.flush();
+    }
+    terminal
+        .draw(|f| ui::draw(f, app))
+        .map_err(|e| format!("терминал: {e}"))?;
+    Ok(())
 }
 
 /// Выполнить действия интерфейса: вход, запросы и файл конфигурации узла — задачами, ответы — сообщениями в

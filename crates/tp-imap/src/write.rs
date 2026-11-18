@@ -16,6 +16,7 @@
 //!   назначения (квота — его), `MOVE` затем удаляет исходные в корзину владельца источника.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use time::OffsetDateTime;
 use tp_contracts::audit::AuditAction;
@@ -149,7 +150,7 @@ impl<T: Transport> Session<T> {
         let source = selected.mailbox;
         let targets: Vec<(usize, u32, MessageId)> = indexes
             .iter()
-            .map(|&i| (i, selected.messages[i].0.0, selected.messages[i].1))
+            .map(|&i| (i, selected.messages[i].uid.0, selected.messages[i].id))
             .collect();
         if targets.is_empty() {
             self.ok(tag, None, &format!("{verb} completed"));
@@ -311,9 +312,11 @@ impl<T: Transport> Session<T> {
         let mut seqs = Vec::new();
         let mut uids = Vec::new();
         if let Some(selected) = self.selected.as_mut() {
+            // Снимок общий из кэша: правка — через `Arc::make_mut` (PERF-03).
+            let messages = Arc::make_mut(&mut selected.messages);
             for i in sorted {
-                if i < selected.messages.len() {
-                    uids.push(selected.messages.remove(i).0.0);
+                if i < messages.len() {
+                    uids.push(messages.remove(i).uid.0);
                     seqs.push(u32::try_from(i + 1).unwrap_or(u32::MAX));
                 }
             }
@@ -350,8 +353,8 @@ impl<T: Transport> Session<T> {
             .messages
             .iter()
             .enumerate()
-            .filter(|(i, (_, id))| deleted.contains(id) && only.is_none_or(|o| o.contains(i)))
-            .map(|(i, (_, id))| (i, *id))
+            .filter(|(i, m)| deleted.contains(&m.id) && only.is_none_or(|o| o.contains(i)))
+            .map(|(i, m)| (i, m.id))
             .collect())
     }
 

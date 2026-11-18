@@ -78,9 +78,11 @@ class Ctx:
         m.login(login, pw)
         return m
 
-    def message(self, to, subject, body):
+    def message(self, to, subject, body, frm="probe@external.test"):
+        # FIX-14: frm — отправитель; для сабмишена с AUTH (587) обязан быть вошедшим,
+        # внешний From узел прав, отвергая 550 («только со своего адреса»).
         msg = EmailMessage()
-        msg["From"] = "probe@external.test"
+        msg["From"] = frm
         msg["To"] = to
         msg["Subject"] = subject
         msg["Message-ID"] = f"<probe-{secrets.token_hex(8)}@external.test>"
@@ -339,7 +341,7 @@ def run(a):
         m = st["idle"]
         tag = idle_begin(m)
         t0 = time.monotonic()
-        st["sub"].sendmail(probe1, [probe2], c.message(probe2, "probe delivery", "delivery " + word()))
+        st["sub"].sendmail(probe1, [probe2], c.message(probe2, "probe delivery", "delivery " + word(), frm=probe1))
         line = idle_wait(m, rb"^\* \d+ EXISTS", 60)
         ms = (time.monotonic() - t0) * 1000
         idle_end(m, tag)

@@ -1,6 +1,6 @@
-//! Общий доступ (DAV-17), представители (DAV-18), бронирование ресурсов и поиск принципалов (DAV-19). Хранилище,
-//! учётные записи и отправка — в памяти; права на коллекции — `FakeSharingAuthorizer` (таблица прав), записи прав и
-//! представители — `MemDav` и `MemMetadata`.
+//! Общий доступ (DAV-17), представители (DAV-18), бронирование ресурсов и поиск принципалов (DAV-19), тип ресурса
+//! (DAV-38). Хранилище, учётные записи и отправка — в памяти; права на коллекции — `FakeSharingAuthorizer`
+//! (таблица прав), записи прав и представители — `MemDav` и `MemMetadata`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use calcard::icalendar::ICalendar;
 use time::Time;
 use tp_contracts::auth::Principal;
 use tp_contracts::dav::{Collection, CollectionKind, DavStore};
-use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert};
+use tp_contracts::meta::{AccountKind, AccountScope, AccountStore, AccountUpsert, ResourceType};
 use tp_contracts::schedule::{ItipDelivery, ItipMessage, ItipMethod, ItipOutcome};
 use tp_contracts::sharing::{
     Bookers, BookingPolicy, CollectionAcl, CollectionRights, DayOfWeek, DelegateLevel,
@@ -34,6 +34,8 @@ const ALICE: &str = "alice@example.org";
 const BOB: &str = "bob@example.org";
 const PETR: &str = "petr@example.org";
 const ROOM: &str = "room@example.org";
+/// Ресурс-оборудование (CTR-88: `resource_type` `equipment`).
+const EQUIP: &str = "projector@example.org";
 
 /// Календарь Алисы, которым она делится.
 const WORK: &str = "/dav/calendars/alice@example.org/work/";
@@ -55,11 +57,18 @@ impl Share {
         let meta = MemMetadata::new(ManualClock::default().shared()).with_groups(groups.clone());
         let auth = FakeAuthenticator::default();
         let mut accounts = Vec::new();
-        for (login, name, kind) in [
-            (ALICE, "Алиса", AccountKind::User),
-            (BOB, "Борис", AccountKind::User),
-            (PETR, "Пётр", AccountKind::User),
-            (ROOM, "Переговорная «Байкал»", AccountKind::Resource),
+        for (login, name, kind, resource_type) in [
+            (ALICE, "Алиса", AccountKind::User, None),
+            (BOB, "Борис", AccountKind::User, None),
+            (PETR, "Пётр", AccountKind::User, None),
+            // Ресурс без типа — помещение (CTR-88).
+            (ROOM, "Переговорная «Байкал»", AccountKind::Resource, None),
+            (
+                EQUIP,
+                "Проектор «Эпсон»",
+                AccountKind::Resource,
+                Some(ResourceType::Equipment),
+            ),
         ] {
             let acc = meta
                 .upsert(
@@ -73,7 +82,7 @@ impl Share {
                         aliases: Vec::new(),
                         kind,
                         hidden_from_gal: false,
-                        resource_type: None,
+                        resource_type,
                     },
                 )
                 .await
@@ -1009,6 +1018,195 @@ async fn room_in_principal_search() {
         .await;
     assert!(r.body.contains("bob@example.org"), "{}", r.body);
     assert!(!r.body.contains("room@example.org/"), "{}", r.body);
+}
+
+/// DAV-38: тип ресурса — `calendar-user-type` `ROOM` (помещение) и `RESOURCE` (оборудование) у принципала
+/// и в поиске принципалов (`principal-property-search`, `calendarserver-principal-search`).
+#[tokio::test]
+async fn equipment_cutype_and_principal_search() {
+    let env = Share::new().await;
+    let cutype = r#"<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-user-type/></d:prop></d:propfind>"#;
+    for (login, value) in [(ROOM, "ROOM"), (EQUIP, "RESOURCE")] {
+        let r = env
+            .propfind(ALICE, &format!("/dav/principals/{login}/"), "0", cutype)
+            .await;
+        assert_eq!(r.status, StatusCode::MULTI_STATUS, "{}", r.body);
+        assert!(
+            r.body.contains(&format!(
+                "<c:calendar-user-type>{value}</c:calendar-user-type>"
+            )),
+            "{}",
+            r.body
+        );
+    }
+    // `principal-property-search` по `calendar-user-type` различает помещения и оборудование.
+    let search = |value: &str| {
+        format!(
+            r#"<d:principal-property-search xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:property-search><d:prop><c:calendar-user-type/></d:prop><d:match>{value}</d:match></d:property-search><d:prop><d:displayname/></d:prop></d:principal-property-search>"#
+        )
+    };
+    for (value, found, missing) in [("ROOM", ROOM, EQUIP), ("RESOURCE", EQUIP, ROOM)] {
+        let r = env
+            .send(
+                ALICE,
+                "REPORT",
+                "/dav/principals/",
+                &[("depth", "0")],
+                &search(value),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::MULTI_STATUS, "{}", r.body);
+        assert!(
+            r.body.contains(&format!("/dav/principals/{found}/")),
+            "{}",
+            r.body
+        );
+        assert!(
+            !r.body.contains(&format!("/dav/principals/{missing}/")),
+            "{}",
+            r.body
+        );
+    }
+    // Календарь macOS и iOS: `context="location"` — помещения, `context="resource"` — оборудование.
+    let cs = |context: &str| {
+        format!(
+            r#"<cs:calendarserver-principal-search xmlns:cs="http://calendarserver.org/ns/" xmlns:d="DAV:" context="{context}"><cs:search-token>example.org</cs:search-token><d:prop><d:displayname/></d:prop></cs:calendarserver-principal-search>"#
+        )
+    };
+    for (context, found, missing) in [("location", ROOM, EQUIP), ("resource", EQUIP, ROOM)] {
+        let r = env
+            .send(
+                ALICE,
+                "REPORT",
+                "/dav/principals/",
+                &[("depth", "0")],
+                &cs(context),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::MULTI_STATUS, "{}", r.body);
+        assert!(
+            r.body.contains(&format!("/dav/principals/{found}/")),
+            "{}",
+            r.body
+        );
+        assert!(
+            !r.body.contains(&format!("/dav/principals/{missing}/")),
+            "{}",
+            r.body
+        );
+        assert!(
+            !r.body.contains("/dav/principals/bob@example.org/"),
+            "пользователи не ищутся: {}",
+            r.body
+        );
+    }
+}
+
+/// DAV-38: бронирование оборудования — так же, как помещения; правила от типа ресурса не зависят.
+#[tokio::test]
+async fn equipment_booked_like_room() {
+    let env = Share::new().await;
+    env.meta
+        .set_booking_policy(
+            env.scope(EQUIP),
+            Some(BookingPolicy {
+                horizon: None,
+                ..BookingPolicy::default()
+            }),
+        )
+        .await
+        .expect("правила");
+    let ics = meeting(
+        "q1",
+        ALICE,
+        &[EQUIP, PETR],
+        "20260105T100000Z",
+        "20260105T110000Z",
+    );
+    let r = env.put(ALICE, &format!("{WORK}q1.ics"), &ics).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+    assert_eq!(
+        env.partstat(EQUIP, "q1", EQUIP).await.as_deref(),
+        Some("ACCEPTED"),
+        "событие — в календаре ресурса"
+    );
+    assert_eq!(
+        env.partstat(ALICE, "q1", EQUIP).await.as_deref(),
+        Some("ACCEPTED"),
+        "ответ ресурса — у организатора"
+    );
+    // Занято — отказ, события в календаре ресурса нет.
+    env.propfind(BOB, "/dav/calendars/bob@example.org/", "0", "")
+        .await;
+    let ics = meeting("q2", BOB, &[EQUIP], "20260105T103000Z", "20260105T113000Z");
+    let r = env
+        .put(BOB, "/dav/calendars/bob@example.org/calendar/q2.ics", &ics)
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+    assert_eq!(env.partstat(EQUIP, "q2", EQUIP).await, None);
+    assert_eq!(
+        env.partstat(BOB, "q2", EQUIP).await.as_deref(),
+        Some("DECLINED")
+    );
+}
+
+/// Решение 121 (а): представитель, назначенный через `PROPPATCH group-member-set` в `calendar-proxy-write`,
+/// рассылает приглашения от имени владельца с `SENT-BY`; повторное назначение признак планирования не меняет.
+#[tokio::test]
+async fn proppatch_appointed_delegate_sends_with_sent_by() {
+    let env = Share::new().await;
+    let group = "/dav/principals/alice@example.org/calendar-proxy-write/";
+    let set = r#"<d:propertyupdate xmlns:d="DAV:"><d:set><d:prop><d:group-member-set><d:href>/dav/principals/bob@example.org/</d:href></d:group-member-set></d:prop></d:set></d:propertyupdate>"#;
+    let r = env.send(ALICE, "PROPPATCH", group, &[], set).await;
+    assert!(r.body.contains("200 OK"), "{}", r.body);
+    // Права представителя, которые производственный `SharingAuthorizer` выводит из назначения.
+    env.grant(
+        BOB,
+        CollectionRights {
+            schedule: true,
+            ..CollectionRights::WRITE
+        },
+    )
+    .await;
+    let ics = meeting("d1", ALICE, &[PETR], "20260105T100000Z", "20260105T110000Z");
+    let r = env.put(BOB, &format!("{WORK}d1.ics"), &ics).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+    let o = crate::deliver::find_uid(&env.store, env.scope(PETR), "d1")
+        .await
+        .expect("хранилище")
+        .expect("приглашение у участника");
+    assert!(
+        o.body.contains("SENT-BY=\"mailto:bob@example.org\"")
+            || o.body.contains("SENT-BY=mailto:bob@example.org"),
+        "{}",
+        o.body
+    );
+    assert!(
+        o.body.contains(":mailto:alice@example.org"),
+        "организатор — владелец: {}",
+        o.body
+    );
+    // Повторное назначение того же представителя признак не меняет: выключенный в Admin API остаётся выключенным.
+    env.meta
+        .set_delegate(
+            env.scope(ALICE),
+            tp_contracts::sharing::Delegate {
+                delegate: env.scope(BOB).account,
+                level: DelegateLevel::Write,
+                schedule_on_behalf: false,
+            },
+        )
+        .await
+        .expect("признак выключен");
+    let r = env.send(ALICE, "PROPPATCH", group, &[], set).await;
+    assert!(r.body.contains("200 OK"), "{}", r.body);
+    let delegates = env
+        .meta
+        .delegates(env.scope(ALICE))
+        .await
+        .expect("представители");
+    assert_eq!(delegates.len(), 1);
+    assert!(!delegates[0].schedule_on_behalf, "признак сохранён");
 }
 
 #[tokio::test]

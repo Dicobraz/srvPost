@@ -476,18 +476,19 @@ impl<T: Transport> Session<T> {
         };
         let id = node.mailbox.id;
         let limit = self.ctx.config.limits.max_mailbox_messages;
-        let list = self
-            .ctx
-            .deps
-            .messages
-            .list(scope, id, MessageQuery::All, limit.saturating_add(1))
+        // Снимок папки — общий `Arc` из кэша снимков (PERF-03): список с метаданными выгружается
+        // только пересборкой снимка, повторные выборки папки соединениями — из кэша.
+        let window = limit.saturating_add(1);
+        let messages = self
+            .snapshots
+            .serve(&self.ctx.deps, scope, id, window)
             .await?;
-        if list.len() > limit {
+        if messages.len() > limit {
             self.no(tag, Some(proto::code("LIMIT")), "Mailbox is too large");
             return Ok(());
         }
         let st = self.ctx.deps.mailboxes.status(scope, id).await?;
-        let first_unseen = list.iter().position(|m| !m.flags.contains(&Flag::Seen));
+        let first_unseen = messages.iter().position(|m| !m.seen);
         self.data(Data::Flags(system_flags()));
         let permanent = if read_only {
             Vec::new()
@@ -511,7 +512,9 @@ impl<T: Transport> Session<T> {
             Some(Code::PermanentFlags(permanent)),
             "Flags permitted",
         );
-        self.data(Data::Exists(u32::try_from(list.len()).unwrap_or(u32::MAX)));
+        self.data(Data::Exists(
+            u32::try_from(messages.len()).unwrap_or(u32::MAX),
+        ));
         if !self.rev2 {
             self.data(Data::Recent(0));
             if let Some(i) = first_unseen {
@@ -556,9 +559,16 @@ impl<T: Transport> Session<T> {
             read_only,
             uid_validity: st.uid_validity,
             modseq: st.highest_modseq,
-            messages: list.iter().map(|m| (m.uid, m.id)).collect(),
+            messages,
         });
         if let Some(q) = qresync {
+            // QRESYNC нужны флаги и ModSeq писем снимка — редкий путь читает список с метаданными.
+            let list = self
+                .ctx
+                .deps
+                .messages
+                .list(scope, id, MessageQuery::All, window)
+                .await?;
             self.qresync_select(q, id, st.uid_validity, st.uid_next, &list)
                 .await?;
         }

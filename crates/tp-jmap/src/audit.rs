@@ -7,19 +7,22 @@
 //!   изменение скриптов Sieve и автоответа (`SieveScript/set`, `VacationResponse/set`) — `ChangeRules`. Пишутся только
 //!   при включённой политике ящика или организации;
 //! - не владелец: отправка от адреса другой учётной записи — `SendAs` или `SendOnBehalf` в ящике владельца адреса
-//!   (исполнитель — представитель); пишется по умолчанию. Других действий в чужом ящике у JMAP нет: методам доступна
-//!   только своя учётная запись;
-//! - чтение владельцем (`Email/get`, `Email/query` и прочие `/get`) журналу не сообщается.
+//!   (исполнитель — представитель); поиск по тексту (`Email/query` с `text`/`body`) в открытом чужом ящике —
+//!   `Search` до выполнения запроса (решение 114, JMAP-43), как IMAP-23; пишутся по умолчанию. Доступ к чужим
+//!   ящикам почты в JMAP откроет отдельная карточка (план, волна jmap-26): запись — на пути метода;
+//! - чтение владельцем (`Email/get`, `Email/query` и прочие `/get`) журналу не сообщается: вход, чтение и поиск
+//!   владельца не записываются никогда (контракт CTR-81).
 //!
 //! Запись делается после выполненного действия. Сбой журнала действие не отменяет: ошибка — в журнале узла
-//! (`error`), метод отвечает успехом.
+//! (`error`), метод отвечает успехом. Исключение — поиск по тексту в чужом ящике: запись до выполнения, сбой
+//! журнала — ошибка метода, результат без записи не выдаётся (как IMAP-23).
 
 use time::OffsetDateTime;
 use tp_contracts::audit::{
     AuditAction, AuditActorKind, AuditEntry, AuditObject, MAX_AUDIT_TEXT_LEN,
 };
 use tp_contracts::meta::AccountScope;
-use tp_contracts::{AccountId, MailboxId, MessageId};
+use tp_contracts::{AccountId, MailboxId, MessageId, Result};
 
 use crate::core::Ctx;
 
@@ -102,14 +105,46 @@ pub(crate) async fn delegate(
     record(ctx, scope, AuditActorKind::Delegate, action, object).await;
 }
 
+/// Поиск по тексту в чужом ящике (решение 114, JMAP-43): одна запись `Search` до выполнения запроса — без записи
+/// результат не выдаётся, как IMAP-23. `mailbox` — папка, если запрос к одной; `query` — строка запроса
+/// (`text "…"`/`body "…"`, чистится [`detail`]), найденные письма не записываются. Свой ящик не записывается
+/// (вход, чтение и поиск владельца — вне журнала). Ошибка журнала — ошибка метода.
+pub(crate) async fn search(ctx: &Ctx<'_>, mailbox: Option<MailboxId>, query: &str) -> Result<()> {
+    let owner =
+        ctx.scope.tenant == ctx.principal.tenant && ctx.scope.account == ctx.principal.account;
+    let detail = (!owner).then(|| detail(query)).flatten();
+    let Some(detail) = detail else {
+        return Ok(());
+    };
+    let entry = AuditEntry {
+        scope: ctx.scope,
+        at: OffsetDateTime::now_utc(),
+        actor: ctx.principal.login.clone(),
+        actor_account: Some(ctx.principal.account),
+        actor_kind: AuditActorKind::Delegate,
+        action: AuditAction::Search,
+        object: AuditObject {
+            mailbox,
+            message: None,
+            detail: Some(detail),
+        },
+        client: Some("jmap".to_owned()),
+    };
+    ctx.jmap.d.audit.record_audit(entry).await.map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value, json};
+    use std::collections::HashMap;
+
+    use serde_json::{Map, Value, json};
     use tp_contracts::audit::{AuditAction, AuditActorKind, AuditPolicy, MailboxAudit};
-    use tp_contracts::auth::SendRight;
+    use tp_contracts::auth::{Principal, SendRight};
     use tp_contracts::meta::SpecialUse;
 
-    use crate::testenv::Env;
+    use crate::core::{Ctx, MethodResult};
+    use crate::sharing::Access;
+    use crate::testenv::{Env, mail};
 
     const USING: &[&str] = &[
         "urn:ietf:params:jmap:core",
@@ -275,5 +310,110 @@ mod tests {
         send(&env, "boss@example.org").await;
         assert_eq!(env.outbound.queued().len(), 1);
         assert!(env.audit.entries().is_empty());
+    }
+
+    /// `Email/query` по тексту в чужом ящике — одна запись `Search` до выдачи результата (решение 114, как
+    /// IMAP-23): строка запроса в `detail`, папка — при запросе к одной папке, найденные письма не записываются;
+    /// поиск только по адресу (`from`) и владелец в своём ящике — не записываются; сбой журнала — ошибка метода.
+    /// Контекст представителя: сессия boss, открыт ящик владельца — как его откроет доступ к чужим ящикам
+    /// (план, волна jmap-26); сегодня методы JMAP принимают только свой `accountId`.
+    #[tokio::test]
+    async fn delegate_text_search_is_recorded() {
+        let env = Env::new().await;
+        let inbox = env.mailbox(SpecialUse::Inbox);
+        env.deliver(
+            inbox,
+            &mail("Договор", "boris@x.org", "", "текст письма"),
+            Default::default(),
+        )
+        .await;
+        let boss = env.user("boss@example.org").await;
+        // `Email/query` от имени `who` в ящике владельца окружения.
+        async fn query(
+            env: &Env,
+            who: &Principal,
+            filter: Value,
+        ) -> MethodResult<Map<String, Value>> {
+            let mut created = HashMap::new();
+            let mut ctx = Ctx {
+                jmap: &env.jmap,
+                principal: who,
+                scope: env.scope,
+                access: Access::Own,
+                created: &mut created,
+                implicit: Vec::new(),
+            };
+            let mut args = Map::new();
+            args.insert("accountId".into(), json!(env.account()));
+            args.insert("filter".into(), filter);
+            crate::email_query::query(&mut ctx, args).await
+        }
+
+        // Представитель ищет по тексту — одна запись со строкой запроса, без найденных писем.
+        let out = query(&env, &boss, json!({"text": "договор"}))
+            .await
+            .expect("query");
+        assert!(out.contains_key("ids"), "{out:?}");
+        let e = env.audit.entries();
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].scope, env.scope);
+        assert_eq!(e[0].actor, "boss@example.org");
+        assert_eq!(e[0].actor_account, Some(boss.account));
+        assert_eq!(e[0].actor_kind, AuditActorKind::Delegate);
+        assert_eq!(e[0].action, AuditAction::Search);
+        assert_eq!(e[0].object.mailbox, None);
+        assert_eq!(e[0].object.message, None);
+        assert_eq!(e[0].object.detail.as_deref(), Some("text \"договор\""));
+        assert_eq!(e[0].client.as_deref(), Some("jmap"));
+
+        // Только адрес (`from`) — не запись; вместе с текстом — запись с одной строкой `text`.
+        query(&env, &boss, json!({"from": "boris"}))
+            .await
+            .expect("query");
+        assert_eq!(env.audit.entries().len(), 1);
+        query(&env, &boss, json!({"text": "договор", "from": "boris"}))
+            .await
+            .expect("query");
+        let e = env.audit.entries();
+        assert_eq!(e.len(), 2, "{e:?}");
+        assert_eq!(e[1].object.detail.as_deref(), Some("text \"договор\""));
+
+        // Управляющие символы чистятся, кавычки в строке запроса экранируются.
+        query(&env, &boss, json!({"text": "дог\"овор\n"}))
+            .await
+            .expect("query");
+        let e = env.audit.entries();
+        assert_eq!(e.len(), 3, "{e:?}");
+        assert_eq!(e[2].object.detail.as_deref(), Some("text \"дог\\\"овор\""));
+
+        // `body` и запрос к одной папке: строка запроса `body`, папка — в записи.
+        query(
+            &env,
+            &boss,
+            json!({"body": "письма", "inMailbox": inbox.to_string()}),
+        )
+        .await
+        .expect("query");
+        let e = env.audit.entries();
+        assert_eq!(e.len(), 4, "{e:?}");
+        assert_eq!(e[3].object.mailbox, Some(inbox));
+        assert_eq!(e[3].object.detail.as_deref(), Some("body \"письма\""));
+
+        // Владелец в своём ящике — не запись.
+        query(&env, &env.principal, json!({"text": "договор"}))
+            .await
+            .expect("query");
+        assert_eq!(env.audit.entries().len(), 4);
+
+        // Сбой журнала — ошибка метода: результат чужого ящика без записи не выдаётся.
+        env.audit
+            .fail_next(tp_contracts::Error::Unavailable { retry_after: None });
+        assert!(
+            query(&env, &boss, json!({"text": "договор"}))
+                .await
+                .is_err(),
+            "сбой журнала"
+        );
+        assert_eq!(env.audit.entries().len(), 4);
     }
 }

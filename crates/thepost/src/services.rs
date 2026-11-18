@@ -82,6 +82,10 @@ pub struct Services {
     /// То же хранилище: воркер истечения корзины роли maintenance (`Store::run_trash_expiry`); клоны разделяют
     /// сигнал о помещении в корзину этим узлом.
     pub mail: tp_mailstore::Store,
+    /// Кэш списков писем папок (`mailstore.list_cache`, PERF-01, подключение — PERF-06): один на узел —
+    /// общий для IMAP и JMAP ([`Services::imap`], [`Services::jmap`]) — тот же обёрнутый `MessageStore`,
+    /// иначе двойная память. `None` — выключен (`max_bytes: 0`), протоколы читают [`Services::meta`] напрямую.
+    pub list_cache: Option<Arc<tp_mailstore::CachedMessages>>,
     /// Точки принятия решений модулей.
     pub hooks: DecisionHooks,
     /// Проверка учётных данных: пароль, Bearer, Kerberos.
@@ -202,6 +206,7 @@ impl Services {
                 .clone(),
             ..tp_blob::WriterConfig::default()
         };
+        let mail_cfg = (*cfg.section::<tp_mailstore::Config>(MAILSTORE)?).clone();
         let mail = tp_mailstore::Store::with_writer(
             tp_mailstore::Deps {
                 blobs: blob.clone(),
@@ -213,10 +218,23 @@ impl Services {
                 bus: bus.clone(),
                 hooks: hooks.clone(),
             },
-            (*cfg.section::<tp_mailstore::Config>(MAILSTORE)?).clone(),
+            mail_cfg.clone(),
             writer,
         );
         let store: Arc<dyn MailStore> = Arc::new(mail.clone());
+        // Кэш списков папок (PERF-06, `mailstore.list_cache`): один на узел — общий для IMAP и JMAP;
+        // `max_bytes: 0` — выключен, протоколы читают метаданные напрямую. Показатели — в /metrics.
+        let list_cache = (mail_cfg.list_cache.max_bytes > 0).then(|| {
+            Arc::new(tp_mailstore::CachedMessages::new(
+                Arc::new(meta.clone()),
+                Arc::new(meta.clone()),
+                Arc::new(meta.clone()),
+                mail_cfg.list_cache.clone(),
+            ))
+        });
+        if let Some(cache) = &list_cache {
+            crate::metrics::register_list_cache(metrics, cache.clone());
+        }
 
         // Вход: пароль приложения или каталога, Bearer OIDC, Kerberos; права — ACL папок.
         let auth = cfg.section::<AuthSection>(AUTH)?;
@@ -363,6 +381,7 @@ impl Services {
             bus,
             store,
             mail,
+            list_cache,
             hooks,
             authn,
             sasl,
@@ -509,13 +528,22 @@ impl Services {
         .with_routes(self.routes.clone(), Some(self.bus.clone())))
     }
 
+    /// Хранилище писем для протоколов IMAP и JMAP: поверх кэша списков папок (`mailstore.list_cache`),
+    /// если он включён, иначе метаданные напрямую. Один кэш на оба протокола ([`Self::list_cache`]).
+    fn protocol_messages(&self) -> Arc<dyn MessageStore> {
+        if let Some(cache) = &self.list_cache {
+            return cache.clone();
+        }
+        Arc::new(self.meta.clone())
+    }
+
     /// Зависимости IMAP.
     pub fn imap(&self) -> tp_imap::Deps {
         tp_imap::Deps {
             sasl: self.sasl.clone(),
             auth: self.authn.clone(),
             mailboxes: Arc::new(self.meta.clone()),
-            messages: Arc::new(self.meta.clone()),
+            messages: self.protocol_messages(),
             store: self.store.clone(),
             search: self.search.clone(),
             changes: Arc::new(self.meta.clone()),
@@ -567,7 +595,7 @@ impl Services {
         let deps = tp_jmap::Deps {
             auth: self.authn.clone(),
             mailboxes: Arc::new(self.meta.clone()),
-            messages: Arc::new(self.meta.clone()),
+            messages: self.protocol_messages(),
             changes: Arc::new(self.meta.clone()),
             store: self.store.clone(),
             search: self.search.clone(),
@@ -2330,6 +2358,204 @@ mod tests {
 
         jmap.shutdown();
         drop((services, jmap, meta));
+        crate::testutil::drop_database(&url, &db_name).await;
+    }
+
+    /// PERF-06: `mailstore.list_cache` включён (по умолчанию) — IMAP и JMAP получают один общий
+    /// кэш списков папок: JMAP `Email/query` идёт через него (пересборка записей), то же хранилище
+    /// у IMAP (та же запись кэша, повторное чтение — попадание); показатели кэша — в /metrics.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn list_cache_serves_imap_and_jmap() {
+        use tp_contracts::ids::DomainId;
+        use tp_contracts::meta::{AccountKind, AccountUpsert};
+        use tp_contracts::transport::{AcceptedDomain, DomainKind, TransportStore};
+
+        const ALICE: &str = "alice@corp.example";
+        const MAIL: &str = "urn:ietf:params:jmap:mail";
+
+        let Some(url) = tp_testkit::pg_url() else {
+            eprintln!("TEST_DATABASE_URL не задан — тест пропущен");
+            return;
+        };
+        let url = crate::testutil::dev_url(&url);
+        let (db_name, url_db) = crate::testutil::create_database(&url).await;
+        let pool = crate::testutil::db_pool(&url_db).await;
+        tp_meta::schema::migrate(&pool).await.expect("migrate");
+        let bus: Arc<dyn EventBus> = Arc::new(tp_cluster::LocalBus::default());
+        let meta = PgMeta::new(pool, tp_meta::MetaConfig::default()).with_bus(bus.clone());
+        let cfg = crate::sections::registry_of(crate::modules::BUILTIN)
+            .expect("registry")
+            .parse(
+                "domain: example.org\nprofile: dev\nservice_http:\n  allow_plaintext: true\n\
+                 database:\n  url: postgres://thepost@localhost/thepost?sslmode=disable\n  tls: { allow_plaintext: true }\n\
+                 blob:\n  url: file:///var/lib/thepost/blob\n",
+                Vec::new(),
+            )
+            .expect("config");
+        let ext = Registry::default();
+        let metrics = tp_platform::Metrics::default();
+        let services = Services::build(Base {
+            cfg: &cfg,
+            meta: meta.clone(),
+            blob: Arc::new(tp_testkit::MemBlobStore::default()),
+            bus: bus.clone(),
+            secrets: Arc::new(tp_testkit::MemSecretStore::default()),
+            ext: &ext,
+            metrics: &metrics,
+            node: NodeId::new("perf-06").expect("node"),
+        })
+        .await
+        .expect("services");
+        let t = TenantId::DEFAULT;
+
+        // Кэш включён по умолчанию (`max_bytes` умолчания узла), показатели — в /metrics.
+        let cache = services.list_cache.clone().expect("кэш включён");
+        let text = metrics.encode().expect("encode");
+        assert!(
+            text.contains("tp_list_cache_rebuilds_total"),
+            "показателей кэша нет в /metrics: {text}"
+        );
+        // IMAP — тот же обёрнутый `MessageStore`, что в Services.
+        let imap_messages = services.imap().messages;
+        let shared: Arc<dyn MessageStore> = cache.clone();
+        assert_eq!(
+            Arc::as_ptr(&imap_messages) as *const u8,
+            Arc::as_ptr(&shared) as *const u8,
+            "IMAP должен получать общий кэш"
+        );
+
+        // JMAP: `Email/query` учётной записи — чтение списков всех папок через общий кэш (пересборка).
+        let version = TransportStore::cluster(&meta)
+            .await
+            .expect("cluster")
+            .version;
+        let domain = DomainId::new();
+        TransportStore::put_domain(
+            &meta,
+            version,
+            &AcceptedDomain {
+                id: domain,
+                tenant: t,
+                name: "corp.example".into(),
+                kind: DomainKind::Authoritative,
+            },
+        )
+        .await
+        .expect("domain");
+        let acc = AccountStore::upsert(
+            &meta,
+            t,
+            AccountUpsert {
+                domain,
+                login: ALICE.into(),
+                display_name: ALICE.into(),
+                external_id: None,
+                enabled: true,
+                aliases: Vec::new(),
+                kind: AccountKind::User,
+                hidden_from_gal: false,
+                resource_type: None,
+            },
+        )
+        .await
+        .expect("account");
+        let scope = AccountScope {
+            tenant: t,
+            account: acc.id,
+        };
+        let p = Principal {
+            tenant: t,
+            account: acc.id,
+            login: ALICE.into(),
+            groups: BTreeSet::new(),
+            scopes: None,
+        };
+
+        let smtp = cfg.section::<SmtpConfig>(SMTP).expect("smtp");
+        let jmap_cfg = (*cfg.section::<tp_jmap::JmapConfig>(JMAP).expect("jmap")).clone();
+        let jmap = services.jmap(&ext, jmap_cfg, &smtp, None).expect("jmap");
+        let session = jmap.session(&p, "https://mail.corp.example").await;
+        let account = session["primaryAccounts"][MAIL]
+            .as_str()
+            .unwrap_or_else(|| panic!("{session}"))
+            .to_owned();
+        let body = serde_json::json!({
+            "using": ["urn:ietf:params:jmap:core", MAIL],
+            "methodCalls": [["Email/query", {"accountId": account}, "c0"]],
+        });
+        let out = jmap
+            .api(&p, body.to_string().as_bytes())
+            .await
+            .expect("api");
+        let resp = serde_json::to_value(out).expect("json");
+        assert_eq!(resp["methodResponses"][0][0], "Email/query", "{resp}");
+        let s = cache.stats();
+        assert!(s.rebuilds >= 1, "Email/query прошёл мимо кэша: {s:?}");
+
+        // То же хранилище у IMAP: список папки — попадание из кэша (записи полные после `Email/query`).
+        let inbox = MailboxStore::list(&meta, scope)
+            .await
+            .expect("mailboxes")
+            .into_iter()
+            .find(|m| m.role == Some(tp_contracts::meta::SpecialUse::Inbox))
+            .expect("inbox")
+            .id;
+        MessageStore::list(imap_messages.as_ref(), scope, inbox, MessageQuery::All, 100)
+            .await
+            .expect("list");
+        let s = cache.stats();
+        assert!(s.hits >= 1, "список папки не из кэша: {s:?}");
+
+        jmap.shutdown();
+        drop((services, jmap, meta));
+        crate::testutil::drop_database(&url, &db_name).await;
+    }
+
+    /// PERF-06: `mailstore.list_cache.max_bytes: 0` — кэш выключен, протоколы читают метаданные
+    /// напрямую, показатели кэша в /metrics не регистрируются.
+    #[tokio::test]
+    async fn list_cache_disabled_passes_meta_through() {
+        let Some(url) = tp_testkit::pg_url() else {
+            eprintln!("TEST_DATABASE_URL не задан — тест пропущен");
+            return;
+        };
+        let url = crate::testutil::dev_url(&url);
+        let (db_name, url_db) = crate::testutil::create_database(&url).await;
+        let pool = crate::testutil::db_pool(&url_db).await;
+        tp_meta::schema::migrate(&pool).await.expect("migrate");
+        let bus: Arc<dyn EventBus> = Arc::new(tp_cluster::LocalBus::default());
+        let meta = PgMeta::new(pool, tp_meta::MetaConfig::default()).with_bus(bus.clone());
+        let cfg = crate::sections::registry_of(crate::modules::BUILTIN)
+            .expect("registry")
+            .parse(
+                "domain: example.org\nprofile: dev\nservice_http:\n  allow_plaintext: true\n\
+                 database:\n  url: postgres://thepost@localhost/thepost?sslmode=disable\n  tls: { allow_plaintext: true }\n\
+                 blob:\n  url: file:///var/lib/thepost/blob\n\
+                 mailstore:\n  list_cache:\n    max_bytes: 0\n",
+                Vec::new(),
+            )
+            .expect("config");
+        let ext = Registry::default();
+        let metrics = tp_platform::Metrics::default();
+        let services = Services::build(Base {
+            cfg: &cfg,
+            meta: meta.clone(),
+            blob: Arc::new(tp_testkit::MemBlobStore::default()),
+            bus: bus.clone(),
+            secrets: Arc::new(tp_testkit::MemSecretStore::default()),
+            ext: &ext,
+            metrics: &metrics,
+            node: NodeId::new("perf-06").expect("node"),
+        })
+        .await
+        .expect("services");
+        assert!(services.list_cache.is_none(), "кэш должен быть выключен");
+        let text = metrics.encode().expect("encode");
+        assert!(
+            !text.contains("tp_list_cache"),
+            "показатели выключенного кэша не должны регистрироваться: {text}"
+        );
+        drop((services, meta));
         crate::testutil::drop_database(&url, &db_name).await;
     }
 }

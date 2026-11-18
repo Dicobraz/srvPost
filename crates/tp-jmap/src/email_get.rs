@@ -9,16 +9,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
+use std::sync::Arc;
 
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt, stream};
 use mail_parser::{HeaderValue, MessageParser};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 use tp_contracts::blob::ByteStream;
-use tp_contracts::meta::{Address, BodyPart, Changes, Flag, Message};
-use tp_contracts::{MessageId, Result};
+use tp_contracts::meta::{Address, BodyPart, Changes, Flag, Message, MessageQuery};
+use tp_contracts::{MailboxId, MessageId, Result};
 
 use crate::core::error::{MethodError, MethodResult, changes_error};
 use crate::core::request::{
@@ -697,19 +698,110 @@ pub(crate) async fn get(
         }
         None => DEFAULT_BODY_PROPS.iter().map(|s| (*s).to_owned()).collect(),
     };
-    let state = ctx.state().await?;
+    let (state, token) = ctx.state_full().await?;
     let d = &ctx.jmap.d;
+    let acct = ctx.scope;
+    let scope = (acct.tenant, acct.account);
+    // Ключ кэша: разрешённые идентификаторы (`#cid` разрешены заранее) и всё, что влияет на ответ.
+    let resolved: Option<Vec<String>> = a
+        .get
+        .ids
+        .as_ref()
+        .map(|ids| ids.iter().map(|id| ctx.resolve_id(id).to_owned()).collect());
+    let cache_key = (ctx.jmap.cfg.query_cache.get_max_bytes > 0).then(|| {
+        format!(
+            "{resolved:?}|{props:?}|{body_props:?}|{}|{}|{}|{}",
+            a.fetch_text_body_values,
+            a.fetch_html_body_values,
+            a.fetch_all_body_values,
+            a.max_body_value_bytes
+        )
+    });
+    // Попадание — готовый ответ без `state`; блокировка без `await` — `Caches` не `Send`.
+    let cached = cache_key.as_ref().and_then(|k| {
+        ctx.jmap
+            .caches()
+            .lookup_get(scope, k, &token)
+            .map(|v| (k, v))
+    });
+    if let Some((_, value)) = cached {
+        let mut out = (*value).clone();
+        out.insert("state".into(), json!(state_string(state)));
+        return Ok(out);
+    }
     let mut found = Vec::new();
     let mut not_found = Vec::new();
     match &a.get.ids {
         Some(ids) => {
-            for id in ids {
-                let msg = match MessageId::from_str(ctx.resolve_id(id)) {
-                    Ok(mid) => d.messages.get(ctx.scope, mid).await?,
-                    Err(_) => None,
-                };
-                match msg {
-                    Some(m) => found.push(m),
+            // Письма по идентификаторам; пакетно — по папкам из кэша `Email/query` с тем же токеном
+            // (один запрос на папку), остальное — точными чтениями параллельно.
+            let mids: Vec<Option<MessageId>> = ids
+                .iter()
+                .map(|id| MessageId::from_str(ctx.resolve_id(id)).ok())
+                .collect();
+            let uniq: Vec<MessageId> = mids
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            let mut map: HashMap<MessageId, Message> = HashMap::new();
+            if !uniq.is_empty() {
+                // Папки — из кэша `Email/query` с тем же токеном; блокировка снимается до
+                // точек ожидания: `Caches` не `Send`.
+                let covering = ctx.jmap.caches().covering(scope, &uniq, &token);
+                if let Some(boxes) = covering {
+                    let mut groups: HashMap<MailboxId, Vec<MessageId>> = HashMap::new();
+                    for (id, mb) in uniq.iter().zip(&boxes) {
+                        groups.entry(*mb).or_default().push(*id);
+                    }
+                    for (mb, group) in groups {
+                        let n = group.len();
+                        if let Ok(msgs) = d
+                            .messages
+                            .list(ctx.scope, mb, MessageQuery::Ids(group), n)
+                            .await
+                        {
+                            map.extend(msgs.into_iter().map(|m| (m.id, m)));
+                        }
+                    }
+                }
+                let missing: Vec<MessageId> = uniq
+                    .into_iter()
+                    .filter(|id| !map.contains_key(id))
+                    .collect();
+                if !missing.is_empty() {
+                    let n = ctx
+                        .jmap
+                        .cfg
+                        .query_cache
+                        .max_parallel_get
+                        .max(1)
+                        .min(missing.len());
+                    let store = d.messages.clone();
+                    let got: Vec<Result<Option<Message>>> = stream::iter(missing)
+                        .map(|id| {
+                            let store = store.clone();
+                            async move { store.get(acct, id).await }
+                        })
+                        .buffer_unordered(n)
+                        .collect()
+                        .await;
+                    for r in got {
+                        match r {
+                            Ok(Some(m)) => {
+                                map.insert(m.id, m);
+                            }
+                            Ok(None) => {}
+                            Err(e) => return Err(e.into()),
+                        }
+                    }
+                }
+            }
+            for (id, mid) in ids.iter().zip(&mids) {
+                match mid.as_ref().and_then(|mid| map.get(mid)) {
+                    Some(m) => found.push(m.clone()),
                     None => not_found.push(id.clone()),
                 }
             }
@@ -725,12 +817,20 @@ pub(crate) async fn get(
     for m in &found {
         list.push(email_json(ctx, m, &props, &a, &body_props).await?);
     }
-    Ok(object(json!({
+    let out = object(json!({
         "accountId": a.get.account_id,
         "state": state_string(state),
         "list": list,
         "notFound": not_found,
-    })))
+    }));
+    if let Some(k) = &cache_key {
+        let mut stored = out.clone();
+        stored.remove("state");
+        ctx.jmap
+            .caches()
+            .store_get(scope, k, token, Arc::new(stored));
+    }
+    Ok(out)
 }
 
 /// `Email/changes` по журналу изменений писем учётной записи.
@@ -1141,5 +1241,54 @@ mod tests {
             "{r:?}"
         );
         assert_eq!(r[0][1]["destroyed"], json!([]));
+    }
+
+    /// Кэш `Email/get` прозрачен: повтор с теми же аргументами — тот же ответ (кроме свежего `state`),
+    /// после смены флагов — обновлённые ключевые слова (PERF-02); запрос после `Email/query` берёт
+    /// письма пакетно по папкам из записи кэша запроса.
+    #[tokio::test]
+    async fn get_cache_transparent() {
+        let env = Env::new().await;
+        let inbox = env.mailbox(SpecialUse::Inbox);
+        let a = env
+            .deliver(
+                inbox,
+                &mail("Отчёт", "ann@x.org", "", "тело"),
+                Default::default(),
+            )
+            .await;
+        let b = env
+            .deliver(
+                inbox,
+                &mail("Счёт", "bob@x.org", "", "сумма"),
+                [Flag::Seen].into(),
+            )
+            .await;
+        let acc = env.account();
+        let args = |ids: Vec<String>| json!({"accountId": acc, "ids": ids, "properties": ["subject", "keywords", "mailboxIds"]});
+        let ids = vec![a.to_string(), b.to_string()];
+        let first = env.call("Email/get", args(ids.clone()), "Email/get").await;
+        assert_eq!(first["notFound"], json!([]));
+        assert_eq!(first["list"][0]["keywords"], json!({}));
+        assert_eq!(first["list"][1]["keywords"], json!({"$seen": true}));
+        // Повтор — из кэша: тот же список, свежее состояние.
+        let second = env.call("Email/get", args(ids.clone()), "Email/get").await;
+        assert_eq!(second["list"], first["list"]);
+        assert_eq!(second["state"], first["state"]);
+        // Смена флага — токен изменился: пересборка с обновлёнными ключевыми словами.
+        use tp_contracts::meta::MessageStore as _;
+        env.meta
+            .set_flags(env.scope, &[a], FlagOp::Add([Flag::Seen].into()), None)
+            .await
+            .expect("flags");
+        let third = env.call("Email/get", args(ids.clone()), "Email/get").await;
+        assert_eq!(third["list"][0]["keywords"], json!({"$seen": true}));
+        // Порядок ответа — как в запросе; несуществующий идентификатор — в `notFound`.
+        let mixed = vec![b.to_string(), a.to_string(), "nope".into()];
+        let r = env.call("Email/get", args(mixed), "Email/get").await;
+        assert_eq!(r["list"].as_array().map(Vec::len), Some(2), "{r:?}");
+        assert_eq!(r["list"][0]["subject"], "Счёт");
+        assert_eq!(r["list"][1]["subject"], "Отчёт");
+        assert_eq!(r["notFound"], json!(["nope"]));
     }
 }
