@@ -58,8 +58,8 @@ use tp_smtp::queue::{QueueDeps, system_now};
 use tp_smtp::routes::Routes;
 use tp_smtp::sources::Sources;
 use tp_smtp::{
-    AuthCheck, Delivery, Groups, Milters, Queue, QueueWorker, SendLimits, SmtpConfig, SmtpMetrics,
-    Tracking,
+    AuthCheck, Delivery, Envelope, Groups, Handler, Milters, Queue, QueueWorker, Reply, SendLimits,
+    SmtpConfig, SmtpMetrics, Tracking,
 };
 
 use crate::infra;
@@ -178,6 +178,76 @@ pub struct Base<'a> {
     pub metrics: &'a Metrics,
     /// Имя узла (журнал доставки).
     pub node: NodeId,
+}
+
+/// Сервисы узла без слоя данных — пресет edge (SRS 2.6, APP-61): приём smtp-in в DMZ без PostgreSQL и BLOB.
+/// Секреты (ключ TLS приёма) узел читает из хранилища секретов напрямую, как остальные узлы (SRS 2.6, п. 6.7).
+pub struct EdgeServices {
+    /// Ограничитель частоты узла (лимиты и доверенные подсети — секция `ratelimit`, без перезапуска).
+    pub limiter: Arc<RateLimiter>,
+    /// Метрики SMTP.
+    pub smtp_metrics: Arc<SmtpMetrics>,
+}
+
+impl std::fmt::Debug for EdgeServices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EdgeServices").finish_non_exhaustive()
+    }
+}
+
+impl EdgeServices {
+    /// Сборка по конфигурации; ошибка секции — до запуска ролей.
+    pub fn new(cfg: &Config, metrics: &Metrics) -> Result<Self> {
+        let limiter = Arc::new(RateLimiter::new(
+            (*cfg.section::<RateLimitConfig>(tp_platform::ratelimit::RATELIMIT)?).clone(),
+        ));
+        let smtp_metrics = Arc::new(SmtpMetrics::new());
+        smtp_metrics.register(metrics);
+        Ok(Self {
+            limiter,
+            smtp_metrics,
+        })
+    }
+
+    /// Зависимости роли smtp-in узла edge: ограничение частоты, метрики и TLS приёма. Проверки SPF, DKIM,
+    /// DMARC, ARC и Milter и ретрансляция в узел transport — этап Ф3 (решение 2026-11-01); до неё транзакции
+    /// завершает [`EdgeRelay`].
+    pub fn smtp_server(&self, tls: Option<Arc<TlsCerts>>) -> tp_smtp::ServerDeps {
+        tp_smtp::ServerDeps {
+            handler: Arc::new(EdgeRelay),
+            sasl: None,
+            limiter: Some(self.limiter.clone()),
+            tls,
+            send_limits: None,
+            metrics: Some(self.smtp_metrics.clone()),
+        }
+    }
+}
+
+/// Обработчик транзакций узла edge до реализации ретрансляции (этап Ф3): по SRS 2.6 письмо после проверок
+/// передаётся той же сессией на узел transport, и `250` отправителю — только после сохранения письма там.
+/// Пока этого пути нет, приём завершается временным отказом `4xx` — как у узла edge при недоступности
+/// внутреннего контура: письмо не теряется, повторы выполняет отправитель (RFC 5321).
+struct EdgeRelay;
+
+#[async_trait]
+impl Handler for EdgeRelay {
+    async fn rcpt(&self, _env: &Envelope, _rcpt: &str) -> Reply {
+        circuit_unavailable()
+    }
+
+    async fn data(&self, _env: &Envelope, _raw: bytes::Bytes) -> Reply {
+        circuit_unavailable()
+    }
+}
+
+/// Временный отказ «внутренний контур недоступен» (4.3.2, RFC 3463).
+fn circuit_unavailable() -> Reply {
+    tp_smtp::server::reply(
+        451,
+        [4, 3, 2],
+        "Internal circuit unavailable, try again later",
+    )
 }
 
 impl Services {

@@ -434,7 +434,7 @@ impl SectionRegistry {
             }
         }
 
-        self.check_channels(&tree, &sections, profile, &mut errors);
+        self.check_channels(&tree, &sections, profile, &roles, &mut errors);
         self.check_plaintext_secrets(&tree, profile, &mut errors);
         let secret_refs = self.secret_refs(&tree, &mut errors);
 
@@ -495,14 +495,23 @@ impl SectionRegistry {
     /// Открытые внутренние каналы вне профиля dev (решение «Шифрование любого обмена»): проверки секций
     /// ([`Self::add_check`]; адреса каналов проверяют крейты — `PoolConfig::check`, `S3Config::check` и т. п.)
     /// и `tls.allow_plaintext: true` в секциях без проверки.
+    ///
+    /// Секции слоя данных (`database`, `blob`) узлу без ролей со слоем данных (пресет edge, SRS 2.6, APP-61) не
+    /// нужны — их проверки пропускаются: узел не открывает PostgreSQL и BLOB; обязательность адресов по ролям —
+    /// [`required_params`].
     fn check_channels(
         &self,
         tree: &Value,
         sections: &BTreeMap<&'static str, AnySection>,
         profile: Profile,
+        roles: &RoleSet,
         errors: &mut Vec<String>,
     ) {
+        let data_layer = roles.roles.iter().any(|r| uses_data_layer(roles, *r));
         for (name, checks) in &self.checks {
+            if !data_layer && URL_SECTIONS.contains(name) {
+                continue;
+            }
             let Some(section) = sections.get(name) else {
                 continue;
             };
@@ -1472,6 +1481,30 @@ mod tests {
                 role: None
             }]
         );
+    }
+
+    /// APP-61: проверки секций слоя данных (`database`, `blob`) не выполняются для узла без ролей со слоем данных
+    /// (пресет edge, SRS 2.6): узел не открывает PostgreSQL и BLOB. Узлу с такой ролью проверка — ошибка.
+    #[test]
+    fn data_layer_section_checks_skipped_for_edge() {
+        let mut r = registry();
+        r.add_section::<ChannelConfig>("blob").expect("blob");
+        r.add_check::<ChannelConfig>("blob", |_, _| Err(Error::invalid("адрес не задан")))
+            .expect("check");
+        r.parse_with(
+            "domain: d\nroles: [edge]\nblob: { url: x }\n",
+            Vec::new(),
+            CheckMode::Strict,
+        )
+        .expect("edge без слоя данных");
+        let e = r
+            .parse_with(
+                "domain: d\nroles: [mailbox]\nblob: { url: x }\n",
+                Vec::new(),
+                CheckMode::Strict,
+            )
+            .expect_err("mailbox");
+        assert!(e.to_string().contains("blob: адрес не задан"), "{e}");
     }
 
     #[test]
