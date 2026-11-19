@@ -764,7 +764,7 @@ fn parse_cursor(c: &JournalCursor) -> Result<(i128, JournalId)> {
 mod tests {
     use super::*;
     use object_store::memory::InMemory;
-    use tp_contracts::blob::{Acquire, Commit, ObjectEntry};
+    use tp_contracts::blob::{Acquire, BlobIndex, Commit, ObjectEntry};
     use tp_contracts::journal::{JournalDirection, JournalScope};
     use tp_contracts::{BlobKey, Gen};
 
@@ -879,7 +879,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = backend_local(dir.path()).await;
         let (_, now) = test_clock(OffsetDateTime::UNIX_EPOCH);
-        let journal = JournalRecords::new(backend, cfg(), now).expect("journal");
+        let journal = Arc::new(JournalRecords::new(backend, cfg(), now).expect("journal"));
         let tenant = TenantId::new();
         let corrupt = {
             let journal = journal.clone();
@@ -902,7 +902,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn suite_journal_on_s3_memory_backend() {
         let (_, now) = test_clock(OffsetDateTime::UNIX_EPOCH);
-        let journal = JournalRecords::new(backend_memory(), cfg(), now).expect("journal");
+        let journal = Arc::new(JournalRecords::new(backend_memory(), cfg(), now).expect("journal"));
         let tenant = TenantId::new();
         let corrupt = {
             let journal = journal.clone();
@@ -1479,7 +1479,7 @@ mod tests {
             .with_bucket_name(&bucket)
             .with_endpoint(endpoint)
             .with_allow_http(true)
-            .with_force_path_style(true)
+            .with_virtual_hosted_style_request(false)
             .build()
             .expect("s3 client");
         let backend = Arc::new(S3Store::with_object_store(
