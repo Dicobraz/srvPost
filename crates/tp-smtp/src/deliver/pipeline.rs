@@ -234,6 +234,7 @@ impl Delivery {
     /// SMTP-54): модульные этапы видят письмо, после Sieve — и итоговый набор действий
     /// ([`StageInput::actions`]); отказ — всему письму, причина — для журнала доставки и ответа.
     /// Служебные письма этапы правил минуют ([`system`]).
+    #[allow(clippy::too_many_arguments)] // конвенция репо (как у `forward` и `apply_rules`)
     pub(super) async fn delivery_point(
         &self,
         point: PipelinePoint,

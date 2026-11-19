@@ -49,7 +49,7 @@ fn rule(id: &str, scope: JournalScope, direction: JournalDirection, enabled: boo
 /// Доставка с этапом журналирования (SMTP-53) и журналом `journal`.
 fn journaled(env: &Env, rules: &MemRules, journal: &MemJournal) -> Delivery {
     env.delivery(true).with_journal(Journaling::new(
-        Arc::new(MemRules(rules.0.lock().expect("lock").clone())),
+        Arc::new(MemRules(Mutex::new(rules.0.lock().expect("lock").clone()))),
         Arc::new(journal.clone()),
     ))
 }

@@ -162,12 +162,8 @@ fn reasons(log: &MemDeliveryLog) -> Vec<String> {
 async fn core_stages_in_contract_order() {
     let env = Env::new(DecisionHooks::default()).await;
     let d = env.delivery(false);
-    let ids: Vec<(PipelinePoint, &str)> = d
-        .pipeline()
-        .stages()
-        .iter()
-        .map(|s| (s.point(), s.id()))
-        .collect();
+    let stages = d.pipeline().stages();
+    let ids: Vec<(PipelinePoint, &str)> = stages.iter().map(|s| (s.point(), s.id())).collect();
     assert_eq!(
         ids,
         vec![
