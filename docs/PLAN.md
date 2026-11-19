@@ -13,7 +13,7 @@
 |---|---|---|---|---|---|
 | Ф0. Основа | Платформа, хранилище метаданных и BLOB, CI, стенд SMB | 38/38 | 87/87 | ✅ готово | Узел SMB запускается из одного бинарного файла; метаданные и BLOB с тестами; CI ≤ 7 мин; стенд SMB поднимается |
 | Ф1. MVP SMB | SMTP с очередью и Milter, IMAP, JMAP Mail, поиск, LDAP, Kerberos, OAUTHBEARER, корзина, Admin API, CLI | 325/349 | 439/470 | в работе, 93 % карточек | Почта SMB целиком на стенде: приём и отправка, IMAP и JMAP, поиск, вход; проверка клиентами Thunderbird и Postman; нагрузка Д.6 для SMB |
-| Ф2. Совместная работа | CalDAV, CardDAV, JMAP Calendars и Contacts, scheduling, free/busy, Sieve, веб-консоль администратора | 133/165 | 203/237 | в работе, 86 % карточек | Календари, контакты, правила и автоответы проверены клиентами; консоль администратора покрывает Admin API |
+| Ф2. Совместная работа | CalDAV, CardDAV, JMAP Calendars и Contacts, scheduling, free/busy, Sieve, веб-консоль администратора | 137/165 | 207/237 | в работе, 87 % карточек | Календари, контакты, правила и автоответы проверены клиентами; консоль администратора покрывает Admin API |
 | Ф3. Enterprise | S3, кластерные роли, межузловое взаимодействие, edge, шарды, Legal Hold, экспорт и импорт | 1/8 | 2/11 | в работе, 18 % карточек | Схемы Enterprise-ВМ и Enterprise-K8s (приложение З) на стенде; переключение СУБД ≤ 30 с; нагрузка Д.6 для Enterprise |
 | Ф4. Выпуск | Стабилизация, аудит безопасности, фаззинг парсеров, документация администратора | 1/2 | 1/2 | в работе, 50 % карточек | Аудит безопасности без открытых критичных находок; фаззинг парсеров; документация; выпуск 1.0 |
 
@@ -884,8 +884,8 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ admin-34 (ветка `x/admin-34`) | ADM-48 | B | contracts-62, design-01, admin-30 | 3 |
 | ✅ app-72 | APP-75 | A | meta-57, admin-34 | 2 |
 | ✅ console-13 | UI-22 | A | console-10, admin-34 | 1 |
-| tui-05 | TUI-08 | A | tui-03, admin-34 | 1 |
-| docs-11 | DOC-11 | A | admin-34 | 1 |
+| ✅ tui-05 | TUI-08 | A | tui-03, admin-34 | 1 |
+| ✅ docs-11 | DOC-11 | A | admin-34 | 1 |
 | ✅ contracts-64 (ветка `x/contracts-64`) | CTR-93 | B | решение 123 (`x/inbound-mail-only`) | 1 |
 | ✅ meta-58 | META-85 | A | contracts-64 | 3 |
 | admin-35 (ветка `x/admin-35`) | ADM-49 | B | contracts-64, admin-30 | 3 |
@@ -895,11 +895,11 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | smtp-35 | SMTP-55 | A | smtp-30 (решение #112: спам — мимо всех авто-механизмов, ручной iTIP запрещён) | 3 |
 | ✅ dav-21 | DAV-44 | A | contracts-64, решение 123 (`x/inbound-mail-only`) | 4 |
 | ✅ jmap-30 | JMAP-47 | A | contracts-64 | 3 |
-| sieve-07 | SIEVE-14 | A | contracts-64 | 2 |
+| ✅ sieve-07 | SIEVE-14 | A | contracts-64 | 2 |
 | app-73 | APP-76 | A | meta-58, admin-35, smtp-30, dav-21, jmap-30, sieve-07 | 2 |
 | docs-12 | DOC-12 | A | app-73 | 1 |
 | ✅ deps-18 (ветка `x/deps-18`) | DEPS-18 | B | — | 1 |
-| contracts-65 (ветка `x/contracts-65`) | CTR-94 | B | contracts-64 | 1 |
+| ✅ contracts-65 (ветка `x/contracts-65`) | CTR-94 | B | contracts-64 | 1 |
 | meta-59 | META-86 | A | contracts-65 | 3 |
 | mailstore-15 | MS-21 | A | contracts-65 | 1 |
 | smtp-31 | SMTP-51 | A | contracts-65, deps-18, smtp-30 | 4 |
