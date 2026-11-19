@@ -60,6 +60,9 @@ pub const SUBMISSION: &str = "urn:ietf:params:jmap:submission";
 pub const WEBSOCKET: &str = "urn:ietf:params:jmap:websocket";
 /// Capability настроек пользователя The Post (`UserSettings`: `trash.purge`).
 pub const SETTINGS: &str = "urn:thepost:params:jmap:settings";
+/// Capability принятия встречи из письма The Post (JMAP-50, решение #134 — вариант 3): `Invitation/respond` —
+/// кнопка «Принять/Отклонить» веб-почты; доступна при подключённых [`Jmap::with_schedule`] и [`Jmap::with_dav`].
+pub const THEPOST_ITIP: &str = "urn:thepost:params:jmap:itip";
 
 /// Capability автоответа (RFC 8621 §8); доступна при подключённом [`Jmap::with_sieve`].
 pub const VACATION: &str = "urn:ietf:params:jmap:vacationresponse";
@@ -93,7 +96,7 @@ pub const ORG_CHART: &str = "urn:thepost:orgchart";
 /// Встроенные capability.
 const BUILTIN: [&str; 5] = [CORE, MAIL, SUBMISSION, WEBSOCKET, SETTINGS];
 /// Встроенные capability, доступные при подключённом хранилище (URI заняты всегда).
-const OPTIONAL: [&str; 11] = [
+const OPTIONAL: [&str; 12] = [
     SENDER_LISTS,
     ORG_CHART,
     VACATION,
@@ -105,6 +108,7 @@ const OPTIONAL: [&str; 11] = [
     PRINCIPALS,
     PRINCIPALS_OWNER,
     AVAILABILITY,
+    THEPOST_ITIP,
 ];
 
 /// Зависимости сервера JMAP: реализации контрактов, выбранные приложением.
@@ -555,6 +559,7 @@ impl Jmap {
             VACATION | THEPOST_VACATION | SIEVE => self.sieve.is_some(),
             CONTACTS | CALENDARS | TASKS | PRINCIPALS | PRINCIPALS_OWNER => self.dav.is_some(),
             AVAILABILITY => self.dav.is_some() && self.freebusy.is_some(),
+            THEPOST_ITIP => self.dav.is_some() && self.schedule.is_some(),
             _ => false,
         }
     }
@@ -699,6 +704,13 @@ impl Jmap {
                 );
                 primary.insert(AVAILABILITY.into(), json!(account));
             }
+        }
+        // Принятие встречи из письма (JMAP-50): приём iTIP и рассылка ответа (`with_schedule`) поверх
+        // календарей (`with_dav`); спам-вердикты личных списков — при подключённых `with_sender_lists`.
+        if self.dav.is_some() && self.schedule.is_some() {
+            caps.insert(THEPOST_ITIP.into(), json!({}));
+            account_caps.insert(THEPOST_ITIP.into(), json!({}));
+            primary.insert(THEPOST_ITIP.into(), json!(account));
         }
         for cap in &self.d.capabilities {
             caps.insert(cap.uri().into(), cap.session_object());
