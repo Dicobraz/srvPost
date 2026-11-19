@@ -22,6 +22,7 @@ pub(super) fn exec_raw(script: &str, message: &[u8], limits: &Limits) -> Outcome
         envelope_to: ENV_TO,
         mailboxes: &mailboxes,
         peer: PeerKind::Own,
+        ..Context::default()
     };
     run(&program, &ctx, limits)
 }

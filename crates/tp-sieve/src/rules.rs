@@ -29,18 +29,21 @@ use async_trait::async_trait;
 use time::OffsetDateTime;
 use tp_contracts::Error;
 use tp_contracts::meta::AccountScope;
+use tp_contracts::risk::SignalId;
 use tp_contracts::sieve::{
     DeliveryRules, RulesInput, RulesOutcome, SieveStore, Vacation, VacationLog,
 };
 use tp_contracts::trust::InviteMode;
 use tp_contracts::{Result, TenantId};
 
-use crate::Limits;
-use crate::compile::{Program, compile};
+use crate::compile::{Program, compile, compile_trusted};
 use crate::config::SieveConfig;
 use crate::outcome::{Merge, mailbox_paths};
-use crate::run::{Context, Hdr, parse_headers, run};
+use crate::run::{
+    Context, Environment, ExternalLists, Hdr, Phase, ThreadTrust, parse_headers, run,
+};
 use crate::vacation::{self, Source};
+use crate::{Diagnostic, Limits};
 
 /// Метка узла The Post в `Received`, когда имя узла не задано ([`Rules::with_node`]).
 const PRODUCT_MARK: [&str; 2] = ["(The", "Post)"];
@@ -81,6 +84,8 @@ pub struct Rules {
     limits: Limits,
     node: Option<String>,
     now: Now,
+    /// Внешние списки `extlists` (RFC 6134, SIEVE-15): интерфейс узла (APP-79); нет — списков нет.
+    lists: Option<Arc<dyn ExternalLists>>,
     cache: Mutex<Cache>,
     compilations: AtomicU64,
 }
@@ -104,6 +109,7 @@ impl Rules {
             config,
             node: None,
             now: Arc::new(OffsetDateTime::now_utc),
+            lists: None,
             cache: Mutex::default(),
             compilations: AtomicU64::new(0),
         }
@@ -124,6 +130,14 @@ impl Rules {
         self
     }
 
+    /// Внешние списки `extlists` (RFC 6134, SIEVE-15): интерфейс узла — списки TI и адресные книги (APP-79);
+    /// в тестах — память. Без него `:list` — ложь, `valid_ext_list` — ложь.
+    #[must_use]
+    pub fn with_lists(mut self, lists: Arc<dyn ExternalLists>) -> Self {
+        self.lists = Some(lists);
+        self
+    }
+
     /// Сколько раз компилировались скрипты (промахи кэша).
     #[cfg(test)]
     pub(crate) fn compilations(&self) -> u64 {
@@ -135,15 +149,24 @@ impl Rules {
     }
 
     fn compile(&self, text: &str) -> Compiled {
+        self.compiled(compile(text.as_bytes(), &self.limits))
+    }
+
+    /// Скрипт организации при доставке (SIEVE-15): допустимы расширения админского профиля (`signal`,
+    /// `environment`, `extlists`, `:regex`); запреты профиля (домены `redirect`, `vacation`) проверил
+    /// ADM-49 при сохранении — доставка доверяет сохранённому тексту.
+    fn compile_org(&self, text: &str) -> Compiled {
+        self.compiled(compile_trusted(text.as_bytes(), &self.limits))
+    }
+
+    fn compiled(&self, r: Result<Program, Vec<Diagnostic>>) -> Compiled {
         self.compilations.fetch_add(1, Ordering::Relaxed);
-        compile(text.as_bytes(), &self.limits)
-            .map(Arc::new)
-            .map_err(|d| {
-                d.first().map_or_else(
-                    || "скрипт не прошёл проверку".to_owned(),
-                    ToString::to_string,
-                )
-            })
+        r.map(Arc::new).map_err(|d| {
+            d.first().map_or_else(
+                || "скрипт не прошёл проверку".to_owned(),
+                ToString::to_string,
+            )
+        })
     }
 
     /// Программа скрипта организации; кэш сверяется с текстом.
@@ -163,7 +186,7 @@ impl Rules {
                 return Ok(Some(e.program.clone()));
             }
         }
-        let program = self.compile(&text);
+        let program = self.compile_org(&text);
         let mut cache = self.cache();
         let used = cache.tick;
         let cap = self.config.cache.programs;
@@ -309,19 +332,51 @@ impl Rules {
         }
 
         let paths = mailbox_paths(&input.mailboxes);
+        // Факты `environment` (RFC 5183, SIEVE-15, решение 126 д) — из контекста правил (CTR-95), не из
+        // заголовков письма. Скрипт организации — этап `before`, скрипт пользователя — `during`.
+        let risk_signals: Vec<SignalId> = input
+            .risk
+            .hits
+            .iter()
+            .chain(&input.risk.report_only)
+            .map(|h| h.signal.clone())
+            .collect();
+        let environment = Environment {
+            domain: input.recipient.rsplit('@').next().unwrap_or_default(),
+            host: self.node.as_deref().unwrap_or_default(),
+            phase: Phase::During,
+            thread: if input.thread_trusted {
+                ThreadTrust::Trusted
+            } else {
+                ThreadTrust::Untrusted
+            },
+            reply: input.peer.reply,
+            risk_score: input.risk.score,
+            risk_signals: &risk_signals,
+        };
+        let lists: &dyn ExternalLists = self.lists.as_deref().unwrap_or(&crate::run::NO_LISTS);
         let ctx = Context {
             message: &input.message,
             envelope_from: &input.mail_from,
             envelope_to: &input.recipient,
             mailboxes: &paths,
             peer: input.peer.kind,
+            environment,
+            lists,
+        };
+        let org_ctx = Context {
+            environment: Environment {
+                phase: Phase::Before,
+                ..environment
+            },
+            ..ctx
         };
         let headers = parse_headers(&input.message);
         let mut merge = Merge::new(&input.mailboxes);
         let mut reply = None;
         let mut stopped = false;
         if let Some(Ok(program)) = &org {
-            let outcome = run(program, &ctx, &self.limits);
+            let outcome = run(program, &org_ctx, &self.limits);
             if let Some(e) = &outcome.error {
                 return Ok(Decision::Failed(format!("{ORG_SCRIPT}: {e}")));
             }

@@ -1,9 +1,12 @@
 //! Проверка скрипта и компиляция в программу (SIEVE-02): известные команды и тесты, аргументы, `require` для каждого
 //! расширения (RFC 5228 §3.2), компараторы и типы сравнения. Профиль «админский» для скрипта организации
-//! ([`AdminProfile`], SIEVE-14) добавляет к общей проверке запреты решения 124 д.
+//! ([`AdminProfile`], SIEVE-14) добавляет к общей проверке запреты решения 124 д. Его же расширения SIEVE-15
+//! (решение 126 д): команда `signal` (`vnd.thepost.risk`), `environment` (RFC 5183), `extlists` (RFC 6134) и
+//! `:regex` (draft-ietf-sieve-regex) — только скрипту организации.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use tp_contracts::risk::SignalId;
 use tp_contracts::sieve::ProcessCalendar;
 
 use crate::ast::{self, Arg, Command};
@@ -28,6 +31,12 @@ pub const EXTENSIONS: &[&str] = &[
     "processcalendar",
     "vnd.thepost.peer",
 ];
+
+/// Расширения только профиля «админский» (скрипт организации, SIEVE-15, решение 126 д): `vnd.thepost.risk` —
+/// команда `signal`, `environment` (RFC 5183) с пунктами `vnd.thepost.*`, `extlists` (RFC 6134) и `regex`
+/// (draft-ietf-sieve-regex). В [`EXTENSIONS`] их нет: ManageSieve и JMAP Sieve пользователя их не показывают,
+/// `require` в скрипте пользователя — ошибка проверки.
+pub const ADMIN_EXTENSIONS: &[&str] = &["environment", "extlists", "regex", "vnd.thepost.risk"];
 
 /// Компараторы ядра: в `require` допустимы, но не обязательны (RFC 5228 §2.7.3).
 const IMPLICIT: &[&str] = &["comparator-i;octet", "comparator-i;ascii-casemap"];
@@ -75,6 +84,15 @@ pub(crate) enum Cmd {
     /// `processcalendar` (RFC 9671 §3, SIEVE-14): параметры вносят приглашение применяющий (приём iTIP у
     /// вызывающего); интерпретатор лишь записывает их в [`crate::run::Action::ProcessCalendar`].
     ProcessCalendar(ProcessCalendar),
+    /// `signal "<id>" [:weight N]` расширения `vnd.thepost.risk` (SIEVE-15, решение 126 д): признак в итог
+    /// правил ([`crate::run::Outcome::signals`]). Вес — каталога признака (`None`) или заданный; скрипт
+    /// может только повысить риск.
+    Signal {
+        /// Идентификатор признака каталога или `org.<имя>`.
+        id: SignalId,
+        /// `:weight N`; `None` — действующий вес признака каталога (для `org.*` — 1).
+        weight: Option<u16>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,18 +118,24 @@ pub(crate) enum Test {
         m: Match,
         names: Vec<String>,
         keys: Vec<String>,
+        /// `:list` (RFC 6134, SIEVE-15): `keys` — имена внешних списков (URI `tag:`), совпадение — поиск в них.
+        list: bool,
     },
     Address {
         m: Match,
         part: Part,
         names: Vec<String>,
         keys: Vec<String>,
+        /// `:list` — как у [`Test::Header`].
+        list: bool,
     },
     Envelope {
         m: Match,
         part: Part,
         names: Vec<String>,
         keys: Vec<String>,
+        /// `:list` — как у [`Test::Header`].
+        list: bool,
     },
     Body {
         m: Match,
@@ -129,12 +153,43 @@ pub(crate) enum Test {
         m: Match,
         keys: Vec<String>,
     },
+    /// `environment` (RFC 5183, SIEVE-15): пункт [`EnvName`] — из контекста ядра
+    /// ([`crate::run::Context::environment`], CTR-95), не из заголовков письма.
+    Environment {
+        m: Match,
+        name: EnvName,
+        keys: Vec<String>,
+    },
+    /// `valid_ext_list` (RFC 6134 §4, SIEVE-15): все имена списков существуют.
+    ValidExtList(Vec<String>),
 }
 
+/// Пункт теста `environment` (RFC 5183 §4): ядро — `domain`, `host`, `phase`; наши `vnd.thepost.*`
+/// (SIEVE-15, решение 126 д) — факты, которые считает Rust до Sieve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EnvName {
+    /// `domain` — домен получателя.
+    Domain,
+    /// `host` — имя узла.
+    Host,
+    /// `phase` — этап выполнения (`before` у скрипта организации, `during` у скрипта пользователя).
+    Phase,
+    /// `vnd.thepost.thread` — `trusted`|`untrusted`|`none`.
+    Thread,
+    /// `vnd.thepost.reply` — `yes`|`no`.
+    Reply,
+    /// `vnd.thepost.risk.score` — балл справочника до Sieve.
+    RiskScore,
+    /// `vnd.thepost.risk.signals` — сработавшие признаки через запятую.
+    RiskSignals,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Match {
     pub cmp: Comparator,
     pub kind: MatchKind,
+    /// Скомпилированные шаблоны `:regex` (порядок ключей); пусто у остальных типов сравнения.
+    pub regex: Vec<CompiledRegex>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +199,27 @@ pub(crate) enum MatchKind {
     Matches,
     Value(Rel),
     Count(Rel),
+    /// `:regex` (draft-ietf-sieve-regex, SIEVE-15): только профиль «админский», шаблоны компилируются при
+    /// проверке скрипта.
+    Regex,
 }
+
+/// Скомпилированный шаблон `:regex` (draft-ietf-sieve-regex): равенство программ — по исходному шаблону.
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledRegex {
+    /// Исходный шаблон (для сравнения и отладки).
+    pub pattern: String,
+    /// Скомпилированное выражение; `None` — не скомпилировался при проверке (ошибка уже записана).
+    pub re: Option<regex::Regex>,
+}
+
+impl PartialEq for CompiledRegex {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern == other.pattern
+    }
+}
+
+impl Eq for CompiledRegex {}
 
 /// Оператор `relational` (RFC 5231).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,29 +275,41 @@ pub struct AdminProfile {
     pub forward_domains: Vec<String>,
 }
 
-/// Разбор и проверка: все найденные ошибки с позициями (ошибка разбора — одна).
+/// Разбор и проверка: все найденные ошибки с позициями (ошибка разбора — одна). Профиль пользователя:
+/// расширения [`ADMIN_EXTENSIONS`] (в том числе `vnd.thepost.risk`) недоступны — `require` — ошибка.
 pub fn compile(src: &[u8], limits: &Limits) -> Result<Program, Vec<Diagnostic>> {
-    compile_with(src, limits, None)
+    compile_with(src, limits, None, false)
+}
+
+/// Проверка скрипта организации при доставке (SIEVE-15): как [`compile`], но расширения [`ADMIN_EXTENSIONS`]
+/// (`signal`, `environment`, `extlists`, `:regex`) допустимы; запреты профиля (домены `redirect`, `vacation`)
+/// не применяются — их проверяет [`compile_admin`] при сохранении (ADM-49), а доставка доверяет сохранённому
+/// тексту. Пользовательский скрипт так не компилируется.
+pub fn compile_trusted(src: &[u8], limits: &Limits) -> Result<Program, Vec<Diagnostic>> {
+    compile_with(src, limits, None, true)
 }
 
 /// Проверка профилем «админский» (скрипт организации, SIEVE-14): к проверке [`compile`] добавляются запреты
-/// [`AdminProfile`].
+/// [`AdminProfile`] и допускаются расширения [`ADMIN_EXTENSIONS`].
 pub fn compile_admin(
     src: &[u8],
     limits: &Limits,
     profile: &AdminProfile,
 ) -> Result<Program, Vec<Diagnostic>> {
-    compile_with(src, limits, Some(profile))
+    compile_with(src, limits, Some(profile), false)
 }
 
 fn compile_with(
     src: &[u8],
     limits: &Limits,
     admin: Option<&AdminProfile>,
+    trusted: bool,
 ) -> Result<Program, Vec<Diagnostic>> {
     let script = ast::parse(src, limits).map_err(|d| vec![d])?;
     let mut c = Compiler {
         admin,
+        trusted: admin.is_some() || trusted,
+        limits: *limits,
         ..Compiler::default()
     };
     let commands = c.block(&script.commands, true);
@@ -315,6 +402,7 @@ const MATCH_TAGS: &[(&str, Kind)] = &[
     ("matches", Kind::Flag),
     ("value", Kind::Str),
     ("count", Kind::Str),
+    ("regex", Kind::Flag),
 ];
 
 const PART_TAGS: &[(&str, Kind)] = &[
@@ -340,9 +428,20 @@ struct Compiler<'a> {
     encoded: bool,
     /// Профиль «админский» (скрипт организации, SIEVE-14): запреты решения 124 д.
     admin: Option<&'a AdminProfile>,
+    /// Скрипт организации (сохранение профилем «админский» или доставка): допустимы [`ADMIN_EXTENSIONS`].
+    trusted: bool,
+    /// Лимиты секции `sieve` (предел `signal`, лимиты `:regex`).
+    limits: Limits,
+    /// Признаки команды `signal`: идентификатор → вес (повтор с другим весом — ошибка проверки).
+    signals: BTreeMap<String, Option<u16>>,
 }
 
 impl Compiler<'_> {
+    /// Скрипту организации доступны расширения [`ADMIN_EXTENSIONS`].
+    fn is_trusted(&self) -> bool {
+        self.admin.is_some() || self.trusted
+    }
+
     fn err(&mut self, pos: Pos, message: impl Into<String>) {
         self.diags.push(Diagnostic::new(pos, message));
     }
@@ -472,13 +571,21 @@ impl Compiler<'_> {
         out
     }
 
-    fn matcher(&mut self, p: &Parsed<'_>) -> Match {
+    /// Тип сравнения и компаратор по тегам; второе значение — тип сравнения задан явно (для запрета вместе
+    /// с `:list`). Шаблоны `:regex` компилируются здесь (draft-ietf-sieve-regex, SIEVE-15): лимиты секции
+    /// `sieve.regex`, превышение — ошибка проверки, а не выполнения; регистр — по компаратору
+    /// (`i;ascii-casemap` — без учёта регистра, `i;octet` — с учётом).
+    fn matcher(&mut self, p: &Parsed<'_>, keys: &[String], key_pos: Pos) -> (Match, bool) {
         let mut kind = None;
         for &(tag, pos, val) in &p.tags {
             let k = match tag {
                 "is" => MatchKind::Is,
                 "contains" => MatchKind::Contains,
                 "matches" => MatchKind::Matches,
+                "regex" => {
+                    self.need("regex", pos);
+                    MatchKind::Regex
+                }
                 "value" | "count" => {
                     self.need("relational", pos);
                     let rel = match val {
@@ -504,6 +611,7 @@ impl Compiler<'_> {
                 self.err(pos, "указано несколько типов сравнения");
             }
         }
+        let explicit = kind.is_some();
         let kind = kind.unwrap_or(MatchKind::Is);
         let cmp = match p.get("comparator") {
             None => Comparator::AsciiCasemap,
@@ -523,17 +631,85 @@ impl Compiler<'_> {
                     }
                 };
                 if cmp == Comparator::AsciiNumeric
-                    && matches!(kind, MatchKind::Contains | MatchKind::Matches)
+                    && matches!(
+                        kind,
+                        MatchKind::Contains | MatchKind::Matches | MatchKind::Regex
+                    )
                 {
                     self.err(
                         pos,
-                        "компаратор \"i;ascii-numeric\" не поддерживает :contains и :matches",
+                        "компаратор \"i;ascii-numeric\" не поддерживает :contains, :matches и :regex",
                     );
                 }
                 cmp
             }
         };
-        Match { cmp, kind }
+        let regex = if kind == MatchKind::Regex {
+            self.regexes(keys, key_pos, cmp)
+        } else {
+            Vec::new()
+        };
+        (Match { cmp, kind, regex }, explicit)
+    }
+
+    /// Компилирует шаблоны `:regex` при проверке (`regex::RegexBuilder` с `size_limit` и `dfa_size_limit`
+    /// из `sieve.regex`): поиск крейта `regex` за линейное время — без ReDoS (решение 126 д).
+    fn regexes(&mut self, keys: &[String], key_pos: Pos, cmp: Comparator) -> Vec<CompiledRegex> {
+        keys.iter()
+            .map(|k| {
+                let built = regex::RegexBuilder::new(k)
+                    .size_limit(self.limits.regex_size_limit)
+                    .dfa_size_limit(self.limits.regex_dfa_size_limit)
+                    .case_insensitive(cmp == Comparator::AsciiCasemap)
+                    .build();
+                match built {
+                    Ok(re) => CompiledRegex {
+                        pattern: k.clone(),
+                        re: Some(re),
+                    },
+                    Err(e) => {
+                        self.err(
+                            key_pos,
+                            format!("regex: шаблон {k:?} не компилируется: {e}"),
+                        );
+                        CompiledRegex {
+                            pattern: k.clone(),
+                            re: None,
+                        }
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// `:list` у `header`/`address`/`envelope` (RFC 6134, SIEVE-15): требует `extlists`, совместим только с
+    /// `:comparator` (не тип сравнения), ключи — имена списков (URI `tag:`).
+    fn list_tag(
+        &mut self,
+        p: &Parsed<'_>,
+        keys: &[String],
+        key_pos: Pos,
+        explicit_match: bool,
+    ) -> bool {
+        let Some((_, pos)) = p.get("list") else {
+            return false;
+        };
+        self.need("extlists", pos);
+        if explicit_match {
+            self.err(
+                pos,
+                ":list — это тип сравнения, другой тип не задаётся вместе с ним",
+            );
+        }
+        for k in keys {
+            if !valid_list_uri(k) {
+                self.err(
+                    key_pos,
+                    format!("имя списка {k:?} — не URI \"tag:\" (RFC 6134, RFC 4151)"),
+                );
+            }
+        }
+        true
     }
 
     fn part(&mut self, p: &Parsed<'_>) -> Part {
@@ -636,6 +812,18 @@ impl Compiler<'_> {
                     self.encoded = true;
                 }
                 self.exts.insert(e);
+            } else if ADMIN_EXTENSIONS.contains(&e.as_str()) {
+                // SIEVE-15 (решение 126 д): расширения справочника аномалий — только скрипту организации.
+                if self.is_trusted() {
+                    self.exts.insert(e);
+                } else {
+                    self.err(
+                        pos,
+                        format!(
+                            "расширение {e:?} доступно только скрипту организации (админский профиль)"
+                        ),
+                    );
+                }
             } else if !IMPLICIT.contains(&e.as_str()) {
                 self.err(pos, format!("расширение {e:?} не поддерживается"));
             }
@@ -802,12 +990,19 @@ impl Compiler<'_> {
                     ],
                     &[],
                 )?;
-                if let Some((_, pos)) = p.get("organizers") {
-                    // RFC 6134 `extlists` не поддерживается — списки внешние указать неоткуда.
-                    self.err(
-                        pos,
-                        "processcalendar: :organizers требует расширение extlists (RFC 6134) — не поддерживается",
-                    );
+                if let Some((val, pos)) = p.get("organizers") {
+                    // `:organizers` (RFC 9671 §3) — имя внешнего списка организаторов (RFC 6134): с extlists
+                    // (SIEVE-15 снимает запрет SIEVE-14) допустимо в скрипте организации. Имя проверяется
+                    // (URI tag:); фильтрацию по списку применяет приём iTIP вызывающего — поле действия
+                    // `ProcessCalendar` контракта получит его волной контрактов, пока значение проверено.
+                    self.need("extlists", pos);
+                    let uri = self.string((val, pos));
+                    if !valid_list_uri(&uri) {
+                        self.err(
+                            pos,
+                            format!("имя списка {uri:?} — не URI \"tag:\" (RFC 6134, RFC 4151)"),
+                        );
+                    }
                 }
                 let updates_only = p.has("updatesonly");
                 if updates_only && let Some((_, pos)) = p.get("calendarid") {
@@ -827,6 +1022,61 @@ impl Compiler<'_> {
                     calendar_id,
                     delete_cancelled: p.has("deletecancelled"),
                 }))
+            }
+            "signal" => {
+                // SIEVE-15 (решение 126 д): только скрипт организации — скрипт может только повысить риск,
+                // вычесть балл, снять признак или изменить порог команда не может.
+                if !self.is_trusted() {
+                    self.err(
+                        c.pos,
+                        "команда signal доступна только скрипту организации \
+                         (расширение vnd.thepost.risk)",
+                    );
+                }
+                self.need("vnd.thepost.risk", c.pos);
+                let p = self.args(name, c.pos, &c.args, &[("weight", Kind::Num)], &[Kind::Str])?;
+                let id = self.string(p.pos[0]);
+                let weight = match p.get("weight") {
+                    Some((Val::Num(n), pos)) => {
+                        let max = u64::from(self.limits.max_signal_weight);
+                        if n > max {
+                            self.err(
+                                pos,
+                                format!(
+                                    "signal: вес {n} больше предела sieve.risk.max_weight ({max})"
+                                ),
+                            );
+                        }
+                        Some(u16::try_from(n).unwrap_or(self.limits.max_signal_weight))
+                    }
+                    _ => None,
+                };
+                match SignalId::new(&id) {
+                    Ok(id) => {
+                        if self
+                            .signals
+                            .get(id.as_str())
+                            .is_some_and(|prev| *prev != weight)
+                        {
+                            self.err(
+                                p.pos[0].1,
+                                format!("signal: признак {id} указан с разными весами"),
+                            );
+                        } else {
+                            self.signals.insert(id.as_str().to_owned(), weight);
+                        }
+                        Some(Cmd::Signal { id, weight })
+                    }
+                    Err(_) => {
+                        self.err(
+                            p.pos[0].1,
+                            format!(
+                                "signal: идентификатор признака {id:?} — [a-z0-9._-], до 64 символов"
+                            ),
+                        );
+                        None
+                    }
+                }
             }
             _ => {
                 self.err(c.pos, format!("неизвестная команда {name}"));
@@ -957,28 +1207,44 @@ impl Compiler<'_> {
                 Test::Size { over, limit }
             }
             "header" => {
-                let Some(p) =
-                    self.args(name, t.pos, &t.args, MATCH_TAGS, &[Kind::List, Kind::List])
+                let tags: Vec<(&str, Kind)> = MATCH_TAGS
+                    .iter()
+                    .copied()
+                    .chain([("list", Kind::Flag)])
+                    .collect();
+                let Some(p) = self.args(name, t.pos, &t.args, &tags, &[Kind::List, Kind::List])
                 else {
                     return Test::False;
                 };
-                let m = self.matcher(&p);
                 let names = self.header_names(p.pos[0]);
                 let keys = self.list(p.pos[1]);
-                Test::Header { m, names, keys }
+                let (m, explicit) = self.matcher(&p, &keys, p.pos[1].1);
+                let list = self.list_tag(&p, &keys, p.pos[1].1, explicit);
+                Test::Header {
+                    m,
+                    names,
+                    keys,
+                    list,
+                }
             }
             "address" | "envelope" => {
                 if name == "envelope" {
                     self.need("envelope", t.pos);
                 }
-                let tags: Vec<(&str, Kind)> = MATCH_TAGS.iter().chain(PART_TAGS).copied().collect();
+                let tags: Vec<(&str, Kind)> = MATCH_TAGS
+                    .iter()
+                    .chain(PART_TAGS)
+                    .copied()
+                    .chain([("list", Kind::Flag)])
+                    .collect();
                 let Some(p) = self.args(name, t.pos, &t.args, &tags, &[Kind::List, Kind::List])
                 else {
                     return Test::False;
                 };
-                let m = self.matcher(&p);
                 let part = self.part(&p);
                 let keys = self.list(p.pos[1]);
+                let (m, explicit) = self.matcher(&p, &keys, p.pos[1].1);
+                let list = self.list_tag(&p, &keys, p.pos[1].1, explicit);
                 if name == "address" {
                     let names = self.header_names(p.pos[0]);
                     Test::Address {
@@ -986,6 +1252,7 @@ impl Compiler<'_> {
                         part,
                         names,
                         keys,
+                        list,
                     }
                 } else {
                     let pos = p.pos[0].1;
@@ -1004,6 +1271,7 @@ impl Compiler<'_> {
                         part,
                         names,
                         keys,
+                        list,
                     }
                 }
             }
@@ -1013,7 +1281,8 @@ impl Compiler<'_> {
                 let Some(p) = self.args(name, t.pos, &t.args, &tags, &[Kind::List]) else {
                     return Test::False;
                 };
-                let m = self.matcher(&p);
+                let keys = self.list(p.pos[0]);
+                let (m, _) = self.matcher(&p, &keys, p.pos[0].1);
                 let mut transform = None;
                 for &(tag, pos, val) in &p.tags {
                     let x = match tag {
@@ -1026,7 +1295,6 @@ impl Compiler<'_> {
                         self.err(pos, "body: указано несколько преобразований");
                     }
                 }
-                let keys = self.list(p.pos[0]);
                 Test::Body {
                     m,
                     transform: transform.unwrap_or(Transform::Text),
@@ -1038,8 +1306,8 @@ impl Compiler<'_> {
                 let Some(p) = self.args(name, t.pos, &t.args, MATCH_TAGS, &[Kind::List]) else {
                     return Test::False;
                 };
-                let m = self.matcher(&p);
                 let keys = self.flags(p.pos[0]);
+                let (m, _) = self.matcher(&p, &keys, p.pos[0].1);
                 Test::HasFlag { m, keys }
             }
             "mailboxexists" => {
@@ -1054,9 +1322,52 @@ impl Compiler<'_> {
                 let Some(p) = self.args(name, t.pos, &t.args, MATCH_TAGS, &[Kind::List]) else {
                     return Test::False;
                 };
-                let m = self.matcher(&p);
                 let keys = self.list(p.pos[0]);
+                let (m, _) = self.matcher(&p, &keys, p.pos[0].1);
                 Test::Peer { m, keys }
+            }
+            "environment" => {
+                self.need("environment", t.pos);
+                let Some(p) = self.args(name, t.pos, &t.args, MATCH_TAGS, &[Kind::Str, Kind::List])
+                else {
+                    return Test::False;
+                };
+                let item = self.string(p.pos[0]).to_ascii_lowercase();
+                let name = match item.as_str() {
+                    "domain" => EnvName::Domain,
+                    "host" => EnvName::Host,
+                    "phase" => EnvName::Phase,
+                    "vnd.thepost.thread" => EnvName::Thread,
+                    "vnd.thepost.reply" => EnvName::Reply,
+                    "vnd.thepost.risk.score" => EnvName::RiskScore,
+                    "vnd.thepost.risk.signals" => EnvName::RiskSignals,
+                    _ => {
+                        self.err(
+                            p.pos[0].1,
+                            format!("environment: неизвестный пункт {item:?}"),
+                        );
+                        return Test::False;
+                    }
+                };
+                let keys = self.list(p.pos[1]);
+                let (m, _) = self.matcher(&p, &keys, p.pos[1].1);
+                Test::Environment { m, name, keys }
+            }
+            "valid_ext_list" => {
+                self.need("extlists", t.pos);
+                let Some(p) = self.args(name, t.pos, &t.args, &[], &[Kind::List]) else {
+                    return Test::False;
+                };
+                let names = self.list(p.pos[0]);
+                for n in &names {
+                    if !valid_list_uri(n) {
+                        self.err(
+                            p.pos[0].1,
+                            format!("имя списка {n:?} — не URI \"tag:\" (RFC 6134, RFC 4151)"),
+                        );
+                    }
+                }
+                Test::ValidExtList(names)
             }
             _ => {
                 self.err(t.pos, format!("неизвестный тест {name}"));
@@ -1076,6 +1387,17 @@ fn rel_of(s: &str) -> Option<Rel> {
         "ne" => Rel::Ne,
         _ => return None,
     })
+}
+
+/// Имя внешнего списка (`:list`, RFC 6134 §3; `valid_ext_list`; `:organizers` RFC 9671): URI схемы `tag:`
+/// (RFC 4151) — `tag:<владелец>,<дата>:<имя>` — на список TI или адресную книгу (CTR-95, SIEVE-15). Разрешает
+/// имя узел — интерфейсом APP-79; здесь проверяется только схема и непустая часть.
+fn valid_list_uri(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    match lower.strip_prefix("tag:") {
+        Some(rest) => !rest.is_empty() && rest.contains(':'),
+        None => false,
+    }
 }
 
 /// Адрес `redirect`: `local@domain` без пробелов и угловых скобок.

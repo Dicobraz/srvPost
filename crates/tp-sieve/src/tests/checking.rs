@@ -409,7 +409,13 @@ if allof (header :count "ge" :comparator "i;ascii-numeric" ["To", "Cc"] "3",
     let Test::AllOf(tests) = &branches[0].0 else {
         panic!("{branches:?}");
     };
-    let Test::Header { m, names, keys } = &tests[0] else {
+    let Test::Header {
+        m,
+        names,
+        keys,
+        list: false,
+    } = &tests[0]
+    else {
         panic!("{tests:?}");
     };
     assert_eq!(m.kind, MatchKind::Count(Rel::Ge));
