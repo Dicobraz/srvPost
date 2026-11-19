@@ -1556,5 +1556,6 @@ mod rules;
 mod scheduled;
 mod sender_login;
 mod senders;
+mod spam;
 mod trust;
 mod wave;
