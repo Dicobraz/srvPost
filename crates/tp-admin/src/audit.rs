@@ -67,7 +67,7 @@ pub struct AuditRecord {
     /// Имя входа администратора.
     pub actor_login: String,
     /// Роли администратора на момент операции (`installation_admin`, `organization_admin`, `operator`,
-    /// `auditor`); пусто — ролей нет (отказ).
+    /// `auditor`, `journal_auditor`); пусто — ролей нет (отказ).
     pub roles: Vec<String>,
     /// Метод HTTP.
     pub method: String,

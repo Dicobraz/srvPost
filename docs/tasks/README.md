@@ -918,7 +918,7 @@
 | [TUI-09](TUI-09.md) | текстовый интерфейс — раздел «Доверие»: матрица, уровни, партнёры | tui | A | tui-06 | ready | TUI-03,ADM-49 |
 | [SMTP-50](SMTP-50.md) | матрица доверия в SMTP — тип абонента, автоответ, MDN, DSN, группы, автопересылка | smtp | A | smtp-30 | done | CTR-93,SMTP-49 |
 | [SMTP-55](SMTP-55.md) | спам — максимально рано мимо всех автоматических механизмов и без ручного iTIP | smtp | A | smtp-35 | done | SMTP-50 |
-| [JMAP-50](JMAP-50.md) | # JMAP-50. Принятие встречи из письма — API веб-почты (решение #134, вариант 3) |  |  | jmap-35 | done | — |
+| [JMAP-50](JMAP-50.md) | принятие встречи из письма — API веб-почты; единый механизм спама (папка «Спам» — источник истины) | jmap | A | jmap-35 | done | SMTP-55 |
 | [DAV-44](DAV-44.md) | матрица доверия в CalDAV и CardDAV — iTIP извне, занятость, общий доступ, публикация, GAL | dav | A | dav-21 | done | CTR-93,DAV-43 |
 | [JMAP-47](JMAP-47.md) | матрица доверия в JMAP — принципалы и занятость своей организации, общий доступ, публикация, внешний автоответ | jmap | A | jmap-30 | done | CTR-93 |
 | [SIEVE-14](SIEVE-14.md) | `processcalendar` (RFC 9671), расширение `vnd.thepost.peer`, админский скрипт — только сужение | sieve | A | sieve-07 | done | CTR-93 |
@@ -971,6 +971,7 @@
 | [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | done | CTR-97 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
 | [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | ready | APP-83,BLOB-18 |
+| [APP-84](APP-84.md) | # APP-84. Включение журнала в узле — wiring JournalStore/JournalRules в thepost |  |  | app-81 | todo | — |
 
 ## Вне волн
 

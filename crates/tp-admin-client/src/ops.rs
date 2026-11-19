@@ -227,6 +227,26 @@ pub const DELIVERY_SEARCH: Op = Op {
     method: "GET",
     path: "/api/v1/orgs/{org}/delivery",
 };
+/// Поиск в журнале переписки (роль «аудитор журнала»).
+pub const JOURNAL_SEARCH: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/journal",
+};
+/// Запись журнала переписки: конверт и хеш цепочки.
+pub const JOURNAL_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/journal/{id}",
+};
+/// Выгрузка записи журнала: .eml с конвертом.
+pub const JOURNAL_EXPORT: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/journal/{id}/export",
+};
+/// Отчёт целостности хеш-цепочки индекса журнала.
+pub const JOURNAL_VERIFY: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/journal/verify",
+};
 /// Доверенные источники организации.
 pub const SOURCE_LIST: Op = Op {
     method: "GET",
@@ -413,6 +433,10 @@ pub const OPERATIONS: &[Op] = &[
     TRASH_HIDDEN_RESTORE,
     AUDIT_SEARCH,
     DELIVERY_SEARCH,
+    JOURNAL_SEARCH,
+    JOURNAL_GET,
+    JOURNAL_EXPORT,
+    JOURNAL_VERIFY,
     SOURCE_LIST,
     SOURCE_PUT,
     SOURCE_DELETE,

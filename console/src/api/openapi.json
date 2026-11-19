@@ -157,7 +157,8 @@
           "installation_admin",
           "organization_admin",
           "operator",
-          "auditor"
+          "auditor",
+          "journal_auditor"
         ],
         "type": "string"
       },
@@ -421,7 +422,7 @@
             "type": "string"
           },
           "roles": {
-            "description": "Роли администратора на момент операции (`installation_admin`, `organization_admin`, `operator`,\n`auditor`); пусто — ролей нет (отказ).",
+            "description": "Роли администратора на момент операции (`installation_admin`, `organization_admin`, `operator`,\n`auditor`, `journal_auditor`); пусто — ролей нет (отказ).",
             "items": {
               "type": "string"
             },
@@ -4466,6 +4467,123 @@
         },
         "required": [
           "version"
+        ],
+        "type": "object"
+      },
+      "ChainReportView": {
+        "description": "Отчёт проверки хеш-цепочки индекса организации.",
+        "properties": {
+          "records": {
+            "description": "Число проверенных записей.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ok": {
+            "description": "Цепочка целостна.",
+            "type": "boolean"
+          },
+          "broken_at": {
+            "description": "Первая запись с нарушением; `null` — нарушений нет.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "records",
+          "ok"
+        ],
+        "type": "object"
+      },
+      "JournalEntryView": {
+        "description": "Запись журнала: идентификатор, конверт и хеш цепочки.",
+        "properties": {
+          "id": {
+            "description": "Идентификатор записи (UUID).",
+            "type": "string"
+          },
+          "record": {
+            "$ref": "#/components/schemas/JournalRecordView",
+            "description": "Конверт."
+          },
+          "hash": {
+            "description": "Хеш цепочки записи (SHA-256, hex); проверяется маршрутом `verify`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "record",
+          "hash"
+        ],
+        "type": "object"
+      },
+      "JournalPageView": {
+        "description": "Страница журнала: записи в порядке (`at`, `id`).",
+        "properties": {
+          "entries": {
+            "description": "Записи страницы.",
+            "items": {
+              "$ref": "#/components/schemas/JournalEntryView"
+            },
+            "type": "array"
+          },
+          "next": {
+            "description": "`after` следующей страницы; `null` — записей больше нет.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "type": "object"
+      },
+      "JournalRecordView": {
+        "description": "Конверт записи журнала в ответе API ([`JournalRecord`] контракта; обе стороны serde — ADM-13).",
+        "properties": {
+          "tenant": {
+            "description": "Организация.",
+            "type": "string"
+          },
+          "sender": {
+            "description": "Отправитель конверта; пустой — уведомление о доставке.",
+            "type": "string"
+          },
+          "recipients": {
+            "description": "Все получатели конверта, включая скрытых и раскрытых из групп.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "message_id": {
+            "description": "Message-ID без угловых скобок; `null` — нет.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "description": "Момент письма (UTC).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "rule": {
+            "description": "Правило журналирования.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "sender",
+          "recipients",
+          "at",
+          "rule"
         ],
         "type": "object"
       }
@@ -13000,6 +13118,364 @@
         "summary": "Текущий администратор и его роли.",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/journal": {
+      "get": {
+        "operationId": "search_journal",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Отправитель конверта (точно, без учёта регистра ASCII).",
+            "in": "query",
+            "name": "sender",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Один из получателей записи, включая скрытых (точно, без учёта регистра ASCII).",
+            "in": "query",
+            "name": "recipient",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Message-ID без угловых скобок (точно).",
+            "in": "query",
+            "name": "message_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Правило журналирования (точно).",
+            "in": "query",
+            "name": "rule",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Начало интервала (RFC 3339), включительно.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Конец интервала (RFC 3339), не включительно.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Размер страницы (по умолчанию и наибольший — из конфигурации).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Продолжение: `next` предыдущей страницы с теми же условиями.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalPageView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Поиск по журналу организации: записи в порядке (`at`, `id`), продолжение — `after`.",
+        "tags": [
+          "journal"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/journal/{id}": {
+      "get": {
+        "operationId": "get_journal",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Запись журнала (UUID)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalEntryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Запись журнала по идентификатору: конверт и хеш цепочки; нет записи — 404.",
+        "tags": [
+          "journal"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/journal/{id}/export": {
+      "get": {
+        "operationId": "export_journal",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Запись журнала (UUID)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "message/rfc822": {}
+            },
+            "description": "файл .eml"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Выгрузка записи: `.eml` с конвертом (заголовки `X-ThePost-Journal-*` и письмо целиком).",
+        "tags": [
+          "journal"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/journal/verify": {
+      "get": {
+        "operationId": "verify_journal",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainReportView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Отчёт целостности хеш-цепочки индекса организации (`hash = SHA-256(prev_hash ‖ canonical)`).",
+        "tags": [
+          "journal"
         ]
       }
     }
