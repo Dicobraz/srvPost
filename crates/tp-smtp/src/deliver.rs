@@ -39,6 +39,10 @@
 //!   локального получателя (smtp-in, submission, [`Delivery::submit`]) после правил потока и до `ingest`: папки и
 //!   флаги, отброс, перенаправление, автоответ; перенаправленное письмо и внутренний автоответ — через правила
 //!   получателя с проверкой петли ([`Delivery::relay`], SMTP-34);
+//! - журналирование переписки (SMTP-53, SRS 4.9; CTR-97): письмо, подошедшее под правило журналирования
+//!   организации ([`Delivery::with_journal`]), копируется в отдельный бакет журнала целиком с конвертом —
+//!   этапом ядра до Sieve ящика и этапов модулей: `discard`/`stop` скрипта получателя запись не отменяют,
+//!   получатели записи — конверт на момент конвейера (скрытые Bcc и раскрытые из групп);
 //! - матрица доверия (решение 124, SMTP-50, [`Delivery::with_trust`]): тип абонента (`PeerKind`) вычисляется для
 //!   каждого письма — submission со входом и [`Delivery::submit`] — свой, smtp-in — по домену `From` и DMARC
 //!   (партнёр — домен из [`TrustStore::partner_of`] с пройденным DMARC, RFC 9989; заголовкам
@@ -99,6 +103,7 @@ use tp_contracts::auth::{Authorizer, DirChange, DirCursor, Directory, Principal,
 use tp_contracts::blob::{BlobIndex, BlobStore};
 use tp_contracts::ext::{CopyTo, Decision, DecisionHooks, SubmissionInfo};
 use tp_contracts::groups::{DistributionGroup, MAX_RULE_NAME_LEN};
+use tp_contracts::journal::JournalDirection;
 use tp_contracts::mailstore::{Delivery as MailDelivery, IngestRequest, Ingested, MailStore};
 use tp_contracts::meta::{
     Account, AccountScope, AccountStore, Mailbox, MailboxStore, MessageQuery, MessageStore, Policy,
@@ -291,6 +296,9 @@ pub struct Delivery {
     send_limits: Option<Arc<SendLimits>>,
     /// `smtp.limits.max_tracked_accounts`.
     max_tracked: usize,
+    /// Журналирование конвейера (SMTP-53): правила организации и хранилище записей; до подключения —
+    /// этап не пишет ничего.
+    journal: Option<journal::Journaling>,
 }
 
 impl fmt::Debug for Delivery {
@@ -412,6 +420,7 @@ impl Delivery {
             redirect_total: cfg.delivery.redirect_total,
             send_limits: None,
             max_tracked: cfg.limits.max_tracked_accounts,
+            journal: None,
         }
     }
 
@@ -2294,6 +2303,21 @@ impl Delivery {
         }
         self.add_copies(&env.id, &mut prepared, &copy_to, filing, &mut trail.steps)
             .await?;
+        // Этап журналирования ядра (SMTP-53, CTR-96: первый этап точки BeforeMailboxSieve) — до Sieve
+        // ящика: запись не зависит от ящика, `discard`/`stop` скрипта получателя её не отменяют.
+        let direction = match env.mode {
+            Mode::Inbound => JournalDirection::In,
+            Mode::Submission => JournalDirection::Out,
+        };
+        self.journal_message(
+            &env.id,
+            direction,
+            &env.mail_from,
+            &rcpts,
+            &full,
+            received_at,
+        )
+        .await?;
         // Внешние получатели smtp-in от обычного клиента — только перенаправления правил потока: пересылка.
         let redirect = env.mode == Mode::Inbound && !app;
         let mut forwarded = Vec::new();
@@ -2656,7 +2680,7 @@ impl Delivery {
         // Отправка вне сессии SMTP — путь вошедшего (CTR-82): тип абонента — свой (SMTP-50).
         let peer = PeerKind::Own;
         // Отчёт о прочтении (MDN, RFC 8098) получателям с выключенной клеткой `mdn` не отправляется (SMTP-50);
-        // события политики (MDN, запрещённая автопересылка) — в журнал доставки.
+        // события политики (MDN, запрещённая автопересылка) — в журнал доставки. MDN — служебное письмо
         let mut policy_steps = Vec::new();
         let rcpts = if dsn::is_mdn(&raw) {
             let (org, _) = self.org_matrix().await?;
@@ -2689,6 +2713,17 @@ impl Delivery {
         };
         let delivered = accounts_of(&prepared.deliveries);
         let mut forward = Vec::new();
+        // Этап журналирования ядра (SMTP-53) — до Sieve ящика (CTR-96): копия письма и конверт по правилам
+        // организации, отправка — направление Out.
+        self.journal_message(
+            id,
+            JournalDirection::Out,
+            mail_from,
+            &rcpts,
+            &full,
+            received_at,
+        )
+        .await?;
         let Sieved {
             redirect: hops,
             mut replies,
@@ -3979,6 +4014,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+mod journal;
 mod moderation;
 mod scheduled;
 

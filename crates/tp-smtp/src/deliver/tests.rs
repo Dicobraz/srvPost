@@ -1155,6 +1155,7 @@ async fn submission_copy_to_local_address() {
 mod addressbook;
 mod imip;
 mod invite;
+mod journal;
 mod moderation;
 mod outbound_milter;
 
