@@ -98,8 +98,7 @@ test("раздел «Брендинг»: ошибка контраста 422 —
   const form = await levelForm("Брендинг установки");
   expect(await within(form).findByText(/Действует: Сервер/)).toBeTruthy();
   fireEvent.click(within(form).getByRole("button", { name: "Сохранить брендинг" }));
-  // Ошибка — у поля роли (тёмная тема, sel) с текстом detail сервера.
-  fireEvent.click(await screen.findByRole("tab", { name: "Тёмная тема" }));
+  // Ошибка — у поля роли (вкладка открывается на теме первой ошибки) с текстом detail сервера.
   const shown = await screen.findAllByText(detail);
   expect(shown.some((e) => e.closest(".ant-form-item-explain-error"))).toBeTruthy();
 });

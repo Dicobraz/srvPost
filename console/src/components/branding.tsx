@@ -50,6 +50,13 @@ function contrastFields(problem: unknown): { name: ["light", string]; errors: st
   );
 }
 
+/** Тема первой ошибки контраста — вкладка ролей открывается на ней. */
+function contrastTheme(problem: unknown): string | undefined {
+  const p = (problem ?? {}) as { errors?: { field?: string }[] };
+  const first = p.errors?.find((e) => typeof e.field === "string" && e.field.includes("."));
+  return first?.field?.split(".")[0];
+}
+
 /** Предпросмотр одной темы: шапка, выделение и F-клавиши цветами действующего набора (с редактируемым). */
 function ThemePreview({ title, colors, name }: { title: string; colors: ModeColors; name: string }) {
   return (
@@ -82,6 +89,8 @@ function LevelForm({ level }: { level: "installation" | "org" }) {
   const { mutate, mutation } = useCustomMutation<Schemas["BrandingView"], HttpError, Schemas["BrandingBody"] | undefined>();
   const [form] = Form.useForm<Values>();
   const values = Form.useWatch([], form) as Values | undefined;
+  // Вкладка ролей: открывается на теме первой ошибки контраста (поля всех тем смонтированы — forceRender).
+  const [roleTab, setRoleTab] = useState<string>();
   // Уровень выше (для предпросмотра): организация — брендинг установки (открытый маршрут), установка — токены IT TASK.
   const [parent, setParent] = useState<Branding | null>(null);
   useEffect(() => {
@@ -179,7 +188,10 @@ function LevelForm({ level }: { level: "installation" | "org" }) {
           { url: view, method: "put", values: toBody(v), successNotification: { type: "success", message: "Брендинг сохранён" } },
           {
             onSuccess: refetch,
-            onError: (error) => form.setFields(contrastFields(error?.problem)),
+            onError: (error) => {
+              form.setFields(contrastFields(error?.problem));
+              setRoleTab(contrastTheme(error?.problem));
+            },
           },
         )
       }
@@ -251,10 +263,12 @@ function LevelForm({ level }: { level: "installation" | "org" }) {
         </Space>
       </Form.Item>
       <Tabs
+        activeKey={roleTab}
+        onChange={setRoleTab}
         items={[
-          { key: "light", label: "Светлая тема", children: roleTable("light") },
-          { key: "dark", label: "Тёмная тема", children: roleTable("dark") },
-          { key: "cli", label: "CLI", children: roleTable("cli") },
+          { key: "light", label: "Светлая тема", children: roleTable("light"), forceRender: true },
+          { key: "dark", label: "Тёмная тема", children: roleTable("dark"), forceRender: true },
+          { key: "cli", label: "CLI", children: roleTable("cli"), forceRender: true },
         ]}
       />
       <Form.Item label="Предпросмотр (шапка, выделение, F-клавиши — в обеих темах)">
