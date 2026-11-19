@@ -185,6 +185,38 @@ async fn ingest_tx_sees_thread_policies() {
     );
 }
 
+/// Письмо учётной записи в таблице `messages` с заданным `thread_key` и моментом приёма
+/// (`uid`/`modseq` — из времени приёма: уникальны и возрастают в порядке вставки).
+async fn insert_message(
+    meta: &PgMeta,
+    scope: AccountScope,
+    mailbox: MailboxId,
+    message: MessageId,
+    key: &str,
+    received: OffsetDateTime,
+) {
+    let mut tx = schema::begin(meta.pool(), scope.tenant)
+        .await
+        .expect("begin");
+    sqlx::query(
+        "INSERT INTO messages (tenant_id, account_id, message_id, mailbox_id, uid, modseq, size,
+                               received_at, skeleton_hash, skeleton_gen, thread_key, meta)
+         VALUES ($1, $2, $3, $4, $5, $6, 1, $7, '\\x00'::bytea, 0, $8, '{}')",
+    )
+    .bind(scope.tenant.as_uuid())
+    .bind(scope.account.as_uuid())
+    .bind(message.as_uuid())
+    .bind(mailbox.as_uuid())
+    .bind(received.unix_timestamp())
+    .bind(received.unix_timestamp())
+    .bind(received)
+    .bind(key)
+    .execute(&mut *tx)
+    .await
+    .expect("insert message");
+    tx.commit().await.expect("commit");
+}
+
 /// Фоновая привязка существующих писем по `thread_key`: письма одной цепочки — в одну беседу, в порядке
 /// приёма; уже привязанное письмо не переносится; когда привязывать нечего — `0`.
 #[tokio::test]
@@ -197,49 +229,24 @@ async fn background_binding_by_thread_key() {
     // Письма учётной записи: chain-1 — три письма (в порядке приёма), chain-2 — одно; письмо chain-1
     // с собственным Message-ID привязано вручную (привязка неизменяема).
     let mut received = OffsetDateTime::now_utc() - time::Duration::minutes(10);
-    let insert = |meta: &PgMeta, message: MessageId, key: &str, at: OffsetDateTime| {
-        let received = at;
-        async move {
-            let mut tx = schema::begin(meta.pool(), scope.tenant)
-                .await
-                .expect("begin");
-            sqlx::query(
-                "INSERT INTO messages (tenant_id, account_id, message_id, mailbox_id, uid, modseq, size,
-                                       received_at, skeleton_hash, skeleton_gen, thread_key, meta)
-                 VALUES ($1, $2, $3, $4, $5, $6, 1, $7, '\\x00'::bytea, 0, $8, '{}')",
-            )
-            .bind(scope.tenant.as_uuid())
-            .bind(scope.account.as_uuid())
-            .bind(message.as_uuid())
-            .bind(mailbox.as_uuid())
-            .bind(received.unix_timestamp())
-            .bind(received.unix_timestamp())
-            .bind(received)
-            .bind(key)
-            .execute(&mut *tx)
-            .await
-            .expect("insert message");
-            tx.commit().await.expect("commit");
-        }
-    };
     let m1 = MessageId::new();
     let m2 = MessageId::new();
     let m3 = MessageId::new();
     let m4 = MessageId::new();
     let m5 = MessageId::new();
-    insert(&meta, m1, "chain-1", received).await;
+    insert_message(&meta, scope, mailbox, m1, "chain-1", received).await;
     received += time::Duration::minutes(1);
-    insert(&meta, m2, "chain-1", received).await;
+    insert_message(&meta, scope, mailbox, m2, "chain-1", received).await;
     received += time::Duration::minutes(1);
-    insert(&meta, m3, "chain-1", received).await;
+    insert_message(&meta, scope, mailbox, m3, "chain-1", received).await;
     received += time::Duration::minutes(1);
-    insert(&meta, m4, "chain-2", received).await;
+    insert_message(&meta, scope, mailbox, m4, "chain-2", received).await;
     let store: Arc<dyn ThreadStore> = Arc::new(meta.clone());
     let t5 = store
         .bind(scope, m5, &["<m5@example.org>"])
         .await
         .expect("bind m5");
-    insert(&meta, m5, "chain-1", received).await;
+    insert_message(&meta, scope, mailbox, m5, "chain-1", received).await;
 
     let bound = meta
         .bind_unthreaded_messages(scope, 100)
