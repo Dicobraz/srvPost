@@ -1109,7 +1109,10 @@ async fn trust_policy_in_node() {
         }
         retry(until, "ответ участника в событии организатора").await;
     };
-    assert!(!answered.contains("Подмена"), "{answered}");
+    assert!(
+        !answered.contains("Подмена"),
+        "LOCATION из письма участника попал в событие организатора"
+    );
 
     // 5. Внешнее письмо в закрытую группу — `550 5.7.1` на RCPT (умолчание чужим закрыто). Письмо своего домена
     // через smtp-in без входа — тоже чужое (решение 124а: домен в `From` своим не делает; «своим — открыто» —
@@ -1170,7 +1173,7 @@ async fn trust_policy_in_node() {
     let view = node.get_org_trust(admin).await;
     assert_eq!(
         view["own"]["invite_new"]["partner"],
-        json!({ "partner": "auto" }),
+        json!("auto"),
         "{view}"
     );
     assert_eq!(
