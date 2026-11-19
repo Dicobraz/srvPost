@@ -5608,6 +5608,7 @@ pub async fn admin_audit_log(log: &dyn AuditLog, tenant: TenantId, foreign_tenan
             path: format!("/api/v1/orgs/{org}/policy"),
             status: if s % 2 == 0 { 200 } else { 403 },
             content_messages: (s == 3).then_some(2),
+            details: None,
         }
     };
     let records = [

@@ -317,6 +317,56 @@ pub const PUBLIC_BRANDING_LOGO: Op = Op {
     method: "GET",
     path: "/api/v1/public/branding/logo/{hash}",
 };
+/// Политика доверия установки.
+pub const TRUST_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/trust",
+};
+/// Замена политики установки.
+pub const TRUST_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/trust",
+};
+/// Сброс политики установки.
+pub const TRUST_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/trust",
+};
+/// Политика доверия организации.
+pub const ORG_TRUST_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/trust",
+};
+/// Замена политики организации.
+pub const ORG_TRUST_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/orgs/{org}/trust",
+};
+/// Сброс политики организации.
+pub const ORG_TRUST_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/orgs/{org}/trust",
+};
+/// Политика доверия группы.
+pub const GROUP_TRUST_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/groups/{group}/trust",
+};
+/// Замена политики группы.
+pub const GROUP_TRUST_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/orgs/{org}/groups/{group}/trust",
+};
+/// Сброс политики группы.
+pub const GROUP_TRUST_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/orgs/{org}/groups/{group}/trust",
+};
+/// Действующая политика доверия учётной записи.
+pub const ACCOUNT_TRUST_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/accounts/{account}/trust",
+};
 
 /// Все операции клиента (сверка со спецификацией OpenAPI — тест).
 pub const OPERATIONS: &[Op] = &[
@@ -381,6 +431,16 @@ pub const OPERATIONS: &[Op] = &[
     ORG_BRANDING_LOGO_RESET,
     PUBLIC_BRANDING,
     PUBLIC_BRANDING_LOGO,
+    TRUST_GET,
+    TRUST_PUT,
+    TRUST_RESET,
+    ORG_TRUST_GET,
+    ORG_TRUST_PUT,
+    ORG_TRUST_RESET,
+    GROUP_TRUST_GET,
+    GROUP_TRUST_PUT,
+    GROUP_TRUST_RESET,
+    ACCOUNT_TRUST_GET,
 ];
 
 #[cfg(test)]

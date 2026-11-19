@@ -72,6 +72,7 @@ impl Access<'_> {
             path: self.path.to_owned(),
             status,
             content_messages: Some(u64::try_from(messages).unwrap_or(u64::MAX)),
+            details: None,
         };
         crate::audit::record(&a.d, &record).await
     }
