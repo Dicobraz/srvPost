@@ -8,12 +8,12 @@ import { App as AntdApp, ConfigProvider } from "antd";
 // ES-модуль: `antd/locale/ru_RU` (CommonJS) в сборке Vite приходит обёрткой без текстов — интерфейс остаётся английским.
 import ruRU from "antd/es/locale/ru_RU";
 import dayjs from "dayjs";
-import { Outlet, Route, Routes } from "react-router";
+import { Outlet, Route, Routes, useLocation } from "react-router";
 
+import { loadSession, type Schemas } from "./api/client";
 import { Forbidden } from "./components/forbidden";
 import { Header } from "./components/header";
 import { i18nProvider } from "./i18n";
-import type { Schemas } from "./api/client";
 import { AccountCreate, AccountList, AccountShow } from "./pages/accounts";
 import { AuditPage } from "./pages/audit";
 import { ContactCreate, ContactEdit, ContactList } from "./pages/contacts";
@@ -32,6 +32,7 @@ import { TransportPage } from "./pages/transport";
 import { UnitsPage } from "./pages/units";
 import { accessControlProvider, allowed } from "./providers/access";
 import { authProvider } from "./providers/auth";
+import { BrandingProvider, useBranding, useBrandingState } from "./providers/branding";
 import { dataProvider } from "./providers/data";
 import { brandTheme, DarkProvider, useSystemDark } from "./theme";
 import { installFonts } from "./fonts";
@@ -41,7 +42,8 @@ installFonts();
 
 dayjs.locale("ru");
 
-const Title = (props: { collapsed: boolean }) => <ThemedTitle {...props} text="The Post" />;
+/** Название в заголовке боковой панели: брендинг заказчика, нет — The Post. */
+const Title = (props: { collapsed: boolean }) => <ThemedTitle {...props} text={useBranding()?.name ?? "The Post"} />;
 
 /** Первый раздел по роли: аудитору доступен только журнал аудита. */
 function Home() {
@@ -51,13 +53,19 @@ function Home() {
 }
 
 export function App() {
-  // Тема — светлая и тёмная, строится из design/tokens.toml и следует системной настройке (UI-19).
+  // Тема — светлая и тёмная, строится из design/tokens.toml и следует системной настройке (UI-19);
+  // действующий брендинг заказчика заменяет роли токенов (UI-22).
   const dark = useSystemDark();
+  // Вход и выход меняют адрес — сессия пересчитывается, брендинг перечитывается (effective после входа).
+  useLocation();
+  const token = loadSession()?.token ?? null;
+  const branding = useBrandingState(token);
   return (
-    <ConfigProvider locale={ruRU} theme={brandTheme(dark)}>
-      <AntdApp>
-        <DarkProvider value={dark}>
-          <Refine
+    <BrandingProvider value={branding}>
+      <ConfigProvider locale={ruRU} theme={brandTheme(dark, branding.branding)}>
+        <AntdApp>
+          <DarkProvider value={dark}>
+            <Refine
             routerProvider={routerProvider}
             dataProvider={dataProvider}
             authProvider={authProvider}
@@ -168,6 +176,7 @@ export function App() {
           </Refine>
         </DarkProvider>
       </AntdApp>
-    </ConfigProvider>
+      </ConfigProvider>
+    </BrandingProvider>
   );
 }

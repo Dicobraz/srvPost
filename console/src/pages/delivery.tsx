@@ -7,6 +7,7 @@ import { useState } from "react";
 import type { Schemas } from "../api/client";
 import { useCursorPages } from "../components/cursor-pages";
 import { interval, moment } from "../components/format";
+import { useBranding } from "../providers/branding";
 import { StatusTag, type StatusRole } from "../components/status";
 import { modeColors, useDark } from "../theme";
 
@@ -36,7 +37,7 @@ function Decision({ e }: { e: Entry }) {
 function MessageCard({ id }: { id: string }) {
   const { page, loading, pager } = useCursorPages<Schemas["DeliveryResults"]>(URL, { message_id: id });
   const events = page?.events ?? [];
-  const colors = modeColors(useDark());
+  const colors = modeColors(useDark(), useBranding());
   const roleColor: Record<StatusRole, string> = { ok: colors.ok, warn: colors.warn, err: colors.err, info: colors.frameA };
   const dot = (e: Entry) => {
     const role = DECISIONS[e.decision]?.[1];

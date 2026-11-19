@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 
 import { StatusTag } from "./components/status";
 import { installFonts } from "./fonts";
-import { brandTheme, fonts, signs, tokens } from "./theme";
+import { brandTheme, fonts, modeColors, signs, tokens, type Branding } from "./theme";
 
 test("тема antd строится из design/tokens.toml: роли режима — значения файла", () => {
   for (const dark of [false, true]) {
@@ -31,6 +31,23 @@ test("тема antd строится из design/tokens.toml: роли режи�
   // Светлая и тёмная темы различаются фоном и текстом, шрифт заголовков — из [fonts.heading].
   expect(brandTheme(true).token?.colorBgLayout).not.toBe(brandTheme(false).token?.colorBgLayout);
   expect(fonts.heading).toContain(tokens.fonts.heading.family);
+});
+
+test("тема из действующего брендинга сервера: заданные роли заменяют токены, незаданные и без брендинга — токены (UI-22)", () => {
+  const branding: Branding = {
+    name: "Кофе",
+    logo: { url: "/api/v1/public/branding/logo/ab" },
+    light: { sel: "#123456", text: "#234567" },
+    dark: { sel: "#345678" },
+  };
+  const light = brandTheme(false, branding).token ?? {};
+  expect(light.colorPrimary).toBe("#123456"); // sel — главная кнопка, выделение
+  expect(light.colorText).toBe("#234567");
+  expect((brandTheme(true, branding).token ?? {}).colorPrimary).toBe("#345678");
+  // Незаданные роли остаются от токенов; бренда нет — тема целиком из токенов (UI-19).
+  expect(light.colorBgLayout).toBe(tokens.mode.light.screen);
+  expect(brandTheme(false).token?.colorPrimary).toBe(tokens.mode.light.sel);
+  expect(modeColors(true, branding).sel).toBe("#345678");
 });
 
 test("знаки состояний из [signs]: у нормы, внимания и ошибки разные непустые знаки", () => {
