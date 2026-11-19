@@ -47,6 +47,7 @@ pub mod tls;
 pub mod transport;
 pub mod trust;
 
+pub use bytes::Bytes;
 pub use error::{Error, Result};
 pub use ids::{
     AccountId, BlobHash, BlobKey, ContactId, DomainId, Gen, GroupId, HeldId, JournalId, MailboxId,

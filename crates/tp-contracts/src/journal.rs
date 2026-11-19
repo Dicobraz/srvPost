@@ -127,7 +127,9 @@ pub struct JournalRecord {
     pub recipients: Vec<String>,
     /// Message-ID без угловых скобок; `None` — нет.
     pub message_id: Option<String>,
-    /// Момент письма (UTC).
+    /// Момент письма (UTC); в каноническом JSON — строка RFC 3339: её приводит к timestamptz
+    /// проверка цепочки чистым SQL (`journal.tp_consistent`).
+    #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
     /// Правило ([`JournalRule::id`]).
     pub rule: String,
@@ -364,6 +366,29 @@ pub trait JournalStore: Send + Sync + 'static {
     /// Восстановление индекса из хранилища записей (maintenance): возвращает число восстановленных
     /// записей организации.
     async fn restore_index(&self, tenant: TenantId) -> Result<u64>;
+}
+
+/// Хранилище записей журнала (SRS 4.9) — порт индекса (META-88): письмо целиком с конвертом в отдельном
+/// от BLOB ящиков бакете журнала с дедупликацией внутри журнала и блокировкой объектов (режим и срок —
+/// настройка установки). Контракт бэкенда не знает: реализация — полоса blob (BLOB-18, S3 с Object Lock
+/// или локальный диск), in-memory — `tp-testkit`. Записи неизменяемы: методов изменения и удаления нет.
+///
+/// Запись адресуется по [`JournalId`]; `put` возвращает ссылку на запись в хранилище (ключ объекта) —
+/// индекс хранит её для поиска и диагностики (thepost doctor). Двухфазная запись журнала: сначала
+/// `put` (идемпотентен, вне транзакции БД — обращения к BLOB в открытой транзакции запрещены), затем
+/// строка индекса в PostgreSQL; при обрыве между фазами индекс чинит [`JournalStore::restore_index`].
+#[async_trait]
+pub trait JournalRecords: Send + Sync + 'static {
+    /// Записывает запись `id` — конверт и письмо целиком; повторная запись того же `id` — не ошибка
+    /// (возвращает ту же ссылку). Возвращает ссылку на запись (ключ объекта хранилища).
+    async fn put(&self, id: JournalId, record: &JournalRecord, message: Bytes) -> Result<String>;
+
+    /// Читает запись — конверт и письмо целиком; нет записи — `Error::NotFound`.
+    async fn read(&self, id: JournalId) -> Result<(JournalRecord, Bytes)>;
+
+    /// Конверты записей организации по возрастанию `id` (порядок добавления): восстановление индекса.
+    /// Письма не читает — для цепочки хешей достаточно конвертов.
+    async fn scan(&self, tenant: TenantId) -> Result<Vec<(JournalId, JournalRecord, String)>>;
 }
 
 #[cfg(test)]

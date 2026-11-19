@@ -1272,6 +1272,98 @@ $$;
 REVOKE ALL ON FUNCTION tp_log_partitions(text, date[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION tp_log_purge(text, timestamptz) FROM PUBLIC;
 
+-- ---------- Журнал переписки (SRS 4.9; CTR-97, META-88) ----------
+--
+-- Индекс журнала — в схеме journal: конверт каждой записи для поиска (eDiscovery) и хеш-цепочка
+-- доказательной целостности hash = sha256(prev_hash ‖ canonical) — SHA-256 считает PostgreSQL
+-- (sha256(bytea); контракт фиксирует образ входа chain_input). Письма целиком — в отдельном бакете
+-- журнала (полоса blob, BLOB-18): строка индекса хранит ссылку на запись (storage). Таблица только на
+-- добавление, как журналы аудита: UPDATE и DELETE отклоняет триггер tp_append_only; очистка — только
+-- функцией восстановления tp_journal_clear (maintenance, restore_index). Без внешнего ключа на tenants
+-- — как у других журналов только на добавление.
+
+CREATE SCHEMA journal;
+
+-- Запись индекса: конверт (sender, recipients, message_id, at, rule) + цепочка. seq — порядок в цепочке
+-- организации (присваивается под рекомендательной блокировкой), поиск — по (at, id).
+-- sender_key и rcpt_keys — адреса в нижнем регистре ASCII для поиска без учёта регистра; canonical —
+-- канонический JSON записи (образ хеша): индекс самодостаточен для проверки цепочки чистым SQL.
+CREATE TABLE journal.entries (
+    tenant_id  uuid NOT NULL,
+    seq        bigint NOT NULL CHECK (seq > 0),
+    id         uuid NOT NULL,
+    sender     text NOT NULL,
+    sender_key text NOT NULL,
+    recipients text[] NOT NULL CHECK (cardinality(recipients) > 0),
+    rcpt_keys  text[] NOT NULL,
+    message_id text,
+    at         timestamptz NOT NULL,
+    rule       text NOT NULL,
+    storage    text NOT NULL CHECK (storage <> ''),
+    canonical  text NOT NULL CHECK (jsonb_typeof(canonical::jsonb) = 'object'),
+    prev_hash  bytea NOT NULL CHECK (octet_length(prev_hash) = 32),
+    hash       bytea NOT NULL CHECK (octet_length(hash) = 32),
+    PRIMARY KEY (tenant_id, id),
+    UNIQUE (tenant_id, seq)
+);
+
+-- Согласованность конверта строки с её каноническим представлением: подмена любого столбца записи
+-- (не только canonical) видна проверке цепочки. Время сравнивается в timestamptz (микросекунды)
+-- с обеих сторон — наносекунды канонического JSON усекаются как в столбце.
+CREATE FUNCTION journal.tp_consistent(e journal.entries) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+    SELECT (e.canonical::jsonb ->> 'tenant')::uuid IS NOT DISTINCT FROM e.tenant_id
+       AND e.canonical::jsonb ->> 'sender' IS NOT DISTINCT FROM e.sender
+       AND (SELECT array_agg(x ORDER BY ord)
+            FROM jsonb_array_elements_text(e.canonical::jsonb -> 'recipients')
+                 WITH ORDINALITY AS t(x, ord)) IS NOT DISTINCT FROM e.recipients
+       AND e.canonical::jsonb ->> 'message_id' IS NOT DISTINCT FROM e.message_id
+       AND (e.canonical::jsonb ->> 'at')::timestamptz IS NOT DISTINCT FROM e.at
+       AND e.canonical::jsonb ->> 'rule' IS NOT DISTINCT FROM e.rule
+$$;
+
+CREATE INDEX journal_entries_time ON journal.entries (tenant_id, at, id);
+CREATE INDEX journal_entries_sender ON journal.entries (tenant_id, sender_key, at, id);
+CREATE INDEX journal_entries_rcpt ON journal.entries USING gin (rcpt_keys);
+CREATE INDEX journal_entries_message ON journal.entries (tenant_id, message_id)
+    WHERE message_id IS NOT NULL;
+CREATE INDEX journal_entries_rule ON journal.entries (tenant_id, rule, at, id);
+
+CREATE TRIGGER tp_append_only BEFORE UPDATE OR DELETE ON journal.entries
+    FOR EACH ROW EXECUTE FUNCTION tp_append_only();
+
+-- Очистка индекса организации — только восстановлением (restore_index пересобирает индекс из хранилища
+-- записей). Триггер только на добавление отключается на время очистки и только этой функцией; записи
+-- хранилища (бакет) она не трогает. Системная транзакция (app.all_tenants) — RLS.
+CREATE FUNCTION tp_journal_clear(tenant uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = journal, public, pg_temp AS $$
+BEGIN
+    ALTER TABLE journal.entries DISABLE TRIGGER tp_append_only;
+    DELETE FROM journal.entries WHERE tenant_id = tenant;
+    ALTER TABLE journal.entries ENABLE TRIGGER tp_append_only;
+END
+$$;
+
+REVOKE ALL ON FUNCTION tp_journal_clear(uuid) FROM PUBLIC;
+
+-- Правила журналирования (CTR-97): организация, группа или ящик, направление, состояние; правило —
+-- данные организации. Удаление группы или учётной записи удаляет их правила (каскад).
+CREATE TABLE journal.rules (
+    tenant_id  uuid NOT NULL REFERENCES tenants ON DELETE CASCADE,
+    id         text NOT NULL CHECK (id <> ''),
+    scope_kind text NOT NULL CHECK (scope_kind IN ('org', 'group', 'mailbox')),
+    group_id   uuid,
+    account_id uuid,
+    direction  text NOT NULL CHECK (direction IN ('in', 'out', 'both')),
+    enabled    boolean NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, id),
+    CHECK ((scope_kind = 'group') = (group_id IS NOT NULL)),
+    CHECK ((scope_kind = 'mailbox') = (account_id IS NOT NULL)),
+    FOREIGN KEY (tenant_id, group_id) REFERENCES groups (tenant_id, group_id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, account_id) REFERENCES accounts (tenant_id, account_id) ON DELETE CASCADE
+);
+
 -- ---------- Транспорт (SRS 4.1, 2.6; решение 2026-11-01-transport-scope-external-mta) ----------
 -- Уровень кластера — принятые домены (таблица domains) и доверенные источники; версия снимка — одна строка
 -- transport_cluster, запись блокирует её (FOR UPDATE), чтение снимка — FOR SHARE. Уровень организации —
@@ -1441,6 +1533,18 @@ CREATE POLICY tenant_isolation ON trust_policies USING (tp_tenant_visible(tenant
     WITH CHECK (tp_tenant_visible(tenant_id));
 CREATE POLICY installation_read ON trust_policies FOR SELECT USING (tenant_id IS NULL);
 
+-- Журнал переписки: записи индекса и правила видит и меняет только своя организация (аудитора журнала
+-- через токен JournalAudit пускает Admin API в транзакции организации); очистку индекса выполняет
+-- только tp_journal_clear в системной транзакции.
+ALTER TABLE journal.entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE journal.entries FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON journal.entries USING (public.tp_tenant_visible(tenant_id))
+    WITH CHECK (public.tp_tenant_visible(tenant_id));
+ALTER TABLE journal.rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE journal.rules FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON journal.rules USING (public.tp_tenant_visible(tenant_id))
+    WITH CHECK (public.tp_tenant_visible(tenant_id));
+
 -- ---------- Роли PostgreSQL (SRS 2.7, 3.1; решение 2026-11-01-borrowings-security) ----------
 --
 -- Владелец схемы (роль, применяющая миграции) в работе узлов не используется. Узлы входят ролями с минимальными
@@ -1477,42 +1581,46 @@ BEGIN
 END
 $$;
 
--- Выдаёт права групповым ролям на таблицы схемы public (секции — только через родительскую таблицу).
+-- Выдаёт права групповым ролям на таблицы схем public и journal (секции — только через родительскую
+-- таблицу; служебные таблицы — как в комментарии выше).
 CREATE FUNCTION tp_grant_roles() RETURNS void
-LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+LANGUAGE plpgsql SET search_path = public, journal, pg_temp AS $$
 DECLARE
     t record;
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'thepost_app') THEN
-        GRANT USAGE ON SCHEMA public TO thepost_app;
+        GRANT USAGE ON SCHEMA public, journal TO thepost_app;
         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO thepost_app;
-        GRANT EXECUTE ON FUNCTION tp_log_partitions(text, date[]), tp_log_purge(text, timestamptz) TO thepost_app;
+        GRANT EXECUTE ON FUNCTION tp_log_partitions(text, date[]), tp_log_purge(text, timestamptz),
+            tp_journal_clear(uuid) TO thepost_app;
     END IF;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'thepost_reader') THEN
-        GRANT USAGE ON SCHEMA public TO thepost_reader;
+        GRANT USAGE ON SCHEMA public, journal TO thepost_reader;
     END IF;
     FOR t IN
-        SELECT c.relname,
+        SELECT n.nspname AS schema, c.relname,
                EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = c.oid AND g.tgname = 'tp_append_only')
                    AS append_only
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+        WHERE n.nspname IN ('public', 'journal') AND c.relkind IN ('r', 'p') AND NOT c.relispartition
           AND c.relname <> '_sqlx_migrations'
     LOOP
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'thepost_app') THEN
-            EXECUTE format('REVOKE ALL ON public.%I FROM thepost_app', t.relname);
+            EXECUTE format('REVOKE ALL ON %I.%I FROM thepost_app', t.schema, t.relname);
             IF t.append_only THEN
-                EXECUTE format('GRANT SELECT, INSERT ON public.%I TO thepost_app', t.relname);
+                EXECUTE format('GRANT SELECT, INSERT ON %I.%I TO thepost_app', t.schema, t.relname);
             ELSE
-                EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON public.%I TO thepost_app', t.relname);
+                EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I.%I TO thepost_app',
+                               t.schema, t.relname);
             END IF;
         END IF;
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'thepost_reader') THEN
-            EXECUTE format('REVOKE ALL ON public.%I FROM thepost_reader', t.relname);
+            EXECUTE format('REVOKE ALL ON %I.%I FROM thepost_reader', t.schema, t.relname);
             IF t.relname IN ('nodes', 'leases', 'event_cursors', 'index_manifests') THEN
-                EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON public.%I TO thepost_reader', t.relname);
+                EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I.%I TO thepost_reader',
+                               t.schema, t.relname);
             ELSE
-                EXECUTE format('GRANT SELECT ON public.%I TO thepost_reader', t.relname);
+                EXECUTE format('GRANT SELECT ON %I.%I TO thepost_reader', t.schema, t.relname);
             END IF;
         END IF;
     END LOOP;
