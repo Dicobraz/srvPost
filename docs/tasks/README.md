@@ -931,7 +931,7 @@
 | [META-86](META-86.md) | запись об отправленном и беседы в PostgreSQL — `SentLog`, `ThreadStore`, удержание и действия по беседе | meta | A | meta-59 | ready | CTR-94 |
 | [MS-21](MS-21.md) | приём письма — беседа и политики беседы в той же транзакции | mailstore | A | mailstore-15 | done | CTR-94 |
 | [SMTP-51](SMTP-51.md) | ответ на наше письмо — метка в Message-ID, BATV, признак ответа, память беседы | smtp | A | smtp-31 | ready | CTR-94,DEPS-18,SMTP-50 |
-| [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | ready | CTR-94,MS-21 |
+| [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | done | CTR-94,MS-21 |
 | [JMAP-49](JMAP-49.md) | доступ к чужим ящикам почты в JMAP — делегированные Email/query и Email/get по ACL | jmap | A | jmap-33 | done | JMAP-32,CTR-82 |
 | [ADM-50](ADM-50.md) | удержание беседы в Admin API — удержать, снять, перечислить, выгрузить; CLI | admin | B | admin-36 | ready | CTR-94,ADM-44 |
 | [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | app-74 | todo | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
