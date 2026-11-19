@@ -457,7 +457,7 @@ impl Node {
     }
 
     /// События доставки письма `message_id`: приём и доставки в ящики.
-    async fn delivered(&self, message_id: &str) -> Vec<DeliveryEventKind> {
+    async fn events(&self, message_id: &str) -> Vec<tp_contracts::delivery::DeliveryEvent> {
         let query = DeliveryQuery {
             message_id: Some(message_id.to_owned()),
             ..DeliveryQuery::all(10)
@@ -466,8 +466,14 @@ impl Node {
             .await
             .expect("delivery log")
             .events
+    }
+
+    /// Получатели событий доставки в ящики (событие несёт нескольких получателей сразу).
+    fn mailbox_rcpts(events: &[tp_contracts::delivery::DeliveryEvent]) -> Vec<String> {
+        events
             .iter()
-            .map(|e| e.kind)
+            .filter(|e| e.kind == DeliveryEventKind::Deliver)
+            .flat_map(|e| e.recipients.iter().cloned())
             .collect()
     }
 }
@@ -501,7 +507,8 @@ async fn disabled_section_leaves_delivery_without_journal() {
     );
     let until = tokio::time::Instant::now() + WAIT;
     loop {
-        let kinds = node.delivered("journal-off@sender.test").await;
+        let events = node.events("journal-off@sender.test").await;
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
         if kinds.contains(&DeliveryEventKind::Receive)
             && kinds.contains(&DeliveryEventKind::Deliver)
         {
@@ -509,7 +516,7 @@ async fn disabled_section_leaves_delivery_without_journal() {
         }
         assert!(
             tokio::time::Instant::now() < until,
-            "не дождались: доставка в ящик"
+            "не дождались: доставка в ящик ({kinds:?})"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -684,21 +691,25 @@ async fn enabled_section_journals_full_envelope() {
         1
     );
 
-    // Доставка в ящики не изменилась: alice, carol (скрытый получатель) и члены группы.
+    // Доставка в ящики не изменилась: alice, carol (скрытый получатель) и группа (члены — carol и dave
+    // под адресом группы; событие доставки несёт нескольких получателей сразу).
     let until = tokio::time::Instant::now() + WAIT;
     loop {
-        let kinds = node.delivered("journal-on@sender.test").await;
-        if kinds
-            .iter()
-            .filter(|k| **k == DeliveryEventKind::Deliver)
-            .count()
-            >= 3
+        let events = node.events("journal-on@sender.test").await;
+        let got = Node::mailbox_rcpts(&events);
+        if [
+            "alice@journal.test",
+            "carol@journal.test",
+            "team@journal.test",
+        ]
+        .iter()
+        .all(|want| got.iter().any(|r| r.eq_ignore_ascii_case(want)))
         {
             break;
         }
         assert!(
             tokio::time::Instant::now() < until,
-            "не дождались: доставка в ящики"
+            "не дождались: доставка в ящики ({events:?})"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
