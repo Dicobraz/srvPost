@@ -703,7 +703,7 @@
 |---|---|---|---|---|---|---|
 | [PLT-37](PLT-37.md) | ACME — окно продления по доле срока сертификата | platform | A | platform-26 | done | — |
 | [PLT-39](PLT-39.md) | ACME — окно продления от сервера (ARI, RFC 9773) | platform | A | platform-26 | done | PLT-37 |
-| [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | ready | PLT-37 |
+| [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | done | PLT-37 |
 | [DOC-15](DOC-15.md) | INSTALL — выпуск сертификата виден со всех точек наблюдения | docs | A | docs-15 | done | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
@@ -967,10 +967,10 @@
 | [SMTP-53](SMTP-53.md) | этап журналирования в конвейере — приём, отправка, конверт | smtp | A | smtp-33 | ready | CTR-96,CTR-97 |
 | [SMTP-54](SMTP-54.md) | конвейер как реестр этапов и итоговый контроль действий в доставке | smtp | A | smtp-33 | ready | CTR-96 |
 | [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | ready | CTR-97,META-88 |
-| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | ready | CTR-97,META-88,BLOB-18 |
-| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | ready | CTR-97 |
+| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | done | CTR-97,META-88,BLOB-18 |
+| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | done | CTR-97 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
-| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | todo | APP-83,BLOB-18 |
+| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | ready | APP-83,BLOB-18 |
 
 ## Вне волн
 
