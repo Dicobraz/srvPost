@@ -28,6 +28,7 @@ pub mod events;
 pub mod failover;
 pub mod groups;
 pub mod index_manifest;
+pub mod journal;
 pub mod lease;
 pub mod mailbox_audit;
 pub mod mailboxes;

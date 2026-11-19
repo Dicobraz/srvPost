@@ -907,6 +907,7 @@ impl ItipInbox {
             method: ItipMethod::Reply,
             ics: reply.to_string(),
             sender: PeerKind::Own,
+            calendar: None,
         };
         if let Err(e) = self.deliver(&m).await {
             tracing::warn!(error = %e, "iTIP: ответ ресурса организатору не отправлен");

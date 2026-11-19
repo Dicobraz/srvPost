@@ -341,6 +341,14 @@ direction: JournalDirection::{In, Out, Both}, enabled }` задаётся на �
   `hash = SHA-256(prev_hash ‖ canonical(record))` (`chain_input` фиксирует образ, у первой записи `prev` — `GENESIS_HASH`);
   целостность проверяют thepost doctor и Admin API.
 - `restore_index(tenant) -> u64` — индекс восстанавливается из хранилища записей (maintenance).
+Порт хранилища записей для индекса (META-88) — `JournalRecords { put(id, record, message) -> ссылка (идемпотентна),
+read(id) -> (record, message), scan(tenant) -> конверты по возрастанию id }`: двухфазная запись — сначала `put` в бакет
+(вне транзакции БД), затем строка индекса; `export` читает запись по ссылке, `restore_index` пересобирает индекс из
+`scan`. Реализация — полоса blob (BLOB-18); in-memory — `MemJournalRecords`.
+Индекс в PostgreSQL (META-88) — `PgJournal` (tp-meta, схема `journal`: `entries` — только добавление, триггер как у
+журнала аудита; очистка — функцией восстановления `tp_journal_clear`; `rules` — правила организации): SHA-256 считает
+PostgreSQL, каноническое представление записи хранится в строке — цепочка проверяется чистым SQL вместе с
+согласованностью конверта строки с её каноническим представлением (подмена любого столбца записи видна проверке).
 Доступ — только роль «аудитор журнала» (SRS 5.2): токен `JournalAudit` (выдаёт авторизация Admin API) — параметр `search`,
 `export`, `verify_chain`; пользователи и администраторы правил журнал не видят, через IMAP и JMAP не доступен.
 In-memory — `MemJournal`; набор `suite::journal` (подмена записи и потеря индекса — колбэки теста).
@@ -809,9 +817,13 @@ iMIP (RFC 6047), занятость. iCalendar контракты не разб�
 с JMAP (`sendSchedulingMessages`, JMAP-31; JMAP Calendars — по черновику IETF, решение 35). Адрес календарного пользователя —
 без `mailto:`, `valid_address` (1–320 байт, без пробелов и управляющих; нормализует вызывающий).
 - `ItipMethod::{Publish, Request, Reply, Add, Cancel, Refresh, Counter, DeclineCounter}` (`as_str`, `FromStr` без регистра, `from_organizer`).
-- `ItipDelivery::deliver(&ItipMessage { recipient: AccountScope, to, from, method, ics, sender: PeerKind }) ->
-  ItipOutcome::{Applied, Ignored(reason)}` — приём iTIP учётной записью: `REQUEST`, `ADD` — событие в календаре по умолчанию
+- `ItipDelivery::deliver(&ItipMessage { recipient: AccountScope, to, from, method, ics, sender: PeerKind,
+  calendar: Option<ProcessCalendar> }) -> ItipOutcome::{Applied, Ignored(reason)}` — приём iTIP учётной записью:
+  `REQUEST`, `ADD` — событие в календаре по умолчанию
   (`PARTSTAT=NEEDS-ACTION`), `REPLY` — статус участника у организатора, `CANCEL` — `STATUS:CANCELLED`, все — во входящие планирования.
+  `calendar` (issue #89, решение владельца — вариант 1) — итог действия `processcalendar` правил Sieve (RFC 9671,
+  `RulesOutcome::calendar`), которое приём исполняет в пределах действующей матрицы получателя (`invite_new = auto`);
+  действия не было или сообщение сохранено без поля — `None` (`#[serde(default)]`).
   `from` проверен вызывающим (iMIP — `From`, прошедший DMARC; внутри — адрес учётной записи). CTR-59 (решение 78): своя организация — также
   приглашение из почтового клиента (submission, JMAP `EmailSubmission`; SMTP-36), если `From` письма принадлежит вошедшей учётной записи
   (свой адрес, псевдоним, право Send As); иначе — письмо без доставки iTIP. CTR-92 → CTR-93 (решения 123 → 124): `sender` — тип отправителя
@@ -1397,3 +1409,17 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   поле `tenant`; `covers` — проверка области правила (членство группы передаёт вызывающий). Раздел «Journal»; in-memory —
   `MemJournal` (хеш — тестовый SipHash, SHA-256 считают реализации); набор `suite::journal`. Реализация — BLOB-18, индекс —
   META-88.
+- 2026-11-19 — META-88 (x/meta-61, решение — issue #111): порт хранилища записей `journal::JournalRecords`
+  (put/read/scan; реализация — полоса blob BLOB-18, in-memory — `MemJournalRecords`) — индекс читает и пишет записи
+  бакета через контракт, двухфазно: сначала бакет (идемпотентно, вне транзакции БД), затем строка индекса; при обрыве
+  между фазами индекс чинит `restore_index`. Индекс в PostgreSQL — `PgJournal` (tp-meta): схема `journal`
+  (`entries` — только добавление с триггером `tp_append_only`, хеш-цепочка `sha256(prev_hash ‖ canonical)` — SHA-256
+  считает PostgreSQL, канонический JSON хранится в строке (проверка цепочки чистым SQL), очистка — только функцией
+  `tp_journal_clear` восстановления; `rules` — правила журналирования организации, RLS); порядок цепочки — `seq`
+  организации под рекомендательной блокировкой; поиск по (`at`, `id`) с курсором; набор `suite::journal` проходит на
+  PostgreSQL (подмена записи ловится, восстановление из хранилища записей возвращает поиск).
+
+- 2026-11-19 — x/contracts-68 (issue #89, решение владельца — вариант 1): `ItipMessage::calendar: Option<ProcessCalendar>`
+  (`#[serde(default)]`) — итог действия `processcalendar` правил Sieve (RFC 9671) приём передаёт вместе с сообщением:
+  SMTP-50 (PR #104) пишет, DAV-44 читает. Совместимо: absent/null — `None`; вызывающие (`tp-smtp`, `tp-dav`, `tp-testkit`)
+  переведены в этом же PR.

@@ -1,6 +1,13 @@
 //! Встроенный клиент ACME для профиля SMB (SRS 6.2): выпуск сертификата по HTTP-01 (ответ на проверку отдаёт
-//! служебный HTTP — [`challenge_router`]), продление за `renew_before` до истечения, перечитывание [`TlsCerts`]
-//! без перезапуска.
+//! служебный HTTP — [`challenge_router`]), продление, когда осталось меньше `min(renew_before, трети срока
+//! жизни)` (сроки публичных сертификатов сокращаются — ballot SC-081v3; cert-manager и Caddy — по той же доле),
+//! перечитывание [`TlsCerts`] без перезапуска.
+//!
+//! Окно продления, подсказанное сервером (ARI, RFC 9773), важнее календаря: для выпущенного сертификата
+//! (серийный номер + идентификатор ключа уполномоченного CA из цепочки — [`certificate_identifier`]) сервер
+//! отвечает `RenewalInfo` с `suggestedWindow` — продлевать, когда проверка попала в окно; «уже сейчас» —
+//! сертификат отмечен к замене (досрочный отзыв, массовый перевыпуск). Сервер без `renewalInfo` в каталоге —
+//! как раньше, по календарю; ошибка запроса ARI — предупреждение в журнал, не отказ продления.
 //!
 //! Ключ TLS — только в хранилище секретов (решение 100, PLT-29): выпущенный ключ пишется новой версией секрета
 //! `tls.key` ([`SecretStore::put`]), затем цепочка — в `tls.cert_file`. Ошибка записи ключа — `ERROR` в журнал,
@@ -26,8 +33,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use instant_acme::{
     Account, AccountBuilder, AccountCredentials, AuthorizationStatus, BodyWrapper, BytesResponse,
-    ChallengeType, HttpClient, Identifier, NewAccount, NewOrder, OrderStatus, RetryPolicy,
+    CertificateIdentifier, ChallengeType, HttpClient, Identifier, NewAccount, NewOrder,
+    OrderStatus, RetryPolicy,
 };
+use rustls::pki_types::Der;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tp_contracts::Error;
@@ -51,7 +60,7 @@ pub struct AcmeConfig {
     pub domains: Vec<String>,
     /// Каталог состояния: учётная запись ACME и список доменов последнего выпуска.
     pub state_dir: PathBuf,
-    /// За сколько до истечения продлевать сертификат (`30d`).
+    /// Максимальное окно продления: осталось меньше `min(renew_before, трети срока жизни)` сертификата (`30d`).
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]
     pub renew_before: Duration,
@@ -234,29 +243,86 @@ impl Acme {
         Ok(true)
     }
 
-    /// Нужен ли выпуск на момент `now`.
+    /// Нужен ли выпуск на момент `now`: сертификата нет, домены изменились, срок истёк — да; иначе окно,
+    /// подсказанное сервером (ARI, RFC 9773), пока оно не миновало, — проверка попала в `[start, end)`; без
+    /// подсказки (её нет или она миновала) — календарное окно: осталось меньше `min(renew_before, треть срока
+    /// жизни)` (⅔ срока прошли). Срок жизни читается из `notBefore`; нестандартное время — прежнее поведение,
+    /// фиксированное `renew_before`.
     pub async fn needs_renewal_at(&self, now: SystemTime) -> tp_contracts::Result<bool> {
         if self.cfg.domains.is_empty() {
             return Err(AcmeError::NoDomains.into());
         }
         let cert_file = self.tls.cert_file.clone();
         let domains_file = self.domains_file();
-        let (not_after, issued_for) = tokio::task::spawn_blocking(move || {
-            let not_after = std::fs::read_to_string(&cert_file)
-                .ok()
-                .and_then(|pem| pem_not_after(&pem));
+        let (cert_pem, issued_for) = tokio::task::spawn_blocking(move || {
+            let cert_pem = std::fs::read_to_string(&cert_file).ok();
             let issued_for = std::fs::read_to_string(&domains_file).ok();
-            (not_after, issued_for)
+            (cert_pem, issued_for)
         })
         .await
         .map_err(|_| AcmeError::Join)?;
-        let Some(not_after) = not_after else {
+        let Some(chain) = cert_pem else {
             return Ok(true);
         };
         if issued_for.as_deref() != Some(self.domains_text().as_str()) {
             return Ok(true);
         }
-        Ok(now + self.cfg.renew_before >= not_after)
+        let (not_before, not_after) = pem_validity(&chain);
+        let Some(not_after) = not_after else {
+            return Ok(true);
+        };
+        if now >= not_after {
+            return Ok(true);
+        }
+        if let Some(renews) = self.ari_renews(&chain, now).await {
+            return Ok(renews);
+        }
+        // Срок жизни по `notBefore`; если его разобрать не удалось (нестандартный формат) — прежнее поведение,
+        // фиксированное `renew_before`.
+        let lifetime = not_before
+            .and_then(|nb| not_after.duration_since(nb).ok())
+            .unwrap_or(Duration::ZERO);
+        let window = if lifetime.is_zero() {
+            self.cfg.renew_before
+        } else {
+            self.cfg.renew_before.min(lifetime / 3)
+        };
+        Ok(now + window >= not_after)
+    }
+
+    /// Окно продления от сервера (ARI): `Some(true)` — проверка попала в подсказанное окно (`start <= now <
+    /// end`, «уже сейчас» — сертификат отмечен к замене); `None` — подсказки нет, решает календарь: окно
+    /// миновало без выпуска (узел был недоступен), сервер без `renewalInfo` в каталоге — как раньше, без
+    /// предупреждений; не удался запрос — предупреждение в журнал.
+    async fn ari_renews(&self, chain: &str, now: SystemTime) -> Option<bool> {
+        let cert_id = certificate_identifier(chain)?;
+        let account = match self.account().await {
+            Ok(account) => account,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "acme: account unavailable, renewal follows the calendar"
+                );
+                return None;
+            }
+        };
+        match account.renewal_info(&cert_id).await {
+            Ok((info, _retry_after)) => {
+                let start = SystemTime::from(info.suggested_window.start);
+                let end = SystemTime::from(info.suggested_window.end);
+                tracing::debug!(start = ?start, end = ?end, "acme: renewal window from the server");
+                if now >= end { None } else { Some(now >= start) }
+            }
+            // В каталоге нет `renewalInfo` — сервер ARI не поддерживает.
+            Err(instant_acme::Error::Unsupported(_)) => None,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "acme: renewal info unavailable, renewal follows the calendar"
+                );
+                None
+            }
+        }
     }
 
     /// Выпускает сертификат безусловно: заказ, проверки HTTP-01, финализация, запись ключа в секрет и цепочки в
@@ -510,11 +576,25 @@ fn write_atomic(path: &Path, data: &[u8], private: bool) -> Result<(), AcmeError
 /// `notAfter` первого сертификата PEM-цепочки.
 fn pem_not_after(pem: &str) -> Option<SystemTime> {
     let der = rustls_pemfile::certs(&mut pem.as_bytes()).next()?.ok()?;
-    cert_not_after(&der)
+    cert_validity(&der).1
 }
 
-/// `notAfter` сертификата X.509 (DER): Certificate → TBSCertificate → [version] serial signature issuer validity.
-fn cert_not_after(der: &[u8]) -> Option<SystemTime> {
+/// `notBefore` и `notAfter` первого сертификата PEM-цепочки; время, разобрать которое не удалось, — `None`.
+fn pem_validity(pem: &str) -> (Option<SystemTime>, Option<SystemTime>) {
+    match rustls_pemfile::certs(&mut pem.as_bytes()).next() {
+        Some(Ok(der)) => cert_validity(&der),
+        _ => (None, None),
+    }
+}
+
+/// Срок сертификата X.509 (DER): Certificate → TBSCertificate → [version] serial signature issuer validity;
+/// `validity` — `notBefore`, `notAfter`. Время в нестандартном формате — `None`.
+fn cert_validity(der: &[u8]) -> (Option<SystemTime>, Option<SystemTime>) {
+    cert_validity_der(der).unwrap_or_default()
+}
+
+/// Ход разбора `cert_validity`; неразобранный сертификат — `None`.
+fn cert_validity_der(der: &[u8]) -> Option<(Option<SystemTime>, Option<SystemTime>)> {
     let (_, cert, _) = der_tlv(der).filter(|(tag, _, _)| *tag == 0x30)?;
     let (_, tbs, _) = der_tlv(cert).filter(|(tag, _, _)| *tag == 0x30)?;
     let mut rest = tbs;
@@ -525,9 +605,75 @@ fn cert_not_after(der: &[u8]) -> Option<SystemTime> {
         rest = der_tlv(rest)?.2; // serialNumber, signature, issuer
     }
     let (_, validity, _) = der_tlv(rest).filter(|(tag, _, _)| *tag == 0x30)?;
-    let after_not_before = der_tlv(validity)?.2;
-    let (tag, time, _) = der_tlv(after_not_before)?;
-    der_time(tag, time)
+    let (before_tag, not_before, rest) = der_tlv(validity)?;
+    let (after_tag, not_after, _) = der_tlv(rest)?;
+    Some((
+        der_time(before_tag, not_before),
+        der_time(after_tag, not_after),
+    ))
+}
+
+/// Идентификатор сертификата для ARI (RFC 9773 §4.1): серийный номер и идентификатор ключа уполномоченного CA
+/// (AKI) первого сертификата цепочки, base64url. Без AKI (сертификат не от уполномоченного CA) — `None`.
+fn certificate_identifier(pem: &str) -> Option<CertificateIdentifier<'static>> {
+    let der = rustls_pemfile::certs(&mut pem.as_bytes()).next()?.ok()?;
+    cert_identifier_der(&der)
+}
+
+/// Идентификатор из DER: TBSCertificate → serialNumber; extensions ([3]) → 2.5.29.35 → `keyIdentifier`.
+fn cert_identifier_der(der: &[u8]) -> Option<CertificateIdentifier<'static>> {
+    const AKI_OID: &[u8] = &[0x55, 0x1d, 0x23]; // 2.5.29.35 (content)
+    let (_, cert, _) = der_tlv(der).filter(|(tag, _, _)| *tag == 0x30)?;
+    let (_, tbs, _) = der_tlv(cert).filter(|(tag, _, _)| *tag == 0x30)?;
+    let mut rest = tbs;
+    if rest.first() == Some(&0xa0) {
+        rest = der_tlv(rest)?.2;
+    }
+    // Серийный номер — байты INTEGER как есть (RFC 9773 §4.1: DER-кодирование, не bigint).
+    let (_, serial, mut rest) = der_tlv(rest).filter(|(tag, _, _)| *tag == 0x02)?;
+    let mut aki = None;
+    while !rest.is_empty() {
+        let tag = *rest.first()?;
+        if tag == 0xa3 {
+            let (_, wrapped, tail) = der_tlv(rest)?;
+            rest = tail;
+            let (_, extensions, _) = der_tlv(wrapped).filter(|(tag, _, _)| *tag == 0x30)?;
+            aki = aki_key_identifier(extensions, AKI_OID);
+        } else if (0x01..=0x7f).contains(&tag) || tag == 0xa1 || tag == 0xa2 {
+            rest = der_tlv(rest)?.2; // signature, issuer, validity, subject, subjectPKInfo, [1], [2]
+        } else {
+            return None;
+        }
+    }
+    let aki = aki?;
+    Some(CertificateIdentifier::new(
+        Der::from(aki),
+        Der::from(serial.to_vec()),
+    ))
+}
+
+/// Байты `keyIdentifier` расширения 2.5.29.35 (AKI); другие расширения пропускаются.
+fn aki_key_identifier(mut extensions: &[u8], aki_oid: &[u8]) -> Option<Vec<u8>> {
+    while !extensions.is_empty() {
+        let (_, ext, tail) = der_tlv(extensions).filter(|(tag, _, _)| *tag == 0x30)?;
+        extensions = tail;
+        let (_, oid, fields) = der_tlv(ext)?;
+        if oid != aki_oid {
+            continue;
+        }
+        // critical BOOLEAN DEFAULT FALSE, extnValue OCTET STRING → AuthorityKeyIdentifier SEQUENCE →
+        // [0] keyIdentifier.
+        let fields = if fields.first() == Some(&0x01) {
+            der_tlv(fields)?.2
+        } else {
+            fields
+        };
+        let (_, value, _) = der_tlv(fields).filter(|(tag, _, _)| *tag == 0x04)?;
+        let (_, sequence, _) = der_tlv(value).filter(|(tag, _, _)| *tag == 0x30)?;
+        let (_, key_id, _) = der_tlv(sequence).filter(|(tag, _, _)| *tag == 0x80)?;
+        return Some(key_id.to_vec());
+    }
+    None
 }
 
 /// Элемент DER: (тег, содержимое, остаток).
@@ -639,6 +785,10 @@ mod tests {
     const BASE: &str = "https://acme.test";
     const TOKEN: &str = "tok-ABC_123";
     const DOMAIN: &str = "mail.example.org";
+    /// Идентификатор ключа уполномоченного CA в тестовых сертификатах (AKI, RFC 9773 §4.1).
+    const AKI: &[u8] = &[0xC0, 0xFF, 0xEE];
+    /// certId тестового сертификата: идентификатор ключа CA — серийный номер 1 (INTEGER `01`), base64url.
+    const CERT_ID: &str = "wP_u.AQ";
 
     /// Мок каталога ACME (RFC 8555) без сети: маршруты по методу и пути. Ответ на проверку HTTP-01 берётся
     /// из [`Http01Challenges`] — как его забрал бы сервер ACME; сертификат выпускается на ключ из CSR.
@@ -656,6 +806,14 @@ mod tests {
         orders: usize,
         validated: bool,
         chain: Option<String>,
+        /// Сервер объявил `renewalInfo` в каталоге (поддержка ARI, RFC 9773).
+        ari_url: bool,
+        /// Окно продления (RFC 3339): подсказка сервера.
+        ari_window: Option<(&'static str, &'static str)>,
+        /// Endpoint ARI объявлен, но отвечает ошибкой.
+        ari_error: bool,
+        /// certId последнего запроса ARI.
+        last_cert_id: Option<String>,
     }
 
     type Reply = (u16, Option<String>, String);
@@ -678,10 +836,33 @@ mod tests {
                 ("GET", "/directory") => (
                     200,
                     None,
-                    format!(
-                        r#"{{"newNonce":"{BASE}/nonce","newAccount":"{BASE}/account","newOrder":"{BASE}/order/new"}}"#
-                    ),
+                    if st.ari_url {
+                        format!(
+                            r#"{{"newNonce":"{BASE}/nonce","newAccount":"{BASE}/account","newOrder":"{BASE}/order/new","renewalInfo":"{BASE}/renewal-info"}}"#
+                        )
+                    } else {
+                        format!(
+                            r#"{{"newNonce":"{BASE}/nonce","newAccount":"{BASE}/account","newOrder":"{BASE}/order/new"}}"#
+                        )
+                    },
                 ),
+                ("GET", ari) if ari.starts_with("/renewal-info/") => {
+                    st.last_cert_id = Some(ari.trim_start_matches("/renewal-info/").to_owned());
+                    if st.ari_error {
+                        (500, None, problem("serverInternal"))
+                    } else {
+                        match st.ari_window {
+                            Some((start, end)) => (
+                                200,
+                                None,
+                                format!(
+                                    r#"{{"suggestedWindow":{{"start":"{start}","end":"{end}"}}}}"#
+                                ),
+                            ),
+                            None => (404, None, problem("malformed")),
+                        }
+                    }
+                }
                 ("HEAD", "/nonce") => (200, None, String::new()),
                 ("POST", "/account") => {
                     st.accounts += 1;
@@ -761,6 +942,10 @@ mod tests {
             if let Some(location) = location {
                 rsp = rsp.header("location", format!("{BASE}{location}"));
             }
+            if head.uri.path().starts_with("/renewal-info/") {
+                // ARI отвечает без JWS, сервер подсказывает, когда вернуться (RFC 9773 §4.3.2).
+                rsp = rsp.header("retry-after", "3600");
+            }
             let (parts, ()) = rsp.body(()).expect("response").into_parts();
             Box::pin(async move {
                 Ok(BytesResponse {
@@ -801,6 +986,15 @@ mod tests {
             0x30,
             &[tlv(0x17, b"260101000000Z"), tlv(0x18, b"21000101000000Z")].concat(),
         );
+        // AKI (2.5.29.35): сертификат, выпущенный уполномоченным CA, — с идентификатором его ключа (RFC 9773).
+        let aki = tlv(
+            0x30,
+            &[
+                tlv(0x06, &[0x55, 0x1d, 0x23]),
+                tlv(0x04, &tlv(0x30, &tlv(0x80, AKI))),
+            ]
+            .concat(),
+        );
         let tbs = tlv(
             0x30,
             &[
@@ -811,21 +1005,12 @@ mod tests {
                 validity,
                 name,
                 spki.to_vec(),
+                tlv(0xa3, &tlv(0x30, &aki)),
             ]
             .concat(),
         );
         let sig = tlv(0x03, &[0, 0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
-        let cert = tlv(0x30, &[tbs, alg, sig].concat());
-        let b64 = b64_encode(&cert);
-        let lines: Vec<&str> = b64
-            .as_bytes()
-            .chunks(64)
-            .map(|c| std::str::from_utf8(c).expect("ascii"))
-            .collect();
-        format!(
-            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
-            lines.join("\n")
-        )
+        pem_from_der(&tlv(0x30, &[tbs, alg, sig].concat()))
     }
 
     fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
@@ -841,6 +1026,72 @@ mod tests {
         }
         out.extend_from_slice(content);
         out
+    }
+
+    /// UTCTime (`YYMMDDHHMMSSZ`) с заданной датой; месяц вне 1..=12 делает время нечитаемым (`der_time` → None).
+    fn utc(year: i64, month: i64, day: i64) -> Vec<u8> {
+        let text = format!("{:02}{:02}{:02}000000Z", year % 100, month, day);
+        tlv(0x17, text.as_bytes())
+    }
+
+    /// Момент полуночи UTC заданной даты.
+    fn civil(year: i64, month: i64, day: i64) -> SystemTime {
+        let days = u64::try_from(days_from_civil(year, month, day)).expect("days");
+        UNIX_EPOCH + Duration::from_secs(days * 86_400)
+    }
+
+    /// PEM-цепочка с заданным серийным номером, AKI и сроком (`notBefore`, `notAfter` — DER-времена).
+    /// Подписи нет: календарю продления и ARI нужен разбор сертификата, а не проверка подписи.
+    fn cert_chain(serial: &[u8], not_before: Vec<u8>, not_after: Vec<u8>) -> String {
+        let alg = tlv(
+            0x30,
+            &[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02],
+        );
+        let name = tlv(0x30, &[]);
+        let validity = tlv(0x30, &[not_before, not_after].concat());
+        // spki: idEcPublicKey без точки кривой — продлению spki не важен.
+        let spki = tlv(
+            0x30,
+            &[0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01],
+        );
+        let aki = tlv(
+            0x30,
+            &[
+                tlv(0x06, &[0x55, 0x1d, 0x23]),
+                tlv(0x04, &tlv(0x30, &tlv(0x80, AKI))),
+            ]
+            .concat(),
+        );
+        let tbs = tlv(
+            0x30,
+            &[
+                tlv(0xa0, &tlv(0x02, &[2])),
+                tlv(0x02, serial),
+                alg.clone(),
+                name.clone(),
+                validity,
+                name,
+                spki,
+                tlv(0xa3, &tlv(0x30, &aki)),
+            ]
+            .concat(),
+        );
+        let sig = tlv(0x03, &[0, 0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
+        pem_from_der(&tlv(0x30, &[tbs, alg, sig].concat()))
+    }
+
+    /// DER → PEM (одна секция CERTIFICATE).
+    fn pem_from_der(der: &[u8]) -> String {
+        let b64 = b64_encode(der);
+        let lines: Vec<&str> = b64
+            .as_bytes()
+            .chunks(64)
+            .map(|c| std::str::from_utf8(c).expect("ascii"))
+            .collect();
+        format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+            lines.join("\n")
+        )
     }
 
     const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1183,7 +1434,271 @@ mod tests {
         assert_eq!(der_time(0x18, b"2026103011Z"), None);
         assert_eq!(days_from_civil(2000, 3, 1), 11_017);
         assert_eq!(pem_not_after("not a pem"), None);
-        assert_eq!(cert_not_after(&[0x30, 0x82, 0xff]), None);
+        assert_eq!(cert_validity(&[0x30, 0x82, 0xff]), (None, None));
+    }
+
+    /// Календарное окно продления — по доле срока жизни (PLT-37): 90 дней — за 30, короткие — при ⅔ срока.
+    #[tokio::test]
+    async fn renewal_window_follows_lifetime_share() {
+        let dir = TempDir::new("acme-window");
+        let (acme, _mock, tls, _keys) = setup(&dir.0, None);
+        std::fs::create_dir_all(dir.0.join("tls")).expect("dir");
+        std::fs::create_dir_all(dir.0.join("acme")).expect("dir");
+        std::fs::write(dir.0.join("acme/domains"), DOMAIN).expect("domains");
+
+        // 90 дней: треть срока (30 дней) не меньше renew_before — окно прежнее, продление за 30 дней.
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 1, 1), utc(2026, 4, 1)),
+        )
+        .expect("cert");
+        assert!(
+            acme.needs_renewal_at(civil(2026, 3, 2))
+                .await
+                .expect("check"),
+            "остался месяц — продлевать"
+        );
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 2, 28))
+                .await
+                .expect("check"),
+            "до окна ещё два дня"
+        );
+
+        // 47 дней (ballot SC-081v3, 2029): не при остатке 30, а при ⅔ срока — остаток ≤ 15⅔ дня.
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 1, 1), utc(2026, 2, 17)),
+        )
+        .expect("cert");
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 2, 1))
+                .await
+                .expect("check"),
+            "остаток 16 дней больше трети срока"
+        );
+        assert!(
+            acme.needs_renewal_at(civil(2026, 2, 2))
+                .await
+                .expect("check"),
+            "⅔ срока прошли"
+        );
+
+        // 6 дней (профиль коротких сертификатов Let's Encrypt): продление при остатке ≤ 2 дней; до этого
+        // прежний код продлевал бы на каждой проверке.
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 1, 1), utc(2026, 1, 7)),
+        )
+        .expect("cert");
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 1, 4))
+                .await
+                .expect("check"),
+            "остаток 3 дня больше трети срока"
+        );
+        assert!(
+            acme.needs_renewal_at(civil(2026, 1, 5))
+                .await
+                .expect("check")
+        );
+    }
+
+    /// Сертификат без `notBefore` (разобрать не удалось) — прежнее поведение: фиксированное `renew_before`.
+    #[tokio::test]
+    async fn unreadable_not_before_keeps_fixed_window() {
+        let dir = TempDir::new("acme-nobefore");
+        let (acme, _mock, tls, _keys) = setup(&dir.0, None);
+        std::fs::create_dir_all(dir.0.join("tls")).expect("dir");
+        std::fs::create_dir_all(dir.0.join("acme")).expect("dir");
+        std::fs::write(dir.0.join("acme/domains"), DOMAIN).expect("domains");
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 13, 1), utc(2026, 4, 1)),
+        )
+        .expect("cert");
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 2, 28))
+                .await
+                .expect("check")
+        );
+        assert!(
+            acme.needs_renewal_at(civil(2026, 3, 2))
+                .await
+                .expect("check"),
+            "фиксированное окно 30 дней без доли срока"
+        );
+    }
+
+    /// Идентификатор сертификата для ARI — из серийного номера и AKI цепочки (RFC 9773 §4.1).
+    #[test]
+    fn certificate_identifier_from_chain() {
+        let chain = cert_chain(&[0xCA, 0xFE], utc(2026, 1, 1), utc(2026, 2, 17));
+        let id = certificate_identifier(&chain).expect("identifier");
+        // Идентификатор ключа CA (AKI C0 FF EE) и серийный номер CA FE — base64url.
+        assert_eq!(format!("{id}"), "wP_u.yv4");
+        // Без AKI (самоподписанный) идентификатора нет.
+        let pem = pem_from_der(&[0x30, 0x08, 0x30, 0x06, 0x02, 0x01, 0x01, 0x05, 0x00]);
+        assert_eq!(certificate_identifier(&pem), None);
+        assert_eq!(certificate_identifier("not a pem"), None);
+    }
+
+    /// Окно продления от сервера (ARI, RFC 9773) важнее календаря: будущее окно откладывает продление,
+    /// окно с `now` — выпускает, миновавшее — возвращает к календарю PLT-37.
+    #[tokio::test]
+    async fn renewal_follows_the_server_window() {
+        let dir = TempDir::new("acme-ari");
+        let (acme, mock, tls, _keys) = setup(&dir.0, None);
+        // Сертификат на 47 дней: до окна продления по календарю (⅔ срока) далеко не всегда.
+        std::fs::create_dir_all(dir.0.join("tls")).expect("dir");
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 1, 1), utc(2026, 2, 17)),
+        )
+        .expect("cert");
+        std::fs::create_dir_all(dir.0.join("acme")).expect("dir");
+        std::fs::write(dir.0.join("acme/domains"), DOMAIN).expect("domains");
+        {
+            let mut st = mock.state.lock().expect("state");
+            st.ari_url = true;
+            st.ari_window = Some(("2026-02-01T00:00:00Z", "2026-02-10T00:00:00Z"));
+        }
+
+        // Окно в будущем — продления нет, хотя до истечения меньше renew_before (календарь сказал бы «да»).
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 1, 20))
+                .await
+                .expect("check"),
+            "ARI: до окна продления сервер не ждёт выпуск"
+        );
+        assert_eq!(
+            mock.state.lock().expect("state").last_cert_id,
+            Some(CERT_ID.to_owned()),
+            "сервер опрошен по идентификатору выпущенной цепочки"
+        );
+
+        // now внутри окна — выпуск.
+        assert!(
+            acme.renew_if_needed_at(civil(2026, 2, 5))
+                .await
+                .expect("renew")
+        );
+
+        // Окно миновало — снова календарь PLT-37: свежему сертификату продление не нужно.
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 2, 12))
+                .await
+                .expect("check")
+        );
+        // ...а окно, миновавшее без выпуска (узел был недоступен), продление не теряет: решает календарь.
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 1, 1), utc(2026, 2, 17)),
+        )
+        .expect("cert");
+        assert!(
+            acme.needs_renewal_at(civil(2026, 2, 12))
+                .await
+                .expect("check"),
+            "⅔ срока прошли, календарь снова решает"
+        );
+    }
+
+    /// «Заменяющее» окно (сертификат отмечен к замене) — ранний перевыпуск действующего сертификата.
+    #[tokio::test]
+    async fn replacement_window_renews_a_fresh_certificate() {
+        let dir = TempDir::new("acme-ari-replace");
+        let (acme, mock, _tls, _keys) = setup(&dir.0, None);
+        assert!(
+            acme.renew_if_needed_at(civil(2026, 6, 2))
+                .await
+                .expect("issue")
+        );
+        {
+            let mut st = mock.state.lock().expect("state");
+            st.ari_url = true;
+            st.ari_window = Some(("2026-06-01T00:00:00Z", "2026-06-03T00:00:00Z"));
+        }
+        // Сертификат действующий (до 2049 года), календарь молчит — сервер просит заменить сейчас.
+        assert!(
+            acme.renew_if_needed_at(civil(2026, 6, 2))
+                .await
+                .expect("renew")
+        );
+        {
+            let st = mock.state.lock().expect("state");
+            assert_eq!(st.orders, 2, "перевыпуск по подсказке сервера");
+        }
+    }
+
+    /// Endpoint ARI отвечает ошибкой — предупреждение в журнал, продление по своему календарю.
+    #[tokio::test]
+    async fn ari_error_falls_back_to_the_calendar() {
+        let dir = TempDir::new("acme-ari-error");
+        let (acme, mock, tls, _keys) = setup(&dir.0, None);
+        std::fs::create_dir_all(dir.0.join("tls")).expect("dir");
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 1, 1), utc(2026, 2, 17)),
+        )
+        .expect("cert");
+        std::fs::create_dir_all(dir.0.join("acme")).expect("dir");
+        std::fs::write(dir.0.join("acme/domains"), DOMAIN).expect("domains");
+        {
+            let mut st = mock.state.lock().expect("state");
+            st.ari_url = true;
+            st.ari_window = Some(("2026-02-01T00:00:00Z", "2026-02-10T00:00:00Z"));
+            st.ari_error = true;
+        }
+        // Без подсказки окно решает календарь: ⅔ срока прошли — продлевать.
+        assert!(
+            acme.needs_renewal_at(civil(2026, 2, 5))
+                .await
+                .expect("check")
+        );
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 1, 20))
+                .await
+                .expect("check")
+        );
+    }
+
+    /// Сервер без `renewalInfo` в каталоге — как раньше: календарь решает без обращения к ARI.
+    #[tokio::test]
+    async fn server_without_ari_keeps_the_calendar() {
+        let dir = TempDir::new("acme-no-ari");
+        let (acme, mock, tls, _keys) = setup(&dir.0, None);
+        std::fs::create_dir_all(dir.0.join("tls")).expect("dir");
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 1, 1), utc(2026, 2, 17)),
+        )
+        .expect("cert");
+        std::fs::create_dir_all(dir.0.join("acme")).expect("dir");
+        std::fs::write(dir.0.join("acme/domains"), DOMAIN).expect("domains");
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 1, 20))
+                .await
+                .expect("check")
+        );
+        assert!(
+            acme.needs_renewal_at(civil(2026, 2, 5))
+                .await
+                .expect("check")
+        );
+        assert_eq!(
+            mock.state.lock().expect("state").last_cert_id,
+            None,
+            "запроса ARI не было"
+        );
     }
 
     #[test]

@@ -18,7 +18,8 @@ futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-time.workspace = true
+# `formatting`/`parsing` — строка RFC 3339 в каноническом JSON записи (`time::serde::rfc3339`).
+time = { workspace = true, features = ["formatting", "parsing"] }
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true

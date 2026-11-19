@@ -701,10 +701,10 @@
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
-| [PLT-37](PLT-37.md) | ACME — окно продления по доле срока сертификата | platform | A | platform-26 | ready | — |
-| [PLT-39](PLT-39.md) | ACME — окно продления от сервера (ARI, RFC 9773) | platform | A | platform-26 | ready | PLT-37 |
-| [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | todo | PLT-37 |
-| [DOC-15](DOC-15.md) | INSTALL — выпуск сертификата виден со всех точек наблюдения | docs | A | docs-15 | ready | — |
+| [PLT-37](PLT-37.md) | ACME — окно продления по доле срока сертификата | platform | A | platform-26 | done | — |
+| [PLT-39](PLT-39.md) | ACME — окно продления от сервера (ARI, RFC 9773) | platform | A | platform-26 | done | PLT-37 |
+| [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | ready | PLT-37 |
+| [DOC-15](DOC-15.md) | INSTALL — выпуск сертификата виден со всех точек наблюдения | docs | A | docs-15 | done | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
 
@@ -916,8 +916,8 @@
 | [ADM-49](ADM-49.md) | политика доверия в Admin API — маршруты уровней, проверка потолка, партнёры, CLI | admin | B | admin-35 | ready | CTR-93,ADM-44 |
 | [UI-23](UI-23.md) | консоль — экран «Доверие»: матрица типов абонентов и функций, уровни, партнёры | console | A | console-14 | todo | ADM-49 |
 | [TUI-09](TUI-09.md) | текстовый интерфейс — раздел «Доверие»: матрица, уровни, партнёры | tui | A | tui-06 | todo | TUI-03,ADM-49 |
-| [SMTP-50](SMTP-50.md) | матрица доверия в SMTP — тип абонента, автоответ, MDN, DSN, группы, автопересылка | smtp | A | smtp-30 | ready | CTR-93,SMTP-49 |
-| [SMTP-55](SMTP-55.md) | спам — максимально рано мимо всех автоматических механизмов и без ручного iTIP | smtp | A | smtp-35 | todo | SMTP-50 |
+| [SMTP-50](SMTP-50.md) | матрица доверия в SMTP — тип абонента, автоответ, MDN, DSN, группы, автопересылка | smtp | A | smtp-30 | done | CTR-93,SMTP-49 |
+| [SMTP-55](SMTP-55.md) | спам — максимально рано мимо всех автоматических механизмов и без ручного iTIP | smtp | A | smtp-35 | ready | SMTP-50 |
 | [DAV-44](DAV-44.md) | матрица доверия в CalDAV и CardDAV — iTIP извне, занятость, общий доступ, публикация, GAL | dav | A | dav-21 | done | CTR-93,DAV-43 |
 | [JMAP-47](JMAP-47.md) | матрица доверия в JMAP — принципалы и занятость своей организации, общий доступ, публикация, внешний автоответ | jmap | A | jmap-30 | done | CTR-93 |
 | [SIEVE-14](SIEVE-14.md) | `processcalendar` (RFC 9671), расширение `vnd.thepost.peer`, админский скрипт — только сужение | sieve | A | sieve-07 | done | CTR-93 |
@@ -927,7 +927,7 @@
 | [CTR-94](CTR-94.md) | контракты ответа и беседы — запись об отправленном, ключи меток, беседа, удержание и действия по беседе | contracts | B | contracts-65 | done | CTR-93 |
 | [META-86](META-86.md) | запись об отправленном и беседы в PostgreSQL — `SentLog`, `ThreadStore`, удержание и действия по беседе | meta | A | meta-59 | ready | CTR-94 |
 | [MS-21](MS-21.md) | приём письма — беседа и политики беседы в той же транзакции | mailstore | A | mailstore-15 | ready | CTR-94 |
-| [SMTP-51](SMTP-51.md) | ответ на наше письмо — метка в Message-ID, BATV, признак ответа, память беседы | smtp | A | smtp-31 | todo | CTR-94,DEPS-18,SMTP-50 |
+| [SMTP-51](SMTP-51.md) | ответ на наше письмо — метка в Message-ID, BATV, признак ответа, память беседы | smtp | A | smtp-31 | ready | CTR-94,DEPS-18,SMTP-50 |
 | [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | todo | CTR-94,MS-21 |
 | [JMAP-49](JMAP-49.md) | доступ к чужим ящикам почты в JMAP — делегированные Email/query и Email/get по ACL | jmap | A | jmap-33 | done | JMAP-32,CTR-82 |
 | [ADM-50](ADM-50.md) | удержание беседы в Admin API — удержать, снять, перечислить, выгрузить; CLI | admin | B | admin-36 | ready | CTR-94,ADM-44 |
@@ -961,13 +961,13 @@
 |---|---|---|---|---|---|---|
 | [CTR-96](CTR-96.md) | конвейер обработки — реестр этапов, итоговый набор действий, итоговый контроль | contracts | B | contracts-67 | done | — |
 | [CTR-97](CTR-97.md) | журналирование — контракт записей, правил и хранилища журнала | contracts | B | contracts-67 | done | CTR-96 |
-| [META-88](META-88.md) | индекс журнала — схема journal, хеш-цепочка, восстановление из хранилища записей | meta | B | meta-61 | ready | CTR-97 |
-| [BLOB-18](BLOB-18.md) | хранилище записей журнала — отдельный бакет S3 с Object Lock, дедуп, SMB append-only | blob | A | blob-11 | ready | CTR-97 |
-| [SMTP-53](SMTP-53.md) | этап журналирования в конвейере — приём, отправка, конверт | smtp | A | smtp-33 | todo | CTR-96,CTR-97 |
-| [SMTP-54](SMTP-54.md) | конвейер как реестр этапов и итоговый контроль действий в доставке | smtp | A | smtp-33 | todo | CTR-96 |
-| [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | todo | CTR-97,META-88 |
-| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | todo | CTR-97,META-88,BLOB-18 |
-| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | todo | CTR-97 |
+| [META-88](META-88.md) | индекс журнала — схема journal, хеш-цепочка, восстановление из хранилища записей | meta | B | meta-61 | done | CTR-97 |
+| [BLOB-18](BLOB-18.md) | хранилище записей журнала — отдельный бакет S3 с Object Lock, дедуп, SMB append-only | blob | A | blob-11 | done | CTR-97 |
+| [SMTP-53](SMTP-53.md) | этап журналирования в конвейере — приём, отправка, конверт | smtp | A | smtp-33 | ready | CTR-96,CTR-97 |
+| [SMTP-54](SMTP-54.md) | конвейер как реестр этапов и итоговый контроль действий в доставке | smtp | A | smtp-33 | ready | CTR-96 |
+| [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | ready | CTR-97,META-88 |
+| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | ready | CTR-97,META-88,BLOB-18 |
+| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | ready | CTR-97 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
 | [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | todo | APP-83,BLOB-18 |
 
@@ -994,6 +994,7 @@
 | [DEPS-21](DEPS-21.md) | фича `time` у `instant-acme` — подсказка окна продления (ARI) | deps | B | PLT-39 |
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
+| [FIX-18](FIX-18.md) | # FIX-18 — экран соединений освобождает генератор стенда (screen.exempt) |  |  | — |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
 | [META-89](META-89.md) | история миграций не хранится |  |  | — |
 | [PERF-06](PERF-06.md) | IMAP и JMAP |  |  | — |

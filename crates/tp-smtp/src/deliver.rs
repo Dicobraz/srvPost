@@ -606,6 +606,8 @@ impl Delivery {
                 method: msg.method,
                 ics: msg.ics.clone(),
                 sender,
+                // Итог `processcalendar` правил — передаёт SMTP-50 (решение по issue #89, вариант 1).
+                calendar: None,
             };
             match delivery.deliver(&message).await {
                 Ok(outcome) => {
