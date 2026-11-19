@@ -323,7 +323,7 @@ impl RiskStore for MemRisk {
 
 /// Начало суток UTC (unix-секунды).
 fn day_start(at: OffsetDateTime) -> i64 {
-    at.to_utc_offset(time::UtcOffset::UTC)
+    at.to_offset(time::UtcOffset::UTC)
         .date()
         .with_time(time::Time::MIDNIGHT)
         .assume_utc()

@@ -2000,13 +2000,13 @@ mod tests {
                 .signal
                 .clone()
         };
-        let fired = [
+        let fired_hits = [
             fired(&by_id("tp.a"), 60),
             fired(&by_id("tp.b"), 100),
             fired(&by_id("tp.c"), 100),
             fired(&by_id("tp.d"), 79),
         ];
-        let mut verdict = Verdict::from_fired(&catalog, &fired);
+        let mut verdict = Verdict::from_fired(&catalog, &fired_hits);
         // a + b = 24; c (Report) балл не меняет; d не сработал.
         assert_eq!(verdict.score, 24);
         assert_eq!(verdict.hits.len(), 2);
@@ -2014,7 +2014,7 @@ mod tests {
         assert_eq!(verdict.report_only[0].signal.as_str(), "tp.c");
         // Действие: max(по баллу 24 ≥ reject 15 → Reject, собственное a — Quarantine) = Reject.
         assert_eq!(verdict.action, RiskAction::Reject);
-        assert!(!verdict.drops_reply(), "детекторы беседы не сработали");
+        assert!(!verdict.drops_reply, "детекторы беседы не сработали");
 
         // combine: самое строгое из действия вердикта и Rspamd.
         assert_eq!(verdict.combine(RiskAction::Junk), RiskAction::Reject);
@@ -2030,7 +2030,7 @@ mod tests {
         thread_signal.detector = Detector::ReplyToChanged;
         let catalog = Catalog::effective(&[thread_signal.clone()], None, None);
         let verdict = Verdict::from_fired(&catalog, &[fired(&thread_signal, 100)]);
-        assert!(verdict.drops_reply());
+        assert!(verdict.drops_reply);
 
         // Sieve-источник срабатывания и сила ниже порога.
         let mut strict = signal("tp.strict", 3);
