@@ -98,80 +98,85 @@ impl SentLog for PgMeta {
             ..record
         };
         let tenant = record.tenant;
-        let record = &record;
         // Метка уникальна, запись с ней идемпотентна: повтор над Failover — «идемпотентная по сути»
-        // (META-40), как upsert по значению.
-        self.rewrite(|| async move {
-            with_tenant(&self.pool, tenant, move |tx| {
-                Box::pin(async move {
-                    // RLS видит только записи своей организации; та же метка с тем же содержимым —
-                    // повтор постановки в очередь.
-                    let prev: Option<SentRow> = sqlx::query_as(
-                        "SELECT tenant_id, account_id, tag, message_id_hash, recipients, thread_id, sent_at
-                         FROM sent_log WHERE tag = $1",
-                    )
-                    .bind(&record.tag)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(db_err)?;
-                    if let Some(prev) = prev {
-                        return if prev.into_record()? == *record {
-                            Ok(())
-                        } else {
-                            Err(Error::Conflict)
-                        };
-                    }
-                    // Метка другой организации ограничением уникальности не видна через RLS — конфликт
-                    // обнаруживает INSERT (`ON CONFLICT (tag)`).
-                    let inserted = sqlx::query(
-                        "INSERT INTO sent_log (tenant_id, account_id, tag, message_id_hash, recipients,
-                                               thread_id, sent_at)
-                         VALUES ($1, $2, $3, $4, $5, $6, $7)
-                         ON CONFLICT (tag) DO NOTHING",
-                    )
-                    .bind(tenant.as_uuid())
-                    .bind(record.account.as_uuid())
-                    .bind(&record.tag)
-                    .bind(&record.message_id_hash.0[..])
-                    .bind(&record.recipients)
-                    .bind(record.thread.map(|t| *t.as_uuid()))
-                    .bind(record.sent_at)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(db_err)?
-                    .rows_affected();
-                    if inserted == 0 {
-                        return Err(Error::Conflict);
-                    }
-                    Ok(())
+        // (META-40), как upsert по значению. Данные — владеемая копия на попытку (замыкания
+        // `with_tenant` живут произвольно долго — HRTB по соединению).
+        self.rewrite(move || {
+            let record = record.clone();
+            async move {
+                with_tenant(&self.pool, tenant, move |tx| {
+                    Box::pin(async move {
+                        // RLS видит только записи своей организации; та же метка с тем же содержимым —
+                        // повтор постановки в очередь.
+                        let prev: Option<SentRow> = sqlx::query_as(
+                            "SELECT tenant_id, account_id, tag, message_id_hash, recipients, thread_id, sent_at
+                             FROM sent_log WHERE tag = $1",
+                        )
+                        .bind(&record.tag)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(db_err)?;
+                        if let Some(prev) = prev {
+                            return if prev.into_record()? == record {
+                                Ok(())
+                            } else {
+                                Err(Error::Conflict)
+                            };
+                        }
+                        // Метка другой организации ограничением уникальности не видна через RLS —
+                        // конфликт обнаруживает INSERT (`ON CONFLICT (tag)`).
+                        let inserted = sqlx::query(
+                            "INSERT INTO sent_log (tenant_id, account_id, tag, message_id_hash, recipients,
+                                                   thread_id, sent_at)
+                             VALUES ($1, $2, $3, $4, $5, $6, $7)
+                             ON CONFLICT (tag) DO NOTHING",
+                        )
+                        .bind(tenant.as_uuid())
+                        .bind(record.account.as_uuid())
+                        .bind(&record.tag)
+                        .bind(&record.message_id_hash.0[..])
+                        .bind(&record.recipients)
+                        .bind(record.thread.map(|t| *t.as_uuid()))
+                        .bind(record.sent_at)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(db_err)?
+                        .rows_affected();
+                        if inserted == 0 {
+                            return Err(Error::Conflict);
+                        }
+                        Ok(())
+                    })
                 })
-            })
-            .await
+                .await
+            }
         })
         .await
     }
 
     async fn by_tag(&self, tenant: TenantId, tag: &[u8]) -> Result<Option<SentRecord>> {
         let tag = tag.to_vec();
-        let tag = &tag;
-        self.idempotent(|| async move {
-            let row: Option<SentRow> = with_tenant(&self.pool, tenant, move |tx| {
-                Box::pin(async move {
-                    sqlx::query_as(
-                        "SELECT tenant_id, account_id, tag, message_id_hash, recipients, thread_id, sent_at
-                         FROM sent_log WHERE tenant_id = $1 AND tag = $2",
-                    )
-                    .bind(tenant.as_uuid())
-                    .bind(tag)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(db_err)
+        self.idempotent(move || {
+            let tag = tag.clone();
+            async move {
+                let row: Option<SentRow> = with_tenant(&self.pool, tenant, move |tx| {
+                    Box::pin(async move {
+                        sqlx::query_as(
+                            "SELECT tenant_id, account_id, tag, message_id_hash, recipients, thread_id, sent_at
+                             FROM sent_log WHERE tenant_id = $1 AND tag = $2",
+                        )
+                        .bind(tenant.as_uuid())
+                        .bind(&tag)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(db_err)
+                    })
                 })
-            })
-            .await?;
-            match row {
-                Some(row) => Ok(Some(row.into_record()?)),
-                None => Ok(None),
+                .await?;
+                match row {
+                    Some(row) => Ok(Some(row.into_record()?)),
+                    None => Ok(None),
+                }
             }
         })
         .await
@@ -182,7 +187,8 @@ impl SentLog for PgMeta {
         tenant: TenantId,
         hash: &MessageIdHash,
     ) -> Result<Vec<SentRecord>> {
-        self.idempotent(|| async move {
+        let hash = *hash;
+        self.idempotent(move || async move {
             let rows: Vec<SentRow> = with_tenant(&self.pool, tenant, move |tx| {
                 Box::pin(async move {
                     sqlx::query_as(
