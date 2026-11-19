@@ -255,7 +255,7 @@ async fn greeting() {
         "\"IMPLEMENTATION\" \"The Post\"\r\n\
          \"SASL\" \"\"\r\n\
          \"SIEVE\" \"fileinto envelope imap4flags vacation body relational subaddress copy mailbox \
-         encoded-character comparator-i;ascii-numeric\"\r\n\
+         encoded-character comparator-i;ascii-numeric processcalendar vnd.thepost.peer\"\r\n\
          \"MAXREDIRECTS\" \"4\"\r\n\
          \"UNAUTHENTICATE\"\r\n\
          \"VERSION\" \"1.0\"\r\n\

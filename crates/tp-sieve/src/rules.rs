@@ -1,9 +1,17 @@
-//! Правила доставки (SIEVE-07): [`Rules`] — реализация [`DeliveryRules`] (CONTRACTS.md#Sieve).
+//! Правила доставки (SIEVE-07, SIEVE-14): [`Rules`] — реализация [`DeliveryRules`] (CONTRACTS.md#Sieve).
 //!
 //! Порядок: скрипт организации, автоответ из настройки [`Vacation`], активный скрипт пользователя. `stop` в скрипте
 //! организации останавливает всё: ни автоответ, ни скрипт пользователя не выполняются. Иначе действия скриптов
-//! складываются ([`crate::outcome`]). Ошибка скрипта — его действия отменены, письмо остаётся во «Входящих»,
-//! запись — в [`RulesOutcome::errors`] и журнал (без содержимого письма). `Err` — только сбой хранилища.
+//! складываются ([`crate::outcome`]). Ошибка скрипта пользователя — его действия отменены, письмо остаётся во
+//! «Входящих», запись — в [`RulesOutcome::errors`] и журнал (без содержимого письма). Сбой скрипта организации
+//! (не скомпилировался, ошибка выполнения, превышение `Limits`) — итог «отказ» ([`Decision::Failed`], SIEVE-14):
+//! письмо не доставляется мимо скрипта, SMTP превращает отказ во временный отказ `451` (SMTP-50) — в отличие от
+//! Stalwart, где письмо проходит. `Err` — только сбой хранилища.
+//!
+//! Действие `processcalendar` (RFC 9671) и тест `peer` (`vnd.thepost.peer`) — в пределах действующей матрицы
+//! получателя ([`RulesInput::matrix`], CTR-93): новое приглашение вносится, только если клетка `invite_new` для
+//! типа отправителя — `Auto`; иначе итог действия — `no_action` с причиной «политика доверия» (решение 124 д),
+//! обновления к существующим событиям идут приёмом iTIP вызывающего независимо от действия.
 //!
 //! Программы кэшируются: учётной записи — по [`SieveStore::state`] (вместе с настройкой автоответа; любое изменение
 //! в хранилище меняет состояние и сбрасывает запись), организации — по тексту скрипта. Объём — `sieve.cache`.
@@ -19,10 +27,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
 use time::OffsetDateTime;
+use tp_contracts::Error;
 use tp_contracts::meta::AccountScope;
 use tp_contracts::sieve::{
     DeliveryRules, RulesInput, RulesOutcome, SieveStore, Vacation, VacationLog,
 };
+use tp_contracts::trust::InviteMode;
 use tp_contracts::{Result, TenantId};
 
 use crate::Limits;
@@ -272,14 +282,30 @@ fn insert<K: Copy + Eq + Hash, V>(
     map.insert(key, value());
 }
 
-#[async_trait]
-impl DeliveryRules for Rules {
-    async fn evaluate(&self, input: &RulesInput) -> Result<RulesOutcome> {
+/// Итог правил целиком (SIEVE-14): применение или отказ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decision {
+    /// Правила применены — итог доставки.
+    Rules(RulesOutcome),
+    /// Отказ: скрипт организации не выполнился (сохранённый текст не проходит проверку, ошибка выполнения,
+    /// превышение `Limits`). Письмо не доставляется мимо скрипта (решение 124 д): SMTP превращает отказ во
+    /// временный `451 4.3.0` (SMTP-50), а не доставку в обход, как у Stalwart. Причина — для журнала.
+    Failed(String),
+}
+
+impl Rules {
+    /// Итог правил с различением отказа ([`Decision::Failed`]) — для вызывающего, которому нужен не только
+    /// `RulesOutcome` (SMTP-50). [`DeliveryRules::evaluate`] превращает отказ в `Err(Unavailable)`.
+    pub async fn decide(&self, input: &RulesInput) -> Result<Decision> {
         let org = self.org(input.scope.tenant).await?;
         let (script, setting) = self.account(input.scope).await?;
         let now = (self.now)();
+        // Сбой скрипта организации — отказ до всего остального: ни автоответ, ни скрипт пользователя.
+        if let Some(Err(e)) = &org {
+            return Ok(Decision::Failed(format!("{ORG_SCRIPT}: {e}")));
+        }
         if org.is_none() && script.is_none() && !setting.is_active(now) {
-            return Ok(RulesOutcome::implicit_keep());
+            return Ok(Decision::Rules(RulesOutcome::implicit_keep()));
         }
 
         let paths = mailbox_paths(&input.mailboxes);
@@ -288,19 +314,19 @@ impl DeliveryRules for Rules {
             envelope_from: &input.mail_from,
             envelope_to: &input.recipient,
             mailboxes: &paths,
+            peer: input.peer,
         };
         let headers = parse_headers(&input.message);
         let mut merge = Merge::new(&input.mailboxes);
         let mut reply = None;
         let mut stopped = false;
-        match &org {
-            Some(Ok(program)) => {
-                let outcome = run(program, &ctx, &self.limits);
-                stopped = outcome.stopped;
-                merge.add(ORG_SCRIPT, outcome);
+        if let Some(Ok(program)) = &org {
+            let outcome = run(program, &ctx, &self.limits);
+            if let Some(e) = &outcome.error {
+                return Ok(Decision::Failed(format!("{ORG_SCRIPT}: {e}")));
             }
-            Some(Err(e)) => merge.fail(ORG_SCRIPT, e),
-            None => {}
+            stopped = outcome.stopped;
+            merge.add(ORG_SCRIPT, outcome);
         }
         if !stopped {
             if setting.is_active(now) {
@@ -320,6 +346,17 @@ impl DeliveryRules for Rules {
             merge.cancel_redirects(&reason);
         }
         let (mut outcome, action) = merge.finish();
+        // processcalendar — только сужение внутри действующей матрицы получателя (решение 124 д): новое
+        // приглашение вносится, лишь если клетка invite_new для типа отправителя — Auto (сегодня её открывают
+        // партнёрам; для остальных — письмо с кнопкой). Иначе итог действия — no_action, причина — «политика
+        // доверия»: в журнал доставки; сам календарь не вносится.
+        if outcome.calendar.is_some() && input.matrix.invite_new.get(input.peer) != InviteMode::Auto
+        {
+            outcome.calendar = None;
+            outcome
+                .errors
+                .push("processcalendar: no_action: политика доверия".to_owned());
+        }
         if reply.is_none()
             && let Some(action) = &action
         {
@@ -336,6 +373,26 @@ impl DeliveryRules for Rules {
                 "sieve: ошибка правил доставки"
             );
         }
-        Ok(outcome)
+        Ok(Decision::Rules(outcome))
+    }
+}
+
+#[async_trait]
+impl DeliveryRules for Rules {
+    async fn evaluate(&self, input: &RulesInput) -> Result<RulesOutcome> {
+        match self.decide(input).await? {
+            Decision::Rules(outcome) => Ok(outcome),
+            Decision::Failed(reason) => {
+                // Отказ — повторяемая ошибка: SMTP отвечает временным отказом, письмо мимо скрипта организации
+                // не проходит (SIEVE-14, SMTP-50).
+                tracing::error!(
+                    tenant = %input.scope.tenant,
+                    account = %input.scope.account,
+                    error = %reason,
+                    "sieve: сбой скрипта организации — отказ доставки"
+                );
+                Err(Error::UNAVAILABLE)
+            }
+        }
     }
 }

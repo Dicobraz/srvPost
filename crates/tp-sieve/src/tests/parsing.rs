@@ -1,6 +1,7 @@
 //! Лексер и грамматика (SIEVE-01): примеры RFC 5228, 5229, 5230, 5232, 5233, ошибки с позицией, лимиты, proptest.
 
 use proptest::prelude::*;
+use tp_contracts::trust::PeerKind;
 
 use super::assert_error;
 use crate::{Arg, Limits, Pos, Script, parse};
@@ -346,6 +347,7 @@ proptest! {
                 envelope_from: "a@b.example",
                 envelope_to: "c+d@e.example",
                 mailboxes: &[],
+                peer: PeerKind::Own,
             };
             let _ = crate::run(&program, &ctx, &Limits::default());
         }

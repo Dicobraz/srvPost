@@ -5,7 +5,11 @@
 //! (require, аргументы, расширения —
 //! программа [`Program`], SIEVE-02) → [`run`] (выполнение над письмом, SIEVE-03) → слияние действий в
 //! `RulesOutcome` (SIEVE-04). Точка правил доставки — [`Rules`] (SIEVE-07): скрипт организации, автоответ
-//! (SIEVE-06), активный скрипт пользователя; секция конфигурации — [`SieveConfig`]. [`managesieve`] — сервер
+//! (SIEVE-06), активный скрипт пользователя; секция конфигурации — [`SieveConfig`]. Расширения доверенной
+//! матрицы (SIEVE-14, решение 124): `processcalendar` (RFC 9671) и `vnd.thepost.peer` — тип абонента из контекста
+//! ядра; сбой скрипта организации — итог «отказ» ([`Decision::Failed`]); автоответ чужим — только внешним текстом
+//! настройки; профиль «админский» ([`AdminProfile`], [`compile_admin`]) проверяет скрипт организации при
+//! сохранении (ADM-49). [`managesieve`] — сервер
 //! ManageSieve (RFC 5804; SIEVE-08, SIEVE-09): вход SASL и команды скриптов поверх `SieveStore`. [`fuzz`] — проверки для целей
 //! cargo-fuzz `crates/tp-sieve/fuzz` (не API).
 //!
@@ -27,10 +31,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub use ast::{Arg, Command, Script, Test, parse};
-pub use compile::{EXTENSIONS, Program, check, compile};
+pub use compile::{AdminProfile, EXTENSIONS, Program, check, compile, compile_admin};
 pub use config::{CacheConfig, ManageSieveConfig, SieveConfig, VacationConfig};
 pub use managesieve::ManageSieve;
-pub use rules::Rules;
+pub use rules::{Decision, Rules};
 pub use run::{Action, Context, Outcome, VacationAction, run};
 
 /// Лимиты разбора и выполнения; в приложении — из секции `sieve` ([`SieveConfig::limits`]).
