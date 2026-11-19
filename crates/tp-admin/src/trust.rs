@@ -1155,11 +1155,11 @@ mod tests {
     use super::*;
     use crate::testenv::{Env, config};
 
-    fn org_trust(env: &Env) -> String {
+    fn org_trust() -> String {
         format!("/api/v1/orgs/{}/trust", TenantId::DEFAULT)
     }
 
-    fn group_trust(env: &Env, group: GroupId) -> String {
+    fn group_trust(group: GroupId) -> String {
         format!("/api/v1/orgs/{}/groups/{group}/trust", TenantId::DEFAULT)
     }
 
