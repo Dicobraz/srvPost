@@ -17,6 +17,13 @@ all:
     # Адрес OpenBao для thepost: DNS-имя с A-записями трёх ВМ данных (клиент перебирает адреса при отказе ВМ).
     small_openbao_url: https://openbao.example.ru:8200
     small_bucket: thepost-blob
+    # Журналирование переписки (SRS 4.9, DEP-58): бакет журнала — отдельный от small_bucket, создаётся плейбуком
+    # с S3 Object Lock (необратимо; режим и срок узел пишет в каждый объект при записи). Не задан или пуст —
+    # журналирование выключено. Режим governance по умолчанию; compliance — явно и только с явным сроком (риск 21:
+    # объект compliance не удаляет никто до конца срока). Правила журналирования — данные организации (Admin API).
+    small_journal_bucket: thepost-journal
+    # small_journal_lock_mode: governance
+    # small_journal_retention: 2555d   # 7 лет; продлевается только
   children:
     small_data:
       hosts:
