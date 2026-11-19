@@ -39,6 +39,15 @@
 //!   локального получателя (smtp-in, submission, [`Delivery::submit`]) после правил потока и до `ingest`: папки и
 //!   флаги, отброс, перенаправление, автоответ; перенаправленное письмо и внутренний автоответ — через правила
 //!   получателя с проверкой петли ([`Delivery::relay`], SMTP-34);
+//! - матрица доверия (решение 124, SMTP-50, [`Delivery::with_trust`]): тип абонента (`PeerKind`) вычисляется для
+//!   каждого письма — submission со входом и [`Delivery::submit`] — свой, smtp-in — по домену `From` и DMARC
+//!   (партнёр — домен из [`TrustStore::partner_of`] с пройденным DMARC, RFC 9989; заголовкам
+//!   `Authentication-Results` чужого шлюза и `remote-host` не доверяем — RFC 8601 §5, RFC 5183). Действующая
+//!   матрица получателя — [`TrustStore::effective_for`], ошибка чтения — закрытая матрица и запись в журнал узла,
+//!   письмо доставляется. По матрице: автоответ чужим (только внешний текст, письмо в группу — без ответа
+//!   участников), MDN наружу, `group_post` групп рассылки, автопересылка (`redirect`, пересылки модулей) —
+//!   домен из `auto_forward_domains`; DSN чужим — с общей диагностикой, отказ по политике — в сессии без
+//!   уведомления потом; сбой скрипта организации — `451 4.3.0`;
 //! - приглашения iTIP в письмах ([`Delivery::with_itip`], [`crate::itip`]): письмо с частью `text/calendar;
 //!   method=…` после доставки в ящик передаётся `ItipDelivery` получателя с типом отправителя (решение 123):
 //!   submission и [`Delivery::submit`] — внутреннее планирование (решение 78, SMTP-36), smtp-in — iMIP (SMTP-33);
@@ -99,7 +108,9 @@ use tp_contracts::transport::{
     AcceptedDomain, BlobRef, DomainKind, EnvelopeSide, FlowDirection, FlowEnvelope, FlowInput,
     FlowOutcome, FlowVerdict, MailFlow,
 };
-use tp_contracts::trust::{PeerKind, TrustMatrix};
+use tp_contracts::trust::{
+    GroupPost, PeerKind, Toggle, TrustLevel, TrustMatrix, TrustStore, effective,
+};
 use tp_contracts::{AccountId, Error, MailboxId, QueueId, Result, TenantId};
 
 use crate::address::Addressing;
@@ -172,6 +183,9 @@ pub enum Resolved {
 #[derive(Debug, Default)]
 struct Snapshot {
     addresses: HashMap<String, BTreeSet<String>>,
+    /// Адреса групп рассылки каталога (без записи в [`Groups`]): письмо по ним — письмо в группу (SMTP-50:
+    /// участники не отвечают отправителю автоответом).
+    mailing: HashSet<String>,
 }
 
 /// Наибольшая глубина вложенности групп каталога.
@@ -186,6 +200,9 @@ struct Target {
     delivered_to: Option<String>,
     /// Адрес — группа рассылки [`Groups`] (ограничения отправителей, модерация).
     group: Option<DistributionGroup>,
+    /// Адрес — группа рассылки (каталог или [`Groups`]): письмо пришло в группу, участники не отвечают
+    /// отправителю автоответом (SMTP-50, Exchange `SendOofMessageToOriginatorEnabled`).
+    mailing: bool,
     /// Адреса почтовых контактов в составе группы (SMTP-26): внешняя доставка.
     contacts: Vec<String>,
     /// Неизвестный адрес домена внутренней ретрансляции: в очередь (на `next_hop` домена).
@@ -212,6 +229,17 @@ enum Origin {
     Module,
 }
 
+/// Решение клетки `group_post` матрицы доверия для письма в группу (SMTP-50).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostAction {
+    /// В очередь модерации (у группы есть модераторы).
+    Hold,
+    /// Отказ: группа закрыта для типа отправителя или модерировать некому.
+    Deny,
+    /// Как сейчас: ограничения и модерация самой группы.
+    Pass,
+}
+
 /// Локальная доставка и обработчик транзакций SMTP.
 pub struct Delivery {
     deps: Deps,
@@ -227,8 +255,9 @@ pub struct Delivery {
     flow: Option<FlowDeps>,
     rules: Option<Arc<dyn DeliveryRules>>,
     itip: Option<Arc<dyn ItipDelivery>>,
-    /// Домены-партнёры организации (решение 123).
-    partners: Option<Arc<dyn PartnerDomains>>,
+    /// Политика доверия организации (решение 124, SMTP-50): действующая матрица получателей, домены-партнёры
+    /// и домены автопересылки. Без неё — безопасные умолчания контракта ([`TrustMatrix::default`]).
+    trust: Option<Arc<dyn TrustStore>>,
     /// Права отправки от чужого адреса (Send As, Send on Behalf) для приглашений из почтового клиента (SMTP-36).
     authz: Option<Arc<dyn Authorizer>>,
     /// Представители учётных записей (APP-69): право планирования от имени организатора у приглашений
@@ -305,11 +334,28 @@ impl Filing {
     }
 }
 
+/// Контекст правил одного письма (SMTP-50): тип абонента отправителя, ящики-«Спам» и участники групп рассылки
+/// (без автоответа) — общий для всех получателей письма.
+struct RuleContext<'a> {
+    peer: PeerKind,
+    junk: &'a HashSet<AccountId>,
+    group: &'a HashSet<AccountId>,
+}
+
+impl<'a> RuleContext<'a> {
+    fn new(peer: PeerKind, junk: &'a HashSet<AccountId>, group: &'a HashSet<AccountId>) -> Self {
+        Self { peer, junk, group }
+    }
+}
+
 /// Письмо, подготовленное к доставке.
 struct Prepared {
     deliveries: Vec<(String, MailDelivery)>,
     /// Учётные записи, которым письмо доставляется как спам (папка «Спам»).
     junk: HashSet<AccountId>,
+    /// Учётные записи, получившие письмо через группу рассылки: участники не отвечают отправителю автоответом
+    /// (SMTP-50, RFC 3834; Exchange `SendOofMessageToOriginatorEnabled`).
+    group: HashSet<AccountId>,
     /// Внешние адреса (после переписывания).
     external: Vec<String>,
     /// Адреса для очереди без пересылки: неизвестные адреса доменов внутренней ретрансляции, исходные
@@ -339,7 +385,7 @@ impl Delivery {
             flow: None,
             rules: None,
             itip: None,
-            partners: None,
+            trust: None,
             authz: None,
             delegates: None,
             senders: None,
@@ -420,10 +466,12 @@ impl Delivery {
         self
     }
 
-    /// Домены-партнёры организации (решение 123 → 124): письмо iMIP с них через smtp-in — от отправителя
-    /// `PeerKind::Partner` ([`Delivery::with_itip`]). Без них партнёров нет.
-    pub fn with_partners(mut self, partners: Arc<dyn PartnerDomains>) -> Self {
-        self.partners = Some(partners);
+    /// Политика доверия организации (решение 124, SMTP-50): действующая матрица получателей
+    /// ([`TrustStore::effective_for`]), домены-партнёры (`TrustStore::partner_of`) и домены автопересылки.
+    /// Реализация — `tp-meta` (META-85), in-memory — `tp-testkit::MemTrust`; без хранилища действуют безопасные
+    /// умолчания контракта ([`TrustMatrix::default`]): группы закрыты чужим, MDN и автопересылка наружу выключены.
+    pub fn with_trust(mut self, trust: Arc<dyn TrustStore>) -> Self {
+        self.trust = Some(trust);
         self
     }
 
@@ -523,9 +571,14 @@ impl Delivery {
                 true
             }
         };
-        // Кто отправитель: вошедший — своя организация, письмо через smtp-in — по домену `From`; что ему можно,
-        // решает приём iTIP по матрице доверия (решение 124, `TrustMatrix::inbound`).
-        let sender = match self.sender_kind(&msg.from, internal).await {
+        // Кто отправитель: вошедший — своя организация, письмо через smtp-in — по домену `From` (партнёр — с
+        // пройденным DMARC); что ему можно, решает приём iTIP по матрице доверия (решение 124,
+        // `TrustMatrix::inbound`).
+        let dmarc_pass = match origin {
+            ItipOrigin::Imip { dmarc_pass } => dmarc_pass,
+            ItipOrigin::Internal { .. } => true,
+        };
+        let sender = match self.sender_kind(&msg.from, internal, dmarc_pass).await {
             Ok(kind) => kind,
             Err(e) => {
                 tracing::warn!(%id, error = %e, "smtp: сбой проверки домена отправителя приглашения");
@@ -586,13 +639,16 @@ impl Delivery {
         }
     }
 
-    /// Тип отправителя `from` относительно организации узла (решение 123). Своя организация
-    /// ([`PeerKind::Own`]) — по входу, а не по домену: внутренний путь (`internal`), `From` которого принадлежит
-    /// вошедшей учётной записи. Письмо через smtp-in — по домену `From` (ближайший принятый домен — сам или
-    /// родитель): домен своей организации — [`PeerKind::External`] (DMARC проходит и сторонний сервис,
-    /// разрешённый в SPF или DKIM домена), домен-партнёр ([`Delivery::with_partners`]) — [`PeerKind::Partner`],
-    /// принятый домен другой организации установки — [`PeerKind::Neighbor`], иначе — [`PeerKind::External`].
-    async fn sender_kind(&self, from: &str, internal: bool) -> Result<PeerKind> {
+    /// Тип отправителя `from` относительно организации узла (решение 123 → 124, SMTP-49/50). Своя организация
+    /// ([`PeerKind::Own`]) — по входу, а не по домену: внутренний путь (`internal` — submission со входом,
+    /// [`Delivery::submit`]), `From` которого принадлежит вошедшей учётной записи. Письмо через smtp-in — по
+    /// домену `From` (ближайший принятый домен — сам или родитель): домен своей организации —
+    /// [`PeerKind::External`] (DMARC проходит и сторонний сервис, разрешённый в SPF или DKIM домена),
+    /// домен-партнёр ([`TrustStore::partner_of`]) — [`PeerKind::Partner`] только с пройденным DMARC
+    /// (выравнивание адреса `From`, RFC 9989), принятый домен другой организации установки —
+    /// [`PeerKind::Neighbor`], иначе — [`PeerKind::External`]. Заголовкам `Authentication-Results` не от своего
+    /// шлюза и `remote-host` не доверяем — тип вычисляет ядро по своим проверкам (RFC 8601 §5, RFC 5183).
+    async fn sender_kind(&self, from: &str, internal: bool, dmarc_pass: bool) -> Result<PeerKind> {
         if internal {
             return Ok(PeerKind::Own);
         }
@@ -600,18 +656,224 @@ impl Delivery {
         if org == Some(self.deps.tenant) {
             return Ok(PeerKind::External);
         }
-        if let (Some(partners), Some((_, domain))) = (&self.partners, from.rsplit_once('@'))
-            && partners
-                .is_partner(self.deps.tenant, &domain.to_lowercase())
-                .await?
-        {
-            return Ok(PeerKind::Partner);
+        let domain = from.rsplit_once('@').map(|(_, d)| d.to_lowercase());
+        let partner = match (&self.trust, domain.as_deref()) {
+            (Some(trust), Some(d)) => trust.partner_of(self.deps.tenant, d).await?,
+            _ => false,
+        };
+        Ok(match () {
+            _ if partner && dmarc_pass => PeerKind::Partner,
+            _ if org.is_some() => PeerKind::Neighbor,
+            _ => PeerKind::External,
+        })
+    }
+
+    /// Тип абонента адреса исходящего получателя (SMTP-50): домен принятого домена организации — [`PeerKind::Own`],
+    /// домен-партнёр — [`PeerKind::Partner`], принятый домен другой организации установки —
+    /// [`PeerKind::Neighbor`], иначе — [`PeerKind::External`]. DMARC не проверяется: это домен адресата, а не
+    /// отправитель письма.
+    async fn rcpt_kind(&self, address: &str) -> Result<PeerKind> {
+        let org = self.org_of(address).await?;
+        if org == Some(self.deps.tenant) {
+            return Ok(PeerKind::Own);
         }
-        Ok(if org.is_some() {
+        let domain = address.rsplit_once('@').map(|(_, d)| d.to_lowercase());
+        let partner = match (&self.trust, domain.as_deref()) {
+            (Some(trust), Some(d)) => trust.partner_of(self.deps.tenant, d).await?,
+            _ => false,
+        };
+        Ok(if partner {
+            PeerKind::Partner
+        } else if org.is_some() {
             PeerKind::Neighbor
         } else {
             PeerKind::External
         })
+    }
+
+    /// Тип абонента отправителя на `RCPT` (до `DATA` письма ещё нет): submission и приложение организации — свой,
+    /// smtp-in — по домену конверта. Партнёр здесь без подтверждения DMARC — предположительно (обычно конверт
+    /// выровнен с `From`); `DATA` перепроверит по `From` и DMARC и может только сузить тип.
+    async fn rcpt_peer(&self, env: &Envelope) -> Result<PeerKind> {
+        if env.mode == Mode::Submission || sender_account(env, self.deps.tenant).is_some() {
+            return Ok(PeerKind::Own);
+        }
+        if let Some((s, _)) = sources::application(env.source.as_deref())
+            && s.tenant == Some(self.deps.tenant)
+        {
+            return Ok(PeerKind::Own);
+        }
+        let from = if env.mail_from.is_empty() {
+            env.helo.as_str()
+        } else {
+            env.mail_from.as_str()
+        };
+        let org = self.org_of(from).await?;
+        if org == Some(self.deps.tenant) {
+            return Ok(PeerKind::External);
+        }
+        let domain = from.rsplit_once('@').map(|(_, d)| d.to_lowercase());
+        let partner = match (&self.trust, domain.as_deref()) {
+            (Some(trust), Some(d)) => trust.partner_of(self.deps.tenant, d).await?,
+            _ => false,
+        };
+        Ok(if partner {
+            PeerKind::Partner
+        } else if org.is_some() {
+            PeerKind::Neighbor
+        } else {
+            PeerKind::External
+        })
+    }
+
+    /// Действующая матрица доверия учётной записи (решение 124 б): [`TrustStore::effective_for`] — установка →
+    /// организация → группы учётной записи, из нескольких групп — самое узкое. Ошибка чтения — закрытая матрица
+    /// ([`TrustMatrix::closed`]) и запись в журнал узла, письмо доставляется как письмо. Без хранилища —
+    /// умолчания контракта.
+    async fn matrix_for(&self, scope: AccountScope) -> TrustMatrix {
+        let Some(trust) = &self.trust else {
+            return TrustMatrix::default();
+        };
+        match trust.effective_for(scope.tenant, scope.account).await {
+            Ok(e) => e.matrix,
+            Err(e) => {
+                tracing::warn!(
+                    tenant = %scope.tenant,
+                    account = %scope.account,
+                    error = %e,
+                    "smtp: политика доверия не прочитана — закрытая матрица, письмо доставляется"
+                );
+                TrustMatrix::closed()
+            }
+        }
+    }
+
+    /// Матрица уровня организации (без групп учётной записи) и домены автопересылки организации
+    /// ([`TrustPolicy::auto_forward_domains`]): точки решения без учётной записи — копии и пересылки модулей.
+    async fn org_matrix(&self) -> Result<(TrustMatrix, Vec<String>)> {
+        let Some(trust) = &self.trust else {
+            return Ok((TrustMatrix::default(), Vec::new()));
+        };
+        let inst = trust.policy(TrustLevel::Installation).await?;
+        let org = trust.policy(TrustLevel::Org(self.deps.tenant)).await?;
+        let domains = org
+            .as_ref()
+            .map(|p| p.auto_forward_domains.clone())
+            .unwrap_or_default();
+        let matrix = effective(
+            inst.as_ref(),
+            org.as_ref().map(|p| (TrustLevel::Org(self.deps.tenant), p)),
+            &[],
+        )
+        .matrix;
+        Ok((matrix, domains))
+    }
+
+    /// Действующее значение [`GroupPost`] группы для отправителя типа `peer` (SMTP-50, решение 124 г): уровень
+    /// группы — политика самой группы ([`TrustLevel::Group`]), иначе организации, иначе установки и умолчания.
+    /// `group` = `None` — группа каталога без записи в [`Groups`]: уровня группы нет. Без хранилища — умолчания
+    /// контракта: своим открыто, чужим закрыто.
+    async fn group_post(
+        &self,
+        group: Option<&DistributionGroup>,
+        peer: PeerKind,
+    ) -> Result<GroupPost> {
+        let Some(trust) = &self.trust else {
+            return Ok(TrustMatrix::default().group_post.get(peer));
+        };
+        let inst = trust.policy(TrustLevel::Installation).await?;
+        let org = trust.policy(TrustLevel::Org(self.deps.tenant)).await?;
+        let group_policy = match group {
+            Some(g) => {
+                trust
+                    .policy(TrustLevel::Group(self.deps.tenant, g.id))
+                    .await?
+            }
+            None => None,
+        };
+        let groups = match (group, group_policy.as_ref()) {
+            (Some(g), Some(p)) => vec![(TrustLevel::Group(self.deps.tenant, g.id), p)],
+            _ => Vec::new(),
+        };
+        let matrix = effective(
+            inst.as_ref(),
+            org.as_ref().map(|p| (TrustLevel::Org(self.deps.tenant), p)),
+            &groups,
+        )
+        .matrix;
+        Ok(matrix.group_post.get(peer))
+    }
+
+    /// Решение клетки `group_post` для письма (SMTP-50): `Hold` — очередь модерации (у группы есть модераторы),
+    /// `Deny` — отказ (группа закрыта, модерировать некому), `Pass` — как сейчас (модерация самой группы сужает
+    /// и дальше).
+    async fn post_action(
+        &self,
+        group: Option<&DistributionGroup>,
+        peer: PeerKind,
+    ) -> Result<PostAction> {
+        Ok(match self.group_post(group, peer).await? {
+            GroupPost::Closed => PostAction::Deny,
+            GroupPost::Moderated if group.is_some_and(|g| g.moderated()) => PostAction::Hold,
+            GroupPost::Moderated => PostAction::Deny,
+            GroupPost::Open => PostAction::Pass,
+        })
+    }
+
+    /// Можно ли переслать письмо на внешний адрес `to` правилом или модулем (SMTP-50, решение 124 г): адрес
+    /// локальный — пересылка внутри; клетка `auto_forward` действующей матрицы для типа адреса включена или домен
+    /// — из `auto_forward_domains` организации. Почтовые контакты в составе группы — не автопересылка:
+    /// администратор задал их явно.
+    async fn forward_to(&self, matrix: &TrustMatrix, domains: &[String], to: &str) -> Result<bool> {
+        let kind = self.rcpt_kind(to).await?;
+        if kind == PeerKind::Own {
+            return Ok(true);
+        }
+        let domain = to.rsplit_once('@').map_or("", |(_, d)| d);
+        Ok(matrix.auto_forward.get(kind) == Toggle::On
+            || domains.iter().any(|d| d.eq_ignore_ascii_case(domain)))
+    }
+
+    /// Отчёты о прочтении (MDN, RFC 8098) из submission и [`Delivery::submit`] получателям, которым клетка `mdn`
+    /// их матрицы запрещает MDN, не отправляются (SMTP-50): получатель убирается до доставки и очереди,
+    /// отправителю — `250` (машинный отчёт его программы, а не ошибка); событие журнала доставки. Свои — матрица
+    /// учётной записи, чужие — матрица организации.
+    async fn mdn_rcpts(
+        &self,
+        id: &str,
+        rcpts: &[String],
+        org: &TrustMatrix,
+    ) -> Result<(Vec<String>, Vec<Step>)> {
+        let mut allowed = Vec::new();
+        let mut steps = Vec::new();
+        for rcpt in rcpts {
+            let kind = self.rcpt_kind(rcpt).await?;
+            let on = match kind {
+                PeerKind::Own => match self.resolve(rcpt).await? {
+                    Resolved::Local(accounts) if !accounts.is_empty() => {
+                        self.matrix_for(AccountScope {
+                            tenant: accounts[0].tenant,
+                            account: accounts[0].id,
+                        })
+                        .await
+                        .mdn
+                        .own
+                    }
+                    _ => org.mdn.own,
+                },
+                _ => org.mdn.get(kind),
+            };
+            if on == Toggle::On {
+                allowed.push(rcpt.clone());
+            } else {
+                tracing::info!(%id, %rcpt, %kind, "smtp: MDN не отправлен — политика доверия");
+                steps.push(
+                    Step::new(Ek::Deliver, Dd::Discard, vec![rcpt.clone()])
+                        .reason("MDN не отправлен: политика"),
+                );
+            }
+        }
+        Ok((allowed, steps))
     }
 
     /// Право учётной записи `account` организации узла на адрес отправителя `from` (решение 78, SMTP-45): её адрес
@@ -908,25 +1170,26 @@ impl Delivery {
             .await?
             .unwrap_or_else(|| address.to_owned());
         let lower = address.to_lowercase();
-        let target = |resolved, delivered_to| Target {
+        let target = |resolved, delivered_to, mailing| Target {
             address: address.clone(),
             resolved,
             delivered_to,
             group: None,
+            mailing,
             contacts: Vec::new(),
             relay: false,
             foreign: false,
         };
         let Some((_, domain)) = lower.rsplit_once('@') else {
-            return Ok(target(Resolved::Unknown, None));
+            return Ok(target(Resolved::Unknown, None, false));
         };
         let Some(accepted) = self.accepted(domain).await? else {
-            return Ok(target(Resolved::External, None));
+            return Ok(target(Resolved::External, None, false));
         };
         if accepted.tenant != self.deps.tenant {
             return Ok(Target {
                 foreign: true,
-                ..target(Resolved::External, None)
+                ..target(Resolved::External, None, false)
             });
         }
         let relay = matches!(accepted.kind, DomainKind::InternalRelay { .. });
@@ -946,31 +1209,39 @@ impl Delivery {
             return Ok(Target {
                 group: Some(group),
                 contacts: members.contacts,
-                ..target(Resolved::Local(accounts), None)
+                ..target(Resolved::Local(accounts), None, true)
             });
         }
         if let Some(accounts) = self.lookup(&snap, &lower).await? {
-            return Ok(target(Resolved::Local(accounts), None));
+            return Ok(target(
+                Resolved::Local(accounts),
+                None,
+                snap.mailing.contains(&lower),
+            ));
         }
         if let Some((base, _tag)) = self.addressing.split(&lower)
             && let Some(accounts) = self.lookup(&snap, &base).await?
         {
-            return Ok(target(Resolved::Local(accounts), Some(address.clone())));
+            return Ok(target(
+                Resolved::Local(accounts),
+                Some(address.clone()),
+                snap.mailing.contains(&base),
+            ));
         }
         let catch_all = format!("@{domain}");
         if snap.addresses.contains_key(&catch_all)
             && let Some(accounts) = self.lookup(&snap, &catch_all).await?
         {
-            return Ok(target(Resolved::Local(accounts), None));
+            return Ok(target(Resolved::Local(accounts), None, false));
         }
         if relay {
             // Адрес вне каталога в домене внутренней ретрансляции — на старый сервер (`next_hop`).
             return Ok(Target {
                 relay: true,
-                ..target(Resolved::External, None)
+                ..target(Resolved::External, None, false)
             });
         }
-        Ok(target(Resolved::Unknown, None))
+        Ok(target(Resolved::Unknown, None, false))
     }
 
     /// Включённые учётные записи адреса `address` (нижний регистр): по снимку каталога или как имя входа.
@@ -1073,6 +1344,7 @@ impl Delivery {
             out
         };
         let mut addresses: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let mut mailing = HashSet::new();
         for (login, emails) in accounts.values() {
             for email in emails {
                 addresses
@@ -1083,6 +1355,7 @@ impl Delivery {
         }
         for (id, (email, _)) in &groups {
             if let Some(email) = email {
+                mailing.insert(email.to_lowercase());
                 addresses
                     .entry(email.to_lowercase())
                     .or_default()
@@ -1095,7 +1368,7 @@ impl Delivery {
                 .or_default()
                 .extend(expand(&alias.target));
         }
-        Ok(Snapshot { addresses })
+        Ok(Snapshot { addresses, mailing })
     }
 
     /// Папка доставки: «Спам» (`junk`) или «Входящие».
@@ -1112,17 +1385,22 @@ impl Delivery {
 
     /// Разрешает всех получателей конверта: доставки (по одной на учётную запись), внешние адреса,
     /// модерируемые группы. Отправитель вне круга группы (принят на `RCPT` до изменения группы, отправка
-    /// из JMAP) — в `failed`.
+    /// из JMAP) — в `failed`. `peer` — тип абонента отправителя (для `group_post`, SMTP-50); копии модулей
+    /// (`Origin::Module`) группы только раскрываются. Отказ по политике (закрытая группа, неизвестный адрес)
+    /// уведомления отправителю не даёт ([`dsn::Recipient::notify`]): он должен был прозвучать в сессии
+    /// до `250` (RFC 5321 §6.2).
     async fn prepare(
         &self,
         id: &str,
         rcpts: &[String],
         filing: &Filing,
         origin: Origin,
+        peer: PeerKind,
     ) -> Result<Prepared> {
         let mut out = Prepared {
             deliveries: Vec::new(),
             junk: HashSet::new(),
+            group: HashSet::new(),
             external: Vec::new(),
             relayed: Vec::new(),
             queued: Vec::new(),
@@ -1152,12 +1430,28 @@ impl Delivery {
             if let (Some(group), Origin::Sender(sender)) = (&target.group, origin) {
                 if !self.group_allows(group, sender).await? {
                     tracing::info!(%id, group = %group.id, "smtp: отправитель вне круга группы рассылки");
-                    out.failed.push(dsn::Recipient::new(
-                        rcpt.clone(),
-                        dsn::Action::Failed,
-                        GROUP_DENIED,
-                    ));
+                    out.failed.push(denied(rcpt.clone(), GROUP_DENIED));
                     continue;
+                }
+                // Матрица доверия (SMTP-50): письма в группу — по типу отправителя; `Moderated` — в очередь
+                // модерации, `Closed` — отказ (на `RCPT` он уже прозвучал), `Open` — как сейчас (модерация
+                // самой группы сужает и дальше). Модератор группы своё письмо не задерживает.
+                match self.post_action(Some(group), peer).await {
+                    Ok(PostAction::Hold)
+                        if !sender.is_some_and(|s| group.moderators.contains(&s)) =>
+                    {
+                        if !out.held.iter().any(|(_, g)| g.id == group.id) {
+                            out.held.push((rcpt.clone(), group.clone()));
+                        }
+                        continue;
+                    }
+                    Ok(PostAction::Deny) => {
+                        tracing::info!(%id, group = %group.id, %peer, "smtp: группа закрыта для типа абонента");
+                        out.failed.push(denied(rcpt.clone(), GROUP_DENIED));
+                        continue;
+                    }
+                    Ok(_) => {}
+                    Err(e) => return Err(e),
                 }
                 if group.requires_moderation(sender) {
                     if !out.held.iter().any(|(_, g)| g.id == group.id) {
@@ -1165,12 +1459,25 @@ impl Delivery {
                     }
                     continue;
                 }
+            } else if target.mailing && matches!(origin, Origin::Sender(_)) {
+                // Группа каталога без записи в [`Groups`]: ограничений и модераторов нет — только матрица;
+                // `Moderated` без модераторов — отказ (решать некому).
+                match self.post_action(None, peer).await {
+                    Ok(PostAction::Pass) => {}
+                    Ok(_) => {
+                        tracing::info!(%id, address = %rcpt, %peer, "smtp: группа закрыта для типа абонента");
+                        out.failed.push(denied(rcpt.clone(), GROUP_DENIED));
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             // Контакты в составе группы — внешним адресатам (очередь; письмо извне — пересылкой).
             push_unique(&mut out.external, target.contacts);
             match target.resolved {
                 Resolved::Local(accounts) => {
                     for acc in accounts {
+                        let direct = out.deliveries.iter().any(|(_, d)| d.account == acc.id);
                         self.push_delivery(
                             &mut out,
                             rcpt,
@@ -1179,6 +1486,9 @@ impl Delivery {
                             filing,
                         )
                         .await?;
+                        if target.mailing && !direct {
+                            out.group.insert(acc.id);
+                        }
                     }
                 }
                 Resolved::External => {
@@ -1191,14 +1501,11 @@ impl Delivery {
                     out.queued.push(rcpt.clone());
                 }
                 // Получатель принят на RCPT, но исчез из каталога (или неизвестен при отправке из JMAP):
-                // письмо ему не доставляется, отправителю — уведомление.
+                // письмо ему не доставляется; отказ по политике — без уведомления отправителю (RFC 5321 §6.2).
                 Resolved::Unknown => {
                     tracing::warn!(%id, "smtp: локальный получатель не найден");
-                    out.failed.push(dsn::Recipient::new(
-                        rcpt.clone(),
-                        dsn::Action::Failed,
-                        "550 5.1.1 mailbox unavailable",
-                    ));
+                    out.failed
+                        .push(denied(rcpt.clone(), "550 5.1.1 mailbox unavailable"));
                 }
             }
         }
@@ -1439,18 +1746,36 @@ impl Delivery {
 
     /// Копии точки принятия решений на адреса (`CopyTo::Address`): локальные — доставки в ящики (без адреса
     /// получателя: копия уведомления отправителю не даёт и адрес ему не раскрывает), внешние — в очередь.
+    /// Автопересылка на внешний адрес (SMTP-50, решение 124 г) — только при включённой клетке `auto_forward` или
+    /// домене из `auto_forward_domains`: иначе копия не пересылается (только журнал доставки).
     async fn add_copies(
         &self,
         id: &str,
         prepared: &mut Prepared,
         addresses: &[String],
         filing: &Filing,
+        steps: &mut Vec<Step>,
     ) -> Result<()> {
         if addresses.is_empty() {
             return Ok(());
         }
-        let mut copies = self.prepare(id, addresses, filing, Origin::Module).await?;
+        let mut copies = self
+            .prepare(id, addresses, filing, Origin::Module, PeerKind::Own)
+            .await?;
         copies.external.append(&mut copies.relayed);
+        let (matrix, domains) = self.org_matrix().await?;
+        let mut external = Vec::new();
+        for a in copies.external {
+            if self.forward_to(&matrix, &domains, &a).await? {
+                external.push(a);
+            } else {
+                tracing::info!(%id, address = %a, "smtp: копия на внешний адрес не переслана — политика автопересылки");
+                steps.push(
+                    Step::new(Ek::Deliver, Dd::Discard, vec![a])
+                        .reason("forward skipped: auto-forward policy"),
+                );
+            }
+        }
         for (_, d) in copies.deliveries {
             if !prepared
                 .deliveries
@@ -1463,14 +1788,16 @@ impl Delivery {
                 prepared.deliveries.push((String::new(), d));
             }
         }
-        push_unique(&mut prepared.external, copies.external);
+        push_unique(&mut prepared.external, external);
         Ok(())
     }
 
     /// Пересылки модулей (`Ingested::forward`): локальные адреса — сразу в ящики (CMP-04, SMTP-28), их
     /// пересылки — так же, пока есть учётные записи, ещё не получившие письмо (`delivered`; защита от
     /// петель). Неизвестный адрес и переполненный ящик — только в журнал: адрес пересылки отправителю не
-    /// раскрывается. Возвращает внешние адреса — для очереди.
+    /// раскрывается. Внешние адреса — автопересылка (SMTP-50): только при включённой клетке `auto_forward` или
+    /// домене из `auto_forward_domains`, запрещённая пересылка — событие журнала. Возвращает внешние адреса —
+    /// для очереди.
     #[allow(clippy::too_many_arguments)]
     async fn forward(
         &self,
@@ -1481,10 +1808,13 @@ impl Delivery {
         filing: &Filing,
         received_at: OffsetDateTime,
         mut delivered: HashSet<AccountId>,
+        steps: &mut Vec<Step>,
     ) -> Result<Vec<String>> {
         let mut external = Vec::new();
         while !forward.is_empty() {
-            let p = self.prepare(id, &forward, filing, Origin::Module).await?;
+            let p = self
+                .prepare(id, &forward, filing, Origin::Module, PeerKind::Own)
+                .await?;
             push_unique(&mut external, p.external);
             push_unique(&mut external, p.relayed);
             let deliveries: Vec<_> = p
@@ -1514,9 +1844,24 @@ impl Delivery {
                     Vec::new()
                 }
                 Err(e) => return Err(e),
-            };
+            }
         }
-        Ok(external)
+        // Внешние адреса пересылки — автопересылка (решение 124 г): без включённой клетки или домена письмо
+        // наружу не уходит.
+        let (matrix, domains) = self.org_matrix().await?;
+        let mut allowed = Vec::new();
+        for a in external {
+            if self.forward_to(&matrix, &domains, &a).await? {
+                allowed.push(a);
+            } else {
+                tracing::info!(%id, address = %a, "smtp: пересылка на внешний адрес не выполнена — политика автопересылки");
+                steps.push(
+                    Step::new(Ek::Deliver, Dd::Discard, vec![a])
+                        .reason("forward skipped: auto-forward policy"),
+                );
+            }
+        }
+        Ok(allowed)
     }
 
     /// Пересылка наружу (SMTP-23): отправитель конверта — SRS (кроме локальных отправителей и уведомлений),
@@ -1799,11 +2144,28 @@ impl Delivery {
         let sender = sender_account(env, self.deps.tenant);
         let filing = Filing::new(junk, forged, &env.mail_from, &full);
         let filing = &filing;
+        // Тип абонента письма (SMTP-50): submission и приложение организации — свой; smtp-in — по домену `From`
+        // и DMARC (партнёр — домен из списка партнёров с пройденным DMARC, RFC 9989).
+        let peer = self
+            .message_peer(
+                env.mode,
+                app,
+                &full,
+                check.as_ref().is_some_and(|c| c.dmarc_pass),
+            )
+            .await;
+        // Отчёт о прочтении (MDN, RFC 8098) получателям с выключенной клеткой `mdn` не отправляется:
+        // отправителю — `250` (машинный отчёт его программы), событие журнала доставки.
+        let rcpts = if env.mode == Mode::Submission && dsn::is_mdn(&full) {
+            let (org, _) = self.org_matrix().await?;
+            let (allowed, steps) = self.mdn_rcpts(&env.id, &env.rcpts, &org).await?;
+            trail.steps.extend(steps);
+            allowed
+        } else {
+            env.rcpts.clone()
+        };
         let mut prepared = self
-            .prepare(&env.id, &env.rcpts, filing, Origin::Sender(sender))
-            .await?;
-        // Очередь модерации — до доставки: её сбой — временный отказ без частичной доставки.
-        self.hold_all(&prepared.held, &env.mail_from, sender, &full, received_at)
+            .prepare(&env.id, &rcpts, filing, Origin::Sender(sender), peer)
             .await?;
         let mut copy_to = Vec::new();
         for copy in copies {
@@ -1820,7 +2182,7 @@ impl Delivery {
                 CopyTo::Address(a) => copy_to.push(a),
             }
         }
-        self.add_copies(&env.id, &mut prepared, &copy_to, filing)
+        self.add_copies(&env.id, &mut prepared, &copy_to, filing, &mut trail.steps)
             .await?;
         // Внешние получатели smtp-in от обычного клиента — только перенаправления правил потока: пересылка.
         let redirect = env.mode == Mode::Inbound && !app;
@@ -1839,16 +2201,29 @@ impl Delivery {
             redirect: hops,
             mut replies,
             steps: mut sieve_steps,
+            org_failed,
         } = self
             .apply_rules(
                 &env.id,
                 &env.mail_from,
                 &full,
                 &mut prepared.deliveries,
-                &prepared.junk,
+                &RuleContext::new(peer, &prepared.junk, &prepared.group),
                 false,
-                PeerKind::External,
+                true,
             )
+            .await?;
+        if !org_failed.is_empty() {
+            // Сбой скрипта организации (SIEVE-14): письмо не доставляется в обход скрипта — временный отказ.
+            return Ok(Some(reply(
+                451,
+                [4, 3, 0],
+                "Sieve organization script failed, try again later",
+            )));
+        }
+        // Очередь модерации — до доставки: её сбой — временный отказ без частичной доставки (после проверки
+        // скрипта организации — письмо не задерживается перед временным отказом).
+        self.hold_all(&prepared.held, &env.mail_from, sender, &full, received_at)
             .await?;
         let local = local_rcpts(&prepared.deliveries);
         let spam = junk_rcpts(&prepared.deliveries, &prepared.junk);
@@ -1895,6 +2270,7 @@ impl Delivery {
                 filing,
                 received_at,
                 delivered,
+                &mut trail.steps,
             )
             .await?;
         push_unique(&mut forwarded, external);
@@ -1906,6 +2282,7 @@ impl Delivery {
                 filing,
                 received_at,
                 Some(env.conn.client.ip()),
+                peer,
             )
             .await?;
         sieve::merge_replies(&mut replies, relayed.replies);
@@ -1925,6 +2302,14 @@ impl Delivery {
         trail.steps.extend(sieve_steps);
         self.send_replies(&env.id, &env.mail_from, &full, replies, &mut trail.steps)
             .await;
+        // Принятое и недоставленное — уведомление на адрес конверта (RFC 3464 §2). Письмо в «Спаме» и карантине
+        // фильтра не уведомляется (backscatter, SMTP-50 — как EOP отбрасывает сомнительное без NDR); отказы по
+        // политике уведомлений не дают ([`dsn::Recipient::notify`]).
+        let failed: Vec<dsn::Recipient> = if junk {
+            Vec::new()
+        } else {
+            failed.iter().filter(|f| f.notify).cloned().collect()
+        };
         if !failed.is_empty() && !env.mail_from.is_empty() {
             let sent = self
                 .bounce(&env.id, &env.mail_from, &failed, &full, received_at)
@@ -1934,7 +2319,8 @@ impl Delivery {
         Ok(None)
     }
 
-    /// Уведомление о недоставке после приёма (`250` уже не отменить); сбой — только в журнал.
+    /// Уведомление о недоставке после приёма (`250` уже не отменить); сбой — только в журнал. Получателю не
+    /// своей организации — с общей диагностикой (решение 124, RFC 3464 §4.2).
     async fn bounce(
         &self,
         id: &str,
@@ -1943,6 +2329,7 @@ impl Delivery {
         original: &[u8],
         received_at: OffsetDateTime,
     ) -> bool {
+        let plain = self.dsn_plain(mail_from).await;
         let raw = dsn::build(&dsn::Report {
             hostname: &self.hostname,
             to: mail_from,
@@ -1954,6 +2341,7 @@ impl Delivery {
             original,
             ret: DsnRet::Headers,
             id,
+            plain,
         });
         if let Err(e) = self
             .send_dsn(self.deps.tenant, mail_from, Bytes::from(raw))
@@ -1963,6 +2351,29 @@ impl Delivery {
             return false;
         }
         true
+    }
+
+    /// Уведомление о недоставке адресу `to` — с общей диагностикой: получатель не своей организации (решение 124,
+    /// RFC 3464 §4.2 — без имён узлов, внутренних адресов и имён фильтров). Ошибка разрешения — общая (безопасно).
+    async fn dsn_plain(&self, to: &str) -> bool {
+        !matches!(self.resolve(to).await, Ok(Resolved::Local(_)))
+    }
+
+    /// Тип абонента письма сессии (SMTP-50): submission (вошедший или приложение организации) — свой; smtp-in —
+    /// по домену `From` (нет `From` — конверт) с DMARC. Сбой чтения политики — внешний (безопасное умолчание),
+    /// письмо доставляется.
+    async fn message_peer(&self, mode: Mode, app: bool, raw: &[u8], dmarc_pass: bool) -> PeerKind {
+        if mode == Mode::Submission || app {
+            return PeerKind::Own;
+        }
+        let from = from_address(raw).unwrap_or_default();
+        match self.sender_kind(&from, false, dmarc_pass).await {
+            Ok(kind) => kind,
+            Err(e) => {
+                tracing::warn!(error = %e, "smtp: тип абонента не вычислен — внешний");
+                PeerKind::External
+            }
+        }
     }
 
     /// Обработка письма отправки вне сессии SMTP до доставки и очереди: фильтры Milter исходящей почты
@@ -2123,8 +2534,21 @@ impl Delivery {
         let sender = self.sender_by_address(mail_from).await?;
         let filing = Filing::new(false, false, mail_from, &raw);
         let filing = &filing;
+        // Отправка вне сессии SMTP — путь вошедшего (CTR-82): тип абонента — свой (SMTP-50).
+        let peer = PeerKind::Own;
+        // Отчёт о прочтении (MDN, RFC 8098) получателям с выключенной клеткой `mdn` не отправляется (SMTP-50);
+        // события политики (MDN, запрещённая автопересылка) — в журнал доставки.
+        let mut policy_steps = Vec::new();
+        let rcpts = if dsn::is_mdn(&raw) {
+            let (org, _) = self.org_matrix().await?;
+            let (allowed, steps) = self.mdn_rcpts(id, rcpts, &org).await?;
+            policy_steps.extend(steps);
+            allowed
+        } else {
+            rcpts.to_vec()
+        };
         let mut prepared = self
-            .prepare(id, rcpts, filing, Origin::Sender(sender))
+            .prepare(id, &rcpts, filing, Origin::Sender(sender), peer)
             .await?;
         let received_at = OffsetDateTime::now_utc();
         self.hold_all(&prepared.held, mail_from, sender, &raw, received_at)
@@ -2139,7 +2563,7 @@ impl Delivery {
             raw.clone()
         } else {
             let mut full = self
-                .submit_headers(id, mail_from, rcpts, received_at)
+                .submit_headers(id, mail_from, &rcpts, received_at)
                 .into_bytes();
             full.extend_from_slice(&raw);
             Bytes::from(full)
@@ -2150,17 +2574,23 @@ impl Delivery {
             redirect: hops,
             mut replies,
             steps: mut sieve_steps,
+            org_failed,
         } = self
             .apply_rules(
                 id,
                 mail_from,
                 &full,
                 &mut prepared.deliveries,
-                &prepared.junk,
+                &RuleContext::new(peer, &prepared.junk, &prepared.group),
                 false,
-                PeerKind::Own,
+                true,
             )
             .await?;
+        // Сбой скрипта организации (SIEVE-14): доставка в обход скрипта невозможна — `SubmitStatus::Failed` с
+        // временным отказом (SMTP-50), без уведомления (статус — у вызывающего).
+        for rcpt in org_failed {
+            failed.push(denied(rcpt, ORG_SCRIPT_FAILED));
+        }
         let local_list = local_rcpts(&prepared.deliveries);
         let spam = junk_rcpts(&prepared.deliveries, &prepared.junk);
         // Приглашение из почтового клиента (решение 78) — от учётной записи отправителя конверта.
@@ -2217,10 +2647,11 @@ impl Delivery {
                 filing,
                 received_at,
                 delivered,
+                &mut policy_steps,
             )
             .await?;
         let relayed = self
-            .relay(id, mail_from, hops, filing, received_at, None)
+            .relay(id, mail_from, hops, filing, received_at, None, peer)
             .await?;
         sieve::merge_replies(&mut replies, relayed.replies);
         sieve_steps.extend(relayed.steps);
@@ -2257,10 +2688,16 @@ impl Delivery {
         outcome_steps(&mut steps, &prepared.held, &local_list, &failed, &spam);
         steps.extend(itip_steps);
         steps.extend(sieve_steps);
+        steps.extend(policy_steps);
         self.send_replies(id, mail_from, &full, replies, &mut steps)
             .await;
-        if bounce && !failed.is_empty() && !mail_from.is_empty() {
-            let sent = self.bounce(id, mail_from, &failed, &raw, received_at).await;
+        // Уведомление — только о принятых и недоставленных (RFC 3464 §2), не по политике и не сбою скрипта
+        // организации (SMTP-50: их статус — у вызывающего).
+        let notified: Vec<dsn::Recipient> = failed.iter().filter(|f| f.notify).cloned().collect();
+        if bounce && !notified.is_empty() && !mail_from.is_empty() {
+            let sent = self
+                .bounce(id, mail_from, &notified, &raw, received_at)
+                .await;
             steps.push(dsn_step(mail_from, sent));
         }
         self.track(mail_from, tracking::message_id(&raw).as_deref(), steps)
@@ -2391,27 +2828,36 @@ impl Delivery {
     /// Правила Sieve получателей письма `raw` (SMTP-31): доставка с адресом получателя заменяется доставками в папки
     /// правил (несколько папок — несколько доставок одного `ingest`; `discard` и `redirect` без копии — ни одной);
     /// копии модулей (без адреса) — без правил. Сбой правил — доставка в папку по умолчанию («Входящие», при
-    /// `junk` — «Спам»). Возвращает перенаправления, автоответы (не для писем в «Спам») и события журнала.
+    /// `junk` — «Спам»). Возвращает перенаправления, автоответы (не для писем в «Спам» и по матрице доверия)
+    /// и события журнала.
+    ///
+    /// Матрица доверия (SMTP-50): правила получают тип абонента `ctx.peer` и действующую матрицу получателя
+    /// ([`TrustStore::effective_for`]); автоответ чужим — только при включённой клетке `auto_reply`, письмо в
+    /// группу — без автоответа участников; `redirect` на внешний адрес — только при включённой автопересылке,
+    /// запрещённое перенаправление не отменяет доставку в ящик. Сбой скрипта организации (SIEVE-14) —
+    /// [`Sieved::org_failed`]: сессия даёт `451 4.3.0` (`session`), вне сессии письмо — во «Входящих», как при
+    /// сбое скрипта пользователя.
     ///
     /// Петля перенаправлений (SMTP-34, [`crate::sieve`]): ящик уже есть в цепочке письма, цепочка длиннее
     /// `delivery.redirect_hops` или исчерпан `delivery.redirect_total` (`over`) — правила ящика не применяются,
     /// письмо — в папку по умолчанию, запись в журнал доставки.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // конвенция репо (как у `forward`)
     async fn apply_rules(
         &self,
         id: &str,
         mail_from: &str,
         raw: &Bytes,
         deliveries: &mut Vec<(String, MailDelivery)>,
-        junk: &HashSet<AccountId>,
+        ctx: &RuleContext<'_>,
         over: bool,
-        peer: PeerKind,
+        session: bool,
     ) -> Result<Sieved> {
         let mut out = Sieved::default();
         let Some(rules) = &self.rules else {
             return Ok(out);
         };
         let chain = sieve::chain(raw);
+        let (_, domains) = self.org_matrix().await?;
         let mut result = Vec::with_capacity(deliveries.len());
         for (rcpt, d) in std::mem::take(deliveries) {
             if rcpt.is_empty() {
@@ -2447,11 +2893,10 @@ impl Delivery {
                 mail_from: mail_from.to_owned(),
                 message: raw.clone(),
                 mailboxes: self.deps.mailboxes.list(scope).await?,
-                // Тип абонента — от пути письма (CTR-93): точную проводку (входящая почта, партнёры, соседние
-                // организации) и действующую матрицу получателя подключает SMTP-50; пока — безопасные умолчания:
-                // вход и перенаправления — чужой, submission вошедшего — свой, матрица — умолчания контракта.
-                peer,
-                matrix: TrustMatrix::default(),
+                // Тип абонента — от пути письма (CTR-93, SMTP-50): заголовкам письма не доверяем
+                // (RFC 8601 §5, RFC 5183); матрица — действующая для получателя.
+                peer: ctx.peer,
+                matrix: self.matrix_for(scope).await,
             };
             let mut notes = Vec::new();
             let outcome = match rules.evaluate(&input).await {
@@ -2465,6 +2910,28 @@ impl Delivery {
             if !outcome.errors.is_empty() {
                 tracing::info!(%id, account = %d.account, count = outcome.errors.len(), "smtp: ошибки выполнения правил Sieve");
                 notes.push(format!("errors: {}", outcome.errors.join("; ")));
+            }
+            // Сбой скрипта организации (SIEVE-14): в обход скрипта доставка невозможна — временный отказ (SMTP-50).
+            if outcome
+                .errors
+                .iter()
+                .any(|e| e.starts_with(ORG_SCRIPT_ERROR))
+            {
+                tracing::warn!(%id, account = %d.account, "smtp: сбой скрипта организации — письмо не доставляется");
+                if session {
+                    out.steps.push(
+                        Step::new(Ek::Deliver, Dd::Defer, vec![rcpt.clone()])
+                            .reason("sieve: org script failed"),
+                    );
+                    out.org_failed.push(rcpt);
+                    continue;
+                }
+                notes.push("org script failed, default folder".into());
+            }
+            if outcome.calendar.is_some() {
+                // Итог `processcalendar` правил (CTR-93): передаётся приёму iTIP (SMTP-50) — виден в журнале
+                // доставки; вносит приглашение не шире матрицы получателя приём (DAV-44).
+                notes.push("processcalendar".into());
             }
             let mut kept: Vec<MailDelivery> = Vec::new();
             for keep in &outcome.keep {
@@ -2492,17 +2959,58 @@ impl Delivery {
             if outcome.discard {
                 notes.push("discard".into());
             }
-            let redirected = !outcome.redirect.is_empty();
+            // Перенаправления: внешние адреса — автопересылка (решение 124 г), запрещённые политикой не
+            // выполняются; письмо (без копии) остаётся в ящике.
+            let mut redirect = Vec::new();
+            let mut skipped = Vec::new();
+            for to in outcome.redirect {
+                if self
+                    .forward_to(&input.matrix, &domains, &to)
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(%id, address = %to, error = %e, "smtp: автопересылка не проверена — не выполняется");
+                        false
+                    })
+                {
+                    redirect.push(to);
+                } else {
+                    skipped.push(to);
+                }
+            }
+            let redirected = !redirect.is_empty();
             if redirected {
-                notes.push(format!("redirect {}", outcome.redirect.join(", ")));
+                notes.push(format!("redirect {}", redirect.join(", ")));
                 out.redirect.push(Hop {
                     raw: sieve::stamp(raw, &token),
-                    to: outcome.redirect,
+                    to: redirect,
+                });
+            }
+            if !skipped.is_empty() {
+                tracing::info!(%id, account = %d.account, "smtp: перенаправление наружу не выполнено — политика автопересылки");
+                notes.push(format!(
+                    "redirect skipped by policy: {}",
+                    skipped.join(", ")
+                ));
+            }
+            if kept.is_empty() && !redirected && !outcome.discard && !skipped.is_empty() {
+                // Единственное перенаправление запрещено — письмо остаётся в ящике (implicit keep).
+                kept.push(MailDelivery {
+                    account: d.account,
+                    mailbox: d.mailbox,
+                    extra_headers: d.extra_headers.clone(),
+                    flags: Default::default(),
                 });
             }
             match outcome.vacation {
-                Some(_) if junk.contains(&d.account) => {
+                Some(_) if ctx.junk.contains(&d.account) => {
                     notes.push("auto-reply skipped: junk".into())
+                }
+                Some(_) if input.matrix.auto_reply.get(ctx.peer) == Toggle::Off => {
+                    notes.push("auto-reply skipped: policy".into())
+                }
+                Some(_) if ctx.group.contains(&d.account) => {
+                    // Письмо пришло в группу рассылки: участники отправителю не отвечают (SMTP-50, RFC 3834 §2).
+                    notes.push("auto-reply skipped: mailing group".into())
                 }
                 Some(reply) => out.replies.push((scope, reply)),
                 None => {}
@@ -2529,8 +3037,11 @@ impl Delivery {
 
     /// Перенаправления правил и внутренние автоответы (SMTP-34, решение 61): письмо каждого перенаправления
     /// доставляется как любое письмо — локальным адресатам через их правила (их перенаправления — так же, пока
-    /// цепочка не оборвётся: [`Delivery::apply_rules`]), внешним — в очередь с SRS и ARC. Неизвестный адрес и
-    /// переполненный ящик — только в журнал. Возвращает автоответы и события журнала доставки.
+    /// цепочка не оборвётся: [`Delivery::apply_rules`]), внешним — в очередь с SRS и ARC. `peer` — тип абонента
+    /// исходного отправителя (SMTP-50): правила получателя перенаправления видят то же письмо; внутренний
+    /// автоответ — от своей учётной записи. Неизвестный адрес и переполненный ящик — только в журнал. Возвращает
+    /// автоответы и события журнала доставки.
+    #[allow(clippy::too_many_arguments)] // peer — тип абонента письма (SMTP-50); конвенция репо (как у `forward`)
     async fn relay(
         &self,
         id: &str,
@@ -2539,6 +3050,7 @@ impl Delivery {
         filing: &Filing,
         received_at: OffsetDateTime,
         ip: Option<std::net::IpAddr>,
+        peer: PeerKind,
     ) -> Result<Sieved> {
         let mut out = Sieved::default();
         let mut hops = VecDeque::from(hops);
@@ -2546,19 +3058,22 @@ impl Delivery {
         while let Some(hop) = hops.pop_front() {
             let over = done >= self.redirect_total;
             done = done.saturating_add(1);
-            let mut p = self.prepare(id, &hop.to, filing, Origin::Module).await?;
+            let mut p = self
+                .prepare(id, &hop.to, filing, Origin::Module, peer)
+                .await?;
             let mut external = std::mem::take(&mut p.external);
             push_unique(&mut external, std::mem::take(&mut p.relayed));
             let delivered = accounts_of(&p.deliveries);
+            let mut hop_steps = Vec::new();
             let sieved = self
                 .apply_rules(
                     id,
                     mail_from,
                     &hop.raw,
                     &mut p.deliveries,
-                    &p.junk,
+                    &RuleContext::new(peer, &p.junk, &p.group),
                     over,
-                    PeerKind::External,
+                    false,
                 )
                 .await?;
             if !p.deliveries.is_empty() {
@@ -2584,6 +3099,7 @@ impl Delivery {
                                 filing,
                                 received_at,
                                 delivered,
+                                &mut hop_steps,
                             )
                             .await?;
                         push_unique(&mut external, more);
@@ -2599,6 +3115,7 @@ impl Delivery {
             hops.extend(sieved.redirect);
             sieve::merge_replies(&mut out.replies, sieved.replies);
             out.steps.extend(sieved.steps);
+            out.steps.extend(hop_steps);
         }
         Ok(out)
     }
@@ -2701,8 +3218,17 @@ impl Delivery {
                     to: vec![to.to_owned()],
                 };
                 let filing = Filing::new(false, false, "", &hop.raw);
+                // Автоответ — от учётной записи организации: тип абонента для правил получателя — свой.
                 let sieved = self
-                    .relay(id, "", vec![hop], &filing, OffsetDateTime::now_utc(), None)
+                    .relay(
+                        id,
+                        "",
+                        vec![hop],
+                        &filing,
+                        OffsetDateTime::now_utc(),
+                        None,
+                        PeerKind::Own,
+                    )
                     .await?;
                 Ok(("delivered", sieved.steps))
             }
@@ -2976,9 +3502,40 @@ impl Delivery {
                 }
                 Err(e) => return temporary(&e),
             }
+            // Матрица доверия (SMTP-50, решение 124 г): письма в группу — по типу отправителя. До `DATA` письма
+            // нет — тип по домену конверта (партнёр предположительно), `DATA` перепроверит по `From` и DMARC.
+            // Ограничения отправителей группы сужают и дальше.
+            let peer = match self.rcpt_peer(env).await {
+                Ok(peer) => peer,
+                Err(e) => return temporary(&e),
+            };
+            match self.post_action(Some(group), peer).await {
+                Ok(PostAction::Deny) => {
+                    tracing::info!(id = %env.id, group = %group.id, %peer, "smtp: группа закрыта для типа абонента");
+                    return reply(550, [5, 7, 1], "Sender not allowed to send to this group");
+                }
+                // Письмо ждёт решения модератора: квоты членов не проверяются.
+                Ok(PostAction::Hold) => return reply(250, [2, 1, 5], "OK"),
+                Ok(PostAction::Pass) => {}
+                Err(e) => return temporary(&e),
+            }
             // Письмо модерируемой группы ждёт решения модератора: квоты членов не проверяются.
             if group.requires_moderation(sender) {
                 return reply(250, [2, 1, 5], "OK");
+            }
+        } else if target.mailing {
+            // Группа каталога без записи в [`Groups`]: только матрица; `Moderated` без модераторов — отказ.
+            let peer = match self.rcpt_peer(env).await {
+                Ok(peer) => peer,
+                Err(e) => return temporary(&e),
+            };
+            match self.post_action(None, peer).await {
+                Ok(PostAction::Pass) => {}
+                Ok(_) => {
+                    tracing::info!(id = %env.id, address = %rcpt, %peer, "smtp: группа закрыта для типа абонента");
+                    return reply(550, [5, 7, 1], "Sender not allowed to send to this group");
+                }
+                Err(e) => return temporary(&e),
             }
         }
         match target.resolved {
@@ -3102,8 +3659,24 @@ fn dsn_step(to: &str, sent: bool) -> Step {
         .reason(reason)
 }
 
-/// Отказ отправителю вне круга группы рассылки после приёма (уведомление о недоставке).
+/// Отказ отправителю вне круга группы рассылки после приёма.
 const GROUP_DENIED: &str = "550 5.7.1 sender not allowed to send to this group";
+
+/// Отказ по политике после приёма (группа закрыта, неизвестный адрес): без уведомления отправителю — он должен
+/// был прозвучать в сессии до `250` (SMTP-50, RFC 5321 §6.2), только статус и журнал доставки.
+fn denied(address: String, reply: &'static str) -> dsn::Recipient {
+    dsn::Recipient {
+        notify: false,
+        ..dsn::Recipient::new(address, dsn::Action::Failed, reply)
+    }
+}
+
+/// Сбой скрипта организации при выполнении (SIEVE-14): доставка в обход скрипта невозможна — временный отказ
+/// (SMTP-50); в сессии smtp-in — `451`, в [`Delivery::submit`] — `SubmitStatus::Failed` с тем же кодом.
+const ORG_SCRIPT_FAILED: &str = "451 4.3.0 sieve organization script failed";
+
+/// Префикс ошибки выполнения скрипта организации в [`RulesOutcome::errors`] (ставит `tp-sieve`).
+const ORG_SCRIPT_ERROR: &str = "скрипт организации";
 
 /// Отказ адресу SRS: подпись не сходится или срок истёк.
 const BAD_SRS: &str = "550 5.1.1 bad SRS address";
@@ -3125,16 +3698,6 @@ pub(crate) async fn read_blob(blobs: &dyn BlobStore, key: &tp_contracts::BlobKey
     use futures::TryStreamExt;
     let chunks: Vec<Bytes> = blobs.get(key, None).await?.try_collect().await?;
     Ok(chunks.concat().into())
-}
-
-/// Домены-партнёры организации — официально установленные доверительные отношения (решение 123): отправитель письма
-/// iMIP с них — `PeerKind::Partner` ([`Delivery::with_partners`]). Источник списка — политика организации (шаблоны
-/// ссылок занятости доменов-партнёров, META-34; хранилища ещё нет — узел список не подключает).
-#[async_trait]
-pub trait PartnerDomains: Send + Sync + 'static {
-    /// Домен `domain` (строчными) — партнёр организации `tenant`: заведён в её политике сам или его родительский
-    /// домен.
-    async fn is_partner(&self, tenant: TenantId, domain: &str) -> Result<bool>;
 }
 
 /// Откуда письмо с iTIP и чем подтверждается его `From` ([`Delivery::with_itip`]).
@@ -3229,6 +3792,16 @@ fn sender_fields(raw: &[u8]) -> Vec<(&'static str, Vec<String>)> {
             (name, addrs)
         })
         .collect()
+}
+
+/// Первый адрес `From` письма (домен определяет тип абонента входящего, решение 124): нет `From` — `None`.
+/// Заголовкам `Authentication-Results` чужого шлюза и `remote-host` не доверяем — тип вычисляет ядро
+/// (RFC 8601 §5, RFC 5183).
+fn from_address(raw: &[u8]) -> Option<String> {
+    sender_fields(raw)
+        .into_iter()
+        .find(|(name, _)| *name == "From")
+        .and_then(|(_, addrs)| addrs.into_iter().next())
 }
 
 /// Временная ошибка (`451 4.3.0`): хранилище или каталог недоступны.

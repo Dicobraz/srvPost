@@ -4,10 +4,11 @@
 //! модерации: письмо группы — её участникам (раскрытие вложенных групп, по одной доставке на учётную запись),
 //! письмо правила потока (`group = None`) — исходным получателям (локальные — в ящики, группы раскрываются без
 //! модерации, внешние — в очередь исходящей почты). Правила Sieve, пересылки модулей и автоответы — как при обычной
-//! доставке; недоставленным получателям — уведомление отправителю. Отклонено — уведомление о недоставке (RFC 3464)
-//! отправителю с причиной модератора: локальному — во «Входящие», внешнему — через очередь. Решение — в журнал
-//! доставки. Успешное решение снимает ссылку письма очереди на объект; ошибка — ссылка остаётся (вызывающий
-//! возвращает письмо в очередь).
+//! доставке (тип абонента и матрица доверия — SMTP-50; участники группы отправителю не отвечают); недоставленным
+//! получателям — уведомление отправителю. Отклонено — уведомление о недоставке (RFC 3464) отправителю с причиной
+//! модератора: локальному — во «Входящие», внешнему — через очередь; чужому отправителю уведомления нет — только
+//! журнал доставки (SMTP-50, решение 124 г: источник backscatter). Решение — в журнал доставки. Успешное решение
+//! снимает ссылку письма очереди на объект; ошибка — ссылка остаётся (вызывающий возвращает письмо в очередь).
 //!
 //! Постановка письмом правила потока (SMTP-30, [`Delivery::hold_by_rule`]): письмо — в очередь модерации,
 //! каждому модератору — уведомление с исходным письмом во вложении (аналог approval request Exchange);
@@ -33,8 +34,9 @@ use tp_contracts::trust::PeerKind;
 use tp_contracts::{AccountId, Error, Result, TenantId};
 
 use super::{
-    Dd, Delivery, Ek, Filing, MailDelivery, NO_OUTBOUND, Origin, Prepared, accounts_of, clean,
-    dsn_step, junk_rcpts, local_rcpts, no_outbound, outcome_steps, push_unique,
+    Dd, Delivery, Ek, Filing, MailDelivery, NO_OUTBOUND, Origin, Prepared, RuleContext,
+    accounts_of, clean, dsn_step, from_address, junk_rcpts, local_rcpts, no_outbound,
+    outcome_steps, push_unique,
 };
 use crate::dsn::{self, DsnSink};
 use crate::groups::{Groups, RuleHold};
@@ -155,7 +157,8 @@ impl Delivery {
     }
 
     /// Доставки участникам группы `group` (включённые учётные записи, каждая — один раз) с адресом группы;
-    /// контакты в её составе — внешние адресаты.
+    /// контакты в её составе — внешние адресаты. Все участники получили письмо через группу — без автоответа
+    /// отправителю (SMTP-50).
     async fn members_of(
         &self,
         groups: &Groups,
@@ -166,6 +169,7 @@ impl Delivery {
         let mut out = Prepared {
             deliveries: Vec::new(),
             junk: HashSet::new(),
+            group: HashSet::new(),
             external: Vec::new(),
             relayed: Vec::new(),
             queued: Vec::new(),
@@ -178,6 +182,7 @@ impl Delivery {
             if let Some(acc) = self.deps.accounts.get(self.deps.tenant, id).await?
                 && acc.enabled
             {
+                out.group.insert(acc.id);
                 self.push_delivery(&mut out, &rcpt, &acc, None, filing)
                     .await?;
             }
@@ -275,6 +280,21 @@ impl Moderation for Delivery {
         let received_at = OffsetDateTime::now_utc();
         let filing = Filing::new(false, false, mail_from, &raw);
         let filing = &filing;
+        // Тип абонента отправителя отпущенного письма (SMTP-50): учётная запись отправителя — свой; иначе — по
+        // домену `From` (партнёр после приёма DMARC не подтверждает — не шире соседа; сузит только матрица).
+        let peer = match message.sender_account {
+            Some(_) => PeerKind::Own,
+            None => match self
+                .sender_kind(&from_address(&raw).unwrap_or_default(), false, false)
+                .await
+            {
+                Ok(peer) => peer,
+                Err(e) => {
+                    tracing::warn!(%id, error = %e, "smtp: тип абонента письма очереди не вычислен");
+                    PeerKind::External
+                }
+            },
+        };
         let (rcpts, mut prepared) = match group {
             Some(g) => (
                 g.address.iter().cloned().collect::<Vec<_>>(),
@@ -283,7 +303,7 @@ impl Moderation for Delivery {
             // Письмо правила потока: группы среди получателей раскрываются без модерации (`Origin::Module`).
             None => (
                 message.recipients.clone(),
-                self.prepare(&id, &message.recipients, filing, Origin::Module)
+                self.prepare(&id, &message.recipients, filing, Origin::Module, peer)
                     .await?,
             ),
         };
@@ -294,17 +314,18 @@ impl Moderation for Delivery {
             redirect: hops,
             mut replies,
             steps: mut sieve_steps,
+            ..
         } = self
             .apply_rules(
                 &id,
                 mail_from,
                 &raw,
                 &mut prepared.deliveries,
-                &prepared.junk,
+                &RuleContext::new(peer, &prepared.junk, &prepared.group),
                 false,
-                // Отпущенное модератором письмо пришло снаружи (чужой в модерируемую группу) — до SMTP-50
-                // безопасное умолчание: чужой, матрица — умолчания контракта.
-                PeerKind::External,
+                // Письмо уже одобрено модератором: сбой скрипта организации — во «Входящие», как у скрипта
+                // пользователя (SMTP-50: `451` — только в сессии приёма).
+                false,
             )
             .await?;
         let local = local_rcpts(&prepared.deliveries);
@@ -338,6 +359,7 @@ impl Moderation for Delivery {
                 Err(e) => return Err(e),
             }
         }
+        let mut policy_steps = Vec::new();
         let forwarded = self
             .forward(
                 &id,
@@ -347,10 +369,11 @@ impl Moderation for Delivery {
                 filing,
                 received_at,
                 delivered,
+                &mut policy_steps,
             )
             .await?;
         let relayed = self
-            .relay(&id, mail_from, hops, filing, received_at, None)
+            .relay(&id, mail_from, hops, filing, received_at, None, peer)
             .await?;
         sieve::merge_replies(&mut replies, relayed.replies);
         sieve_steps.extend(relayed.steps);
@@ -372,11 +395,14 @@ impl Moderation for Delivery {
             vec![Step::new(Ek::Receive, Dd::Accept, rcpts).reason("approved by moderator")];
         outcome_steps(&mut steps, &[], &local, &failed, &spam);
         steps.extend(sieve_steps);
+        steps.extend(policy_steps);
         self.send_replies(&id, mail_from, &raw, replies, &mut steps)
             .await;
-        if !failed.is_empty() && !mail_from.is_empty() {
+        // Уведомление — о принятых и недоставленных (RFC 3464 §2), не по политике (SMTP-50).
+        let notified: Vec<dsn::Recipient> = failed.iter().filter(|f| f.notify).cloned().collect();
+        if !notified.is_empty() && !mail_from.is_empty() {
             let sent = self
-                .bounce(&id, mail_from, &failed, &raw, received_at)
+                .bounce(&id, mail_from, &notified, &raw, received_at)
                 .await;
             steps.push(dsn_step(mail_from, sent));
         }
@@ -396,7 +422,10 @@ impl Moderation for Delivery {
             Step::new(Ek::Reject, Dd::Reject, rcpts.clone())
                 .reason(format!("rejected by moderator: {reason}")),
         ];
-        if !message.sender.is_empty() {
+        // Отказ модератора чужому отправителю — без уведомления (SMTP-50, решение 124 г: источник backscatter;
+        // как EOP молча отбрасывает без NDR): только журнал доставки. Своему — уведомление с причиной
+        // модератора (RFC 3464).
+        if !message.sender.is_empty() && !self.dsn_plain(&message.sender).await {
             let raw = groups.read(&message.blob).await?;
             let reply = format!("550 5.7.1 {reason}");
             let failed: Vec<dsn::Recipient> = rcpts
@@ -414,6 +443,7 @@ impl Moderation for Delivery {
                 original: &raw,
                 ret: DsnRet::Headers,
                 id: &id,
+                plain: false,
             });
             // Уведомление не отправлено — решение не принято: письмо вернётся в очередь.
             self.send_dsn(tenant, &message.sender, Bytes::from(notice))

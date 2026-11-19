@@ -344,7 +344,13 @@ async fn forward_uses_srs_and_bounce_returns_to_sender() {
         copies: vec![CopyTo::Address("carol@partner.example".into())],
     }));
     let env = Env::new(DecisionHooks::new(vec![hook])).await;
-    let d = env.delivery(true).with_forwarding(forwarding());
+    // Домен копии модуля — из `auto_forward_domains` организации (SMTP-50): пересылка разрешена.
+    let d = env
+        .delivery(true)
+        .with_forwarding(forwarding())
+        .with_trust(Arc::new(
+            trust(&[], GroupPost::Closed, &["partner.example"]).await,
+        ));
     let e = envelope(Mode::Inbound, &["bob@example.org"]);
     assert_eq!(d.data(&e, Bytes::from_static(MAIL)).await.code, 250);
     let queued = env.queue.0.lock().expect("lock").clone();

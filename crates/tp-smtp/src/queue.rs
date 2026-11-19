@@ -792,6 +792,8 @@ impl QueueWorker {
     }
 
     /// Уведомление отправителю записи `c` о получателях `rcpts` (пусто или пустой отправитель — ничего).
+    /// Отправителю не своей организации — с общей диагностикой (SMTP-50, решение 124, RFC 3464 §4.2): только код
+    /// и общий текст, без имён узлов и ответов серверов.
     async fn notify(
         &self,
         c: &Claimed,
@@ -802,6 +804,7 @@ impl QueueWorker {
         if rcpts.is_empty() || c.from.is_empty() {
             return Ok(());
         }
+        let plain = self.foreign_sender(c).await;
         let id = c.claim.id.to_string();
         let raw = dsn::build(&dsn::Report {
             hostname: &self.hostname,
@@ -814,8 +817,29 @@ impl QueueWorker {
             original: message,
             ret: c.dsn.ret.unwrap_or(DsnRet::Headers),
             id: &id,
+            plain,
         });
         self.dsn.send_dsn(c.tenant, &c.from, Bytes::from(raw)).await
+    }
+
+    /// Отправитель записи — не своей организации: уведомление ему — с общей диагностикой. Снимки транспорта нет —
+    /// считаем чужим (безопасно: диагностика узла наружу не раскрывается).
+    async fn foreign_sender(&self, c: &Claimed) -> bool {
+        let Some(routes) = &self.routes else {
+            return true;
+        };
+        let Some((_, domain)) = c.from.rsplit_once('@') else {
+            return true;
+        };
+        match routes.cluster().await {
+            Ok(cluster) => !cluster
+                .domain(&domain.to_lowercase())
+                .is_some_and(|d| d.tenant == c.tenant),
+            Err(e) => {
+                tracing::warn!(id = %c.claim.id, error = %e, "smtp-out: домен отправителя не разрешён — общая диагностика");
+                true
+            }
+        }
     }
 
     /// Перенос получателя планировщиком без попытки доставки ([`QueueStore::postpone`]). Хранилище без переноса

@@ -23,6 +23,7 @@ fn report<'a>(
         original: ORIGINAL,
         ret,
         id: "0001",
+        plain: false,
     }
 }
 
@@ -140,4 +141,56 @@ fn status_from_reply() {
     assert_eq!(status_of("452 mailbox full", Action::Delayed), "4.0.0");
     assert_eq!(status_of("timeout", Action::Failed), "5.0.0");
     assert_eq!(status_of("timeout", Action::Delayed), "4.0.0");
+}
+
+/// Общая диагностика чужим (решение 124, RFC 3464 §4.2): код и общий текст, без подробностей узла.
+#[test]
+fn plain_report_for_foreign_sender() {
+    let rcpts = [
+        Recipient::new(
+            "x@example.net",
+            Action::Failed,
+            "550 5.1.1 mail.remote.example said no such user",
+        ),
+        Recipient::new(
+            "y@example.net",
+            Action::Delayed,
+            "451 4.3.0 host mx1.internal: timeout",
+        ),
+    ];
+    let r = Report {
+        plain: true,
+        ..report(&rcpts, DsnRet::Headers, None)
+    };
+    let raw = build(&r);
+    let text = String::from_utf8(raw.clone()).expect("utf8");
+    assert!(text.contains("550 5.1.1 delivery failed"), "{text}");
+    assert!(text.contains("451 4.3.0 delivery delayed"), "{text}");
+    // Без внутренних имён узлов и ответов серверов.
+    assert!(!text.contains("internal"), "{text}");
+    assert!(!text.contains("no such user"), "{text}");
+    let (_, status) = parts(&raw);
+    assert!(
+        status.contains("Diagnostic-Code: smtp; 550 5.1.1 delivery failed"),
+        "{status}"
+    );
+    // Полная диагностика — как была.
+    let full = build(&report(&rcpts, DsnRet::Headers, None));
+    let full = String::from_utf8(full).expect("utf8");
+    assert!(full.contains("no such user"), "{full}");
+    assert!(full.contains("mx1.internal"), "{full}");
+}
+
+/// Отчёт о прочтении (MDN, RFC 8098) узнаётся по типу части верхнего уровня.
+#[test]
+fn mdn_detection() {
+    let mdn = b"From: bob@example.org\r\nTo: alice@example.org\r\nSubject: Read: hi\r\n\
+        MIME-Version: 1.0\r\nContent-Type: multipart/report; report-type=disposition-notification;\
+        \r\n\tboundary=b\r\n\r\n--b\r\n\r\n--b--\r\n";
+    assert!(is_mdn(mdn));
+    // Доставка — другой report-type.
+    let dsn = b"Content-Type: multipart/report; report-type=delivery-status; boundary=b\r\n\r\nx";
+    assert!(!is_mdn(dsn));
+    assert!(!is_mdn(b"Content-Type: text/plain\r\n\r\nx"));
+    assert!(!is_mdn(b"Subject: no content type\r\n\r\nx"));
 }

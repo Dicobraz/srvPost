@@ -11,7 +11,9 @@ use tp_contracts::ext::{Augment, CopyTo, Decision, DecisionHooks};
 use tp_contracts::mailstore::MailStore;
 use tp_contracts::meta::{AccountScope, MessageQuery, MessageStore, SpecialUse};
 use tp_contracts::transport::TransportStore;
+use tp_contracts::trust::{GroupPost, TrustLevel, TrustPolicy};
 use tp_contracts::{Result, TenantId};
+use tp_testkit::MemTrust;
 use tp_testkit::{
     BlobOp, Clock, FakeDirectory, MemBlobIndex, MemBlobStore, MemEventBus, MemGroups, MemMetadata,
     MemQuota, MemTransport, MemTrash, RecordingDecisionHook, SystemClock,
@@ -294,6 +296,23 @@ fn envelope(mode: Mode, rcpts: &[&str]) -> Envelope {
 
 const MAIL: &[u8] = b"From: sender@example.net\r\nSubject: hello\r\n\r\nbody\r\n";
 
+/// Политика доверия организации окружения (SMTP-50): домены-партнёры `partners`, письма чужих в группы —
+/// `groups`, домены автопересылки `forward`.
+async fn trust(partners: &[&str], groups: GroupPost, forward: &[&str]) -> MemTrust {
+    let trust = MemTrust::new().with_accepted(TenantId::DEFAULT, &["example.org".to_owned()]);
+    let mut org = TrustPolicy::default();
+    org.group_post.partner = Some(groups);
+    org.group_post.neighbor = Some(groups);
+    org.group_post.external = Some(groups);
+    org.partners = partners.iter().map(|p| (*p).to_owned()).collect();
+    org.auto_forward_domains = forward.iter().map(|d| (*d).to_owned()).collect();
+    trust
+        .set_policy(TrustLevel::Org(TenantId::DEFAULT), &org)
+        .await
+        .expect("org policy");
+    trust
+}
+
 #[tokio::test]
 async fn resolves_accounts_aliases_and_groups() {
     let env = Env::new(DecisionHooks::default()).await;
@@ -547,8 +566,11 @@ async fn rcpt_replies() {
         .set_limit(env.scope("bob@example.org").await, Some(1));
     let r = d.rcpt(&inbound, "bob@example.org").await;
     assert_eq!((r.code, r.esc), (452, [4, 2, 2]));
-    // В группе переполненный ящик одного члена адрес не отклоняет.
-    assert_eq!(d.rcpt(&inbound, "team@example.org").await.code, 250);
+    // В группе переполненный ящик одного члена адрес не отклоняет (группы открыты организации — SMTP-50).
+    let open = env
+        .delivery(false)
+        .with_trust(Arc::new(trust(&[], GroupPost::Open, &[]).await));
+    assert_eq!(open.rcpt(&inbound, "team@example.org").await.code, 250);
     // При приёме письма переполненный ящик пропускается, остальные получают письмо.
     let r = d
         .data(
@@ -566,7 +588,10 @@ async fn rcpt_replies() {
 #[tokio::test]
 async fn one_ingest_for_many_recipients() {
     let env = Env::new(DecisionHooks::default()).await;
-    let d = env.delivery(false);
+    // Группы организации открыты письму извне (SMTP-50): письма чужих в группы — по матрице доверия.
+    let d = env
+        .delivery(false)
+        .with_trust(Arc::new(trust(&[], GroupPost::Open, &[]).await));
     let rcpts = ["alice@example.org", "team@example.org", "carol@example.org"];
     let r = d
         .data(&envelope(Mode::Inbound, &rcpts), Bytes::from_static(MAIL))
@@ -642,7 +667,10 @@ async fn forward_from_decision_hook_is_queued() {
         copies: vec![CopyTo::Address("archive@example.com".into())],
     }));
     let env = Env::new(DecisionHooks::new(vec![hook])).await;
-    let d = env.delivery(true);
+    // Домен копии модуля — из `auto_forward_domains` организации (SMTP-50).
+    let d = env.delivery(true).with_trust(Arc::new(
+        trust(&[], GroupPost::Closed, &["example.com"]).await,
+    ));
     let e = envelope(Mode::Inbound, &["carol@example.org"]);
     assert_eq!(d.data(&e, Bytes::from_static(MAIL)).await.code, 250);
     assert_eq!(env.inbox("carol@example.org").await.len(), 1);
@@ -773,7 +801,10 @@ async fn submission_decision_hook() {
         copies: vec![CopyTo::Address("archive@example.com".into())],
     }));
     let env = Env::new(DecisionHooks::default()).await;
-    let mut d = env.delivery(true);
+    // Домен копии модуля — из `auto_forward_domains` организации (SMTP-50).
+    let mut d = env.delivery(true).with_trust(Arc::new(
+        trust(&[], GroupPost::Closed, &["example.com"]).await,
+    ));
     d.deps.hooks = DecisionHooks::new(vec![hook.clone()]);
     let mut e = envelope(Mode::Submission, &["bob@example.org", "x@example.net"]);
     e.principal = Some(tp_testkit::principal(
@@ -948,12 +979,8 @@ async fn submit_unknown_local_address_bounces() {
         ]
     );
     assert_eq!(env.inbox("bob@example.org").await.len(), 1);
-    // Уведомление локальному отправителю — во «Входящие», не в очередь.
-    let inbox = env.inbox("alice@example.org").await;
-    assert_eq!(inbox.len(), 1);
-    assert!(inbox[0].contains(
-        "Final-Recipient: rfc822; nobody@example.org\r\nAction: failed\r\nStatus: 5.1.1"
-    ));
+    // Отказ по политике (неизвестный адрес) не уведомляется: статус — у вызывающего (SMTP-50, RFC 5321 §6.2).
+    assert!(env.inbox("alice@example.org").await.is_empty());
     assert!(env.queue.0.lock().expect("lock").is_empty());
 }
 
@@ -1306,7 +1333,11 @@ mod groups {
     #[tokio::test]
     async fn moderated_group_holds_message() {
         let env = Env::new(DecisionHooks::default()).await;
-        let d = env.with_groups(env.delivery(false));
+        // Матрица доверия открывает группы письму извне (SMTP-50): письмо задерживает модерация самой группы.
+        let d = env.with_groups(
+            env.delivery(false)
+                .with_trust(Arc::new(trust(&[], GroupPost::Open, &[]).await)),
+        );
         let g = env
             .group(
                 "news@example.org",
@@ -1525,4 +1556,5 @@ mod rules;
 mod scheduled;
 mod sender_login;
 mod senders;
+mod trust;
 mod wave;

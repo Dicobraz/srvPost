@@ -1780,8 +1780,8 @@ mod tests {
 
     /// FIX-02: письмо внешнего отправителя в модерируемую группу узла (`PgMeta`) → Admin API узла (`Services::admin`,
     /// сессия `admin init`): список с `include=subject` отдаёт темы писем (APP-38); `approve` — 204 (было 500
-    /// «доставка решений ещё не подключена»), письмо у каждого участника, повтор — 404; `reject` — 204, DSN
-    /// отправителю в очереди исходящей почты.
+    /// «доставка решений ещё не подключена»), письмо у каждого участника, повтор — 404; `reject` — 204, чужому
+    /// отправителю без уведомления (backscatter, SMTP-50), очередь пуста.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn moderation_decisions_through_admin_api() {
         use tp_contracts::groups::{DistributionGroup, GroupMember, GroupStore, SenderRestriction};
@@ -2028,7 +2028,7 @@ mod tests {
         let r = decide(approve, "approve", "").await.expect("approve again");
         assert_eq!(r.status(), reqwest::StatusCode::NOT_FOUND);
 
-        // Отказ: DSN внешнему отправителю — в очереди исходящей почты, участникам ничего.
+        // Отказ: чужому отправителю — без уведомления (backscatter, SMTP-50, решение 124 г), участникам ничего.
         let r = decide(reject, "reject", r#"{"reason":"off-topic"}"#)
             .await
             .expect("reject");
@@ -2046,7 +2046,7 @@ mod tests {
         .await
         .expect("queue");
         drop(tx);
-        assert_eq!(queued, 1, "DSN отказа не в очереди");
+        assert_eq!(queued, 0, "чужому отправителю — без DSN");
         assert!(
             GroupStore::held(&meta, t, Some(group.id), None, 10)
                 .await
