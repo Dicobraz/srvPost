@@ -991,12 +991,12 @@ async fn journal_enabled_rules(pool: &DbPool) -> Result<u64> {
     Ok(count.max(0) as u64)
 }
 
+/// Организации каталога и их счётчики записей индекса (сверка цепочки и прогноза объёма, APP-82).
+type JournalTenants = (Vec<TenantId>, Vec<(TenantId, u64)>);
+
 /// Организации каталога и число записей индекса каждой (APP-82): системная транзакция
 /// (`app.all_tenants`, RLS), счётчики — `journal.entries` (схема journal, META-88). У организации без
 /// записей цепочка проверяется как пустая.
-///
-/// Организации каталога и их счётчики записей индекса (сверка цепочки и прогноза, APP-82).
-type JournalTenants = (Vec<TenantId>, Vec<(TenantId, u64)>);
 async fn journal_tenants_and_counts(pool: &DbPool) -> Result<JournalTenants> {
     let rows: Vec<(String, i64)> = tp_meta::pool::with_system(pool, |tx| {
         Box::pin(async move {
