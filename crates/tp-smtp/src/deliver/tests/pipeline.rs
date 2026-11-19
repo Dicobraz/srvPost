@@ -339,9 +339,9 @@ async fn forbid_external_forward_rejects_module_copy() {
         headers: Vec::new(),
         copies: vec![CopyTo::Address("evil@external.example".into())],
     }));
-    let env = Env::new(DecisionHooks::new(vec![Arc::new(hook)])).await;
+    let env = Env::new(DecisionHooks::default()).await;
     let log = MemDeliveryLog::new();
-    let d = forwarding(
+    let mut d = forwarding(
         &env,
         &FakeRules::new(),
         &log,
@@ -350,6 +350,7 @@ async fn forbid_external_forward_rejects_module_copy() {
         }),
     )
     .await;
+    d.deps.hooks = DecisionHooks::new(vec![Arc::new(hook)]);
     let mut e = envelope(Mode::Submission, &["bob@example.org"]);
     e.mail_from = "alice@example.org".into();
     e.principal = Some(tp_testkit::principal(
