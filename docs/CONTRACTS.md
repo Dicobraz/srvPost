@@ -467,7 +467,10 @@ until, limit, after })` -> `AuditPage` (как `DeliveryLog::search`), `purge_au
 ## AdminAuditLog
 SRS 5.2, 6.8, решение 98 (CTR-25; код — `admin_audit.rs`). Журнал аудита Admin API, только добавление. `AdminAuditRecord { at, tenant?
 (`None` — уровень инсталляции), actor_tenant, actor, actor_login, roles: Vec<String> (роли Admin API), method, route, path, status,
-content_messages? }` — без тела запроса и секретов. `AuditLog`: `append(&record) -> seq` (номер ≥ 1, растёт в порядке добавления);
+content_messages?, details? }` — без тела запроса и секретов. Детали — решение владельца 19.11 (issue #108,
+ADM-49): журнал аудита пишет и старое, и новое значение — `AuditDetails::Trust { from?, to? }`, прежняя и новая
+политика доверия уровня целиком (сброс — `to` нет); технологические журналы узла пишут только новое значение.
+`AuditLog`: `append(&record) -> seq` (номер ≥ 1, растёт в порядке добавления);
 `search(tenant, &AdminAuditQuery { since?, until?, actor?, method?, route_prefix?, limit ≥ 1, after? }) -> AdminAuditPage { entries:
 Vec<AdminAuditEntry { seq, record }>, next? }` — только записи организации (без уровня инсталляции), по возрастанию `seq`, условия по «и»
 (`AdminAuditQuery::matches`: `at` в [`since`, `until`), `actor` — имя входа без учёта регистра или UUID, `method` — точно, `route_prefix` —

@@ -3,7 +3,7 @@
 lane: admin
 deps: [CTR-93, ADM-44]
 class: B
-files: [crates/tp-admin/*, crates/tp-admin-client/*, crates/thepost/src/admin_cli.rs, console/src/api/openapi.json, console/src/api/schema.d.ts]
+files: [crates/tp-admin/*, crates/tp-admin-client/*, crates/thepost/src/admin_cli.rs, crates/tp-contracts/src/admin_audit.rs, console/src/api/openapi.json, console/src/api/schema.d.ts]
 read: [docs/decisions/2026-11-11-stage2-followups.md#124, docs/tasks/CTR-93.md, docs/ADMIN-GUIDE.md#что-может-менять-администратор, crates/tp-admin/src/server.rs, crates/tp-admin/src/sieve.rs]
 checks: [nextest, console]
 manual: no
@@ -57,3 +57,9 @@ manual: no
 Задача волны: разобрать, какие журналы узла к каким типам относятся, назначить соответствующие типы
 и признаки (разметка в структуре записей), вести записи по классификации. Приёмка дополнительно:
 изменение клетки видно в журнале аудита парой «старое→новое» и в технологическом — одним значением.
+
+Применение (этот PR): журнал аудита — `AdminAuditRecord` (CTR-25) с полем деталей
+`AuditDetails::Trust { from, to }` (прежняя и новая политика уровня целиком: клетки, партнёры,
+автопересылка; сброс — `to` нет); технологические журналы узла (конвейер обработки, CTR-96/97,
+трассировка) значение политики целиком не пишут, «только новое» соблюдено. Разметка — тег `what`
+в деталях записи.

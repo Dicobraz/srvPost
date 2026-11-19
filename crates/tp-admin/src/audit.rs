@@ -21,16 +21,32 @@ use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tp_contracts::admin_audit::{
-    AdminAuditEntry, AdminAuditPage, AdminAuditQuery, AdminAuditRecord,
+    AdminAuditEntry, AdminAuditPage, AdminAuditQuery, AdminAuditRecord, AuditDetails,
 };
 use tp_contracts::{AccountId, Result, TenantId};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 
 use crate::extract::{Json, Path, Query};
 use crate::server::{Admin, ApiResult, Deps, Problem};
+use crate::trust::TrustPolicySchema;
 
 /// Шаблон маршрута чтения журнала аудита (единственный маршрут роли «аудитор»).
 pub const AUDIT_ROUTE: &str = "/api/v1/orgs/{org}/audit";
+
+/// Детали записи аудита: что именно менялось (журнал аудита пишет и старое, и новое значение — решение
+/// владельца 19.11, issue #108, ADM-49; технологические журналы — только новое).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(tag = "what", rename_all = "snake_case")]
+pub enum AuditDetailsSchema {
+    /// Политика доверия уровня: прежняя и новая политика целиком (клетки матрицы, домены-партнёры, домены
+    /// автопересылки) — пара «старое → новое».
+    Trust {
+        /// Прежняя политика уровня; `null` — не была задана.
+        from: Option<TrustPolicySchema>,
+        /// Новая политика уровня; `null` — сброс к умолчаниям уровня выше.
+        to: Option<TrustPolicySchema>,
+    },
+}
 
 /// Запись журнала аудита в ответе API и в экспорте в SIEM ([`AdminAuditRecord`] контракта).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -65,6 +81,11 @@ pub struct AuditRecord {
     /// отправитель которых запрошены; `None` — запрос содержимое не отдаёт. Самих тем в записи нет.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_messages: Option<u64>,
+    /// Детали изменения: старое и новое значение ([`AuditDetailsSchema`], только журнал аудита — решение
+    /// владельца 19.11); отсутствует — операция деталей не несёт.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<AuditDetailsSchema>)]
+    pub details: Option<AuditDetails>,
 }
 
 impl From<&AdminAuditRecord> for AuditRecord {
@@ -81,6 +102,7 @@ impl From<&AdminAuditRecord> for AuditRecord {
             path: r.path.clone(),
             status: r.status,
             content_messages: r.content_messages,
+            details: r.details.clone(),
         }
     }
 }
@@ -160,7 +182,7 @@ pub(crate) fn routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
 #[derive(Debug, OpenApi)]
 #[openapi(
     paths(search_audit),
-    components(schemas(AuditRecord, AuditEntry, AuditPage))
+    components(schemas(AuditRecord, AuditEntry, AuditPage, AuditDetailsSchema))
 )]
 pub(crate) struct Doc;
 

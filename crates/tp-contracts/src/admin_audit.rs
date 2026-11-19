@@ -4,6 +4,11 @@
 //! писем — запись [`AdminAuditRecord`]. Журнал — только добавление: записи не меняются и не удаляются. Тело запроса
 //! и секреты не записываются. Запись делает Admin API (`tp-admin`) — только в журнал.
 //!
+//! Классификация журналов узла (решение владельца 19.11, issue #108, ADM-49): этот журнал — **журнал аудита**,
+//! его записи несут и старое, и новое значение меняемой сущности ([`AdminAuditRecord::details`]);
+//! **технологические журналы** узла (конвейер обработки — [`crate::journal`], трассировка) пишут только новое
+//! значение.
+//!
 //! Выгрузка в SIEM (syslog, OTLP; решение владельца 12.11, APP-59) читает журнал ([`AuditLog::export_page`]) от
 //! отметки доставки приёмника ([`AuditLog::export_mark`]) и сдвигает её после доставки
 //! ([`AuditLog::advance_export_mark`]): недоступный приёмник догоняет пропущенное, записи не теряются. Реализация —
@@ -15,6 +20,7 @@ use time::OffsetDateTime;
 
 use crate::error::{Error, Result};
 use crate::ids::{AccountId, TenantId};
+use crate::trust::TrustPolicy;
 
 /// Запись журнала аудита Admin API.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +51,25 @@ pub struct AdminAuditRecord {
     /// не отдаёт. Самих тем в записи нет.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_messages: Option<u64>,
+    /// Детали изменения: старое и новое значение (только журнал аудита — решение владельца 19.11, issue #108);
+    /// `None` — операция деталей не несёт (всё, кроме изменения политики доверия).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<AuditDetails>,
+}
+
+/// Детали записи журнала аудита: что именно менялось (разметка классификации журналов — решение владельца
+/// 19.11, issue #108, ADM-49). Признак — тег `what`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "what", rename_all = "snake_case")]
+pub enum AuditDetails {
+    /// Политика доверия уровня: прежняя и новая политика целиком (клетки матрицы, домены-партнёры, домены
+    /// автопересылки) — в журнале аудита видна пара «старое → новое».
+    Trust {
+        /// Прежняя политика уровня; `None` — не была задана (первое задание) или новая.
+        from: Option<TrustPolicy>,
+        /// Новая политика уровня; `None` — сброс к умолчаниям уровня выше.
+        to: Option<TrustPolicy>,
+    },
 }
 
 /// Запись журнала с номером.
@@ -239,6 +264,7 @@ mod tests {
             path: "/api/v1/orgs/x/transport/routes/*".into(),
             status: 200,
             content_messages: None,
+            details: None,
         };
         let with = |f: &dyn Fn(&mut AdminAuditQuery)| {
             let mut q = AdminAuditQuery::first(1);
@@ -288,12 +314,50 @@ mod tests {
                 path: "/api/v1/orgs/x/policy".into(),
                 status: 200,
                 content_messages: None,
+                details: None,
             },
         };
         let v = serde_json::to_value(&entry).expect("ser");
         assert_eq!(v["seq"], 7);
         assert!(v.get("content_messages").is_none());
+        assert!(v.get("details").is_none());
         let back: AdminAuditEntry = serde_json::from_value(v).expect("de");
         assert_eq!(back, entry);
+    }
+
+    /// Детали в записи: тег `what` и пара «старое → новое» (решение владельца 19.11, issue #108).
+    #[test]
+    fn details_serde_tagged() {
+        let d = AuditDetails::Trust {
+            from: None,
+            to: Some(TrustPolicy::default()),
+        };
+        let v = serde_json::to_value(&d).expect("ser");
+        assert_eq!(v["what"], "trust");
+        assert!(v["from"].is_null());
+        assert_eq!(
+            v["to"],
+            serde_json::to_value(TrustPolicy::default()).expect("ser")
+        );
+        let back: AuditDetails = serde_json::from_value(v).expect("de");
+        assert_eq!(back, d);
+        // Запись с деталями переживает сериализацию вместе с журналом.
+        let record = AdminAuditRecord {
+            at: OffsetDateTime::UNIX_EPOCH,
+            tenant: Some(TenantId::DEFAULT),
+            actor_tenant: TenantId::DEFAULT,
+            actor: AccountId::new(),
+            actor_login: "admin".into(),
+            roles: vec!["organization_admin".into()],
+            method: "PUT".into(),
+            route: "/api/v1/orgs/{org}/trust".into(),
+            path: "/api/v1/orgs/x/trust".into(),
+            status: 200,
+            content_messages: None,
+            details: Some(d),
+        };
+        let back: AdminAuditRecord =
+            serde_json::from_value(serde_json::to_value(&record).expect("ser")).expect("de");
+        assert_eq!(back, record);
     }
 }
