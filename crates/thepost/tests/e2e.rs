@@ -9,6 +9,9 @@
 //! по локальному сокету и сессия), действует на следующую сессию SMTP; правила потока почты тестового модуля
 //! (`Registry::mail_flow`) вызываются один раз на письмо.
 //!
+//! Брендинг заказчика (APP-75): наборы уровней и знак через Admin API — в PostgreSQL и BLOB узла; открытый маршрут
+//! отдаёт их без входа, после перезапуска узла набор и знак на месте.
+//!
 //! Планирование встреч (APP-28): приглашение из CalDAV и JMAP — участнику организации в календарь, внешнему —
 //! письмом iMIP в очередь исходящей почты.
 //!
@@ -454,13 +457,36 @@ async fn http(
     body: Option<&Value>,
 ) -> (u16, Vec<u8>) {
     let body = body.map(|b| b.to_string()).unwrap_or_default();
+    let (code, _, payload) = http_raw(
+        addr,
+        method,
+        path,
+        authorization,
+        "application/json",
+        body.as_bytes(),
+    )
+    .await;
+    (code, payload)
+}
+
+/// Запрос HTTP/1.1 с произвольным телом и типом (знак брендинга — `image/png`): код, заголовки ответа строкой в
+/// нижнем регистре (`ETag`, `Cache-Control`) и тело (с разбором `chunked`).
+async fn http_raw(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    authorization: &str,
+    content_type: &str,
+    body: &[u8],
+) -> (u16, String, Vec<u8>) {
     let mut s = TcpStream::connect(addr).await.expect("http connect");
     let req = format!(
         "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: {authorization}\r\n\
-         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+         Content-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     s.write_all(req.as_bytes()).await.expect("http write");
+    s.write_all(body).await.expect("http body");
     let mut raw = Vec::new();
     s.read_to_end(&mut raw).await.expect("http read");
     let split = raw
@@ -496,7 +522,7 @@ async fn http(
         }
         payload = out;
     }
-    (code, payload)
+    (code, head, payload)
 }
 
 /// Запрос DAV без тела: ответ целиком (строка состояния, заголовки, тело как есть).
@@ -1331,6 +1357,260 @@ async fn transport_settings_without_restart() {
     );
     smtp_send(smtp, "robot@allowed.test", &login, &message).await;
     assert_eq!(FLOW_CALLS.load(Ordering::SeqCst), 1);
+
+    shutdown.cancel();
+    let report = running.wait().await.expect("wait");
+    assert!(report.failed.is_empty(), "{report:?}");
+    drop_database(&url, &db_name).await;
+}
+
+// ---------- APP-75: брендинг заказчика ----------
+
+/// PNG знака для Admin API — актив текстового интерфейса (встроенный знак IT TASK): 96×109 RGBA, в пределах
+/// знака (до 256 КБ и 1024×1024).
+fn logo_png() -> Vec<u8> {
+    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../tp-tui/assets/it-task.png"))
+        .expect("it-task.png")
+}
+
+/// APP-75: брендинг заказчика в Admin API узла — наборы уровней в `PgMeta` (`BrandingStore`), байты знака в BLOB
+/// узла. Набор установки и знак через Admin API → открытый маршрут отдаёт их без входа (маршруты уровней — с
+/// сессией); свой набор организации — по её домену; после перезапуска узла набор и знак на месте; сброс
+/// организации — снова брендинг установки (неизвестный домен и без домена — тот же ответ).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn branding_levels_public_route_and_restart() {
+    let Some(url) = tp_testkit::pg_url() else {
+        eprintln!("TEST_DATABASE_URL не задан — тест пропущен");
+        return;
+    };
+    let url = dev_url(&url);
+    let (db_name, url_db) = create_database(&url).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (db_url, password) = split_password(&url_db);
+    let secrets = node_secrets(password);
+
+    let domain = "example.ru".to_owned();
+    let socket = dir.path().join("admin.sock");
+    let path = dir.path().join("config.yaml");
+    std::fs::write(&path, admin_config(dir.path(), &db_url, &domain, &socket)).expect("config");
+    let cfg = thepost::sections::registry()
+        .expect("registry")
+        .load(&path)
+        .expect("load config");
+    let bound = ADMIN_SOCKET.lock().await;
+    thepost::local_admin::bind(&cfg).expect("admin init socket");
+    let shutdown = CancellationToken::new();
+    let running = start(ServeOptions {
+        config: path.clone(),
+        secrets: Some(secrets.clone() as Arc<dyn SecretStore>),
+        telemetry: false,
+        shutdown: shutdown.clone(),
+        modules: thepost::modules::BUILTIN,
+    })
+    .await
+    .expect("start");
+    let until = deadline();
+    while !running.health.is_ready() {
+        retry(until, "узел готов").await;
+    }
+    let admin = addr(&running, "admin");
+
+    // Первый администратор: учётная запись, принятый домен `example.ru`, пароль и одноразовый токен; сессия —
+    // обменом токена.
+    let login = format!("admin@{domain}");
+    let granted = admin_init(&socket, &login).await;
+    drop(bound);
+    assert_eq!(granted["status"], "granted", "{granted}");
+    let secret = granted["password"].as_str().expect("password").to_owned();
+    let token = granted["token"].as_str().expect("token").to_owned();
+    let (code, body) = http(
+        admin,
+        "POST",
+        "/api/v1/session",
+        &format!("Bearer {token}"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+    let session: Value = serde_json::from_slice(&body).expect("session");
+    let bearer = format!("Bearer {}", session["session"].as_str().expect("session"));
+
+    // Набор установки и знак — через Admin API: наборы — `PgMeta`, байты знака — BLOB узла.
+    let (code, body) = http(
+        admin,
+        "PUT",
+        "/api/v1/branding",
+        &bearer,
+        Some(&json!({ "product_name": "Почта АО Ромашка", "primary": "#177CAA" })),
+    )
+    .await;
+    assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+    let png = logo_png();
+    let (code, _, body) = http_raw(
+        admin,
+        "PUT",
+        "/api/v1/branding/logo",
+        &bearer,
+        "image/png",
+        &png,
+    )
+    .await;
+    assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+    let view: Value = serde_json::from_slice(&body).expect("view");
+    let hash = view["own"]["logo"]["hash"]
+        .as_str()
+        .expect("hash")
+        .to_owned();
+
+    // Открытый маршрут — без входа: название, палитра и ссылка на знак установки; знак по хэшу — те же байты.
+    // Маршруты уровней — с сессией: без входа — 401.
+    let public = format!("/api/v1/public/branding/logo/{hash}");
+    let (code, head, body) = http_raw(
+        admin,
+        "GET",
+        "/api/v1/public/branding",
+        "none",
+        "text/plain",
+        &[],
+    )
+    .await;
+    assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+    assert!(head.contains("cache-control: public"), "{head}");
+    let public_branding: Value = serde_json::from_slice(&body).expect("public branding");
+    assert_eq!(public_branding["product_name"], "Почта АО Ромашка");
+    assert_eq!(public_branding["logo"], public);
+    assert_eq!(public_branding["palette"]["light"]["frameA"], "#177CAA");
+    let (code, _, logo) = http_raw(admin, "GET", &public, "none", "text/plain", &[]).await;
+    assert_eq!(code, 200);
+    assert_eq!(logo, png);
+    let (code, body) = http(admin, "GET", "/api/v1/branding", "none", None).await;
+    assert_eq!(code, 401, "{}", String::from_utf8_lossy(&body));
+
+    // Свой набор организации — по её домену (принят `admin init`): название организации, цвета и знак — установки.
+    let (code, body) = http(
+        admin,
+        "PUT",
+        &format!("/api/v1/orgs/{}/branding", TenantId::DEFAULT),
+        &bearer,
+        Some(&json!({ "product_name": "Ромашка" })),
+    )
+    .await;
+    assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+    let (code, _, body) = http_raw(
+        admin,
+        "GET",
+        &format!("/api/v1/public/branding?domain={domain}"),
+        "none",
+        "text/plain",
+        &[],
+    )
+    .await;
+    assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+    let by_domain: Value = serde_json::from_slice(&body).expect("public branding");
+    assert_eq!(by_domain["product_name"], "Ромашка");
+    assert_eq!(by_domain["palette"]["light"]["frameA"], "#177CAA");
+    assert_eq!(by_domain["logo"], public);
+
+    // Перезапуск узла: наборы — в PostgreSQL, знак — в BLOB (сессии — в памяти, новый вход — по паролю).
+    stop_node(running, shutdown).await;
+    let bound = ADMIN_SOCKET.lock().await;
+    thepost::local_admin::bind(&cfg).expect("admin init socket");
+    let shutdown = CancellationToken::new();
+    let running = start(ServeOptions {
+        config: path.clone(),
+        secrets: Some(secrets.clone() as Arc<dyn SecretStore>),
+        telemetry: false,
+        shutdown: shutdown.clone(),
+        modules: thepost::modules::BUILTIN,
+    })
+    .await
+    .expect("restart");
+    let until = deadline();
+    while !running.health.is_ready() {
+        retry(until, "узел готов после перезапуска").await;
+    }
+    let admin = addr(&running, "admin");
+    drop(bound);
+    let (code, body) = http(
+        admin,
+        "POST",
+        "/api/v1/session",
+        "none",
+        Some(&json!({ "login": login, "password": secret })),
+    )
+    .await;
+    assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+    let session: Value = serde_json::from_slice(&body).expect("session");
+    let bearer = format!("Bearer {}", session["session"].as_str().expect("session"));
+
+    // Набор и знак на месте: свой набор установки со знаком, домен организации — её название.
+    let (code, body) = http(admin, "GET", "/api/v1/branding", &bearer, None).await;
+    assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+    let view: Value = serde_json::from_slice(&body).expect("view");
+    assert_eq!(view["own"]["product_name"], "Почта АО Ромашка");
+    assert_eq!(view["own"]["primary"], "#177CAA");
+    assert_eq!(view["own"]["logo"]["hash"], hash);
+    let (code, _, body) = http_raw(
+        admin,
+        "GET",
+        &format!("/api/v1/public/branding?domain={domain}"),
+        "none",
+        "text/plain",
+        &[],
+    )
+    .await;
+    assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+    let by_domain: Value = serde_json::from_slice(&body).expect("public branding");
+    assert_eq!(by_domain["product_name"], "Ромашка");
+    let (code, _, logo) = http_raw(admin, "GET", &public, "none", "text/plain", &[]).await;
+    assert_eq!(code, 200);
+    assert_eq!(logo, png);
+
+    // Сброс организации — снова брендинг установки; неизвестный домен и без домена — побайтно тот же ответ.
+    let (code, body) = http(
+        admin,
+        "DELETE",
+        &format!("/api/v1/orgs/{}/branding", TenantId::DEFAULT),
+        &bearer,
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+    let (_, _, reset) = http_raw(
+        admin,
+        "GET",
+        &format!("/api/v1/public/branding?domain={domain}"),
+        "none",
+        "text/plain",
+        &[],
+    )
+    .await;
+    let (_, _, no_domain) = http_raw(
+        admin,
+        "GET",
+        "/api/v1/public/branding",
+        "none",
+        "text/plain",
+        &[],
+    )
+    .await;
+    let (_, _, unknown) = http_raw(
+        admin,
+        "GET",
+        "/api/v1/public/branding?domain=nowhere.test",
+        "none",
+        "text/plain",
+        &[],
+    )
+    .await;
+    assert_eq!(
+        reset, no_domain,
+        "после сброса организации — брендинг установки"
+    );
+    assert_eq!(unknown, no_domain, "неизвестный домен — тот же ответ");
+    let installation: Value = serde_json::from_slice(&no_domain).expect("public branding");
+    assert_eq!(installation["product_name"], "Почта АО Ромашка");
+    assert_eq!(installation["logo"], public);
 
     shutdown.cancel();
     let report = running.wait().await.expect("wait");
