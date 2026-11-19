@@ -335,6 +335,8 @@ pub struct Session {
     pub home_org: String,
     /// Узел (адрес Admin API).
     pub server: String,
+    /// Администратор установки — доступен уровень установки в разделе «Доверие» (TUI-09).
+    pub install_admin: bool,
 }
 
 /// Список записей.
@@ -407,6 +409,8 @@ pub enum View {
     Card(CardView),
     /// Конфигурация узла.
     Config(ConfigView),
+    /// Раздел «Доверие»: матрица функций × типов абонентов (TUI-09).
+    Trust(crate::trust::Trust),
 }
 
 /// Конфигурация узла: дерево параметров схемы со значениями файла.
@@ -463,7 +467,7 @@ impl View {
         match self {
             Self::List(l) => l.layout,
             Self::Card(c) => c.back.as_ref().and_then(|b| b.layout),
-            Self::Info { .. } | Self::Config(_) => None,
+            Self::Info { .. } | Self::Config(_) | Self::Trust(_) => None,
         }
     }
 }
@@ -519,6 +523,17 @@ pub enum Overlay {
     Confirm(Request),
     /// Правка параметра конфигурации узла.
     ConfigEdit(ConfigEdit),
+    /// Выбор группы или учётной записи в разделе «Доверие» (TUI-09).
+    TrustPick {
+        /// Что ищем.
+        what: crate::trust::Pick,
+        /// Форма поиска.
+        form: Box<Form>,
+    },
+    /// Ввод домена на вкладке «Партнёры» раздела «Доверие» (TUI-09).
+    TrustDomain(crate::trust::DomainInput),
+    /// Подтверждение сброса уровня политики доверия (TUI-09).
+    TrustConfirm(Request),
 }
 
 /// Состояние основного экрана.
@@ -619,6 +634,9 @@ enum Pending {
         form: Box<Form>,
         then: Then,
     },
+    /// Раздел «Доверие»: чтение уровня, запись клетки и доменов, сброс, выбор группы или учётной записи
+    /// (TUI-09).
+    Trust(crate::trust::Pending),
 }
 
 /// Запросы в пути и строка состояния.
@@ -630,7 +648,7 @@ pub(crate) struct Bus {
 }
 
 impl Bus {
-    fn call(&mut self, req: Request, p: Pending) -> Effect {
+    pub(crate) fn call(&mut self, req: Request, p: Pending) -> Effect {
         self.seq += 1;
         self.pending.insert(self.seq, p);
         Effect::Call(self.seq, req)
@@ -658,7 +676,7 @@ impl Bus {
         self.call(req.clone(), Pending::Submit { req, form })
     }
 
-    fn say(&mut self, level: Level, text: impl Into<String>) {
+    pub(crate) fn say(&mut self, level: Level, text: impl Into<String>) {
         self.status = Some((level, text.into()));
     }
 }
@@ -714,6 +732,11 @@ impl App {
         };
         if matches!(m.view, View::Config(_)) && m.overlay.is_none() {
             return CONFIG_KEYS;
+        }
+        if let View::Trust(t) = &m.view
+            && m.overlay.is_none()
+        {
+            return crate::trust::key_labels(t);
         }
         let Some(l) = m.view.layout().filter(|_| m.overlay.is_none()) else {
             return KEYS;
@@ -785,8 +808,9 @@ impl App {
             org: who.tenant.clone(),
             session: Session {
                 login: who.login,
-                home_org: who.tenant,
+                home_org: who.tenant.clone(),
                 server,
+                install_admin: who.roles.contains(&AdminRole::InstallationAdmin),
             },
             orgs: Vec::new(),
             focus: Panel::Main,
@@ -898,6 +922,16 @@ impl App {
         let Stage::Main(m) = &mut self.stage else {
             return Vec::new();
         };
+        // Раздел «Доверие»: чтение, запись, сброс и выбор группы или учётной записи (TUI-09).
+        if let Pending::Trust(p) = p {
+            return match result {
+                Ok(page) => crate::trust::on_ok(m, &mut self.bus, p, page),
+                Err(e) => {
+                    crate::trust::on_err(m, &mut self.bus, p, &e);
+                    Vec::new()
+                }
+            };
+        }
         let page = match result {
             Ok(page) => page,
             Err(e) => {
@@ -1008,6 +1042,7 @@ fn main_command(m: &Main) -> String {
                 .unwrap_or_default();
         }
         Some(Overlay::ConfigEdit(_)) => return "thepost config check".to_owned(),
+        Some(Overlay::TrustConfirm(req)) => return show(req),
         Some(Overlay::Help) | None => {}
     }
     if m.focus == Panel::Tree {
@@ -1034,6 +1069,7 @@ fn main_command(m: &Main) -> String {
         }
         View::Card(c) => show(&c.req),
         View::Config(_) => "thepost config check".to_owned(),
+        View::Trust(t) => crate::trust::command(t),
         View::Info { .. } => String::new(),
     }
 }
@@ -1259,6 +1295,10 @@ fn open_tree(m: &mut Main, bus: &mut Bus) -> Vec<Effect> {
             let s = SECTIONS[i];
             m.section = s.label.to_owned();
             m.focus = Panel::Main;
+            // Раздел «Доверие» — ручная раскладка матрицы, не экран движка (TUI-09).
+            if s.op == crate::trust::SECTION_OP {
+                return crate::trust::open(m, bus);
+            }
             match catalog().get(s.op) {
                 Some(op) => {
                     let ctx = m.ctx();
@@ -1401,6 +1441,7 @@ pub(crate) fn view_key(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect
             Vec::new()
         }
         View::Config(c) => config_key(c, bus, &mut m.overlay, key),
+        View::Trust(_) => crate::trust::key(m, bus, key),
         View::Info { .. } => Vec::new(),
     }
 }
@@ -1768,6 +1809,37 @@ fn overlay_key(m: &mut Main, bus: &mut Bus, ov: Overlay, key: KeyEvent) -> Vec<E
     match ov {
         Overlay::Help => Vec::new(),
         Overlay::ConfigEdit(e) => config_edit_key(m, e, key),
+        Overlay::TrustConfirm(req) => match key.code {
+            KeyCode::Enter | KeyCode::Char('y' | 'д') => {
+                vec![bus.call(req, Pending::Trust(crate::trust::Pending::Reset))]
+            }
+            KeyCode::Esc | KeyCode::Char('n' | 'н') => Vec::new(),
+            _ => {
+                m.overlay = Some(Overlay::TrustConfirm(req));
+                Vec::new()
+            }
+        },
+        Overlay::TrustDomain(d) => crate::trust::domain_key(m, bus, d, key),
+        Overlay::TrustPick { what, mut f } => match form_key(&mut f, key) {
+            FormKey::Cancel => Vec::new(),
+            FormKey::Submit => match f.request() {
+                Some(req) => {
+                    let p = match what {
+                        crate::trust::Pick::Group => crate::trust::Pending::PickGroup(f),
+                        crate::trust::Pick::Account => crate::trust::Pending::PickAccount(f),
+                    };
+                    vec![bus.call(req, Pending::Trust(p))]
+                }
+                None => {
+                    m.overlay = Some(Overlay::TrustPick { what, form: f });
+                    Vec::new()
+                }
+            },
+            FormKey::Stay => {
+                m.overlay = Some(Overlay::TrustPick { what, form: f });
+                Vec::new()
+            }
+        },
         Overlay::Menu { sel } => {
             let n = catalog().ops.len();
             let sel = match key.code {

@@ -56,6 +56,26 @@ const COMMANDS: &[(&str, &str)] = &[
     ("remove_org_script", "sieve org delete"),
     ("vacation", "vacation get {account}"),
     ("set_vacation", "vacation set {account}"),
+    // Политика доверия (ADM-49): без `--org` команды выбирают уровень установки.
+    ("get_installation_trust", "trust show"),
+    ("put_installation_trust", "trust set --file <ПУТЬ>"),
+    ("reset_installation_trust", "trust reset"),
+    ("get_org_trust", "trust show --org {org}"),
+    ("put_org_trust", "trust set --org {org} --file <ПУТЬ>"),
+    ("reset_org_trust", "trust reset --org {org}"),
+    ("get_group_trust", "trust show --org {org} --group {group}"),
+    (
+        "put_group_trust",
+        "trust set --org {org} --group {group} --file <ПУТЬ>",
+    ),
+    (
+        "reset_group_trust",
+        "trust reset --org {org} --group {group}",
+    ),
+    (
+        "get_account_trust",
+        "trust show --org {org} --account {account}",
+    ),
 ];
 
 /// Шаблон команды CLI операции `id`.

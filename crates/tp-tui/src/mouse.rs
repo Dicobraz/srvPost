@@ -202,7 +202,7 @@ impl App {
                                 open = double;
                             }
                         }
-                        View::Card(_) | View::Info { .. } => {}
+                        View::Card(_) | View::Info { .. } | View::Trust(_) => {}
                     },
                 }
             }
