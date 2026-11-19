@@ -492,7 +492,7 @@ fn processcalendar() {
         "require \"processcalendar\";\nprocesscalendar :allowpublic :addresses [\"a@b.example\"] \
          :calendarid \"work\" :deletecancelled :outcome \"o\" :reason \"r\";",
     );
-    let Cmd::ProcessCalendar(c) = &p.commands[1] else {
+    let Cmd::ProcessCalendar(c) = &p.commands[0] else {
         panic!("{:?}", p.commands);
     };
     assert!(c.allow_public && c.delete_cancelled);
@@ -501,7 +501,7 @@ fn processcalendar() {
     assert!(!c.updates_only);
     // Без require и без тегов.
     let p = ok("require \"processcalendar\"; processcalendar;");
-    let Cmd::ProcessCalendar(c) = &p.commands[1] else {
+    let Cmd::ProcessCalendar(c) = &p.commands[0] else {
         panic!("{:?}", p.commands);
     };
     assert_eq!(*c, ProcessCalendar::default());
@@ -536,7 +536,7 @@ fn processcalendar() {
 #[test]
 fn peer_test() {
     let p = ok("require \"vnd.thepost.peer\"; if peer :is [\"partner\", \"external\"] { stop; }");
-    let Cmd::If { branches, .. } = &p.commands[1] else {
+    let Cmd::If { branches, .. } = &p.commands[0] else {
         panic!("{:?}", p.commands);
     };
     let Test::Peer { m, keys } = &branches[0].0 else {
