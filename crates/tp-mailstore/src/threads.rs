@@ -128,7 +128,7 @@ mod tests {
     use tp_contracts::meta::{MailboxStore, MessageQuery, SpecialUse};
     use tp_contracts::thread::{ThreadFacts, ThreadHold, ThreadLimits};
     use tp_contracts::{AccountId, MessageId, TenantId, ThreadId};
-    use tp_testkit::{MemThreads, SystemClock};
+    use tp_testkit::{Clock, MemThreads, SystemClock};
 
     use crate::testenv::{Env, stream};
 
