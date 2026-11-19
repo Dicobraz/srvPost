@@ -776,8 +776,8 @@ mod tests {
         assert_eq!(e["list"][1]["mailboxIds"], json!({&trash: true}), "{e}");
 
         // Без applyToExisting прежние письма не трогаются: новое правило — только будущим письмам
-        // (следующее письмо беседы получает новое ключевое слово, прежние — прежнее).
-        let c = env.deliver(inbox, &letter("c"), Default::default()).await;
+        // (следующее письмо беседы получает новое ключевое слово, прежние — прежнее). Правило задаётся
+        // до доставки: будущие письма — те, что приходят после правила.
         let (_, r) = call(
             &env,
             "ThreadRule/set",
@@ -786,6 +786,7 @@ mod tests {
         )
         .await;
         assert!(r["created"]["k2"].is_object(), "{r}");
+        let c = env.deliver(inbox, &letter("c"), Default::default()).await;
         let e = env
             .call(
                 "Email/get",
