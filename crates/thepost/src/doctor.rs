@@ -605,7 +605,7 @@ pub async fn journal(
     };
     // Организации каталога и счётчики записей индекса (системная транзакция, RLS) — нужны цепочке и
     // прогнозу; ошибка чтения — отказ цепочки, прогноз считает по записям хранилища без правил.
-    let indexed: Option<(Vec<TenantId>, Vec<(TenantId, u64)>)> = match pool {
+    let indexed: Option<JournalTenants> = match pool {
         Some(pool) if chain || retention => match journal_tenants_and_counts(pool).await {
             Ok(x) => Some(x),
             Err(e) => {
@@ -904,7 +904,7 @@ pub async fn journal_volume(
     let avg_record_bytes = if entries.is_empty() {
         None
     } else {
-        let n = entries.len().min(SAMPLE).max(1);
+        let n = entries.len().clamp(1, SAMPLE);
         let mut sizes: Vec<u64> = Vec::with_capacity(n);
         for i in 0..n {
             let (tenant, id, _) = entries[i * entries.len() / n];
@@ -994,9 +994,10 @@ async fn journal_enabled_rules(pool: &DbPool) -> Result<u64> {
 /// Организации каталога и число записей индекса каждой (APP-82): системная транзакция
 /// (`app.all_tenants`, RLS), счётчики — `journal.entries` (схема journal, META-88). У организации без
 /// записей цепочка проверяется как пустая.
-async fn journal_tenants_and_counts(
-    pool: &DbPool,
-) -> Result<(Vec<TenantId>, Vec<(TenantId, u64)>)> {
+///
+/// Организации каталога и их счётчики записей индекса (сверка цепочки и прогноза, APP-82).
+type JournalTenants = (Vec<TenantId>, Vec<(TenantId, u64)>);
+async fn journal_tenants_and_counts(pool: &DbPool) -> Result<JournalTenants> {
     let rows: Vec<(String, i64)> = tp_meta::pool::with_system(pool, |tx| {
         Box::pin(async move {
             sqlx::query_as(
@@ -2337,9 +2338,8 @@ mod tests {
                 "sender": format!("s{i}@external.example"),
                 "recipients": ["anna@internal.example"],
                 "message_id": format!("m{i}@external.example"),
-                "at": [
-                    "2026-12-14T00:00:00Z", "2026-12-15T00:00:00Z", "2026-12-16T00:00:00Z"
-                ][i as usize],
+                "at": (["2026-12-14T00:00:00Z", "2026-12-15T00:00:00Z", "2026-12-16T00:00:00Z"]
+                    [i as usize]),
                 "rule": "r-0042",
             }))
             .expect("record")
@@ -2457,9 +2457,8 @@ mod tests {
                 "sender": format!("s{i}@external.example"),
                 "recipients": ["anna@internal.example"],
                 "message_id": format!("m{i}@external.example"),
-                "at": [
-                    "2026-12-14T00:00:00Z", "2026-12-15T00:00:00Z", "2026-12-16T00:00:00Z"
-                ][i as usize],
+                "at": (["2026-12-14T00:00:00Z", "2026-12-15T00:00:00Z", "2026-12-16T00:00:00Z"]
+                    [i as usize]),
                 "rule": "r-0042",
             }))
             .expect("record");
