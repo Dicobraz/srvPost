@@ -824,6 +824,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{org}/journal/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Отчёт целостности хеш-цепочки индекса организации (`hash = SHA-256(prev_hash ‖ canonical)`). */
+        get: operations["verify_journal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{org}/journal/{id}": {
         parameters: {
             query?: never;
@@ -850,23 +867,6 @@ export interface paths {
         };
         /** Выгрузка записи: `.eml` с конвертом (заголовки `X-ThePost-Journal-*` и письмо целиком). */
         get: operations["export_journal"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/orgs/{org}/journal/verify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Отчёт целостности хеш-цепочки индекса организации (`hash = SHA-256(prev_hash ‖ canonical)`). */
-        get: operations["verify_journal"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1857,12 +1857,12 @@ export interface components {
         };
         /** @description Отчёт проверки хеш-цепочки индекса организации. */
         ChainReportView: {
-            /** @description Число проверенных записей. */
-            records: number;
-            /** @description Цепочка целостна. */
-            ok: boolean;
             /** @description Первая запись с нарушением; `null` — нарушений нет. */
             broken_at?: string | null;
+            /** @description Цепочка целостна. */
+            ok: boolean;
+            /** @description Число проверенных записей. */
+            records: number;
         };
         /** @description Снимок уровня кластера. */
         ClusterView: {
@@ -2213,12 +2213,12 @@ export interface components {
         };
         /** @description Запись журнала: идентификатор, конверт и хеш цепочки. */
         JournalEntryView: {
+            /** @description Хеш цепочки записи (SHA-256, hex); проверяется маршрутом `verify`. */
+            hash: string;
             /** @description Идентификатор записи (UUID). */
             id: string;
             /** @description Конверт. */
             record: components["schemas"]["JournalRecordView"];
-            /** @description Хеш цепочки записи (SHA-256, hex); проверяется маршрутом `verify`. */
-            hash: string;
         };
         /** @description Страница журнала: записи в порядке (`at`, `id`). */
         JournalPageView: {
@@ -2229,21 +2229,21 @@ export interface components {
         };
         /** @description Конверт записи журнала в ответе API ([`JournalRecord`] контракта; обе стороны serde — ADM-13). */
         JournalRecordView: {
-            /** @description Организация. */
-            tenant: string;
-            /** @description Отправитель конверта; пустой — уведомление о доставке. */
-            sender: string;
-            /** @description Все получатели конверта, включая скрытых и раскрытых из групп. */
-            recipients: string[];
-            /** @description Message-ID без угловых скобок; `null` — нет. */
-            message_id?: string | null;
             /**
              * Format: date-time
              * @description Момент письма (UTC).
              */
             at: string;
+            /** @description Message-ID без угловых скобок; `null` — нет. */
+            message_id?: string | null;
+            /** @description Все получатели конверта, включая скрытых и раскрытых из групп. */
+            recipients: string[];
             /** @description Правило журналирования. */
             rule: string;
+            /** @description Отправитель конверта; пустой — уведомление о доставке. */
+            sender: string;
+            /** @description Организация. */
+            tenant: string;
         };
         /** @description Запись аудита ящика. */
         MailboxAuditEntry: {
@@ -6842,6 +6842,60 @@ export interface operations {
             };
         };
     };
+    verify_journal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChainReportView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     get_journal: {
         parameters: {
             query?: never;
@@ -6918,60 +6972,6 @@ export interface operations {
                 };
                 content: {
                     "message/rfc822": unknown;
-                };
-            };
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    verify_journal: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Организация (UUID) */
-                org: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChainReportView"];
                 };
             };
             400: {

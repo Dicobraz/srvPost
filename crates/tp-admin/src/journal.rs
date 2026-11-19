@@ -24,13 +24,13 @@
 //! сбой выгрузки не влияет на доставку почты (проход ведёт роль maintenance узла, как SIEM —
 //! [`crate::export`]), повтор — по журналу выгрузки ([`ArchiveLedger`]).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use axum::extract::MatchedPath;
+use axum::extract::{MatchedPath, State};
 use axum::http::{HeaderMap, HeaderValue, Method, Uri, header};
 use axum::routing::get;
 use axum::{Extension, Router};
@@ -133,7 +133,7 @@ pub struct JournalPageView {
 }
 
 /// Отчёт проверки хеш-цепочки индекса организации.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ChainReportView {
     /// Число проверенных записей.
     pub records: u64,
