@@ -531,6 +531,8 @@ struct Node {
     running: Option<Running>,
     pool: tp_meta::pool::DbPool,
     meta: PgMeta,
+    admin_login: String,
+    admin_password: String,
     bearer: String,
 }
 
@@ -591,6 +593,8 @@ impl Node {
         let login = format!("admin@{domain}");
         let granted = admin_init(&socket, &login).await;
         assert_eq!(granted["status"], "granted", "{granted}");
+        // Пароль администратора — для нового входа после перезапуска узла: сессия переживает остановку не всегда.
+        let admin_password = granted["password"].as_str().expect("password").to_owned();
         let token = granted["token"].as_str().expect("token").to_owned();
         let (code, body) = http(
             addr(&running, "admin"),
@@ -614,6 +618,8 @@ impl Node {
             running: Some(running),
             pool,
             meta,
+            admin_login: login,
+            admin_password,
             bearer,
         })
     }
@@ -829,7 +835,8 @@ impl Node {
         assert!(report.failed.is_empty(), "{report:?}");
     }
 
-    /// Повторный запуск узла на той же базе и конфигурации (политика — на месте после перезапуска).
+    /// Повторный запуск узла на той же базе и конфигурации (политика — на месте после перезапуска) и новый
+    /// вход администратора: сессия Admin API переживает остановку не всегда — bearer обновляется.
     async fn restart(&mut self) {
         let cfg = thepost::sections::registry()
             .expect("registry")
@@ -842,6 +849,21 @@ impl Node {
             Some(Self::launch(&self.config_path, self.secrets.clone(), shutdown.clone()).await);
         drop(bound);
         self.shutdown = shutdown;
+        let admin = addr(self.running(), "admin");
+        let (code, body) = http(
+            admin,
+            "POST",
+            "/api/v1/session",
+            "none",
+            Some(&json!({
+                "login": self.admin_login.clone(),
+                "password": self.admin_password.clone(),
+            })),
+        )
+        .await;
+        assert_eq!(code, 201, "{body}");
+        let session: Value = serde_json::from_str(&body).expect("session");
+        self.bearer = format!("Bearer {}", session["session"].as_str().expect("session"));
     }
 
     /// Остановка узла и удаление базы.
