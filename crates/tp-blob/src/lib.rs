@@ -1,4 +1,5 @@
-//! BLOB-хранилище: локальный диск и S3, кэш NVMe, GC, «сироты», verify, мигратор (SRS 3.2–3.5, 3.7).
+//! BLOB-хранилище: локальный диск и S3, кэш NVMe, GC, «сироты», verify, мигратор (SRS 3.2–3.5, 3.7);
+//! хранилище записей журнала переписки — `journal_store` (BLOB-18, SRS 4.9).
 
 use std::ops::Range;
 
@@ -8,6 +9,7 @@ pub mod cache;
 pub mod compress;
 mod config;
 pub mod gc;
+pub mod journal_store;
 pub mod local;
 pub mod orphans;
 pub mod s3;
@@ -18,6 +20,7 @@ pub mod writer;
 pub use cache::{BlobCache, CacheConfig};
 pub use compress::{CompressionConfig, Decompressing};
 pub use gc::{GcConfig, GcMetrics, GcPass, GcWorker};
+pub use journal_store::{JournalConfig, JournalRecords, LockMode, Retention, StoredRecord};
 pub use local::{LocalConfig, LocalStore};
 pub use orphans::{OrphanConfig, OrphanMetrics, OrphanPass, OrphanStat, OrphanSweeper};
 pub use s3::{S3Config, S3Credentials, S3Store};
