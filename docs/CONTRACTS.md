@@ -345,12 +345,20 @@ direction: JournalDirection::{In, Out, Both}, enabled }` задаётся на �
 read(id) -> (record, message), scan(tenant) -> конверты по возрастанию id }`: двухфазная запись — сначала `put` в бакет
 (вне транзакции БД), затем строка индекса; `export` читает запись по ссылке, `restore_index` пересобирает индекс из
 `scan`. Реализация — полоса blob (BLOB-18); in-memory — `MemJournalRecords`.
+Правила журналирования (ADM-53, решение #171) — порт `JournalRuleStore { rules(tenant), set_rule(rule) (замена целиком
+по идентификатору), delete_rule(tenant, id) }`: CRUD для Admin API поверх таблицы `journal.rules` (META-88); существование
+группы и ящика области проверяет вызывающий (Admin API — до записи, PostgreSQL — внешний ключ), записи журнала правила
+не трогают. `JournalScope::priority()` — приоритет наследования ящик > группа > организация (порядок списков). Реализация —
+`PgJournal`; in-memory — `MemJournal`; набор `suite::journal_rules`.
 Индекс в PostgreSQL (META-88) — `PgJournal` (tp-meta, схема `journal`: `entries` — только добавление, триггер как у
 журнала аудита; очистка — функцией восстановления `tp_journal_clear`; `rules` — правила организации): SHA-256 считает
 PostgreSQL, каноническое представление записи хранится в строке — цепочка проверяется чистым SQL вместе с
 согласованностью конверта строки с её каноническим представлением (подмена любого столбца записи видна проверке).
 Доступ — только роль «аудитор журнала» (SRS 5.2): токен `JournalAudit` (выдаёт авторизация Admin API) — параметр `search`,
-`export`, `verify_chain`; пользователи и администраторы правил журнал не видят, через IMAP и JMAP не доступен.
+`export`, `verify_chain`; пользователи и администраторы правил журнал не видят, через IMAP и JMAP не доступен. Правила —
+наоборот, только администратору организации (`/api/v1/orgs/{org}/journal/rules`, ADM-53): аудитор журнала записей не видит,
+правил — тем более (изменение правил — запись журнала аудита с деталями `AuditDetails::JournalRule { from, to }`,
+кто/что/было-стало).
 In-memory — `MemJournal`; набор `suite::journal` (подмена записи и потеря индекса — колбэки теста).
 
 ## Groups
@@ -1566,6 +1574,12 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   `tp_journal_clear` восстановления; `rules` — правила журналирования организации, RLS); порядок цепочки — `seq`
   организации под рекомендательной блокировкой; поиск по (`at`, `id`) с курсором; набор `suite::journal` проходит на
   PostgreSQL (подмена записи ловится, восстановление из хранилища записей возвращает поиск).
+- 2026-11-19 — ADM-53 (x/admin-39, решение владельца — issue #171): порт `journal::JournalRuleStore`
+  { rules(tenant), set_rule(rule), delete_rule(tenant, id) } — CRUD правил журналирования для Admin API поверх
+  `journal.rules` (реализация — `PgJournal`, in-memory — `MemJournal`; набор `suite::journal_rules`); `JournalScope::priority()`
+  — приоритет наследования ящик > группа > организация; `AuditDetails::JournalRule { from, to }` — изменение правил в
+  журнале аудита (кто/что/было-стало). Право управления — только администратор организации; конвейер читает правила на
+  каждом письме (SMTP-53) — изменения действуют без перезапуска.
 
 - 2026-11-19 — x/contracts-68 (issue #89, решение владельца — вариант 1): `ItipMessage::calendar: Option<ProcessCalendar>`
   (`#[serde(default)]`) — итог действия `processcalendar` правил Sieve (RFC 9671) приём передаёт вместе с сообщением:

@@ -5,8 +5,8 @@ use time::OffsetDateTime;
 use tp_contracts::Error;
 use tp_contracts::ids::{JournalId, TenantId};
 use tp_contracts::journal::{
-    JournalAudit, JournalDirection, JournalQuery, JournalRecord, JournalRule, JournalScope,
-    JournalStore, journal_eml,
+    JournalAudit, JournalDirection, JournalQuery, JournalRecord, JournalRule, JournalRuleStore,
+    JournalScope, JournalStore, journal_eml,
 };
 
 /// Набор проверок `JournalStore` (CTR-97): запись содержит скрытых и раскрытых из групп получателей и
@@ -195,4 +195,120 @@ pub async fn journal(
     assert!(!report.ok, "подмена поймана");
     assert_eq!(report.broken_at, Some(id1));
     assert_eq!(report.records, 2);
+}
+
+/// Набор проверок правил журналирования — порт [`JournalRuleStore`] (ADM-53, решение #171): список,
+/// задание (замена целиком по идентификатору), выключение, удаление, изоляция организаций и приоритет
+/// наследования областей (ящик > группа > организация). Изменение видно сразу, без перезапуска:
+/// каждое чтение `rules` — то, что конвейер прочитал бы на следующем письме (SMTP-53), и правило из
+/// него действует по [`JournalRule::covers`]. Организация набора — новая.
+pub async fn journal_rules(store: &dyn JournalRuleStore) {
+    let tenant = TenantId::new();
+    assert!(
+        store.rules(tenant).await.expect("rules").is_empty(),
+        "в новой организации правил нет"
+    );
+
+    // Три правила: организация, группа и ящик (существование области проверяет вызывающий — здесь
+    // механика порта).
+    let (account, group) = (tp_contracts::AccountId::new(), tp_contracts::GroupId::new());
+    let org = JournalRule {
+        id: "all-mail".to_owned(),
+        tenant,
+        scope: JournalScope::Org,
+        direction: JournalDirection::Both,
+        enabled: true,
+    };
+    let grp = JournalRule {
+        id: "team-in".to_owned(),
+        tenant,
+        scope: JournalScope::Group(group),
+        direction: JournalDirection::In,
+        enabled: true,
+    };
+    let mailbox = JournalRule {
+        id: "director".to_owned(),
+        tenant,
+        scope: JournalScope::Mailbox(account),
+        direction: JournalDirection::Out,
+        enabled: false,
+    };
+    store.set_rule(&org).await.expect("правило организации");
+    store.set_rule(&grp).await.expect("правило группы");
+    store.set_rule(&mailbox).await.expect("правило ящика");
+    let rules = store.rules(tenant).await.expect("rules");
+    assert_eq!(rules.len(), 3);
+    // Порядок порта — по возрастанию идентификаторов; приоритет наследования — ящик > группа >
+    // организация (сортирует вызывающий, [`JournalScope::priority`]).
+    assert_eq!(
+        rules.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec!["all-mail", "director", "team-in"],
+        "по идентификаторам"
+    );
+    let mut by_priority = rules.clone();
+    by_priority.sort_by_key(|r| (r.scope.priority(), r.id.clone()));
+    assert_eq!(
+        by_priority
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["director", "team-in", "all-mail"],
+        "ящик > группа > организация"
+    );
+
+    // Замена целиком: направление и состояние меняются, число правил — то же; новое правило читается
+    // тем же хранилищем сразу (конвейер читает на каждом письме — перезапуска не нужно).
+    let off = JournalRule {
+        enabled: false,
+        direction: JournalDirection::In,
+        ..org.clone()
+    };
+    store.set_rule(&off).await.expect("замена");
+    let rules = store.rules(tenant).await.expect("rules");
+    assert_eq!(rules.len(), 3, "замена, не добавление");
+    let read = rules.iter().find(|r| r.id == "all-mail").expect("есть");
+    assert_eq!(read, &off);
+    // Правило из чтения действует по covers: выключенные правила писем не касаются, включённое
+    // правило группы покрывает её члена.
+    assert!(!read.covers(JournalDirection::In, None, &[], &[]));
+    assert!(!mailbox.covers(JournalDirection::Out, Some(account), &[], &[]));
+    assert!(grp.covers(JournalDirection::In, Some(account), &[], &[account]));
+
+    // Изоляция организаций: чужая организация правил не видит, её правило не мешает.
+    let foreign = TenantId::new();
+    assert!(store.rules(foreign).await.expect("чужие").is_empty());
+    let foreign_rule = JournalRule {
+        id: "all-mail".to_owned(),
+        tenant: foreign,
+        scope: JournalScope::Org,
+        direction: JournalDirection::Both,
+        enabled: true,
+    };
+    store.set_rule(&foreign_rule).await.expect("правило чужой");
+    assert_eq!(store.rules(tenant).await.expect("rules").len(), 3);
+    assert_eq!(store.rules(foreign).await.expect("чужие").len(), 1);
+
+    // Недопустимый идентификатор — Invalid (проверка контракта).
+    let bad = JournalRule {
+        id: "has space".to_owned(),
+        ..org.clone()
+    };
+    assert!(matches!(store.set_rule(&bad).await, Err(Error::Invalid(_))));
+
+    // Удаление: правило исчезает из чтения сразу; нет правила — не ошибка; записи не трогает.
+    store
+        .delete_rule(tenant, "team-in")
+        .await
+        .expect("удаление");
+    store
+        .delete_rule(tenant, "team-in")
+        .await
+        .expect("повтор удаления — не ошибка");
+    let rules = store.rules(tenant).await.expect("rules");
+    assert_eq!(
+        rules.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        vec!["all-mail", "director"],
+        "правило группы удалено, чужая организация не задета"
+    );
+    assert_eq!(store.rules(foreign).await.expect("чужие").len(), 1);
 }

@@ -15,8 +15,8 @@ use bytes::Bytes;
 use tp_contracts::ids::{BlobHash, JournalId, TenantId};
 use tp_contracts::journal::{
     ChainReport, GENESIS_HASH, JournalAudit, JournalCursor, JournalEntry, JournalPage,
-    JournalQuery, JournalRecord, JournalRecords, JournalRule, JournalStore, chain_input,
-    journal_eml,
+    JournalQuery, JournalRecord, JournalRecords, JournalRule, JournalRuleStore, JournalStore,
+    chain_input, journal_eml,
 };
 use tp_contracts::{Error, Result};
 
@@ -34,11 +34,15 @@ struct Stored {
 struct JournalState {
     /// Записи в порядке добавления; цепочка — в пределах организации.
     entries: Vec<Stored>,
+    /// Правила журналирования по организациям ([`JournalRuleStore`], ADM-53): идентификаторы по
+    /// возрастанию (BTreeMap).
+    rules: std::collections::BTreeMap<TenantId, std::collections::BTreeMap<String, JournalRule>>,
     /// Индекс потерян (до `restore_index`): поиск невозможен.
     index_dropped: bool,
 }
 
-/// [`JournalStore`] в памяти; клоны разделяют данные. Записи неизменяемы; методов удаления нет.
+/// [`JournalStore`] и [`JournalRuleStore`] в памяти; клоны разделяют данные. Записи неизменяемы;
+/// методов удаления записей нет (правила журналирования — меняются, ADM-53).
 #[derive(Debug, Clone)]
 pub struct MemJournal {
     state: Arc<Mutex<JournalState>>,
@@ -99,6 +103,40 @@ fn parse_cursor(c: &JournalCursor) -> Result<(i128, JournalId)> {
         id.parse()
             .map_err(|_| Error::invalid("journal: bad cursor"))?,
     ))
+}
+
+/// Правила журналирования в памяти — порт [`JournalRuleStore`] (ADM-53): те же строки `journal.rules`,
+/// что и `tp-meta` `PgJournal`, без проверки существования группы и ящика области (её делают Admin API и
+/// внешний ключ PostgreSQL). Клоны разделяют данные.
+#[async_trait]
+impl JournalRuleStore for MemJournal {
+    async fn rules(&self, tenant: TenantId) -> Result<Vec<JournalRule>> {
+        let state = lock(&self.state);
+        Ok(state
+            .rules
+            .get(&tenant)
+            .map(|r| r.values().cloned().collect())
+            .unwrap_or_default())
+    }
+
+    async fn set_rule(&self, rule: &JournalRule) -> Result<()> {
+        rule.validate()?;
+        let mut state = lock(&self.state);
+        state
+            .rules
+            .entry(rule.tenant)
+            .or_default()
+            .insert(rule.id.clone(), rule.clone());
+        Ok(())
+    }
+
+    async fn delete_rule(&self, tenant: TenantId, id: &str) -> Result<()> {
+        let mut state = lock(&self.state);
+        if let Some(rules) = state.rules.get_mut(&tenant) {
+            rules.remove(id);
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -298,6 +336,7 @@ mod tests {
             move || journal.drop_index()
         };
         suite::journal(&journal, &tamper, &drop_index).await;
+        suite::journal_rules(&journal).await;
     }
 
     #[tokio::test]

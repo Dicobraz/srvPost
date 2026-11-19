@@ -132,8 +132,10 @@ impl AdminRole {
         let installation = route.starts_with(crate::branding::BRANDING_PREFIX)
             || route.starts_with(crate::trust::INSTALLATION_TRUST);
         // Содержимое журнала переписки — только роли «аудитор журнала» (SRS 4.9, 5.2; ADM-52): прочим
-        // администраторам нельзя.
-        let journal = route.starts_with(crate::journal::JOURNAL_PREFIX);
+        // администраторам нельзя. Правила журналирования — не содержимое (ADM-53): ими управляет
+        // администратор организации, аудитор журнала их не видит.
+        let journal = route.starts_with(crate::journal::JOURNAL_PREFIX)
+            && !route.starts_with(crate::journal::JOURNAL_RULES_PREFIX);
         match self {
             AdminRole::InstallationAdmin => !journal,
             AdminRole::OrganizationAdmin => own_scope && !cluster && !installation && !journal,
@@ -428,6 +430,9 @@ pub struct Admin {
     /// Журнал переписки ([`crate::journal`]); `None` — не подключено (маршруты — 503): записи пишет этап
     /// ядра конвейера, читает готовое хранилище (BLOB-18, META-88).
     pub(crate) journal: Option<Arc<dyn tp_contracts::journal::JournalStore>>,
+    /// Правила журналирования ([`crate::journal`], ADM-53); `None` — не подключено (маршруты — 503).
+    /// Конвейер читает их на каждом письме (SMTP-53) — изменения действуют без перезапуска.
+    pub(crate) journal_rules: Option<Arc<dyn tp_contracts::journal::JournalRuleStore>>,
     /// Политика доверия ([`crate::trust`]); `None` — не подключено (маршруты — 503).
     pub(crate) trust: Option<Arc<dyn TrustStore>>,
     /// Организации инсталляции: без модуля «Мультитенантность» — только организация по умолчанию (решение 10).
@@ -448,6 +453,7 @@ impl fmt::Debug for Admin {
             .field("queue", &self.queue.is_some())
             .field("branding", &self.branding.is_some())
             .field("journal", &self.journal.is_some())
+            .field("journal_rules", &self.journal_rules.is_some())
             .field("trust", &self.trust.is_some())
             .field("organizations", &self.organizations)
             .finish()
@@ -489,6 +495,7 @@ impl Admin {
             queue: None,
             branding: None,
             journal: None,
+            journal_rules: None,
             trust: None,
             organizations: BTreeSet::from([TenantId::DEFAULT]),
         })
@@ -514,6 +521,17 @@ impl Admin {
     /// цепочки — роль «аудитор журнала» ([`AdminRole::JournalAuditor`]).
     pub fn with_journal(mut self, journal: Arc<dyn tp_contracts::journal::JournalStore>) -> Self {
         self.journal = Some(journal);
+        self
+    }
+
+    /// Подключает правила журналирования ([`crate::journal`], ADM-53): список с наследованием, запись
+    /// и удаление — администратор организации (аудитор журнала правил не видит). Хранилище то же, что
+    /// читает конвейер (SMTP-53): `PgJournal` — и записи, и правила.
+    pub fn with_journal_rules(
+        mut self,
+        rules: Arc<dyn tp_contracts::journal::JournalRuleStore>,
+    ) -> Self {
+        self.journal_rules = Some(rules);
         self
     }
 
@@ -1271,6 +1289,7 @@ mod tests {
         use crate::app_passwords::{AppPasswordInfo, IssuedAppPassword, NewAppPassword};
         use crate::branding::{BrandingBody, BrandingView, PublicBranding};
         use crate::init::AdminSession;
+        use crate::journal::{JournalRuleBody, JournalRuleView, JournalRulesView};
         use crate::transport::{DomainBody, DomainList, DomainWritten, VersionQuery, Written};
 
         fn roundtrip<T: Serialize + DeserializeOwned + PartialEq + Debug>(v: T) {
@@ -1394,6 +1413,32 @@ mod tests {
                 .collect(),
         });
         roundtrip(BrandingBody::default());
+        roundtrip(JournalRuleBody {
+            scope: tp_contracts::journal::JournalScope::Mailbox(AccountId::new()),
+            direction: tp_contracts::journal::JournalDirection::Out,
+            enabled: true,
+        });
+        roundtrip(JournalRuleBody {
+            scope: tp_contracts::journal::JournalScope::Org,
+            direction: tp_contracts::journal::JournalDirection::Both,
+            enabled: false,
+        });
+        roundtrip(JournalRuleView {
+            id: "all-mail".into(),
+            tenant: TenantId::DEFAULT.to_string(),
+            scope: tp_contracts::journal::JournalScope::Org,
+            direction: tp_contracts::journal::JournalDirection::Both,
+            enabled: true,
+        });
+        roundtrip(JournalRulesView {
+            rules: vec![JournalRuleView {
+                id: "team-in".into(),
+                tenant: TenantId::DEFAULT.to_string(),
+                scope: tp_contracts::journal::JournalScope::Group(tp_contracts::GroupId::new()),
+                direction: tp_contracts::journal::JournalDirection::In,
+                enabled: false,
+            }],
+        });
         roundtrip(BrandingView {
             own: None,
             effective: tp_contracts::branding::BrandingLevels::default().effective(),
