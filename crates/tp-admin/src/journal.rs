@@ -1038,7 +1038,7 @@ mod tests {
         let ok = OkSink::default();
         let mut total = 0;
         loop {
-            let n = archive_pass(&env.journal, &ok, &ledger, d, 2)
+            let n = archive_pass(&env.journal, &ledger, &ok, d, 2)
                 .await
                 .expect("pass");
             if n == 0 {
@@ -1076,17 +1076,17 @@ mod tests {
             .await
             .expect("append");
         assert_eq!(
-            archive_pass(&env.journal, &ok, &ledger, d, 2).await,
+            archive_pass(&env.journal, &ledger, &ok, d, 2).await,
             Ok(1),
             "только новая запись"
         );
         assert_eq!(ok.delivered().await.last(), Some(&tail));
-        assert_eq!(archive_pass(&env.journal, &ok, &ledger, d, 2).await, Ok(0));
+        assert_eq!(archive_pass(&env.journal, &ledger, &ok, d, 2).await, Ok(0));
 
         // Выгрузка чужой организации не смешивается.
         let mut other_total = 0;
         loop {
-            let n = archive_pass(&env.journal, &ok, &ledger, env.other_tenant, 2)
+            let n = archive_pass(&env.journal, &ledger, &ok, env.other_tenant, 2)
                 .await
                 .expect("pass");
             if n == 0 {
@@ -1110,7 +1110,11 @@ mod tests {
         for id in &ids[..2] {
             let path = dir.path().join(d.to_string()).join(format!("{id}.eml"));
             let eml = std::fs::read_to_string(&path).expect("файл записи");
-            assert!(eml.starts_with("X-ThePost-Journal-Sender: "), "{path}");
+            assert!(
+                eml.starts_with("X-ThePost-Journal-Sender: "),
+                "{}",
+                path.display()
+            );
         }
 
         // Приёмник HTTPS отвечает не успехом: проход не удался, позиция на месте (повтор по журналу).
@@ -1158,7 +1162,7 @@ mod tests {
                 // Заголовки и тело очередного запроса.
                 let done = loop {
                     if let Some(at) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let head = String::from_utf8_lossy(&buf[..at]).to_owned();
+                        let head = String::from_utf8_lossy(&buf[..at]).into_owned();
                         let len = head
                             .lines()
                             .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))

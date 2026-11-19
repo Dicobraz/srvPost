@@ -4084,7 +4084,16 @@ mod tests {
             limit: None,
             after: None,
         };
-        let page = json(exec(&ja, true, by_rcpt).await);
+        let page = json(
+            exec(
+                &ja,
+                true,
+                ApiAction::Journal {
+                    action: Box::new(by_rcpt),
+                },
+            )
+            .await,
+        );
         assert_eq!(page["entries"].as_array().expect("entries").len(), 1);
 
         // Запись: конверт и хеш цепочки.
