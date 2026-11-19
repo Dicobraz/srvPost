@@ -58,18 +58,15 @@ struct EntryInsert {
 }
 
 impl EntryInsert {
-    /// Строка добавления из записи; каноническое представление — UTF-8 (serde_json).
+    /// Строка добавления из записи; каноническое представление — UTF-8 (serde_json). Ключи поиска —
+    /// адреса в нижнем регистре (как `delivery_log`: считает записывающий, не SQL).
     fn of(id: JournalId, record: &JournalRecord, storage: String) -> Result<Self> {
         Ok(EntryInsert {
             id,
             sender: record.sender.clone(),
-            sender_key: record.sender.to_ascii_lowercase(),
+            sender_key: record.sender.to_lowercase(),
             recipients: record.recipients.clone(),
-            rcpt_keys: record
-                .recipients
-                .iter()
-                .map(|a| a.to_ascii_lowercase())
-                .collect(),
+            rcpt_keys: record.recipients.iter().map(|a| a.to_lowercase()).collect(),
             message_id: record.message_id.clone(),
             at: record.at,
             rule: record.rule.clone(),
@@ -144,7 +141,7 @@ impl PgJournal {
     async fn indexed(&self, tenant: TenantId) -> Result<u64> {
         self.meta
             .idempotent(|| {
-                with_system(self.meta.pool(), tenant, move |tx| {
+                with_system(self.meta.pool(), move |tx| {
                     Box::pin(async move {
                         sqlx::query_scalar(
                             "SELECT count(*) FROM journal.entries WHERE tenant_id = $1",
@@ -374,8 +371,8 @@ async fn committed_entry(
 }
 
 /// Пересборка строк индекса из хранилища записей в системной транзакции (под блокировкой порядка):
-/// цепочка считается рекурсивно одним запросом; `start` — номер первой вставляемой строки, `prev` —
-/// хеш предыдущей (GENESIS при полной пересборке).
+/// по строке за раз — хеш цепочки считает SQL от хеша предыдущей строки; `start` — номер первой
+/// вставляемой строки, `prev` — хеш предыдущей (GENESIS при полной пересборке).
 async fn rebuild_entries(
     tx: &mut PgConnection,
     tenant: TenantId,
@@ -383,79 +380,50 @@ async fn rebuild_entries(
     start: i64,
     prev: [u8; 32],
 ) -> Result<()> {
-    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _)| *id.as_uuid()).collect();
-    let senders: Vec<&str> = rows.iter().map(|(_, r, _)| r.sender.as_str()).collect();
-    let sender_keys: Vec<String> = rows
-        .iter()
-        .map(|(_, r, _)| r.sender.to_ascii_lowercase())
-        .collect();
-    let recipients: Vec<Vec<String>> = rows.iter().map(|(_, r, _)| r.recipients.clone()).collect();
-    let rcpt_keys: Vec<Vec<String>> = rows
-        .iter()
-        .map(|(_, r, _)| {
-            r.recipients
+    let mut seq = start;
+    let mut prev = prev.to_vec();
+    for (id, record, storage) in rows {
+        let canonical = String::from_utf8(record.canonical())
+            .map_err(|_| Error::internal("journal: канонический JSON не utf-8"))?;
+        let hash: Vec<u8> =
+            sqlx::query_scalar("SELECT sha256($1::bytea || convert_to($2, 'UTF8'))")
+                .bind(&prev)
+                .bind(canonical.as_str())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        sqlx::query(
+            "INSERT INTO journal.entries
+                 (tenant_id, seq, id, sender, sender_key, recipients, rcpt_keys, message_id, at,
+                  rule, storage, canonical, prev_hash, hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        )
+        .bind(*tenant.as_uuid())
+        .bind(seq)
+        .bind(*id.as_uuid())
+        .bind(&record.sender)
+        .bind(record.sender.to_lowercase())
+        .bind(&record.recipients)
+        .bind(
+            record
+                .recipients
                 .iter()
-                .map(|a| a.to_ascii_lowercase())
-                .collect()
-        })
-        .collect();
-    let message_ids: Vec<Option<String>> =
-        rows.iter().map(|(_, r, _)| r.message_id.clone()).collect();
-    let ats: Vec<OffsetDateTime> = rows.iter().map(|(_, r, _)| r.at).collect();
-    let rules: Vec<&str> = rows.iter().map(|(_, r, _)| r.rule.as_str()).collect();
-    let storages: Vec<&str> = rows.iter().map(|(_, _, s)| s.as_str()).collect();
-    let canonicals: Vec<String> = rows
-        .iter()
-        .map(|(_, r, _)| {
-            String::from_utf8(r.canonical())
-                .map_err(|_| Error::internal("journal: канонический JSON не utf-8"))
-        })
-        .collect::<Result<_>>()?;
-    sqlx::query(
-        "WITH RECURSIVE
-         src AS (
-             SELECT s.ord, s.id, s.sender, s.sender_key, s.recipients, s.keys, s.message_id,
-                    s.at, s.rule, s.storage, s.canonical
-             FROM unnest($2::uuid[], $3::text[], $4::text[], $5::text[][], $6::text[][], $7::text[],
-                         $8::timestamptz[], $9::text[], $10::text[], $11::text[])
-                  WITH ORDINALITY AS s(id, sender, sender_key, recipients, keys, message_id, at,
-                                       rule, storage, canonical, ord)
-         ),
-         chain AS (
-             SELECT src.ord, src.id, src.sender, src.sender_key, src.recipients, src.keys,
-                    src.message_id, src.at, src.rule, src.storage, src.canonical,
-                    $12::bigint AS seq, $13::bytea AS prev,
-                    sha256($13::bytea || convert_to(src.canonical, 'UTF8')) AS hash
-             FROM src WHERE src.ord = 1
-           UNION ALL
-             SELECT n.ord, n.id, n.sender, n.sender_key, n.recipients, n.keys, n.message_id,
-                    n.at, n.rule, n.storage, n.canonical, c.seq + 1, c.hash,
-                    sha256(c.hash || convert_to(n.canonical, 'UTF8'))
-             FROM chain c JOIN src n ON n.ord = c.seq - $12::bigint + 2
-         )
-         INSERT INTO journal.entries
-             (tenant_id, seq, id, sender, sender_key, recipients, rcpt_keys, message_id, at, rule,
-              storage, canonical, prev_hash, hash)
-         SELECT $1, c.seq, c.id, c.sender, c.sender_key, c.recipients, c.keys, c.message_id, c.at,
-                c.rule, c.storage, c.canonical, c.prev, c.hash
-         FROM chain c",
-    )
-    .bind(*tenant.as_uuid())
-    .bind(ids)
-    .bind(senders)
-    .bind(sender_keys)
-    .bind(recipients)
-    .bind(rcpt_keys)
-    .bind(message_ids)
-    .bind(ats)
-    .bind(rules)
-    .bind(storages)
-    .bind(canonicals)
-    .bind(start)
-    .bind(prev.to_vec())
-    .execute(&mut *tx)
-    .await
-    .map_err(db_err)?;
+                .map(|a| a.to_lowercase())
+                .collect::<Vec<_>>(),
+        )
+        .bind(&record.message_id)
+        .bind(record.at)
+        .bind(&record.rule)
+        .bind(storage)
+        .bind(&canonical)
+        .bind(&prev)
+        .bind(&hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        prev = hash;
+        seq += 1;
+    }
     Ok(())
 }
 
@@ -488,12 +456,16 @@ impl JournalStore for PgJournal {
             .keyed(
                 tenant,
                 |tx| {
+                    let entry = &entry;
                     Box::pin(async move {
-                        insert_entry(tx, tenant, &entry).await?;
+                        insert_entry(tx, tenant, entry).await?;
                         Ok(id)
                     })
                 },
-                |tx| Box::pin(committed_entry(tx, tenant, id)),
+                |tx| {
+                    let id = id;
+                    Box::pin(committed_entry(tx, tenant, id))
+                },
             )
             .await?;
         Ok(id)
@@ -505,8 +477,8 @@ impl JournalStore for PgJournal {
             Some(c) => Some(parse_cursor(c)?),
             None => None,
         };
-        let sender = query.sender.as_deref().map(|s| s.to_ascii_lowercase());
-        let recipient = query.recipient.as_deref().map(|s| s.to_ascii_lowercase());
+        let sender = query.sender.as_deref().map(|s| s.to_lowercase());
+        let recipient = query.recipient.as_deref().map(|s| s.to_lowercase());
         let (message_id, rule, since, until) =
             (&query.message_id, &query.rule, query.since, query.until);
         let tenant = query.tenant;
@@ -632,7 +604,7 @@ impl JournalStore for PgJournal {
         self.meta
             .rewrite(|| {
                 let records = records.clone();
-                with_system(self.meta.pool(), tenant, move |tx| {
+                with_system(self.meta.pool(), move |tx| {
                     Box::pin(async move {
                         sqlx::query(ORDER_LOCK)
                             .bind(tenant.to_string())

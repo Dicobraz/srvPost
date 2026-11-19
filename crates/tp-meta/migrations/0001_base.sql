@@ -1293,7 +1293,7 @@ CREATE TABLE journal.entries (
     seq        bigint NOT NULL CHECK (seq > 0),
     id         uuid NOT NULL,
     sender     text NOT NULL,
-    sender_key text NOT NULL CHECK (sender_key = lower(sender)),
+    sender_key text NOT NULL,
     recipients text[] NOT NULL CHECK (cardinality(recipients) > 0),
     rcpt_keys  text[] NOT NULL,
     message_id text,
