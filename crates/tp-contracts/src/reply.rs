@@ -451,16 +451,11 @@ mod tests {
     fn age_since_saturates() {
         let now = OffsetDateTime::UNIX_EPOCH;
         let d = |s: i64| Duration::from_secs(s.max(0) as u64);
-        assert_eq!(
-            age_since(now.replace_second(-10).expect("past"), now),
-            d(10)
-        );
+        let shift = |s: i64| now + time::Duration::seconds(s);
+        assert_eq!(age_since(shift(-10), now), d(10), "момент в прошлом");
         assert_eq!(age_since(now, now), Duration::ZERO);
         // Момент в будущем — нулевой возраст (насыщение).
-        assert_eq!(
-            age_since(now.replace_second(10).expect("future"), now),
-            d(0)
-        );
+        assert_eq!(age_since(shift(10), now), d(0));
     }
 
     #[test]

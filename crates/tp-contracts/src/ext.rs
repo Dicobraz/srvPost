@@ -239,7 +239,7 @@ pub struct FinalDelete {
     /// в базовой поставке ([`crate::thread::ThreadHoldHook`]), модуль «Соответствие требованиям» видит
     /// беседу для своих правил. `None` — вызывающий привязки не знает; хук может разрешить беседу
     /// по письму ([`crate::thread::ThreadStore::thread_of`]).
-    pub thread: Option<crate::thread::ThreadId>,
+    pub thread: Option<crate::ThreadId>,
 }
 
 /// Доставка письма получателям организации (`MailStore::ingest`, до загрузки).
