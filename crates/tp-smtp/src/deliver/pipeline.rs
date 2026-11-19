@@ -222,7 +222,9 @@ impl Delivery {
         // `RejectRecipient` вне `RcptTo` — ошибка реестра (контракт), сюда не доходит.
         Ok(
             match self.pipeline.run(PipelinePoint::Data, &input).await? {
-                StageVerdict::Reject(reason) => Some(reason),
+                StageVerdict::Reject(reason) | StageVerdict::RejectRecipient { reason, .. } => {
+                    Some(reason)
+                }
                 StageVerdict::Allow => None,
             },
         )
@@ -252,7 +254,9 @@ impl Delivery {
             system,
         };
         Ok(match self.pipeline.run(point, &input).await? {
-            StageVerdict::Reject(reason) => Some(reason),
+            StageVerdict::Reject(reason) | StageVerdict::RejectRecipient { reason, .. } => {
+                Some(reason)
+            }
             StageVerdict::Allow => None,
         })
     }
