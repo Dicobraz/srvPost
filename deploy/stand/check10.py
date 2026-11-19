@@ -13,11 +13,11 @@
 Порча записи и замер задержки с журналированием (риск 22) — сценарий docs/manual-tests/DEP-58.md,
 в этот шаг не входят. Записи журнала неизменяемы: прогон оставляет записи в журнале стенда.
 
-Поверхности (состояние на волне deploy-51): этап журналирования в узле и `thepost admin journal …`
-(ADM-52) вливаются волнами app-81/admin-38 — до их слияния шаги помечаются БЛОК (не FAIL), кроме
-проверок по индексу PostgreSQL (схема journal — tp-meta, влита). Правило журналирования — данные
-организации (Admin API); здесь при отсутствии правила заводится напрямую в journal.rules — только
-для стенда, продуктовая поверхность — Admin API/консоль.
+Поверхности (состояние на волне deploy-51): `thepost admin journal search/get/export/verify` влиты
+(ADM-52, #160); этап журналирования в узле — волна app-81 (APP-84), правила журналирования и
+restore_index (обслуживание) — следующих волн: до их слияния соответствующие шаги помечаются БЛОК
+(не FAIL). Правило журналирования — данные организации (Admin API); здесь при отсутствии правила
+заводится напрямую в journal.rules — только для стенда, продуктовая поверхность — Admin API/консоль.
 
 Запуск (стенд): python3 check10.py --host mail.example.test --domain example.test \
   --user-a a@example.test --password-a … --user-b b@example.test \
@@ -144,7 +144,7 @@ def main() -> int:
                             f"WHERE tenant_id = '{TENANT}'::uuid AND message_id = '{mid_in}'")
     record(env, "ок" if f"hidden@{args.domain}" in bcc else f"FAIL ({bcc})")
 
-    # Поиск: thepost admin journal search (ADM-52); поверхность не влита — поиск по индексу (БД).
+    # Поиск: thepost admin journal search (ADM-52) — по отправителю; сбой CLI — поиск по индексу (БД).
     if node_prefix:
         p = node(node_prefix, ["admin", "journal", "search", "--sender", f"x@remote.{args.domain}"])
         if p.returncode == 0 and mid_in in p.stdout:
@@ -152,7 +152,7 @@ def main() -> int:
         else:
             hit = psql(psql_prefix, "SELECT count(*) FROM journal.entries WHERE tenant_id = "
                                     f"'{TENANT}'::uuid AND sender = 'x@remote.{args.domain}'")
-            record("поиск: по отправителю (индекс; admin journal search — волна admin-38)",
+            record(f"поиск: по отправителю (CLI недоступен: {p.stderr.strip()[:60]}; по индексу)",
                    "ок" if hit != "0" else "FAIL")
     else:
         record("поиск: --node не задан — пропущен", "БЛОК")
@@ -164,8 +164,8 @@ def main() -> int:
         if p.returncode == 0 and all(h in head for h in ENVELOPE_HEADERS[:4]):
             record("выгрузка: .eml с конвертом X-ThePost-Journal-*", "ок")
         else:
-            record(f"выгрузка: thepost admin journal export недоступен/без конверта "
-                   f"(волна admin-38): {p.stderr.strip()[:120]}", "БЛОК")
+            record(f"выгрузка: thepost admin journal export недоступен/без конверта: "
+                   f"{p.stderr.strip()[:120]}", "БЛОК")
     else:
         record("выгрузка: --node не задан — пропущена", "БЛОК")
 
@@ -174,8 +174,8 @@ def main() -> int:
     if node_prefix:
         probe = node(node_prefix, ["admin", "journal", "restore-index"])
         if probe.returncode != 0:
-            record("восстановление: thepost admin journal restore-index недоступен (волна admin-38) — "
-                   "индекс не очищаем, стенд не ломаем", "БЛОК")
+            record("восстановление: thepost admin journal restore-index недоступен (поверхность "
+                   "обслуживания не влита) — индекс не очищаем, стенд не ломаем", "БЛОК")
         else:
             psql(psql_prefix, f"DELETE FROM journal.entries WHERE tenant_id = '{TENANT}'::uuid")
             empty = psql(psql_prefix, "SELECT count(*) FROM journal.entries "

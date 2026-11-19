@@ -1,12 +1,13 @@
 # DEP-58: развёртывание журнала переписки — ручная проверка (стенд)
 
 Нужны: узел с этапом журналирования в конвейере (волна `app-81`, APP-84 — до её слияния записи журнала не
-пишутся: этап реализован в tp-smtp, но не подключён в собранном узле) и поверхностями аудита (волна `admin-38`,
-ADM-52 — `thepost admin journal search/get/export/verify`, роль «аудитор журнала»; правила — Admin API или
-веб-консоль UI-25). Стенды: профиль SMB (`--profile smb` из `docs/manual-tests/CMP-01.md` или Ansible `smb.yml` —
-журнал `journal.local`) и малый Enterprise (`small-enterprise.yml` с `small_journal_bucket` — SeaweedFS ≥ 4.x с
-Object Lock; образ compose 3.80 блокировки не умеет). Инструменты: `swaks`, `psql`, `weed shell`, `thepost`
-на узле. Живые стенды не трогать: сценарий прогоняется на отдельной ВМ/контейнере.
+пишутся: этап реализован в tp-smtp, но не подключён в собранном узле) и поверхностями правил/восстановления
+(правила журналирования и `restore_index` — следующие волны; аудит влит — ADM-52 #160: `thepost admin journal
+search/get/export/verify`, роль «аудитор журнала»). Стенды: профиль SMB (`--profile smb` из
+`docs/manual-tests/CMP-01.md` или Ansible `smb.yml` — журнал `journal.local`) и малый Enterprise
+(`small-enterprise.yml` с `small_journal_bucket` — SeaweedFS ≥ 4.x с Object Lock; образ compose 3.80 блокировки
+не умеет). Инструменты: `swaks`, `psql`, `weed shell`, `thepost` на узле. Живые стенды не трогать: сценарий
+прогоняется на отдельной ВМ/контейнере.
 
 Обозначения: `D` — домен стенда, `A=a@$D`, `B=b@$D` (пароль приложения — APP-19), `PSQL` — доступ к базе узла
 (`psql postgres://thepost@…/thepost`), `NODE` — команда запуска `thepost` на узле (`docker exec <узел>` или `ssh`).
@@ -36,7 +37,8 @@ Object Lock; образ compose 3.80 блокировки не умеет). Ин
 
 ## Правило Both → записи (запись)
 
-6. **Правило:** включить правило журналирования на организацию, направление «оба» (Admin API / консоль);
+6. **Правило:** включить правило журналирования на организацию, направление «оба» (Admin API / консоль;
+   до вливания поверхности правил — вставка в `journal.rules` через `psql`, как в `deploy/stand/check10.py`);
    `PSQL -c 'SELECT id, direction FROM journal.rules'` — правило видно.
 7. **Входящее:** `swaks --server <$D> --port 25 --from x@remote.test --to $B --header 'Bcc: hidden@$D'` — `250`;
    в журнале запись о письме: конверт содержит отправителя, `$B` и скрытого `hidden@$D` (поиск/просмотр — шаг 11);
@@ -62,8 +64,9 @@ Object Lock; образ compose 3.80 блокировки не умеет). Ин
 
 13. **Порча индекса как авария:** `PSQL -c 'DELETE FROM journal.entries'` → поиск по журналу пуст,
     `NODE thepost doctor journal` — расхождение индекса с хранилищем записей (`journal.index`).
-14. **Восстановление:** `restore_index` (обслуживание, Admin API) → все записи из хранилища в индексе, поиск
-    шага 11 снова находит их, `NODE thepost doctor journal chain` — цепочка целостна.
+14. **Восстановление:** `restore_index` (обслуживание; поверхность следующих волн — до влития временно
+    напрямую по контракту `JournalStore::restore_index`, как в тестах tp-blob/tp-meta) → все записи из
+    хранилища в индексе, поиск шага 11 снова находит их, `NODE thepost doctor journal chain` — цепочка целостна.
 
 ## Целостность цепочки (verify chain)
 
@@ -95,6 +98,6 @@ Object Lock; образ compose 3.80 блокировки не умеет). Ин
 
 | # | Итог |
 |---|---|
-| 1–19 | прогон не выполнялся: живые стенды (school-99, podium) не трогались; сценарий ждёт слияния волн `app-81` (APP-84 — этап в узле) и `admin-38` (ADM-52 — доступ аудитора) |
+| 1–19 | прогон не выполнялся: живые стенды (school-99, podium) не трогались; сценарий ждёт слияния волны `app-81` (APP-84 — этап в узле) и поверхностей правил/`restore_index` |
 
 Прогон: —.
