@@ -883,6 +883,7 @@ async fn room_imip_from_partner_stays_mail() {
             method: ItipMethod::Cancel,
             ics: cancel,
             sender: PeerKind::Partner,
+            calendar: None,
         })
         .await
         .expect("приём");
@@ -918,6 +919,7 @@ async fn room_internal_foreign_organizer_stays_mail() {
                 method: ItipMethod::Request,
                 ics,
                 sender: PeerKind::Own,
+                calendar: None,
             })
             .await
             .expect("приём");
@@ -950,6 +952,7 @@ impl Share {
                 method: ItipMethod::Request,
                 ics,
                 sender,
+                calendar: None,
             })
             .await
             .expect("приём")

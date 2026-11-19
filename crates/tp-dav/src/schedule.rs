@@ -204,6 +204,7 @@ impl ScheduleDeps {
                     method: m.method,
                     ics: ics.clone(),
                     sender: PeerKind::Own,
+                    calendar: None,
                 };
                 match self.delivery.deliver(&msg).await {
                     Ok(ItipOutcome::Applied) => set(to, STATUS_DELIVERED),

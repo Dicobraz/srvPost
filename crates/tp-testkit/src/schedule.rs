@@ -134,6 +134,7 @@ mod tests {
             method: ItipMethod::Request,
             ics: "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n".into(),
             sender: PeerKind::Partner,
+            calendar: None,
         }
     }
 
