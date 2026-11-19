@@ -168,11 +168,15 @@ mod tests {
             .is_err()
         );
 
-        // Схема: длительность — строка, режим — перечисление.
+        // Схема: длительность — строка, режим — перечисление governance/compliance.
         let schema = serde_json::to_value(schemars::schema_for!(JournalConfig)).expect("schema");
         let props = &schema["properties"];
         assert_eq!(props["retention"]["type"], "string");
-        assert_eq!(props["lock_mode"]["type"], "string");
+        let modes = serde_json::to_string(&props["lock_mode"]).expect("режим в схеме");
+        assert!(
+            modes.contains("governance") && modes.contains("compliance"),
+            "{modes}"
+        );
         assert!(props.get("retention_secs").is_none());
     }
 

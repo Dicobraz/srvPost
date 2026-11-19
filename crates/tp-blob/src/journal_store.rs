@@ -425,7 +425,7 @@ impl JournalRecords {
             slot.push(stored);
             if slot.len() > 1 {
                 // Развилка: продолжает цепь запись раньше по (at, id), прочие — нарушение.
-                let mut fork: Vec<&StoredRecord> = slot.iter().copied().collect();
+                let mut fork: Vec<&StoredRecord> = slot.to_vec();
                 fork.sort_by_key(|s| (s.record.at, s.id));
                 broken.extend(fork[1..].iter().map(|s| s.id));
             }
@@ -438,7 +438,7 @@ impl JournalRecords {
             && let Some(next) = by_prev.get(&cursor)
         {
             steps -= 1;
-            let mut candidates: Vec<&StoredRecord> = next.iter().copied().collect();
+            let mut candidates: Vec<&StoredRecord> = next.to_vec();
             candidates.sort_by_key(|s| (s.record.at, s.id));
             let stored = candidates[0];
             chain.push(stored.clone());
@@ -874,24 +874,35 @@ mod tests {
         .collect()
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    /// Замыкание `corrupt` набора `suite::journal`: подмена записи в отдельном потоке со своим
+    /// маленьким рантаймом (замыкание синхронное, из задачи его не вызвать).
+    fn corrupt_hook(
+        journal: Arc<JournalRecords>,
+        tenant: TenantId,
+    ) -> impl Fn(JournalId) + Send + Sync {
+        move |id: JournalId| {
+            let journal = journal.clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("journal tamper runtime");
+                rt.block_on(journal.tamper(tenant, id))
+                    .expect("journal tamper");
+            })
+            .join()
+            .expect("journal tamper thread");
+        }
+    }
+
+    #[tokio::test]
     async fn suite_journal_on_local_backend() {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = backend_local(dir.path()).await;
         let (_, now) = test_clock(OffsetDateTime::UNIX_EPOCH);
         let journal = Arc::new(JournalRecords::new(backend, cfg(), now).expect("journal"));
         let tenant = TenantId::new();
-        let corrupt = {
-            let journal = journal.clone();
-            move |id: JournalId| {
-                let journal = journal.clone();
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current()
-                        .block_on(journal.tamper(tenant, id))
-                        .expect("tamper");
-                });
-            }
-        };
+        let corrupt = corrupt_hook(journal.clone(), tenant);
         let drop_idx = {
             let journal = journal.clone();
             move || journal.drop_index()
@@ -899,22 +910,12 @@ mod tests {
         suite::journal(journal.as_ref(), &corrupt, &drop_idx).await;
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     async fn suite_journal_on_s3_memory_backend() {
         let (_, now) = test_clock(OffsetDateTime::UNIX_EPOCH);
         let journal = Arc::new(JournalRecords::new(backend_memory(), cfg(), now).expect("journal"));
         let tenant = TenantId::new();
-        let corrupt = {
-            let journal = journal.clone();
-            move |id: JournalId| {
-                let journal = journal.clone();
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current()
-                        .block_on(journal.tamper(tenant, id))
-                        .expect("tamper");
-                });
-            }
-        };
+        let corrupt = corrupt_hook(journal.clone(), tenant);
         let drop_idx = {
             let journal = journal.clone();
             move || journal.drop_index()
