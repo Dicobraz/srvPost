@@ -19,6 +19,7 @@ const ROLES: Partial<Record<string, string>> = {
   organization_admin: "администратор организации",
   operator: "оператор",
   auditor: "аудитор",
+  journal_auditor: "аудитор журнала",
 } satisfies Record<Schemas["AdminRole"], string>;
 const METHODS = ["PUT", "POST", "PATCH", "DELETE"].map((m) => ({ value: m, label: m }));
 

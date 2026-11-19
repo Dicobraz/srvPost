@@ -25,8 +25,8 @@ use tp_contracts::transport::{AcceptedDomain, DomainKind, TransportStore};
 use tp_contracts::{AccountId, DomainId, GroupId, MessageId, Result, TenantId};
 use tp_testkit::{
     Clock, FakeAuthenticator, MemAppPasswords, MemAuditLog, MemBlobIndex, MemBlobStore,
-    MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemLocalAdminTokens, MemMetadata,
-    MemPolicies, MemQueue, MemQuota, MemSieve, MemTransport, MemTrash, SystemClock,
+    MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemJournal, MemLocalAdminTokens,
+    MemMetadata, MemPolicies, MemQueue, MemQuota, MemSieve, MemTransport, MemTrash, SystemClock,
 };
 use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate, MemTrust};
 
@@ -309,7 +309,7 @@ pub fn deps() -> Deps {
 
 /// Токены: `root` — администратор инсталляции, `org` — администратор организации по умолчанию,
 /// `user` — без роли (организация по умолчанию), `other` — администратор организации по имени входа в другой организации,
-/// `operator` и `auditor` — оператор и аудитор организации по умолчанию.
+/// `operator`, `auditor` — оператор и аудитор организации по умолчанию, `journal` — аудитор журнала.
 pub struct Env {
     pub auth: FakeAuthenticator,
     pub audit: MemAudit,
@@ -343,6 +343,8 @@ pub struct Env {
     pub brand_blobs: MemBlobStore,
     /// Политика доверия (`Admin::with_trust`).
     pub trust: MemTrust,
+    /// Журнал переписки (`Admin::with_journal`).
+    pub journal: MemJournal,
     pub admin: Arc<Admin>,
     pub router: Router,
     pub other_tenant: TenantId,
@@ -439,6 +441,11 @@ pub fn config() -> AdminConfig {
                 logins: vec![],
                 groups: vec!["security".into()],
             },
+            RoleBinding {
+                role: AdminRole::JournalAuditor,
+                logins: vec![],
+                groups: vec!["compliance".into()],
+            },
         ],
         ..AdminConfig::default()
     }
@@ -451,31 +458,36 @@ impl Env {
 
     /// Без настроек транспорта (маршруты транспорта — 503).
     pub fn without_transport() -> Self {
-        Self::build(config(), Vec::new(), false, true, true, true, true)
+        Self::build(config(), Vec::new(), false, true, true, true, true, true)
     }
 
     /// Без локального входа (`admin init`, вход по паролю и обмен — 503).
     pub fn without_local() -> Self {
-        Self::build(config(), Vec::new(), true, false, true, true, true)
+        Self::build(config(), Vec::new(), true, false, true, true, true, true)
     }
 
     /// Без общего доступа, представителей и ресурсов (их маршруты — 503).
     pub fn without_sharing() -> Self {
-        Self::build(config(), Vec::new(), true, true, false, true, true)
+        Self::build(config(), Vec::new(), true, true, false, true, true, true)
     }
 
     /// Без очереди исходящей почты (её маршруты — 503).
     pub fn without_queue() -> Self {
-        Self::build(config(), Vec::new(), true, true, true, false, true)
+        Self::build(config(), Vec::new(), true, true, true, false, true, true)
     }
 
     /// Без брендинга (его маршруты — 503).
     pub fn without_branding() -> Self {
-        Self::build(config(), Vec::new(), true, true, true, true, false)
+        Self::build(config(), Vec::new(), true, true, true, true, false, true)
+    }
+
+    /// Без журнала переписки (его маршруты — 503).
+    pub fn without_journal() -> Self {
+        Self::build(config(), Vec::new(), true, true, true, true, true, false)
     }
 
     pub fn with(cfg: AdminConfig, modules: Vec<Arc<dyn AdminRoutes>>) -> Self {
-        Self::build(cfg, modules, true, true, true, true, true)
+        Self::build(cfg, modules, true, true, true, true, true, true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -487,6 +499,7 @@ impl Env {
         with_sharing: bool,
         with_queue: bool,
         with_branding: bool,
+        with_journal: bool,
     ) -> Self {
         let auth = FakeAuthenticator::default();
         let other_tenant = TenantId::new();
@@ -497,6 +510,7 @@ impl Env {
         auth.add_token("other", subject(other_tenant, "admin@example.org", &[]));
         auth.add_token("operator", subject(d, "ops@example.org", &["mail-ops"]));
         auth.add_token("auditor", subject(d, "sec@example.org", &["security"]));
+        auth.add_token("journal", subject(d, "ja@example.org", &["compliance"]));
         let audit = MemAudit::default();
         let stores = Stores::new();
         let admin = Admin::new(
@@ -542,6 +556,12 @@ impl Env {
         // Политика доверия: группы — членство MemGroups (уровни групп в `effective_for`).
         let trust = MemTrust::new().with_groups(Arc::new(stores.groups.clone()));
         let admin = admin.with_trust(Arc::new(trust.clone()));
+        let journal = MemJournal::new();
+        let admin = if with_journal {
+            admin.with_journal(Arc::new(journal.clone()))
+        } else {
+            admin
+        };
         let sieve = MemSieve::new();
         let held_blobs = MemBlobStore::new(Arc::new(SystemClock));
         let mut admin = admin
@@ -593,6 +613,7 @@ impl Env {
             branding,
             brand_blobs,
             trust,
+            journal,
             router: admin.clone().router(),
             admin,
             other_tenant,
