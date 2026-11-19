@@ -1303,7 +1303,8 @@ mod tests {
         cfg.retention = Duration::from_secs(2 * 24 * 3600);
 
         let backend = backend_memory();
-        let journal = JournalRecords::new(backend.clone(), cfg.clone(), now).expect("journal");
+        let journal =
+            JournalRecords::new(backend.clone(), cfg.clone(), now.clone()).expect("journal");
         let tenant = TenantId::DEFAULT;
         let message = random_bytes(2, 400);
         let id = journal
