@@ -109,8 +109,9 @@ struct Invitation {
 }
 
 /// Приглашение iTIP письма `raw`: часть `text/calendar` с параметром `method=REQUEST`, один адрес `From` —
-/// организатор встречи. `None`/`Err` — письмо не приглашение (причина — в описании ошибки).
-fn extract(raw: &[u8]) -> Option<Result<Invitation, String>> {
+/// организатор встречи; вместе со сведениями планирования (участники для идентичности пользователя).
+/// `None`/`Err` — письмо не приглашение (причина — в описании ошибки).
+fn extract(raw: &[u8]) -> Option<Result<(Invitation, itip::Meeting), String>> {
     let msg = MessageParser::new().parse(raw)?;
     let (method, ics) = msg.parts.iter().find_map(|p| {
         let ct = p.content_type()?;
@@ -146,8 +147,9 @@ fn extract(raw: &[u8]) -> Option<Result<Invitation, String>> {
             return Err("письмо не приглашение: не один адрес From".into());
         };
         let from = itip::address(from);
-        let ical =
-            ICalendar::parse(&ics).ok_or("письмо не приглашение: неразборчивый iCalendar")?;
+        let ical = ICalendar::parse(&ics)
+            .ok()
+            .ok_or("письмо не приглашение: неразборчивый iCalendar")?;
         let meeting = itip::meeting(&ical).ok_or("письмо не приглашение: нет события с UID")?;
         if meeting.organizer.as_deref() != Some(from.as_str()) {
             return Err("письмо не приглашение: отправитель письма — не организатор".into());
@@ -384,7 +386,7 @@ pub(crate) async fn respond(
             "calendarEventId": null,
         })));
     };
-    let Some(mut ical) = ICalendar::parse(&obj.body) else {
+    let Some(mut ical) = ICalendar::parse(&obj.body).ok() else {
         return Err(MethodError::server_fail("копия события не разбирается"));
     };
     if !set_partstat(&mut ical, &me, partstat.ical()) {

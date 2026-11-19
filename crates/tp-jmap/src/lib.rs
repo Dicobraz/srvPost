@@ -91,8 +91,8 @@ pub use crate::sharing::SharingDeps;
 
 use crate::core::error::MethodResult;
 use crate::core::{
-    AVAILABILITY, CALENDARS, CONTACTS, CORE, MAIL, ORG_CHART, PRINCIPALS, SENDER_LISTS, SETTINGS,
-    SIEVE, SUBMISSION, TASKS, THEPOST_ITIP, VACATION,
+    AVAILABILITY, CALENDARS, CONTACTS, CORE, Ctx, MAIL, ORG_CHART, PRINCIPALS, SENDER_LISTS,
+    SETTINGS, SIEVE, SUBMISSION, TASKS, THEPOST_ITIP, VACATION,
 };
 
 /// Встроенные методы и их capability.
