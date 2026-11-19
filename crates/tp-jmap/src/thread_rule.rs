@@ -413,6 +413,7 @@ mod tests {
     use tp_contracts::MessageId;
     use tp_contracts::ext::Decision;
     use tp_contracts::meta::SpecialUse;
+    use tp_contracts::retention::TrashStore as _;
     use tp_contracts::thread::{ThreadHold, ThreadStore as _};
 
     use crate::core::parse_thread_id;
