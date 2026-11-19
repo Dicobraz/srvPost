@@ -235,7 +235,7 @@ async fn search_journal(
     let query = q.query(&a, org)?;
     query.validate()?;
     let page = store(&a)?.search(&JournalAudit::grant(), &query).await?;
-    access(&a, &caller, org, route.as_str(), &uri, page.entries.len())?;
+    access(&a, &caller, org, route.as_str(), &uri, page.entries.len()).await?;
     Ok(Json(JournalPageView {
         entries: page.entries.iter().map(Into::into).collect(),
         next: page.next.map(|c| c.0),
@@ -256,7 +256,7 @@ async fn get_journal(
     Path((org, id)): Path<(TenantId, JournalId)>,
 ) -> ApiResult<Json<JournalEntryView>> {
     let entry = entry(store(&a)?, org, id, a.cfg.max_page_size).await?;
-    access(&a, &caller, org, route.as_str(), &uri, 1)?;
+    access(&a, &caller, org, route.as_str(), &uri, 1).await?;
     Ok(Json(JournalEntryView::from(&entry)))
 }
 
@@ -304,7 +304,7 @@ async fn export_journal(
     Path((org, id)): Path<(TenantId, JournalId)>,
 ) -> ApiResult<(HeaderMap, Vec<u8>)> {
     let eml = store(&a)?.export(&JournalAudit::grant(), org, id).await?;
-    access(&a, &caller, org, route.as_str(), &uri, 1)?;
+    access(&a, &caller, org, route.as_str(), &uri, 1).await?;
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(EML_TYPE));
     headers.insert(
@@ -328,7 +328,7 @@ async fn verify_journal(
     Path(org): Path<TenantId>,
 ) -> ApiResult<Json<ChainReportView>> {
     let report = store(&a)?.verify_chain(&JournalAudit::grant(), org).await?;
-    access(&a, &caller, org, route.as_str(), &uri, 0)?;
+    access(&a, &caller, org, route.as_str(), &uri, 0).await?;
     Ok(Json(report.into()))
 }
 

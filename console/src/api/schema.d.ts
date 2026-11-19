@@ -1565,7 +1565,7 @@ export interface components {
          * @description Роль администратора.
          * @enum {string}
          */
-        AdminRole: "installation_admin" | "organization_admin" | "operator" | "auditor";
+        AdminRole: "installation_admin" | "organization_admin" | "operator" | "auditor" | "journal_auditor";
         /** @description Сессия Admin API: значение показывается один раз. */
         AdminSession: {
             /** @description Учётная запись. */
@@ -1861,7 +1861,10 @@ export interface components {
             broken_at?: string | null;
             /** @description Цепочка целостна. */
             ok: boolean;
-            /** @description Число проверенных записей. */
+            /**
+             * Format: int64
+             * @description Число проверенных записей.
+             */
             records: number;
         };
         /** @description Снимок уровня кластера. */
@@ -6966,6 +6969,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description файл .eml */
             200: {
                 headers: {
                     [name: string]: unknown;
