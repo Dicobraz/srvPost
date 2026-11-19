@@ -19,6 +19,15 @@ database:
 blob:
   url: file:///var/lib/thepost/blob
 
+# Журналирование переписки (SRS 4.9): по умолчанию выключено — включается явно (journal.enabled).
+# Профиль SMB — локальный каталог: неизменяемость обеспечивает только сервер (записи лишь добавляются),
+# от администратора ОС защиты нет — thepost doctor предупреждает (APP-82); для требований неизменяемости —
+# S3 с Object Lock (journal.s3). Правила журналирования — данные организации (Admin API), не файл узла.
+journal:
+  enabled: false
+  local:
+    dir: /var/lib/thepost/journal
+
 roles: [all]
 
 # Сертификат клиентских протоколов (SMTP, IMAP, ManageSieve, JMAP): цепочка — файл, ключ — только в OpenBao (секрет
