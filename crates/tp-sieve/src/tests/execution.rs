@@ -42,6 +42,7 @@ pub(super) fn summary(o: &Outcome) -> String {
                 format!("redirect{} {address}", if *copy { " :copy" } else { "" })
             }
             Action::Vacation(_) => "vacation".to_owned(),
+            Action::ProcessCalendar(_) => "processcalendar".to_owned(),
         })
         .collect();
     if o.error.is_some() {

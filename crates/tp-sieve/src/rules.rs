@@ -285,8 +285,8 @@ fn insert<K: Copy + Eq + Hash, V>(
 /// Итог правил целиком (SIEVE-14): применение или отказ.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    /// Правила применены — итог доставки.
-    Rules(RulesOutcome),
+    /// Правила применены — итог доставки (`Box` — итог крупнее отказа, clippy `large_enum_variant`).
+    Rules(Box<RulesOutcome>),
     /// Отказ: скрипт организации не выполнился (сохранённый текст не проходит проверку, ошибка выполнения,
     /// превышение `Limits`). Письмо не доставляется мимо скрипта (решение 124 д): SMTP превращает отказ во
     /// временный `451 4.3.0` (SMTP-50), а не доставку в обход, как у Stalwart. Причина — для журнала.
@@ -305,7 +305,7 @@ impl Rules {
             return Ok(Decision::Failed(format!("{ORG_SCRIPT}: {e}")));
         }
         if org.is_none() && script.is_none() && !setting.is_active(now) {
-            return Ok(Decision::Rules(RulesOutcome::implicit_keep()));
+            return Ok(Decision::Rules(Box::new(RulesOutcome::implicit_keep())));
         }
 
         let paths = mailbox_paths(&input.mailboxes);
@@ -373,7 +373,7 @@ impl Rules {
                 "sieve: ошибка правил доставки"
             );
         }
-        Ok(Decision::Rules(outcome))
+        Ok(Decision::Rules(Box::new(outcome)))
     }
 }
 
@@ -381,7 +381,7 @@ impl Rules {
 impl DeliveryRules for Rules {
     async fn evaluate(&self, input: &RulesInput) -> Result<RulesOutcome> {
         match self.decide(input).await? {
-            Decision::Rules(outcome) => Ok(outcome),
+            Decision::Rules(outcome) => Ok(*outcome),
             Decision::Failed(reason) => {
                 // Отказ — повторяемая ошибка: SMTP отвечает временным отказом, письмо мимо скрипта организации
                 // не проходит (SIEVE-14, SMTP-50).

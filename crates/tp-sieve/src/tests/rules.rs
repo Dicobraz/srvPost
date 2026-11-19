@@ -471,7 +471,7 @@ async fn processcalendar_within_matrix() {
     f.input.peer = PeerKind::Partner;
     f.input.matrix.invite_new.partner = InviteMode::Auto;
     let o = f.eval().await;
-    let cal = o.calendar.expect("calendar");
+    let cal = o.calendar.as_ref().expect("calendar");
     assert_eq!(
         (cal.addresses.as_slice(), cal.calendar_id.as_deref()),
         (["pm@partner.example".to_owned()].as_slice(), Some("work"))
