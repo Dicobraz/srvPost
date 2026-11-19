@@ -1935,9 +1935,13 @@ mod tests {
             },
         ];
         let report = Catalog::apply_update(&old, &mut new_vendor);
-        assert_eq!(report.added, [&c]);
-        assert_eq!(report.removed, [&b], "b без изменений администратора");
-        assert_eq!(report.changed, [&a], "пакет изменил вес");
+        assert_eq!(report.added, vec![c.clone()]);
+        assert_eq!(
+            report.removed,
+            vec![b.clone()],
+            "b без изменений администратора"
+        );
+        assert_eq!(report.changed, vec![a.clone()], "пакет изменил вес");
         assert!(
             report.orphaned_overrides.is_empty(),
             "a остался в пакете: {report:?}"
@@ -1966,7 +1970,7 @@ mod tests {
         let mut new_vendor = vec![signal("tp.a", 6)];
         let report = Catalog::apply_update(&old_with_b_override, &mut new_vendor);
         assert_eq!(report.removed, Vec::<SignalId>::new());
-        assert_eq!(report.orphaned_overrides, [&b]);
+        assert_eq!(report.orphaned_overrides, vec![b.clone()]);
         // Изменение администратора переживает обновление: каталог после обновления с той же политикой.
         let updated = Catalog::effective(&new_vendor, Some(&policy), None);
         let a_effective = updated.get(&a).expect("a");
