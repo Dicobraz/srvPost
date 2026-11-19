@@ -1770,10 +1770,14 @@ mod tests {
         );
 
         // Признаки администратора обоих уровней; организация перекрывает установку.
-        let mut inst = RiskPolicy::default();
-        inst.signals = vec![admin_signal("org.x", 2)];
-        let mut org = RiskPolicy::default();
-        org.signals = vec![admin_signal("org.x", 5), admin_signal("org.y", 3)];
+        let inst = RiskPolicy {
+            signals: vec![admin_signal("org.x", 2)],
+            ..Default::default()
+        };
+        let org = RiskPolicy {
+            signals: vec![admin_signal("org.x", 5), admin_signal("org.y", 3)],
+            ..Default::default()
+        };
         let catalog = Catalog::effective(&[], Some(&inst), Some((org_level, &org)));
         assert_eq!(catalog.signals.len(), 2);
         let x = catalog
@@ -1900,8 +1904,10 @@ mod tests {
             },
         );
         assert!(matches!(bad.check(), Err(Error::Invalid(_))));
-        let mut bad = RiskPolicy::default();
-        bad.signals = vec![admin_signal("org.x", 1), admin_signal("org.x", 2)];
+        let bad = RiskPolicy {
+            signals: vec![admin_signal("org.x", 1), admin_signal("org.x", 2)],
+            ..Default::default()
+        };
         assert!(matches!(bad.check(), Err(Error::Invalid(_))));
     }
 
@@ -1929,13 +1935,9 @@ mod tests {
             },
         ];
         let report = Catalog::apply_update(&old, &mut new_vendor);
-        assert_eq!(report.added, [c.clone()]);
-        assert_eq!(
-            report.removed,
-            [b.clone()],
-            "b без изменений администратора"
-        );
-        assert_eq!(report.changed, [a.clone()], "пакет изменил вес");
+        assert_eq!(report.added, [&c]);
+        assert_eq!(report.removed, [&b], "b без изменений администратора");
+        assert_eq!(report.changed, [&a], "пакет изменил вес");
         assert!(
             report.orphaned_overrides.is_empty(),
             "a остался в пакете: {report:?}"
@@ -1964,7 +1966,7 @@ mod tests {
         let mut new_vendor = vec![signal("tp.a", 6)];
         let report = Catalog::apply_update(&old_with_b_override, &mut new_vendor);
         assert_eq!(report.removed, Vec::<SignalId>::new());
-        assert_eq!(report.orphaned_overrides, [b.clone()]);
+        assert_eq!(report.orphaned_overrides, [&b]);
         // Изменение администратора переживает обновление: каталог после обновления с той же политикой.
         let updated = Catalog::effective(&new_vendor, Some(&policy), None);
         let a_effective = updated.get(&a).expect("a");

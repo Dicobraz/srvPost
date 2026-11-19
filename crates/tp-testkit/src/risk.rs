@@ -335,12 +335,12 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    use crate::infra::ManualClock;
     use tp_contracts::risk::{
         Detector, Hit, HitSource, ListId, Origin,
         PackageState::{Active, Previous},
         RiskAction, Semver, Signal, SignalId, SourceKind, Tier,
     };
-    use tp_testkit::ManualClock;
 
     use crate::suite;
 

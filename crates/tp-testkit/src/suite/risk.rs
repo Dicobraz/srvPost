@@ -253,7 +253,7 @@ pub async fn risk(store: &dyn RiskStore, keep: usize) {
 
     // Учёт обращений: суммируется по суткам и организациям.
     let source =
-        tp_contracts::risk::SourceId::new(&format!("suite-{}", TenantId::new())).expect("source");
+        tp_contracts::risk::SourceId::new(format!("suite-{}", TenantId::new())).expect("source");
     store
         .record_usage(&source, tenant, 10, 1)
         .await
