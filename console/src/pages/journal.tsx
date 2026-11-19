@@ -18,22 +18,24 @@ const URL = "/api/v1/orgs/{org}/journal";
 type Entry = Schemas["JournalEntryView"];
 type Filters = { sender?: string; recipient?: string; message_id?: string; rule?: string; range?: [Dayjs | null, Dayjs | null] | null };
 
-const sender = (e: Entry) => e.record.sender || "<> (уведомление о недоставке)";
+const sender = (r: Schemas["JournalRecordView"]) => r.sender || "<> (уведомление о недоставке)";
 
 /** Конверт записи: просмотр — отдельное обращение к журналу (фиксируется журналом аудита узла), рядом выгрузка `.eml`. */
 function Envelope({ id }: { id: string }) {
   const { result, query } = useCustom<Entry>({ url: `${URL}/${id}`, method: "get" });
-  const e = result.data;
+  // До ответа Refine отдаёт пустой объект — запись распознаётся по конверту.
+  const e = result.data as Entry | undefined;
+  const r = e?.record;
   return (
     <Space direction="vertical" size="middle">
       <Descriptions column={1} size="small">
-        <Descriptions.Item label="Время">{e && moment(e.record.at)}</Descriptions.Item>
-        <Descriptions.Item label="Отправитель">{e && sender(e)}</Descriptions.Item>
-        <Descriptions.Item label="Получатели">{e ? e.record.recipients.join(", ") : ""}</Descriptions.Item>
-        <Descriptions.Item label="Message-ID">{e?.record.message_id ?? "—"}</Descriptions.Item>
-        <Descriptions.Item label="Правило">{e?.record.rule ?? ""}</Descriptions.Item>
+        <Descriptions.Item label="Время">{r && moment(r.at)}</Descriptions.Item>
+        <Descriptions.Item label="Отправитель">{r && sender(r)}</Descriptions.Item>
+        <Descriptions.Item label="Получатели">{r ? r.recipients.join(", ") : ""}</Descriptions.Item>
+        <Descriptions.Item label="Message-ID">{r ? (r.message_id ?? "—") : ""}</Descriptions.Item>
+        <Descriptions.Item label="Правило">{r ? r.rule : ""}</Descriptions.Item>
         <Descriptions.Item label="Хеш цепочки">
-          {e && (
+          {e?.hash && (
             <Typography.Text code copyable={{ text: e.hash }}>
               {e.hash}
             </Typography.Text>
@@ -51,15 +53,19 @@ function Envelope({ id }: { id: string }) {
 function Chain() {
   const [open, setOpen] = useState(false);
   const { result, query } = useCustom<Schemas["ChainReportView"]>({ url: `${URL}/verify`, method: "get" });
-  const r = result.data;
+  // До ответа Refine отдаёт пустой объект — отчёт распознаётся по числу записей.
+  const data = result.data as Schemas["ChainReportView"] | undefined;
+  const r = typeof data?.records === "number" ? data : undefined;
   return (
     <Space>
-      {query.isLoading ? (
-        <Typography.Text type="secondary">Целостность цепочки: проверка…</Typography.Text>
-      ) : r?.ok ? (
-        <StatusTag role="ok">цепочка цела</StatusTag>
+      {r ? (
+        r.ok ? (
+          <StatusTag role="ok">цепочка цела</StatusTag>
+        ) : (
+          <StatusTag role="err">разрыв цепочки</StatusTag>
+        )
       ) : (
-        <StatusTag role="err">разрыв цепочки</StatusTag>
+        <Typography.Text type="secondary">Целостность цепочки: {query.isLoading ? "проверка…" : "нет отчёта"}</Typography.Text>
       )}
       <Button type="link" style={{ padding: 0 }} onClick={() => setOpen(true)}>
         Отчёт целостности
@@ -67,10 +73,18 @@ function Chain() {
       <Drawer open={open} title="Отчёт целостности цепочки" width={480} onClose={() => setOpen(false)} destroyOnHidden>
         <Descriptions column={1} size="small">
           <Descriptions.Item label="Состояние">
-            {r?.ok ? <StatusTag role="ok">цепочка целостна</StatusTag> : <StatusTag role="err">разрыв цепочки</StatusTag>}
+            {r ? (
+              r.ok ? (
+                <StatusTag role="ok">цепочка целостна</StatusTag>
+              ) : (
+                <StatusTag role="err">разрыв цепочки</StatusTag>
+              )
+            ) : (
+              "…"
+            )}
           </Descriptions.Item>
-          <Descriptions.Item label="Проверено записей">{r?.records ?? "…"}</Descriptions.Item>
-          <Descriptions.Item label="Разрыв">{r?.broken_at ?? "—"}</Descriptions.Item>
+          <Descriptions.Item label="Проверено записей">{r ? r.records : "…"}</Descriptions.Item>
+          <Descriptions.Item label="Разрыв">{r ? (r.broken_at ?? "—") : "…"}</Descriptions.Item>
         </Descriptions>
       </Drawer>
     </Space>
@@ -111,7 +125,7 @@ export function JournalPage() {
       </Form>
       <Table<Entry> dataSource={page?.entries} loading={loading} rowKey="id" pagination={false}>
         <Table.Column<Entry> title="Время" render={(_, e) => moment(e.record.at)} />
-        <Table.Column<Entry> title="Отправитель" render={(_, e) => sender(e)} />
+        <Table.Column<Entry> title="Отправитель" render={(_, e) => sender(e.record)} />
         <Table.Column<Entry> title="Получатели" render={(_, e) => e.record.recipients.join(", ")} />
         <Table.Column<Entry> title="Message-ID" render={(_, e) => e.record.message_id ?? "—"} />
         <Table.Column<Entry> title="Правило" render={(_, e) => <Tag>{e.record.rule}</Tag>} />

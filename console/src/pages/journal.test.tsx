@@ -43,8 +43,8 @@ test("журнал переписки: поиск по отправителю, �
     },
     ["journal_auditor"],
   );
-  expect(await screen.findByText("a@external.example")).toBeTruthy();
-  // Целостность цепочки — индикатор на странице (число записей — в отчёте).
+  // Обе записи страницы — в таблице; целостность цепочки — индикатор в заголовке (число записей — в отчёте).
+  expect(await screen.findAllByText("a@external.example")).toHaveLength(2);
   expect(await screen.findByText("цепочка цела")).toBeTruthy();
 
   fireEvent.change(screen.getByLabelText("Отправитель"), { target: { value: "a@external.example" } });
