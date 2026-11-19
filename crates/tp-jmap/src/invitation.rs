@@ -45,7 +45,7 @@ use tp_contracts::audit::{AuditAction, AuditObject};
 use tp_contracts::dav::{DavObject, Precondition, PutOutcome};
 use tp_contracts::meta::{Message, SpecialUse};
 use tp_contracts::schedule::{ItipMessage, ItipMethod, ItipOutcome};
-use tp_contracts::senders::{SenderLists, SenderVerdict};
+use tp_contracts::senders::SenderVerdict;
 use tp_contracts::trust::PeerKind;
 use tp_dav::itip;
 
