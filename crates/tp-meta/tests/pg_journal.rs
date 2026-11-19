@@ -12,12 +12,14 @@ use time::OffsetDateTime;
 use tp_contracts::groups::{DistributionGroup, GroupMember, GroupStore, SenderRestriction};
 use tp_contracts::ids::{AccountId, GroupId, JournalId, TenantId};
 use tp_contracts::journal::{
-    JournalAudit, JournalDirection, JournalQuery, JournalRecord, JournalRule, JournalScope,
-    JournalStore,
+    JournalAudit, JournalDirection, JournalQuery, JournalRecord, JournalRecords, JournalRule,
+    JournalScope, JournalStore,
 };
 use tp_contracts::meta::{AccountKind, AccountStore, AccountUpsert};
 use tp_contracts::{DomainId, Error};
-use tp_meta::{PgJournal, PgMeta, schema};
+use tp_meta::PgMeta;
+use tp_meta::journal::PgJournal;
+use tp_meta::schema;
 use tp_testkit::{MemJournalRecords, suite};
 
 /// Код ошибки PostgreSQL.

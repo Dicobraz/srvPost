@@ -383,9 +383,9 @@ async fn rebuild_entries(
     start: i64,
     prev: [u8; 32],
 ) -> Result<()> {
-    let mut seq = start;
     let mut prev = prev.to_vec();
-    for (id, record, storage) in rows {
+    for (i, (id, record, storage)) in rows.iter().enumerate() {
+        let seq = start + i as i64;
         let canonical = String::from_utf8(record.canonical())
             .map_err(|_| Error::internal("journal: канонический JSON не utf-8"))?;
         let hash: Vec<u8> =
@@ -425,7 +425,6 @@ async fn rebuild_entries(
         .await
         .map_err(db_err)?;
         prev = hash;
-        seq += 1;
     }
     Ok(())
 }
