@@ -159,7 +159,7 @@ impl Rules {
         self.compiled(compile_trusted(text.as_bytes(), &self.limits))
     }
 
-    fn compiled(&self, r: Result<Program, Vec<Diagnostic>>) -> Compiled {
+    fn compiled(&self, r: std::result::Result<Program, Vec<Diagnostic>>) -> Compiled {
         self.compilations.fetch_add(1, Ordering::Relaxed);
         r.map(Arc::new).map_err(|d| {
             d.first().map_or_else(

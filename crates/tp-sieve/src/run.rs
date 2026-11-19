@@ -522,7 +522,7 @@ impl Exec<'_> {
             Test::Environment { m, name, keys } => {
                 // Факты — из контекста ядра (CTR-95, решение 126 д), заголовки письма не читаются:
                 // подделка `X-ThePost-Thread` и подобных на тест не влияет.
-                let value = self.env_value(name);
+                let value = self.env_value(*name);
                 self.matches(m, &[value], keys)?
             }
             Test::ValidExtList(uris) => uris.iter().all(|u| self.ctx.lists.valid(u)),
