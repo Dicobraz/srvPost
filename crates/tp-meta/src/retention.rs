@@ -34,7 +34,9 @@ use tp_contracts::retention::{
     PurgeOutcome, Quota, Restored, TrashItem, TrashObject, TrashPurge, TrashPurgeRule,
     TrashPurgeSetting, TrashStore, trash_changed,
 };
-use tp_contracts::{AccountId, DomainId, Error, MailboxId, MessageId, Result, TenantId, Uid};
+use tp_contracts::{
+    AccountId, DomainId, Error, MailboxId, MessageId, Result, TenantId, ThreadId, Uid,
+};
 use uuid::Uuid;
 
 use crate::changelog::{self, Change, Op};
@@ -520,12 +522,15 @@ async fn trash_page(
 }).await
 }
 
-/// Письмо, видимое в корзине: кандидат «очистить корзину».
+/// Письмо, видимое в корзине: кандидат «очистить корзину». Беседа — из привязки письма (META-86):
+/// `before_final_delete` письма удержанной беседы — один запрос к БД (`ThreadStore::hold` хука; без
+/// беседы в записи хук искал бы её по письму ещё одним запросом).
 #[derive(FromRow)]
 struct PurgeRow {
     message_id: Uuid,
     trashed_from: Option<Uuid>,
     received_at: OffsetDateTime,
+    thread_id: Option<Uuid>,
 }
 
 /// Убранное из корзины письмо: идентификатор, папка, UID.
@@ -752,12 +757,15 @@ impl TrashStore for PgMeta {
     ) -> Result<PurgeOutcome> {
         self.once(async move {
         let mode = PolicyResolver::trash_purge(self, scope).await?.effective();
-        // Письма, видимые в корзине, в порядке `ids` без повторов.
+        // Письма, видимые в корзине, в порядке `ids` без повторов; беседа — из привязки письма
+        // (META-86): `before_final_delete` письма удержанной беседы — один запрос (hold хука).
         let mut tx = begin(&self.box_pool(scope).await?, scope.tenant).await?;
         let rows: Vec<PurgeRow> = sqlx::query_as(
-            "SELECT m.message_id, m.trashed_from, m.received_at
+            "SELECT m.message_id, m.trashed_from, m.received_at, tm.thread_id
              FROM (SELECT id, min(ord) AS ord FROM unnest($3::uuid[]) WITH ORDINALITY AS d(id, ord) GROUP BY id) d
              JOIN messages m ON m.tenant_id = $1 AND m.account_id = $2 AND m.message_id = d.id
+             LEFT JOIN thread_messages tm ON tm.tenant_id = m.tenant_id AND tm.account_id = m.account_id
+                                         AND tm.message_id = m.message_id
              WHERE m.trashed_at IS NOT NULL AND m.hidden_at IS NULL
              ORDER BY d.ord",
         )
@@ -778,7 +786,7 @@ impl TrashStore for PgMeta {
                         mailbox: MailboxId::from_uuid(origin),
                         message: MessageId::from_uuid(r.message_id),
                         received_at: r.received_at,
-                        thread: None,
+                        thread: r.thread_id.map(ThreadId::from_uuid),
                     };
                     // Запрет (Legal Hold) и ошибка точки принятия решений — скрыть: стирание необратимо.
                     matches!(hooks.before_final_delete(&op).await, Ok(Decision::Allow))
