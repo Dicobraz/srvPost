@@ -5,6 +5,7 @@
 //! (`tp-meta`, полоса blob). «Хранилище записей» и «индекс» — одни данные; `drop_index` помечает индекс
 //! потерянным до `restore_index` (для набора `suite::journal`).
 
+use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::sync::{Arc, Mutex};
@@ -14,7 +15,8 @@ use bytes::Bytes;
 use tp_contracts::ids::{BlobHash, JournalId, TenantId};
 use tp_contracts::journal::{
     ChainReport, GENESIS_HASH, JournalAudit, JournalCursor, JournalEntry, JournalPage,
-    JournalQuery, JournalRecord, JournalRule, JournalStore, chain_input, journal_eml,
+    JournalQuery, JournalRecord, JournalRecords, JournalRule, JournalStore, chain_input,
+    journal_eml,
 };
 use tp_contracts::{Error, Result};
 
@@ -221,10 +223,68 @@ impl JournalStore for MemJournal {
     }
 }
 
+/// Запись [`MemJournalRecords`]: конверт, письмо и ссылка.
+#[derive(Debug, Clone)]
+struct MemStored {
+    record: JournalRecord,
+    message: Bytes,
+    storage: String,
+}
+
+/// [`JournalRecords`] в памяти (порт индекса журнала, META-88): запись — идемпотентна по `id`, чтение —
+/// по `id`, конверты организации — по возрастанию `id`. Ссылка — `mem/<id>`; клоны разделяют данные.
+#[derive(Debug, Default, Clone)]
+pub struct MemJournalRecords {
+    entries: Arc<Mutex<BTreeMap<JournalId, MemStored>>>,
+}
+
+impl MemJournalRecords {
+    /// Пустое хранилище записей.
+    pub fn new() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl JournalRecords for MemJournalRecords {
+    async fn put(&self, id: JournalId, record: &JournalRecord, message: Bytes) -> Result<String> {
+        record.validate()?;
+        if message.is_empty() {
+            return Err(Error::invalid("journal: empty message"));
+        }
+        let mut entries = lock(&self.entries);
+        let storage = format!("mem/{id}");
+        entries.entry(id).or_insert(MemStored {
+            record: record.clone(),
+            message,
+            storage: storage.clone(),
+        });
+        Ok(storage)
+    }
+
+    async fn read(&self, id: JournalId) -> Result<(JournalRecord, Bytes)> {
+        let entries = lock(&self.entries);
+        let stored = entries.get(&id).ok_or(Error::NotFound)?;
+        Ok((stored.record.clone(), stored.message.clone()))
+    }
+
+    async fn scan(&self, tenant: TenantId) -> Result<Vec<(JournalId, JournalRecord, String)>> {
+        let entries = lock(&self.entries);
+        Ok(entries
+            .iter()
+            .filter(|(_, s)| s.record.tenant == tenant)
+            .map(|(id, s)| (*id, s.record.clone(), s.storage.clone()))
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::suite;
+    use time::OffsetDateTime;
 
     #[tokio::test]
     async fn suite_journal_store() {
@@ -238,5 +298,49 @@ mod tests {
             move || journal.drop_index()
         };
         suite::journal(&journal, &tamper, &drop_index).await;
+    }
+
+    #[tokio::test]
+    async fn mem_records_put_read_scan() {
+        let records = MemJournalRecords::new();
+        let (a, b) = (TenantId::new(), TenantId::new());
+        let base = JournalRecord {
+            tenant: a,
+            sender: "s@external.example".to_owned(),
+            recipients: vec!["r@internal.example".to_owned()],
+            message_id: None,
+            at: OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("time"),
+            rule: "r-1".to_owned(),
+        };
+        let (id1, id2) = (JournalId::new(), JournalId::new());
+        let msg = Bytes::from_static(b"Subject: one\r\n\r\nbody");
+        // Запись и повторная запись того же id — не ошибка, та же ссылка.
+        let r1 = records.put(id1, &base, msg.clone()).await.expect("put");
+        assert_eq!(
+            records.put(id1, &base, msg.clone()).await.expect("again"),
+            r1
+        );
+        let mut other = base.clone();
+        other.tenant = b;
+        let r2 = records.put(id2, &other, msg.clone()).await.expect("put 2");
+        // Чтение: конверт и письмо.
+        let (back, message) = records.read(id1).await.expect("read");
+        assert_eq!(back, base);
+        assert_eq!(message, msg);
+        assert!(matches!(
+            records.read(JournalId::new()).await,
+            Err(Error::NotFound)
+        ));
+        // Конверты организации по возрастанию id, с чужой организацией не смешиваются.
+        let scan = records.scan(a).await.expect("scan");
+        assert_eq!(scan.len(), 1);
+        assert_eq!(scan[0].0, id1);
+        assert_eq!(scan[0].1, base);
+        assert_eq!(scan[0].2, r1);
+        let scan_b = records.scan(b).await.expect("scan b");
+        assert_eq!(scan_b.len(), 1);
+        assert_eq!(scan_b[0].0, id2);
+        assert_eq!(scan_b[0].1, other);
+        assert_eq!(scan_b[0].2, r2);
     }
 }

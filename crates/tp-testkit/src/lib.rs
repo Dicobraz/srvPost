@@ -60,7 +60,7 @@ pub use infra::{
     Clock, ManualClock, MemEventBus, MemEventLog, MemLease, MemPartitionAssigner,
     MemShardedEventLog, SystemClock,
 };
-pub use journal::MemJournal;
+pub use journal::{MemJournal, MemJournalRecords};
 pub use load::MemLoadMonitor;
 pub use membership::MemMembership;
 pub use meta::MemMetadata;
