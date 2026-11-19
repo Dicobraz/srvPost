@@ -2,6 +2,14 @@
 # Скопировать в update.conf рядом со скриптом и подставить значения своего стенда.
 # Два эталонных стенда ниже: раскомментировать нужный блок.
 
+# --- Политика автообновления (решение владельца 19.11) ------------------------
+# По умолчанию ВЫКЛЮЧЕНО (AUTO_UPDATE=no) — в проде не включать. На тестовых/перф-стендах
+# включают явно. Интервал — единственная настройка UPDATE_EVERY_DAYS: cron стенда взводится
+# из него одной командой stand-update.sh --install-cron (раз в N дней утром). Обновление
+# только безопасно: sha256, чистая установка, приёмка md5+служб, откат при провале.
+# AUTO_UPDATE=no
+# UPDATE_EVERY_DAYS=3
+
 # --- Общее -------------------------------------------------------------------
 # Репозиторий релизов и архитектура тарболла (asset thepost-<тег>-<ASSET_ARCH>.tar.gz).
 REPO=Dicobraz/srvPost
@@ -18,14 +26,16 @@ KEEP=2
 # --- podium-dev: /home/admin2/thepost-perf (Д.7 на 172.22.0.0/24) -------------
 # NODE=thepost-perf-smb
 # NODE_RUN_ARGS='--network thepost-perf --hostname mail --ip 172.22.0.2 --privileged'
+# GEN=thepost-perf-gen
 
 # --- school-99-stand: /home/<user>/thepost-d7 (Д.7 на 172.21.0.0/24) ----------
 # NODE=thepost-d7-smb
 # NODE_RUN_ARGS='--network thepost-d7 --hostname mail --ip 172.21.0.2 --privileged --restart unless-stopped'
+# GEN=thepost-d7-gen
 
 # --- Cron (на хосте стенда, от того же пользователя, что и стенд) -------------
-# Проверка раз в 15 минут; журнал — update.log:
-#   */15 * * * * /home/admin2/thepost-perf/stand-update.sh >> /home/admin2/thepost-perf/update.log 2>&1
+# Взводится из UPDATE_EVERY_DAYS одной командой (после правки интервала — повторить):
+#   stand-update.sh --install-cron    #  -> 17 4 */3 * * ... >> update.log 2>&1
 # Ручной контроль:
 #   stand-update.sh --check   # exit 2 — есть новая версия
 #   stand-update.sh --tag v0.2.1-beta.4
