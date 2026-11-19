@@ -5498,28 +5498,39 @@ mod tests {
             .await,
         );
         assert_eq!(show["own"], Value::Null);
-        let audit = ApiAction::Audit {
-            action: Box::new(AuditAction::Search {
-                since: None,
-                until: None,
-                actor: None,
-                method: None,
-                route: Some("/api/v1".into()),
-                limit: None,
-                after: None,
-            }),
-        };
-        let audit = json(exec(&c, true, audit).await);
-        let trust_ops: Vec<&str> = audit["entries"]
-            .as_array()
-            .expect("entries")
-            .iter()
-            .filter_map(|e| e["route"].as_str())
-            .filter(|r| r.contains("/trust"))
-            .collect();
+        // Аудит: изменения с маршрутом доверия; страница списков в тесте — 2 записи, идём по `next`.
+        let mut trust_ops: Vec<String> = Vec::new();
+        let mut after = None;
+        for _ in 0..10 {
+            let audit = ApiAction::Audit {
+                action: Box::new(AuditAction::Search {
+                    since: None,
+                    until: None,
+                    actor: None,
+                    method: None,
+                    route: Some("/api/v1".into()),
+                    limit: None,
+                    after,
+                }),
+            };
+            let page = json(exec(&c, true, audit).await);
+            trust_ops.extend(
+                page["entries"]
+                    .as_array()
+                    .expect("entries")
+                    .iter()
+                    .filter_map(|e| e["route"].as_str())
+                    .filter(|r| r.contains("/trust"))
+                    .map(str::to_owned),
+            );
+            after = page["next"].as_u64();
+            if after.is_none() {
+                break;
+            }
+        }
         assert!(
             trust_ops.len() >= 4,
-            "изменения политики — в журнале аудита: {audit}"
+            "изменения политики — в журнале аудита: {trust_ops:?}"
         );
     }
 
