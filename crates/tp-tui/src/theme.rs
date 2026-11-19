@@ -1,10 +1,11 @@
 //! Тема экрана по токенам `design/tokens.toml` (TUI-06, решение 119): пять режимов, роли как у веб-консоли,
 //! градиент строки меню, знак бренда на экране входа и палитра консоли Linux.
 //!
-//! Цвета берутся только из токенов (`include_str!`), второго списка в коде нет. Бренд — набор [`Brand`]
-//! «название, знак (PNG), основной цвет, акцент» (решение 122): IT TASK — набор по умолчанию, его роли
-//! совпадают с токенами; набор заказчика (из Admin API) перекрашивает роли бренда и доводит их до контраста
-//! по правилам `[[contrast]]` тех же токенов.
+//! Цвета берутся только из токенов (`include_str!`), второго списка в коде нет. Брендинг заказчика (TUI-08,
+//! решение 122) приходит с сервера — название, знак PNG и палитра ролей обеих тем; своих расчётов цветов нет:
+//! роли сервера применяются как есть в truecolor и 256 (ближайший xterm-256 к роли тёмной темы), в 16 цветах и
+//! монохроме — встроенные роли TUI-06, палитра консоли Linux — `[palette16]` токенов. Палитра сервера проходит
+//! страховку контракта `Palette::guarded` — пара ниже порога берётся с уровня выше (IT TASK).
 
 use std::fmt;
 use std::io::{self, Write};
@@ -14,9 +15,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
-use ratatui_image::picker::Picker;
+use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
 use ratatui_image::{Image, Resize};
+use tp_admin::branding::{BrandingView, PublicBranding};
 
 /// Токены фирменного стиля — единственный источник цветов.
 const TOKENS: &str = include_str!("../../../design/tokens.toml");
@@ -144,9 +146,6 @@ impl Mode {
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {
-    const WHITE: Self = Self(255, 255, 255);
-    const BLACK: Self = Self(0, 0, 0);
-
     /// Цвет из `#RRGGBB`.
     pub fn parse(s: &str) -> Option<Self> {
         let h = s.strip_prefix('#')?;
@@ -155,25 +154,6 @@ impl Rgb {
         }
         let byte = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
         Some(Self(byte(0)?, byte(2)?, byte(4)?))
-    }
-
-    /// Относительная яркость (WCAG 2.1).
-    fn luminance(self) -> f64 {
-        let lin = |c: u8| {
-            let c = f64::from(c) / 255.0;
-            if c <= 0.04045 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * lin(self.0) + 0.7152 * lin(self.1) + 0.0722 * lin(self.2)
-    }
-
-    /// Контраст двух цветов (WCAG 2.1), от 1 до 21.
-    pub fn contrast(self, other: Self) -> f64 {
-        let (a, b) = (self.luminance(), other.luminance());
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 
     /// Смесь: `t` = 0 — этот цвет, 1 — `other`.
@@ -236,30 +216,89 @@ impl fmt::Debug for Png {
     }
 }
 
-/// Бренд, из которого строятся роли (решение 122): название, знак, основной цвет и акцент.
+/// Бренд, из которого строятся роли (решение 122): название, знак и палитра ролей сервера.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Brand {
-    /// Название на экране входа и в строке меню.
+    /// Название на экране входа и в строке меню; встроенное — IT TASK.
     pub name: String,
     /// Знак для экрана входа; нет — только название.
     pub mark: Option<Png>,
-    /// Основной цвет: F-клавиши, рамка активной панели, конец градиента меню.
-    pub primary: Rgb,
-    /// Акцент: выделение, главное действие, начало градиента меню.
-    pub accent: Rgb,
+    /// Встроенный знак IT TASK: показывается и полублоками, когда терминал не умеет картинки.
+    pub builtin_mark: bool,
+    /// Роли сервера обеих тем; `None` — встроенные роли TUI-06 (IT TASK).
+    pub roles: Option<BrandRoles>,
 }
 
 impl Default for Brand {
-    /// IT TASK: цвета `[brand]` токенов и знак из `design/logo.svg`.
+    /// IT TASK: встроенные роли токенов и знак из `design/logo.svg`.
     fn default() -> Self {
-        let t = tokens();
         Self {
             name: "IT TASK".to_owned(),
             mark: Some(Png(Arc::from(IT_TASK_MARK))),
-            primary: t.blue,
-            accent: t.pink,
+            builtin_mark: true,
+            roles: None,
         }
     }
+}
+
+impl Brand {
+    /// Бренд из действующего брендинга экрана входа (открытый маршрут, TUI-08): палитра проходит страховку
+    /// контракта `Palette::guarded` с родителем IT TASK, незаданная роль — цвет IT TASK. Знак — загруженные
+    /// байты `logo`: ссылки нет — встроенный куб, по ссылке не загрузился — только название.
+    pub fn from_public(pb: PublicBranding, logo: Option<Png>) -> Self {
+        let builtin = pb.logo.is_none();
+        let palette = pb.palette.guarded(&parent_branding().palette);
+        let t = tokens();
+        let mut light = t.light;
+        let mut dark = t.dark;
+        for (map, out) in [(&palette.light, &mut light), (&palette.dark, &mut dark)] {
+            for (role, color) in map {
+                if let Some(i) = NAMES.iter().position(|n| *n == role.as_str()) {
+                    let [r, g, b] = color.rgb();
+                    out[i] = Rgb(r, g, b);
+                }
+            }
+        }
+        Self {
+            name: pb.product_name.unwrap_or_else(|| "IT TASK".to_owned()),
+            mark: logo.or_else(|| builtin.then(|| Png(Arc::from(IT_TASK_MARK)))),
+            builtin_mark: builtin,
+            roles: Some(BrandRoles { light, dark }),
+        }
+    }
+
+    /// Бренд из действующего брендинга своей организации после входа (`effective`; уровень установки —
+    /// администратором установки): та же страховка и знак по хэшу действующего набора.
+    pub fn from_effective(view: BrandingView, logo: Option<Png>) -> Self {
+        let has_logo = view.effective.logo.is_some();
+        let pb = PublicBranding {
+            product_name: view.effective.product_name,
+            palette: view.effective.palette,
+            logo: has_logo.then(String::new),
+        };
+        Self::from_public(pb, logo)
+    }
+}
+
+/// Роли сервера (решение 122) — палитра обеих тем из ответа Admin API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrandRoles {
+    /// Светлая тема — `[mode.light]` ролей.
+    pub light: [Rgb; N],
+    /// Тёмная тема — `[mode.dark]` ролей.
+    pub dark: [Rgb; N],
+}
+
+/// Родитель страховки `guarded`: пустые карты — `Palette::role` без значения в карте даёт цвет IT TASK
+/// (`Role::it_task`), то есть родитель равен `Palette::it_task()` (CTR-91).
+fn parent_branding() -> &'static PublicBranding {
+    static PARENT: OnceLock<PublicBranding> = OnceLock::new();
+    PARENT.get_or_init(|| {
+        serde_json::from_str(
+            r#"{"product_name":null,"palette":{"light":{},"dark":{},"cli":{}},"logo":null}"#,
+        )
+        .unwrap_or_else(|e| panic!("пустая палитра брендинга: {e}"))
+    })
 }
 
 /// Роли токенов — столбцы таблиц `[mode.*]`, в порядке [`NAMES`].
@@ -290,19 +329,9 @@ const NAMES: [&str; N] = [
     "selI", "selIFg", "fkBg", "fkFg", "ok", "warn", "err",
 ];
 
-/// Правило `[[contrast]]`: роль `fg` на каждом из фонов `bg` — не ниже `min`.
-#[derive(Debug)]
-struct Rule {
-    fg: usize,
-    bg: Vec<usize>,
-    min: f64,
-}
-
 /// Разобранные токены.
 #[derive(Debug)]
 struct Tokens {
-    pink: Rgb,
-    blue: Rgb,
     dark: [Rgb; N],
     light: [Rgb; N],
     c256: [u8; N],
@@ -310,7 +339,6 @@ struct Tokens {
     mono: [Modifier; N],
     attrs: [Modifier; N],
     palette16: [Rgb; 16],
-    contrast: Vec<Rule>,
 }
 
 fn tokens() -> &'static Tokens {
@@ -346,7 +374,7 @@ fn parse_tokens(src: &str) -> Result<Tokens, String> {
     };
     let colors = |path: &str| -> Result<[Rgb; N], String> {
         let t = table(path)?;
-        let mut out = [Rgb::BLACK; N];
+        let mut out = [Rgb(0, 0, 0); N];
         for (c, name) in out.iter_mut().zip(NAMES) {
             *c = rgb(t.get(name), &format!("{path}.{name}"))?;
         }
@@ -379,39 +407,11 @@ fn parse_tokens(src: &str) -> Result<Tokens, String> {
         .and_then(toml::Value::as_array)
         .filter(|a| a.len() == 16)
         .ok_or("palette16.colors: нужно 16 цветов")?;
-    let mut palette16 = [Rgb::BLACK; 16];
+    let mut palette16 = [Rgb(0, 0, 0); 16];
     for (i, (p, c)) in palette16.iter_mut().zip(pal).enumerate() {
         *p = rgb(Some(c), &format!("palette16.colors[{i}]"))?;
     }
-    let role = |v: &toml::Value| {
-        v.as_str()
-            .and_then(|s| NAMES.iter().position(|n| *n == s))
-            .ok_or_else(|| format!("contrast: неизвестная роль {v:?}"))
-    };
-    let mut contrast = Vec::new();
-    for r in root
-        .get("contrast")
-        .and_then(toml::Value::as_array)
-        .ok_or("нет [[contrast]]")?
-    {
-        let fg = role(r.get("fg").ok_or("contrast: нет fg")?)?;
-        let bg = r
-            .get("bg")
-            .and_then(toml::Value::as_array)
-            .ok_or("contrast: нет bg")?
-            .iter()
-            .map(role)
-            .collect::<Result<_, _>>()?;
-        let min = r
-            .get("min")
-            .and_then(toml::Value::as_float)
-            .ok_or("contrast: нет min")?;
-        contrast.push(Rule { fg, bg, min });
-    }
-    let brand = table("brand")?;
     Ok(Tokens {
-        pink: rgb(brand.get("pink"), "brand.pink")?,
-        blue: rgb(brand.get("blue"), "brand.blue")?,
         dark: colors("mode.dark")?,
         light: colors("mode.light")?,
         c256: index("mode.c256", 255)?,
@@ -419,59 +419,7 @@ fn parse_tokens(src: &str) -> Result<Tokens, String> {
         mono,
         attrs: role_attrs,
         palette16,
-        contrast,
     })
-}
-
-/// Роли truecolor-палитры `base` под бренд и признак «роль — цвет бренда». Набор с цветами `[brand]` (IT TASK)
-/// ничего не меняет. Иначе роли, равные в токенах основному цвету или акценту, получают цвет бренда, рамка
-/// активной панели следует основному, заголовок и выделение — акценту; затем по `[[contrast]]` перекрашенные текст и рамки
-/// смешиваются с белым (тёмный фон) или чёрным (светлый) до нужного контраста, а текст на фоне бренда
-/// становится белым или чёрным.
-fn branded(base: &[Rgb; N], brand: &Brand) -> ([Rgb; N], [bool; N]) {
-    let t = tokens();
-    let mut c = *base;
-    let mut touched = [false; N];
-    for (from, to, derived) in [
-        (t.blue, brand.primary, &[T::FrameA][..]),
-        (t.pink, brand.accent, &[T::TitleA, T::Sel][..]),
-    ] {
-        if from == to {
-            continue;
-        }
-        for ((c, touched), b) in c.iter_mut().zip(touched.iter_mut()).zip(base) {
-            if *b == from {
-                (*c, *touched) = (to, true);
-            }
-        }
-        for &r in derived {
-            (c[r as usize], touched[r as usize]) = (to, true);
-        }
-    }
-    let toward = if base[T::Panel as usize].luminance() < 0.5 {
-        Rgb::WHITE
-    } else {
-        Rgb::BLACK
-    };
-    let meets = |c: &[Rgb; N], fg: Rgb, r: &Rule| r.bg.iter().all(|&b| fg.contrast(c[b]) >= r.min);
-    for r in t.contrast.iter().filter(|r| touched[r.fg]) {
-        let fg = c[r.fg];
-        c[r.fg] = (0..=20)
-            .map(|k| fg.mix(toward, f64::from(k) / 20.0))
-            .find(|&x| meets(&c, x, r))
-            .unwrap_or(toward);
-    }
-    for r in &t.contrast {
-        if !touched[r.fg] && r.bg.iter().any(|&b| touched[b]) && !meets(&c, c[r.fg], r) {
-            let bg = c[r.bg[0]];
-            c[r.fg] = if Rgb::WHITE.contrast(bg) >= Rgb::BLACK.contrast(bg) {
-                Rgb::WHITE
-            } else {
-                Rgb::BLACK
-            };
-        }
-    }
-    (c, touched)
 }
 
 /// Знак бренда, подготовленный для терминала (протокол графики или полублоки).
@@ -507,23 +455,41 @@ pub struct Theme {
     attrs: [Modifier; N],
     /// Фон панели в RGB: подложка знака.
     panel: Rgb,
-    /// 16 цветов консоли Linux под бренд.
+    /// Концы градиента строки меню — роли `sel` и `fkBg` действующей палитры режима.
+    gradient: (Rgb, Rgb),
+    /// 16 цветов консоли Linux — `[palette16]` токенов (роли сервера в 16 цветов не попадают).
     palette: [Rgb; 16],
     mark: Option<Mark>,
 }
 
 impl Theme {
-    /// Тема режима `mode` для бренда `brand`; знак — [`Theme::with_mark`].
+    /// Тема режима `mode` для бренда `brand`; знак — [`Theme::with_mark`]. Роли сервера перекрашивают тему
+    /// только в truecolor (`light` или `dark` — по режиму) и 256 (ближайший xterm-256 к роли тёмной темы);
+    /// в 16 цветах и монохроме — встроенные роли TUI-06.
     pub fn new(mode: Mode, brand: Brand) -> Self {
         let t = tokens();
-        let (dark, touched) = branded(&t.dark, &brand);
-        let light = branded(&t.light, &brand).0;
-        let mut palette = t.palette16;
-        for i in (0..N).filter(|&i| touched[i]) {
-            palette[usize::from(t.c16[i])] = dark[i];
+        let (mut dark, mut light) = (t.dark, t.light);
+        // Роли тёмной темы, заменённые сервером: для них 256-режим берёт ближайший xterm-256, прочие —
+        // значения `[mode.c256]` токенов.
+        let mut replaced = [false; N];
+        if let Some(roles) = &brand.roles {
+            for (i, ((d, l), (sd, sl))) in dark
+                .iter_mut()
+                .zip(light.iter_mut())
+                .zip(roles.dark.iter().zip(roles.light.iter()))
+                .enumerate()
+            {
+                if *sd != *d {
+                    *d = *sd;
+                    replaced[i] = true;
+                }
+                if *sl != *l {
+                    *l = *sl;
+                }
+            }
         }
         let c256: [u8; N] = std::array::from_fn(|i| {
-            if touched[i] {
+            if replaced[i] {
                 dark[i].xterm256()
             } else {
                 t.c256[i]
@@ -534,8 +500,14 @@ impl Theme {
             Mode::Dark => (dark.map(Rgb::color), dark[p]),
             Mode::Light => (light.map(Rgb::color), light[p]),
             Mode::C256 => (c256.map(Color::Indexed), xterm_rgb(c256[p])),
-            Mode::C16 => (t.c16.map(ansi16), palette[usize::from(t.c16[p])]),
-            Mode::Mono => ([Color::Reset; N], Rgb::BLACK),
+            Mode::C16 => (t.c16.map(ansi16), t.palette16[usize::from(t.c16[p])]),
+            Mode::Mono => ([Color::Reset; N], Rgb(0, 0, 0)),
+        };
+        let (sel, fk) = (T::Sel as usize, T::FkBg as usize);
+        let gradient = match mode {
+            Mode::Dark | Mode::C256 => (dark[sel], dark[fk]),
+            Mode::Light => (light[sel], light[fk]),
+            Mode::C16 | Mode::Mono => (t.dark[sel], t.dark[fk]),
         };
         Self {
             mode,
@@ -543,7 +515,8 @@ impl Theme {
             colors,
             attrs: if mode == Mode::Mono { t.mono } else { t.attrs },
             panel,
-            palette,
+            gradient,
+            palette: t.palette16,
             mark: None,
         }
     }
@@ -564,7 +537,7 @@ impl Theme {
         &self.brand
     }
 
-    /// 16 цветов консоли Linux: `[palette16]`, у бренда заказчика — его цвета в слотах ролей бренда.
+    /// 16 цветов консоли Linux — `[palette16]` токенов (роли сервера в 16 цветов не попадают, TUI-06).
     pub fn console_palette(&self) -> &[Rgb; 16] {
         &self.palette
     }
@@ -578,6 +551,11 @@ impl Theme {
 
     fn load_mark(&self, picker: &Picker) -> Option<Mark> {
         if !self.mode.graphics() {
+            return None;
+        }
+        // Знак заказчика — только настоящими протоколами графики (kitty, sixel); полублоки — встроенный куб
+        // IT TASK (решение 122).
+        if !self.brand.builtin_mark && matches!(picker.protocol_type(), ProtocolType::Halfblocks) {
             return None;
         }
         let png = self.brand.mark.as_ref()?;
@@ -668,16 +646,19 @@ impl Theme {
         }
     }
 
-    /// Ячейка `x` строки меню шириной `width`: градиент от акцента к основному цвету (truecolor; в 256 —
-    /// ближайшие цвета), в 16 цветах и монохроме — сплошной [`Role::Menu`].
+    /// Ячейка `x` строки меню шириной `width`: градиент от роли `sel` к роли `fkBg` действующей палитры
+    /// режима (решение 122; truecolor, в 256 — ближайшие цвета), в 16 цветах и монохроме — сплошной
+    /// [`Role::Menu`].
     pub fn menu(&self, x: u16, width: u16) -> Style {
-        let t = f64::from(x) / f64::from(width.saturating_sub(1).max(1));
-        let c = self.brand.accent.mix(self.brand.primary, t.min(1.0));
         let base = self.style(Role::Menu);
+        if !self.mode.graphics() {
+            return base;
+        }
+        let t = f64::from(x) / f64::from(width.saturating_sub(1).max(1));
+        let c = self.gradient.0.mix(self.gradient.1, t.min(1.0));
         match self.mode {
-            Mode::Dark | Mode::Light => base.bg(c.color()),
             Mode::C256 => base.bg(Color::Indexed(c.xterm256())),
-            Mode::C16 | Mode::Mono => base,
+            _ => base.bg(c.color()),
         }
     }
 }
@@ -750,11 +731,68 @@ impl<W: Write> Drop for ConsolePalette<W> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn rgb(s: &str) -> Rgb {
         Rgb::parse(s).unwrap_or_else(|| panic!("{s}"))
+    }
+
+    /// Бренд из ответа сервера (JSON открытого маршрута): роли тем — пары «имя — цвет».
+    pub(crate) fn server_brand(
+        name: Option<&str>,
+        dark: &[(&str, &str)],
+        light: &[(&str, &str)],
+        logo: bool,
+    ) -> Brand {
+        let roles = |pairs: &[(&str, &str)]| {
+            serde_json::Map::from_iter(
+                pairs
+                    .iter()
+                    .map(|(r, c)| (r.to_string(), serde_json::json!(c))),
+            )
+        };
+        let pb: PublicBranding = serde_json::from_value(serde_json::json!({
+            "product_name": name,
+            "palette": {"light": roles(light), "dark": roles(dark), "cli": {}},
+            "logo": logo.then_some("/api/v1/public/branding/logo/abc"),
+        }))
+        .expect("брендинг");
+        Brand::from_public(pb, None)
+    }
+
+    /// Брендинга нет: ответ сервера — только встроенная палитра, тема — IT TASK (TUI-08).
+    #[test]
+    fn no_branding_is_it_task() {
+        let brand = server_brand(None, &[], &[], false);
+        assert_eq!(brand.name, "IT TASK");
+        assert!(brand.builtin_mark);
+        assert!(brand.mark.is_some());
+        for mode in [Mode::Dark, Mode::Light, Mode::C256, Mode::C16, Mode::Mono] {
+            let plain = Theme::new(mode, Brand::default());
+            let server = Theme::new(mode, brand.clone());
+            for role in [
+                Role::Screen,
+                Role::Panel,
+                Role::Text,
+                Role::Muted,
+                Role::Frame,
+                Role::FrameA,
+                Role::TitleA,
+                Role::Head,
+                Role::Sel,
+                Role::SelI,
+                Role::Fk,
+                Role::Menu,
+                Role::Ok,
+                Role::Warn,
+                Role::Err,
+            ] {
+                assert_eq!(server.style(role), plain.style(role), "{mode:?} {role:?}");
+            }
+            assert_eq!(server.menu(0, 80), plain.menu(0, 80), "{mode:?}");
+            assert_eq!(server.menu(40, 80), plain.menu(40, 80), "{mode:?}");
+        }
     }
 
     /// Автоопределение режима по окружению; ключ и переменная перекрывают выбор.
@@ -811,15 +849,11 @@ mod tests {
         assert!(Mode::detect(|_| None, Some("pink")).is_err());
     }
 
-    /// Бренд IT TASK — цвета `[brand]`, его роли совпадают с токенами.
+    /// Бренд IT TASK: роли совпадают с токенами, палитра консоли — `[palette16]`.
     #[test]
     fn default_brand_is_tokens() {
         let t = tokens();
-        assert_eq!(t.pink, rgb("#E4107F"));
-        assert_eq!(t.blue, rgb("#177CAA"));
         let b = Brand::default();
-        assert_eq!(branded(&t.dark, &b), (t.dark, [false; N]));
-        assert_eq!(branded(&t.light, &b).0, t.light);
         let th = Theme::new(Mode::Dark, b.clone());
         assert_eq!(th.console_palette(), &t.palette16);
         // Выделение — #E3107F (белый на нём 4,5:1), текст жирный (решение владельца).
@@ -837,38 +871,152 @@ mod tests {
         );
     }
 
-    /// Бренд заказчика: роли бренда перекрашены, все правила `[[contrast]]` соблюдены.
+    /// Роли сервера применяются в truecolor (обе темы) и 256 (ближайший xterm-256 к роли тёмной темы);
+    /// в 16 цветах и монохроме — встроенные роли TUI-06, палитра консоли Linux не меняется. Сервер прислал
+    /// светлую палитру IT TASK как тёмную (и наоборот) — все пары проходят контраст.
+    #[test]
+    fn server_roles_modes() {
+        let t = tokens();
+        let dark: Vec<(&str, String)> = NAMES
+            .iter()
+            .zip(t.light)
+            .map(|(n, c)| (*n, c.to_string()))
+            .collect();
+        let light: Vec<(&str, String)> = NAMES
+            .iter()
+            .zip(t.dark)
+            .map(|(n, c)| (*n, c.to_string()))
+            .collect();
+        let dark_refs: Vec<(&str, &str)> = dark.iter().map(|(n, c)| (*n, c.as_str())).collect();
+        let light_refs: Vec<(&str, &str)> = light.iter().map(|(n, c)| (*n, c.as_str())).collect();
+        let brand = server_brand(Some("Ромашка"), &dark_refs, &light_refs, false);
+        assert_eq!(brand.name, "Ромашка");
+
+        let th = Theme::new(Mode::Dark, brand.clone());
+        assert_eq!(
+            th.style(Role::Screen).bg,
+            Some(Color::Rgb(0xE9, 0xEE, 0xF3))
+        );
+        assert_eq!(th.style(Role::Panel).bg, Some(Color::Rgb(0xFF, 0xFF, 0xFF)));
+        assert_eq!(th.style(Role::Text).fg, Some(Color::Rgb(0x16, 0x16, 0x16)));
+        assert_eq!(th.style(Role::Sel).bg, Some(Color::Rgb(0xE3, 0x10, 0x7F)));
+        let th = Theme::new(Mode::Light, brand.clone());
+        assert_eq!(
+            th.style(Role::Screen).bg,
+            Some(Color::Rgb(0x0F, 0x13, 0x17))
+        );
+        assert_eq!(th.style(Role::Text).fg, Some(Color::Rgb(0xD8, 0xE7, 0xF4)));
+
+        // 256: заменённые роли — ближайший xterm-256 к значению тёмной темы сервера.
+        let th = Theme::new(Mode::C256, brand.clone());
+        assert_eq!(
+            th.style(Role::Screen).bg,
+            Some(Color::Indexed(rgb("#E9EEF3").xterm256()))
+        );
+        assert_eq!(
+            th.style(Role::Text).fg,
+            Some(Color::Indexed(rgb("#161616").xterm256()))
+        );
+        // Роли, равные IT TASK (sel), — значение `[mode.c256]` токенов.
+        assert_eq!(th.style(Role::Sel).bg, Some(Color::Indexed(162)));
+
+        // 16 цветов и монохром — встроенные роли, палитра консоли — токены.
+        for mode in [Mode::C16, Mode::Mono] {
+            let server = Theme::new(mode, brand.clone());
+            let plain = Theme::new(mode, Brand::default());
+            assert_eq!(server.style(Role::Screen), plain.style(Role::Screen));
+            assert_eq!(server.style(Role::Text), plain.style(Role::Text));
+            assert_eq!(server.console_palette(), plain.console_palette());
+        }
+    }
+
+    /// Пара ниже порога в ответе сервера (данные старой версии) рисуется цветами IT TASK: страховка
+    /// `Palette::guarded` берёт пару с уровня выше.
+    #[test]
+    fn guarded_pair_is_it_task() {
+        // Текст цвета фона панели — не читается: текст (и фон) берутся с уровня IT TASK.
+        let brand = server_brand(None, &[("text", "#141A20")], &[], false);
+        let th = Theme::new(Mode::Dark, brand);
+        assert_eq!(th.style(Role::Text).fg, Some(Color::Rgb(0xD8, 0xE7, 0xF4)));
+        assert_eq!(
+            th.style(Role::Screen).bg,
+            Some(Color::Rgb(0x0F, 0x13, 0x17))
+        );
+
+        // Светлый фон экрана с тёмными ролями остальной палитры — тоже пара уровня выше.
+        let brand = server_brand(None, &[("screen", "#FAFAFA")], &[], false);
+        let th = Theme::new(Mode::Dark, brand);
+        assert_eq!(
+            th.style(Role::Screen).bg,
+            Some(Color::Rgb(0x0F, 0x13, 0x17))
+        );
+        // Роль без пары ниже порога остаётся своей.
+        assert_eq!(
+            th.style(Role::TitleA).fg,
+            Some(Color::Rgb(0xFB, 0x5F, 0xB0))
+        );
+    }
+
+    /// Бренд заказчика: название, градиент меню от `sel` к `fkBg` его палитры, палитра консоли — IT TASK.
     #[test]
     fn customer_brand() {
         let t = tokens();
-        let brand = Brand {
-            name: "ACME".into(),
-            mark: None,
-            primary: rgb("#FFD400"),
-            accent: rgb("#00A651"),
-        };
-        for base in [&t.dark, &t.light] {
-            let (c, touched) = branded(base, &brand);
-            for r in [T::Sel, T::FkBg, T::FrameA, T::TitleA] {
-                assert!(touched[r as usize], "{r:?}");
-            }
-            assert!(!touched[T::Err as usize]);
-            for r in &t.contrast {
-                for &b in &r.bg {
-                    let k = c[r.fg].contrast(c[b]);
-                    assert!(k >= r.min, "{} на {}: {k:.2}", NAMES[r.fg], NAMES[b]);
-                }
-            }
-        }
-        let dark = branded(&t.dark, &brand).0;
-        assert_eq!(dark[T::Sel as usize], brand.accent);
-        assert_eq!(dark[T::FkBg as usize], brand.primary);
+        let brand = server_brand(
+            Some("ACME"),
+            &[("sel", "#C62828"), ("fkBg", "#0A706F")],
+            &[],
+            false,
+        );
         let th = Theme::new(Mode::Dark, brand.clone());
-        assert_eq!(th.menu(0, 80).bg, Some(Color::Rgb(0x00, 0xA6, 0x51)));
-        assert_eq!(th.menu(79, 80).bg, Some(Color::Rgb(0xFF, 0xD4, 0x00)));
-        assert_eq!(th.console_palette()[5], brand.accent);
-        assert_eq!(th.console_palette()[4], brand.primary);
-        assert_eq!(th.console_palette()[1], t.palette16[1]);
+        assert_eq!(th.style(Role::Sel).bg, Some(Color::Rgb(0xC6, 0x28, 0x28)));
+        assert_eq!(th.style(Role::Fk).bg, Some(Color::Rgb(0x0A, 0x70, 0x6F)));
+        assert_eq!(th.menu(0, 80).bg, Some(Color::Rgb(0xC6, 0x28, 0x28)));
+        assert_eq!(th.menu(79, 80).bg, Some(Color::Rgb(0x0A, 0x70, 0x6F)));
+        assert_ne!(th.menu(40, 80).bg, th.menu(0, 80).bg);
+        // 256 — ближайший xterm-255 к `sel` сервера; палитра консоли Linux не меняется.
+        let th = Theme::new(Mode::C256, brand);
+        assert_eq!(
+            th.style(Role::Sel).bg,
+            Some(Color::Indexed(rgb("#C62828").xterm256()))
+        );
+        assert_eq!(th.console_palette(), &t.palette16);
+    }
+
+    /// Знак заказчика: полублоками не показывается (только название), настоящими протоколами — да;
+    /// встроенный куб — и полублоками.
+    #[test]
+    fn customer_mark() {
+        let mut png = Vec::new();
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 40, 40]));
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("png");
+        let brand = Brand {
+            mark: Some(Png(Arc::from(png.as_slice()))),
+            builtin_mark: false,
+            ..server_brand(Some("ACME"), &[("sel", "#C62828")], &[], false)
+        };
+        let mut picker = Picker::halfblocks();
+        assert!(
+            Theme::new(Mode::Dark, brand.clone())
+                .with_mark(&picker)
+                .mark()
+                .is_none()
+        );
+        picker.set_protocol_type(ProtocolType::Kitty);
+        assert!(
+            Theme::new(Mode::Dark, brand)
+                .with_mark(&picker)
+                .mark()
+                .is_some()
+        );
+        for mode in [Mode::C16, Mode::Mono] {
+            assert!(
+                Theme::new(mode, Brand::default())
+                    .with_mark(&picker)
+                    .mark()
+                    .is_none()
+            );
+        }
     }
 
     #[test]
@@ -880,11 +1028,12 @@ mod tests {
         assert_eq!(xterm_rgb(26), rgb("#005FD7"));
     }
 
-    /// Градиент меню от #E4107F к #177CAA; в 16 цветах — сплошной основной, в монохроме — инверсия.
+    /// Градиент меню от `sel` (#E3107F) к `fkBg` (#177CAA); в 16 цветах — сплошной основной, в монохроме —
+    /// инверсия.
     #[test]
     fn menu_gradient() {
         let dark = Theme::new(Mode::Dark, Brand::default());
-        assert_eq!(dark.menu(0, 80).bg, Some(Color::Rgb(0xE4, 0x10, 0x7F)));
+        assert_eq!(dark.menu(0, 80).bg, Some(Color::Rgb(0xE3, 0x10, 0x7F)));
         assert_eq!(dark.menu(79, 80).bg, Some(Color::Rgb(0x17, 0x7C, 0xAA)));
         assert_ne!(dark.menu(40, 80).bg, dark.menu(0, 80).bg);
         let c256 = Theme::new(Mode::C256, Brand::default());

@@ -134,7 +134,8 @@ impl Painter<'_> {
             .set_style(Rect::new(x0, y, x1.saturating_sub(x0) + 1, 1), st);
     }
 
-    /// Строка меню: градиент бренда, пункты и название бренда с версией (жирным) справа.
+    /// Строка меню: градиент от `sel` к `fkBg`, пункты и название бренда с версией (жирным) справа; длинное
+    /// название обрезается с многоточием по ширине экрана (решение 122).
     fn menu(&mut self) {
         let w = self.w;
         for x in 0..w {
@@ -154,6 +155,7 @@ impl Painter<'_> {
             self.t.brand().name,
             env!("CARGO_PKG_VERSION")
         );
+        let brand = cut(&brand, usize::from(w));
         let x = w.saturating_sub(brand.chars().count() as u16 + 1);
         put(
             self.buf,
@@ -193,19 +195,20 @@ impl Painter<'_> {
         self.put(area.x + area.width - 1, ROW_SEP, r, role);
     }
 
-    /// Знак и название бренда над формой входа; без графики — только название.
+    /// Знак и название бренда над формой входа; без графики — только название; длинное название — с
+    /// многоточием по ширине экрана (решение 122).
     fn brand(&mut self) {
         let t = self.t;
-        let name = &t.brand().name;
+        let name = cut(&t.brand().name, self.w as usize);
         let nw = name.chars().count() as u16;
         match t.mark() {
             Some(mark) => {
                 let s = mark.size();
                 let x = self.w.saturating_sub(s.width + 2 + nw) / 2;
                 t.render_mark(mark, Rect::new(x, 1, s.width, s.height), self.buf);
-                self.put(x + s.width + 2, 1 + s.height / 2, name, Role::Name);
+                self.put(x + s.width + 2, 1 + s.height / 2, &name, Role::Name);
             }
-            None => self.put(self.w.saturating_sub(nw) / 2, 3, name, Role::Name),
+            None => self.put(self.w.saturating_sub(nw) / 2, 3, &name, Role::Name),
         }
     }
 
@@ -975,6 +978,19 @@ fn fit(s: &str, w: usize) -> String {
     }
 }
 
+/// Строка не шире `w`: длинная обрезается с многоточием (название бренда — по ширине экрана, решение 122).
+fn cut(s: &str, w: usize) -> String {
+    if s.chars().count() <= w {
+        s.to_owned()
+    } else {
+        let mut out: String = s.chars().take(w.saturating_sub(1)).collect();
+        if w > 0 {
+            out.push('…');
+        }
+        out
+    }
+}
+
 /// Разбить текст на строки не длиннее `w` по словам.
 fn wrap(s: &str, w: usize) -> Vec<String> {
     let mut out = Vec::new();
@@ -1138,7 +1154,7 @@ mod tests {
             let sel = buf[(40, 3)].style();
             match mode {
                 Mode::Dark | Mode::Light => {
-                    assert_eq!(left, Color::Rgb(0xE4, 0x10, 0x7F));
+                    assert_eq!(left, Color::Rgb(0xE3, 0x10, 0x7F));
                     assert_eq!(right, Color::Rgb(0x17, 0x7C, 0xAA));
                     assert_eq!(sel.bg, Some(Color::Rgb(0xE3, 0x10, 0x7F)));
                 }
@@ -1213,15 +1229,15 @@ mod tests {
         }
     }
 
-    /// Бренд заказчика (решение 122): его название в меню и на входе, градиент от его акцента.
+    /// Бренд заказчика (решение 122): его название в меню и на входе, градиент меню — от его `sel`.
     #[test]
     fn customer_brand() {
-        let brand = Brand {
-            name: "ACME".into(),
-            mark: None,
-            primary: crate::theme::Rgb(0x00, 0x33, 0x99),
-            accent: crate::theme::Rgb(0xCC, 0x00, 0x00),
-        };
+        let brand = crate::theme::tests::server_brand(
+            Some("ACME"),
+            &[("sel", "#C62828"), ("fkBg", "#0A706F")],
+            &[],
+            false,
+        );
         let app = App::new(
             Theme::new(Mode::Dark, brand),
             LoginForm::new("https://node:9443".into(), false),
@@ -1229,7 +1245,61 @@ mod tests {
         let (rows, buf) = screen(&app);
         assert!(rows[0].contains("ACME · The Post"), "{}", rows[0]);
         assert!(rows[3].contains("ACME"), "{}", rows[3]);
-        assert_eq!(buf[(0, 0)].bg, Color::Rgb(0xCC, 0x00, 0x00));
+        assert_eq!(buf[(0, 0)].bg, Color::Rgb(0xC6, 0x28, 0x28));
+        assert_eq!(buf[(79, 0)].bg, Color::Rgb(0x0A, 0x70, 0x6F));
+        // Пара ниже порога (цвет фона) в ответе сервера рисуется цветами IT TASK (страховка guarded).
+        let brand = crate::theme::tests::server_brand(
+            Some("ACME"),
+            &[("sel", "#C62828"), ("text", "#141A20")],
+            &[],
+            false,
+        );
+        let app = App::new(
+            Theme::new(Mode::Dark, brand),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let (rows, buf) = screen(&app);
+        assert!(rows[3].contains("ACME"), "{}", rows[3]);
+        let label = rows[8].find("Адрес").map(|x| x as u16).unwrap_or_default();
+        assert_eq!(
+            buf[(label, 8)].fg,
+            Color::Rgb(0xD8, 0xE7, 0xF4),
+            "текст — цвет IT TASK"
+        );
+    }
+
+    /// Название длиннее ширины экрана обрезается с многоточием — в строке меню и на экране входа.
+    #[test]
+    fn long_name_is_cut() {
+        let name: String = "Я".repeat(90);
+        let brand = crate::theme::tests::server_brand(Some(&name), &[], &[], false);
+        let app = App::new(
+            Theme::new(Mode::Dark, brand),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let (rows, _) = screen(&app);
+        assert!(rows[0].ends_with('…'), "{}", rows[0]);
+        assert_eq!(rows[0].chars().count(), 80, "{}", rows[0]);
+        assert!(rows[3].ends_with('…'), "{}", rows[3]);
+        assert!(rows[3].chars().count() <= 80, "{}", rows[3]);
+        assert!(rows[3].starts_with('Я'), "{}", rows[3]);
+    }
+
+    /// Без графики — название без знака: бренд заказчика без своего знака в 16 цветах и монохроме, и со
+    /// своим знаком там, где протокол — полублоки.
+    #[test]
+    fn no_graphics_name_only() {
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        for mode in [Mode::C16, Mode::Mono] {
+            let brand = crate::theme::tests::server_brand(Some("Ромашка"), &[], &[], true);
+            let theme = Theme::new(mode, brand).with_mark(&picker);
+            assert!(theme.mark().is_none());
+            let app = App::new(theme, LoginForm::new("https://node:9443".into(), false));
+            let (rows, _) = screen(&app);
+            let top = rows[1..6].join("\n");
+            assert!(top.contains("Ромашка"), "{mode:?}: {top}");
+            assert!(!top.contains('▀') && !top.contains('▄'), "{mode:?}: {top}");
+        }
     }
 
     /// Форма с неверным значением: ошибка под полем.

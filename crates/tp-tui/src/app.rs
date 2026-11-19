@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Map, Value};
-use tp_admin::server::WhoAmI;
+use tp_admin::server::{AdminRole, WhoAmI};
 
 use crate::cli;
 use crate::cursor::CursorView;
@@ -216,6 +216,35 @@ impl LoginForm {
             LoginField::Method => None,
         }
     }
+
+    /// Почтовый домен введённого имени входа (после `@`): брендинг экрана входа по домену (TUI-08, решение 122).
+    pub fn domain(&self) -> Option<String> {
+        if self.method != Method::Password {
+            return None;
+        }
+        self.user
+            .rsplit_once('@')
+            .and_then(|(_, d)| (!d.is_empty()).then(|| d.to_owned()))
+    }
+}
+
+/// Запрос брендинга (TUI-08): тема поверх действующего брендинга сервера.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrandingFetch {
+    /// Экран входа — открытый маршрут `public_branding`: сначала без домена, затем по домену введённого имени
+    /// входа.
+    Public {
+        /// Адрес Admin API из формы входа.
+        url: String,
+        /// Почтовый домен имени входа; `None` — брендинг установки.
+        domain: Option<String>,
+    },
+    /// После входа — действующий брендинг (`effective`) своей организации; `None` — уровень установки
+    /// (администратор установки).
+    Own {
+        /// Организация (UUID); `None` — уровень установки.
+        org: Option<String>,
+    },
 }
 
 /// Вход, который выполняет запускающий код.
@@ -249,6 +278,8 @@ pub enum LoginRequest {
 pub enum Effect {
     /// Войти.
     Login(LoginRequest),
+    /// Запросить брендинг сервера (TUI-08): ответ перекрашивает тему, ошибка или нет сети — тема IT TASK.
+    Branding(BrandingFetch),
     /// Запрос к Admin API; ответ — [`App::on_result`] с тем же номером.
     Call(u64, Request),
     /// Прочитать `config.yaml` узла; ответ — [`App::on_config`].
@@ -645,18 +676,22 @@ pub struct App {
     pub mouse: MouseState,
     /// Плавный курсор текущего кадра (TUI-07): ставит цикл терминала.
     pub cursor: Option<CursorView>,
+    /// Последний запрошенный брендинг экрана входа: адрес Admin API и домен имени входа (TUI-08).
+    pub(crate) brand_target: (String, Option<String>),
     pub(crate) bus: Bus,
 }
 
 impl App {
     /// Интерфейс на экране входа.
     pub fn new(theme: Theme, login: LoginForm) -> Self {
+        let brand_target = (login.url.trim().to_owned(), None);
         Self {
             theme,
             stage: Stage::Login(login),
             node: false,
             mouse: MouseState::default(),
             cursor: None,
+            brand_target,
             bus: Bus::default(),
         }
     }
@@ -704,13 +739,25 @@ impl App {
         {
             return vec![Effect::Quit];
         }
-        match &mut self.stage {
+        let mut effects = match &mut self.stage {
             Stage::Login(form) => form.key(key).into_iter().collect(),
             Stage::Main(m) => {
                 self.bus.status = None;
                 main_key(m, &mut self.bus, key)
             }
+        };
+        // Экран входа: сменились адрес или домен имени входа — запросить брендинг (TUI-08).
+        if let Stage::Login(form) = &self.stage {
+            let target = (form.url.trim().to_owned(), form.domain());
+            if target != self.brand_target {
+                self.brand_target = target.clone();
+                effects.push(Effect::Branding(BrandingFetch::Public {
+                    url: target.0,
+                    domain: target.1,
+                }));
+            }
         }
+        effects
     }
 
     /// Итог входа: администратор и узел, или ошибка.
@@ -726,6 +773,13 @@ impl App {
                 form.error = Some(e);
                 return Vec::new();
             }
+        };
+        // После входа — действующий брендинг своей организации; администратор установки — уровень
+        // установки (TUI-08).
+        let brand_org = if who.roles.contains(&AdminRole::InstallationAdmin) {
+            None
+        } else {
+            Some(who.tenant.clone())
         };
         let mut m = Box::new(Main {
             org: who.tenant.clone(),
@@ -753,6 +807,7 @@ impl App {
             out.push(self.bus.call(req, Pending::Orgs));
         }
         out.extend(open_tree(&mut m, &mut self.bus));
+        out.push(Effect::Branding(BrandingFetch::Own { org: brand_org }));
         self.stage = Stage::Main(m);
         out
     }
@@ -1891,6 +1946,84 @@ pub(crate) mod tests {
         app.on_key(key(KeyCode::Right));
         assert_eq!(app.command_line(), "thepost admin login --oidc");
         assert_eq!(app.on_key(key(KeyCode::F(10))), vec![Effect::Quit]);
+    }
+
+    /// Брендинг экрана входа (TUI-08): домен введённого имени входа запрашивает брендинг по домену — по одному
+    /// запросу на смену адреса или домена; ввод без изменений ничего не запрашивает.
+    #[test]
+    fn branding_by_domain() {
+        let mut app = App::new(
+            Theme::new(Mode::Dark, Brand::default()),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        for c in "admin".chars() {
+            assert!(app.on_key(key(KeyCode::Char(c))).is_empty(), "{c}");
+        }
+        let mut fetches = Vec::new();
+        for c in "@it-task.ru".chars() {
+            fetches.extend(app.on_key(key(KeyCode::Char(c))));
+        }
+        let want: Vec<Effect> = [
+            Some("i"),
+            Some("it"),
+            Some("it-"),
+            Some("it-t"),
+            Some("it-ta"),
+            Some("it-tas"),
+            Some("it-task"),
+            Some("it-task."),
+            Some("it-task.r"),
+            Some("it-task.ru"),
+        ]
+        .into_iter()
+        .map(|domain| {
+            Effect::Branding(BrandingFetch::Public {
+                url: "https://node:9443".into(),
+                domain: domain.map(str::to_owned),
+            })
+        })
+        .collect();
+        assert_eq!(fetches, want);
+        // Смена адреса — запрос с тем же доменом; клавиши без изменения полей — нет запроса.
+        assert!(app.on_key(key(KeyCode::Left)).is_empty());
+        app.on_key(key(KeyCode::Up));
+        app.on_key(key(KeyCode::Up));
+        let fx = app.on_key(key(KeyCode::Backspace));
+        assert_eq!(
+            fx,
+            vec![Effect::Branding(BrandingFetch::Public {
+                url: "https://node:944".into(),
+                domain: Some("it-task.ru".into()),
+            })]
+        );
+    }
+
+    /// После входа — действующий брендинг своей организации; администратор установки — уровень установки
+    /// (TUI-08).
+    #[test]
+    fn branding_after_login() {
+        let mut app = App::new(
+            Theme::new(Mode::Dark, Brand::default()),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let fx = app.on_login(Ok((who(), "node:9443".into())));
+        assert!(
+            fx.contains(&Effect::Branding(BrandingFetch::Own {
+                org: Some("00000000-0000-0000-0000-000000000001".into())
+            })),
+            "{fx:?}"
+        );
+        let mut admin = who();
+        admin.roles = vec![AdminRole::InstallationAdmin];
+        let mut app = App::new(
+            Theme::new(Mode::Dark, Brand::default()),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let fx = app.on_login(Ok((admin, "node:9443".into())));
+        assert!(
+            fx.contains(&Effect::Branding(BrandingFetch::Own { org: None })),
+            "{fx:?}"
+        );
     }
 
     #[test]
