@@ -195,10 +195,10 @@ fn scan_links(text: &str, out: &mut Vec<String>) {
                 .iter()
                 .position(|&c| !is_host_byte(c))
                 .unwrap_or(b.len() - start);
-        if let Ok(domain) = normalize_domain(host_of(&text[start..end])) {
-            if !out.contains(&domain) {
-                out.push(domain);
-            }
+        if let Ok(domain) = normalize_domain(host_of(&text[start..end]))
+            && !out.contains(&domain)
+        {
+            out.push(domain);
         }
         i = end.max(start);
     }

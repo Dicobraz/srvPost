@@ -268,12 +268,14 @@ mod tests {
             next.delivered[0].mailbox, deals,
             "папка вместо выбранной правилами"
         );
-        let msg = env.meta.get(scope, id).await.expect("get").expect("msg");
+        let msg = MessageStore::get(&env.meta, scope, id)
+            .await
+            .expect("get")
+            .expect("msg");
         assert_eq!(msg.mailbox, deals);
         assert_eq!(msg.uid, next.delivered[0].uid);
         assert_eq!(
-            env.meta
-                .list(scope, d.mailbox, MessageQuery::All, 10)
+            MessageStore::list(&env.meta, scope, d.mailbox, MessageQuery::All, 10)
                 .await
                 .expect("list")
                 .len(),
@@ -294,9 +296,7 @@ mod tests {
             ))
             .await
             .expect("ingest");
-        let msg = env
-            .meta
-            .get(scope, keyworded.delivered[0].message)
+        let msg = MessageStore::get(&env.meta, scope, keyworded.delivered[0].message)
             .await
             .expect("get")
             .expect("msg");
@@ -374,9 +374,7 @@ mod tests {
             ))
             .await
             .expect("ingest");
-        let msg = env
-            .meta
-            .get(scope, ignored.delivered[0].message)
+        let msg = MessageStore::get(&env.meta, scope, ignored.delivered[0].message)
             .await
             .expect("get")
             .expect("msg");
@@ -489,8 +487,7 @@ mod tests {
             account: d.account,
         };
         assert_eq!(
-            env.meta
-                .list(scope, d.mailbox, MessageQuery::All, 10)
+            MessageStore::list(&env.meta, scope, d.mailbox, MessageQuery::All, 10)
                 .await
                 .expect("list")
                 .len(),
@@ -502,8 +499,7 @@ mod tests {
             .mailbox_by_role(scope, SpecialUse::Trash)
             .expect("trash");
         assert!(
-            env.meta
-                .list(scope, trash, MessageQuery::All, 10)
+            MessageStore::list(&env.meta, scope, trash, MessageQuery::All, 10)
                 .await
                 .expect("list")
                 .is_empty(),
