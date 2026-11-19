@@ -886,6 +886,7 @@ fn value_ru(v: CellValue) -> &'static str {
         CellValue::Invite(InviteMode::Button) => "письмо с кнопкой",
         CellValue::Invite(InviteMode::Auto) => "авто",
         CellValue::Toggle(Toggle::Off) => "выключено",
+        CellValue::Toggle(Toggle::ReplyOnly) => "только ответ на наше письмо",
         CellValue::Toggle(Toggle::On) => "включено",
         CellValue::Detail(Detail::None) => "нет",
         CellValue::Detail(Detail::FreeBusy) => "свободен/занят",
