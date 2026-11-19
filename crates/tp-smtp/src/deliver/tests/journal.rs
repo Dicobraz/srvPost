@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use tp_contracts::groups::{DistributionGroup, GroupMember, GroupStore, SenderRestriction};
 use tp_contracts::journal::{
     JournalAudit, JournalDirection, JournalEntry, JournalQuery, JournalRule, JournalScope,
+    JournalStore,
 };
 use tp_contracts::sieve::{AutoReply, ReplyBody, RulesOutcome};
 use tp_contracts::{GroupId, Result, TenantId};
