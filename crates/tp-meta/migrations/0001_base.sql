@@ -454,6 +454,44 @@ CREATE UNIQUE INDEX branding_installation ON branding ((tenant_id IS NULL)) WHER
 -- `logo_in_use`: упомянут ли знак хоть одним уровнем.
 CREATE INDEX branding_logo ON branding (logo_hash) WHERE logo_hash IS NOT NULL;
 
+-- Политика доверия (решение 124; CTR-93, META-85): по строке на уровень — установка (tenant_id и group_id
+-- NULL, не больше одной строки), организация (group_id IS NULL, уникальный tenant) и группа (уникальная
+-- пара tenant и группа; удаление группы удаляет её политику). Клетки — cells в jsonb по схеме контракта
+-- (TrustPolicy без доменных списков; новое поле политики — не миграция схемы клеток), схема клеток —
+-- schema_version. Домены-партнёры и домены автопересылки — только у организации, отдельными таблицами.
+-- RLS: строку установки читают все организации (installation_read), пишет её только системная транзакция.
+CREATE TABLE trust_policies (
+    tenant_id      uuid REFERENCES tenants ON DELETE CASCADE,
+    group_id       uuid,
+    cells          jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(cells) = 'object'),
+    schema_version integer NOT NULL DEFAULT 1 CHECK (schema_version > 0),
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+    -- Группа всегда с организацией: tenant_id IS NULL (установка) — только вместе с group_id IS NULL.
+    CHECK (tenant_id IS NOT NULL OR group_id IS NULL),
+    FOREIGN KEY (tenant_id, group_id) REFERENCES groups (tenant_id, group_id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX trust_policies_installation ON trust_policies ((tenant_id IS NULL)) WHERE tenant_id IS NULL;
+CREATE UNIQUE INDEX trust_policies_org ON trust_policies (tenant_id) WHERE tenant_id IS NOT NULL AND group_id IS NULL;
+CREATE UNIQUE INDEX trust_policies_group ON trust_policies (tenant_id, group_id) WHERE group_id IS NOT NULL;
+
+-- Домены-партнёры организации (PeerKind::Partner): канонические имена (нижний регистр, A-label IDN —
+-- проверяет контракт при записи, CHECK — страховка); partner_of — по первичному ключу.
+CREATE TABLE trust_partner_domains (
+    tenant_id  uuid NOT NULL REFERENCES tenants ON DELETE CASCADE,
+    domain     text NOT NULL CHECK (domain = lower(domain)),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, domain)
+);
+
+-- Домены, куда разрешена автопересылка (при auto_forward = On); вид — как у партнёров.
+CREATE TABLE trust_forward_domains (
+    tenant_id  uuid NOT NULL REFERENCES tenants ON DELETE CASCADE,
+    domain     text NOT NULL CHECK (domain = lower(domain)),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, domain)
+);
+
 -- ---------- Ящик: таблицы шарда ящика (без внешних ключей к каталогу) ----------
 
 CREATE TABLE mailboxes (
@@ -847,17 +885,22 @@ CREATE TABLE sieve_org_scripts (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Автоответ учётной записи (модель JMAP VacationResponse, RFC 8621 §8); нет строки — выключен.
+-- Автоответ учётной записи (модель JMAP VacationResponse, RFC 8621 §8); нет строки — выключен. Внешний
+-- текст (CTR-93, решение 124 г, RFC 3834): чужим (`PeerKind` не `Own`) ответ идёт только им и только если
+-- задан; все внешние поля NULL — наружу ничего не уходит.
 CREATE TABLE vacation (
-    tenant_id  uuid NOT NULL,
-    account_id uuid NOT NULL,
-    enabled    boolean NOT NULL,
-    from_at    timestamptz,
-    to_at      timestamptz,
-    subject    text,
-    text_body  text,
-    html_body  text,
-    updated_at timestamptz NOT NULL DEFAULT now(),
+    tenant_id          uuid NOT NULL,
+    account_id         uuid NOT NULL,
+    enabled            boolean NOT NULL,
+    from_at            timestamptz,
+    to_at              timestamptz,
+    subject            text,
+    text_body          text,
+    html_body          text,
+    external_subject   text,
+    external_text_body text,
+    external_html_body text,
+    updated_at         timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, account_id),
     CHECK (from_at IS NULL OR to_at IS NULL OR from_at <= to_at)
 );
@@ -1362,7 +1405,8 @@ BEGIN
         'sieve_org_scripts', 'vacation', 'vacation_log', 'email_submissions', 'email_submission_tombstones',
         'collection_acl', 'blobs', 'queue', 'queue_rcpts', 'policies', 'delivery_log', 'mailbox_audit',
         'mailbox_audit_policies', 'audit_log', 'transport_versions', 'transport_routes',
-        'transport_rewrites', 'local_admin_tokens', 'events']
+        'transport_rewrites', 'local_admin_tokens', 'events', 'trust_partner_domains',
+        'trust_forward_domains']
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
@@ -1387,6 +1431,15 @@ ALTER TABLE branding FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON branding USING (tp_tenant_visible(tenant_id))
     WITH CHECK (tp_tenant_visible(tenant_id));
 CREATE POLICY installation_read ON branding FOR SELECT USING (tenant_id IS NULL);
+
+-- Политики доверия — как брендинг: уровни организации и группы видит и меняет только своя организация,
+-- строку установки читают все (действующий потолок и effective_for в транзакции организации), меняет —
+-- только системная транзакция (у tenant_id IS NULL проверка tp_tenant_visible ложна).
+ALTER TABLE trust_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trust_policies FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON trust_policies USING (tp_tenant_visible(tenant_id))
+    WITH CHECK (tp_tenant_visible(tenant_id));
+CREATE POLICY installation_read ON trust_policies FOR SELECT USING (tenant_id IS NULL);
 
 -- ---------- Роли PostgreSQL (SRS 2.7, 3.1; решение 2026-11-01-borrowings-security) ----------
 --
