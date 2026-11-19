@@ -30,15 +30,19 @@ afterEach(() => {
 });
 
 test("журнал переписки: поиск по отправителю, получателю, Message-ID и правилу, страницы по next", async () => {
-  const calls = open("/journal", {
-    [`GET ${BASE}/journal`]: (c) =>
-      c.path.includes("after=c2")
-        ? { body: { entries: [entry(ID2)], next: null } }
-        : c.path.includes("sender=a%40external.example")
-          ? { body: { entries: [entry(ID1)], next: "c2" } }
-          : { body: { entries: [entry(ID1), entry(ID2)], next: null } },
-    [`GET ${BASE}/journal/verify`]: { body: { records: 2, ok: true, broken_at: null } },
-  });
+  const calls = open(
+    "/journal",
+    {
+      [`GET ${BASE}/journal`]: (c) =>
+        c.path.includes("after=c2")
+          ? { body: { entries: [entry(ID2)], next: null } }
+          : c.path.includes("sender=a%40external.example")
+            ? { body: { entries: [entry(ID1)], next: "c2" } }
+            : { body: { entries: [entry(ID1), entry(ID2)], next: null } },
+      [`GET ${BASE}/journal/verify`]: { body: { records: 2, ok: true, broken_at: null } },
+    },
+    ["journal_auditor"],
+  );
   expect(await screen.findByText("a@external.example")).toBeTruthy();
   // Целостность цепочки — индикатор на странице (число записей — в отчёте).
   expect(await screen.findByText("цепочка цела")).toBeTruthy();
@@ -57,12 +61,16 @@ test("журнал переписки: поиск по отправителю, �
 
 test("запись: конверт со скрытым получателем и хешем цепочки, выгрузка .eml — запросы к Admin API", async () => {
   const e = entry(ID1);
-  const calls = open("/journal", {
-    [`GET ${BASE}/journal`]: { body: { entries: [e], next: null } },
-    [`GET ${BASE}/journal/verify`]: { body: { records: 1, ok: true, broken_at: null } },
-    [`GET ${BASE}/journal/${ID1}`]: { body: e },
-    [`GET ${BASE}/journal/${ID1}/export`]: { body: "X-ThePost-Journal-Sender: a@external.example\r\n" },
-  });
+  const calls = open(
+    "/journal",
+    {
+      [`GET ${BASE}/journal`]: { body: { entries: [e], next: null } },
+      [`GET ${BASE}/journal/verify`]: { body: { records: 1, ok: true, broken_at: null } },
+      [`GET ${BASE}/journal/${ID1}`]: { body: e },
+      [`GET ${BASE}/journal/${ID1}/export`]: { body: "X-ThePost-Journal-Sender: a@external.example\r\n" },
+    },
+    ["journal_auditor"],
+  );
   expect(await screen.findByText("a@external.example")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Открыть" }));
   // Просмотр конверта — отдельное обращение к журналу; хеш цепочки — только в конверте.
@@ -76,10 +84,14 @@ test("запись: конверт со скрытым получателем и
 });
 
 test("целостность: разрыв цепочки — индикатор и отчёт с числом записей и первой нарушенной", async () => {
-  open("/journal", {
-    [`GET ${BASE}/journal`]: { body: { entries: [], next: null } },
-    [`GET ${BASE}/journal/verify`]: { body: { records: 7, ok: false, broken_at: ID2 } },
-  });
+  open(
+    "/journal",
+    {
+      [`GET ${BASE}/journal`]: { body: { entries: [], next: null } },
+      [`GET ${BASE}/journal/verify`]: { body: { records: 7, ok: false, broken_at: ID2 } },
+    },
+    ["journal_auditor"],
+  );
   expect(await screen.findByText("разрыв цепочки")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Отчёт целостности" }));
   expect(await screen.findByText("Проверено записей")).toBeTruthy();
