@@ -115,3 +115,35 @@ export async function request<T>(path: string, o: RequestOptions = {}): Promise<
   const next = link ? (new URL(link[1], url).searchParams.get("after") ?? undefined) : undefined;
   return { data: data as T, next };
 }
+
+/**
+ * Скачивает файл Admin API — выгрузка `.eml` записи журнала (UI-25): адрес, `{org}` и сессия — как у
+ * [`request`], ответ — не JSON. Ошибка — `HttpError` для уведомлений Refine.
+ */
+export async function download(path: string, filename: string): Promise<void> {
+  const url = new URL(path.replace("{org}", encodeURIComponent(getOrg())), apiBase || location.origin);
+  const bearer = loadSession()?.token;
+  const resp = await fetch(`${apiBase}${url.pathname}`, {
+    headers: { Accept: "message/rfc822", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    let problem: unknown;
+    try {
+      problem = text ? JSON.parse(text) : undefined;
+    } catch {
+      problem = undefined;
+    }
+    const p = (problem ?? {}) as Partial<Schemas["Problem"]>;
+    const error: HttpError = { message: p.detail ?? p.title ?? resp.statusText, statusCode: resp.status, problem };
+    throw error;
+  }
+  // Сохранение файла — средствами страницы; jsdom (тесты) без URL.createObjectURL — проверяется запрос.
+  if (typeof URL.createObjectURL !== "function") return;
+  const href = URL.createObjectURL(await resp.blob());
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(href);
+}

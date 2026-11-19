@@ -20,6 +20,7 @@ import { ContactCreate, ContactEdit, ContactList } from "./pages/contacts";
 import { DeliveryPage } from "./pages/delivery";
 import { DisabledPage } from "./pages/disabled";
 import { GroupCreate, GroupEdit, GroupList } from "./pages/groups";
+import { JournalPage } from "./pages/journal";
 import { LoginPage } from "./pages/login";
 import { MailboxAuditPage } from "./pages/mailbox-audit";
 import { ModerationPage } from "./pages/moderation";
@@ -46,11 +47,13 @@ dayjs.locale("ru");
 /** Название в заголовке боковой панели: брендинг заказчика, нет — The Post. */
 const Title = (props: { collapsed: boolean }) => <ThemedTitle {...props} text={useBranding()?.name ?? "The Post"} />;
 
-/** Первый раздел по роли: аудитору доступен только журнал аудита. */
+/** Первый раздел по роли: аудитору журнала — журнал переписки, аудитору — журнал аудита. */
 function Home() {
   const { data: roles, isLoading } = usePermissions<Schemas["AdminRole"][]>({});
   if (isLoading) return null;
-  return <NavigateToResource resource={allowed(roles ?? ["installation_admin"], "organization", "list") ? "organization" : "audit"} />;
+  const rs = roles ?? ["installation_admin"];
+  const first = allowed(rs, "organization", "list") ? "organization" : allowed(rs, "audit", "list") ? "audit" : "journal";
+  return <NavigateToResource resource={first} />;
 }
 
 export function App() {
@@ -112,6 +115,8 @@ export function App() {
               { name: "transport", list: "/transport", meta: { label: "Транспорт" } },
               { name: "delivery", list: "/delivery", meta: { label: "Журнал доставки" } },
               { name: "audit", list: "/audit", meta: { label: "Журнал аудита" } },
+              // Отдельно от журналов доставки и аудита: содержимое писем — только аудитору журнала (UI-25).
+              { name: "journal", list: "/journal", meta: { label: "Журнал переписки" } },
               { name: "mailbox-audit", list: "/mailbox-audit", meta: { label: "Аудит ящиков" } },
             ]}
             // Без внешних обращений (SRS 5.2): телеметрия Refine выключена.
@@ -163,6 +168,7 @@ export function App() {
                 <Route path="/transport" element={<TransportPage />} />
                 <Route path="/delivery" element={<DeliveryPage />} />
                 <Route path="/audit" element={<AuditPage />} />
+                <Route path="/journal" element={<JournalPage />} />
                 <Route path="/mailbox-audit" element={<MailboxAuditPage />} />
                 <Route path="*" element={<ErrorComponent />} />
               </Route>
