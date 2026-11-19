@@ -41,11 +41,13 @@ function toBody(v: Values): Schemas["BrandingBody"] {
 }
 
 /** Ошибки контраста 422 — к полям ролей из `errors` (роль, пара, тема), текст — `detail` сервера. */
-function contrastFields(problem: unknown): { name: (string | number)[]; errors: string[] }[] {
+function contrastFields(problem: unknown): { name: ["light", string]; errors: string[] }[] {
   const p = (problem ?? {}) as { detail?: string; errors?: { field?: string }[] };
-  return (p.errors ?? [])
-    .filter((e) => typeof e.field === "string" && e.field.includes("."))
-    .map((e) => ({ name: e.field.split("."), errors: [p.detail ?? "Контраст ниже порога"] }));
+  return (p.errors ?? []).flatMap((e) =>
+    typeof e.field === "string" && e.field.includes(".")
+      ? [{ name: e.field.split(".") as ["light", string], errors: [p.detail ?? "Контраст ниже порога"] }]
+      : [],
+  );
 }
 
 /** Предпросмотр одной темы: шапка, выделение и F-клавиши цветами действующего набора (с редактируемым). */

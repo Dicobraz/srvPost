@@ -72,7 +72,8 @@ export const cliRoleNames = Object.keys(tokens.cli.roles);
 
 /** Значения только известных ролей: карта ролей из ответа сервера — к Partial<ModeColors>. */
 export function roleOverlay(map: Record<string, string> | undefined): Partial<ModeColors> {
-  return Object.fromEntries(roleNames.filter((r) => map?.[r]).map((r) => [r, map[r]])) as Partial<ModeColors>;
+  const known = Object.entries(map ?? {}).filter(([role]) => roleNames.includes(role as keyof ModeColors));
+  return Object.fromEntries(known) as Partial<ModeColors>;
 }
 
 /**

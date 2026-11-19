@@ -45,7 +45,7 @@ test("страница входа: брендинг по домену имени
 });
 
 test("после входа: effective своей организации — знак и название в шапке", async () => {
-  const { container } = open(
+  open(
     "/",
     {
       [`GET ${BASE}`]: { body: org() },
@@ -56,7 +56,7 @@ test("после входа: effective своей организации — з�
     ["organization_admin"],
   );
   expect(await screen.findAllByText("Школа №1")).not.toHaveLength(0); // шапка и заголовок боковой панели
-  await waitFor(() => expect(container.querySelector('img[src="/api/v1/public/branding/logo/ff00"]')).toBeTruthy());
+  await waitFor(() => expect(document.querySelector('img[src="/api/v1/public/branding/logo/ff00"]')).toBeTruthy());
 });
 
 test("раздел «Брендинг»: незаданная роль — действующий цвет уровня выше; сброс организации возвращает тему установки", async () => {
