@@ -15,6 +15,7 @@
 //!
 //! Команды проверяются против роутера tp-admin.
 
+use std::io::Write as _;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -215,6 +216,12 @@ pub enum ApiAction {
         /// Действие.
         #[command(subcommand)]
         action: Box<DeliveryAction>,
+    },
+    /// Журнал переписки (роль «аудитор журнала»): поиск, запись, выгрузка .eml, проверка цепочки.
+    Journal {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<JournalAction>,
     },
     /// Транспорт: принятые домены, доверенные источники, политики доменов назначения.
     Transport {
@@ -650,6 +657,54 @@ pub enum DeliveryAction {
         #[arg(long)]
         after: Option<String>,
     },
+}
+
+/// Действия с журналом переписки (SRS 4.9, 5.2; ADM-52): роль «аудитор журнала»; администраторам
+/// организации и инсталляции содержимое журнала недоступно.
+#[derive(Debug, Clone, Subcommand)]
+pub enum JournalAction {
+    /// Записи по возрастанию времени; условия — по «и».
+    Search {
+        /// Отправитель конверта (точно, без учёта регистра).
+        #[arg(long)]
+        sender: Option<String>,
+        /// Один из получателей записи, включая скрытых (точно, без учёта регистра).
+        #[arg(long)]
+        recipient: Option<String>,
+        /// Message-ID без угловых скобок.
+        #[arg(long)]
+        message_id: Option<String>,
+        /// Правило журналирования.
+        #[arg(long)]
+        rule: Option<String>,
+        /// Начало интервала, RFC 3339 (например, 2026-12-01T00:00:00Z), включительно.
+        #[arg(long, value_name = "ВРЕМЯ")]
+        since: Option<String>,
+        /// Конец интервала, RFC 3339, не включительно.
+        #[arg(long, value_name = "ВРЕМЯ")]
+        until: Option<String>,
+        /// Размер страницы (по умолчанию и наибольший — из конфигурации узла).
+        #[arg(long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+        limit: Option<usize>,
+        /// Продолжение: позиция из подсказки предыдущей страницы (с теми же условиями).
+        #[arg(long)]
+        after: Option<String>,
+    },
+    /// Запись журнала: конверт и хеш цепочки.
+    Get {
+        /// Запись журнала: идентификатор (UUID, из `journal search`).
+        id: String,
+    },
+    /// Выгрузка записи: .eml с конвертом — в файл `--output` или в stdout.
+    Export {
+        /// Запись журнала: идентификатор (UUID, из `journal search`).
+        id: String,
+        /// Файл для .eml (по умолчанию — stdout).
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
+    /// Отчёт целостности хеш-цепочки индекса журнала организации.
+    Verify,
 }
 
 /// Ресурсы транспорта; каждая запись — по версии снимка последнего чтения (устарела — 409, повторите команду).
@@ -1297,6 +1352,7 @@ pub async fn execute(client: &Client, args: &ApiArgs, action: ApiAction) -> CliR
         ApiAction::Trash { action } => trash_command(client, args, action).await,
         ApiAction::Audit { action } => audit_command(client, args, *action).await,
         ApiAction::Delivery { action } => delivery_command(client, args, *action).await,
+        ApiAction::Journal { action } => journal_command(client, args, *action).await,
         ApiAction::Transport { action } => {
             let org = client.org(args.org.clone()).await?;
             match *action {
@@ -2435,6 +2491,131 @@ async fn delivery_command(
     out(args, &page, text)
 }
 
+/// `thepost admin journal search`: одна страница; продолжение — подсказкой `--after`.
+async fn journal_command(
+    client: &Client,
+    args: &ApiArgs,
+    action: JournalAction,
+) -> CliResult<String> {
+    let org = client.org(args.org.clone()).await?;
+    match action {
+        JournalAction::Search {
+            sender,
+            recipient,
+            message_id,
+            rule,
+            since,
+            until,
+            limit,
+            after,
+        } => {
+            let params: tp_admin::journal::JournalParams = from_json(
+                serde_json::json!({
+                    "sender": sender, "recipient": recipient, "message_id": message_id,
+                    "rule": rule, "since": since, "until": until, "limit": limit, "after": after,
+                }),
+                "журнал переписки",
+            )?;
+            let page: tp_admin::journal::JournalPageView = client
+                .call(JOURNAL_SEARCH, &[&org], &query(&params)?, NO_BODY)
+                .await?;
+            let rows: Vec<Vec<String>> = page
+                .entries
+                .iter()
+                .map(|e| {
+                    vec![
+                        json_field(&e.record, "at"),
+                        e.record.sender.clone(),
+                        e.record.recipients.join(", "),
+                        or_dash(e.record.message_id.as_deref().unwrap_or_default()),
+                        e.record.rule.clone(),
+                        e.id.clone(),
+                    ]
+                })
+                .collect();
+            let mut text = style::table(
+                args.theme(),
+                &[
+                    "МОМЕНТ",
+                    "ОТПРАВИТЕЛЬ",
+                    "ПОЛУЧАТЕЛИ",
+                    "MESSAGE-ID",
+                    "ПРАВИЛО",
+                    "ЗАПИСЬ",
+                ],
+                &rows,
+            );
+            if let Some(next) = &page.next {
+                text.push_str(&style::more(
+                    args.theme(),
+                    &format!("Есть ещё. Следующая страница: те же условия и --after {next}"),
+                ));
+            }
+            out(args, &page, text)
+        }
+        JournalAction::Get { id } => {
+            let e: tp_admin::journal::JournalEntryView =
+                client.call(JOURNAL_GET, &[&org, &id], &[], NO_BODY).await?;
+            out(args, &e, journal_entry_record(&e))
+        }
+        JournalAction::Export { id, output } => {
+            let eml = client.bytes(JOURNAL_EXPORT, &[&org, &id]).await?;
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, &eml).map_err(|e| format!("{}: {e}", path.display()))?;
+                    let text = format!(
+                        "Запись {id} выгружена в {} ({} байт).\n",
+                        path.display(),
+                        eml.len()
+                    );
+                    out(
+                        args,
+                        &serde_json::json!({"written": path.display().to_string()}),
+                        text,
+                    )
+                }
+                // .eml — не обязательно UTF-8: в stdout байты как есть, без оформления.
+                None => std::io::stdout()
+                    .write_all(&eml)
+                    .map_err(|e| e.to_string())
+                    .map(|()| String::new()),
+            }
+        }
+        JournalAction::Verify => {
+            let r: tp_admin::journal::ChainReportView =
+                client.call(JOURNAL_VERIFY, &[&org], &[], NO_BODY).await?;
+            let text = if r.ok {
+                record(&[
+                    ("Проверено записей", r.records.to_string()),
+                    ("Цепочка целостна", "да".to_owned()),
+                ])
+            } else {
+                record(&[
+                    ("Проверено записей", r.records.to_string()),
+                    ("Цепочка целостна", "нет".to_owned()),
+                    ("Первая запись с нарушением", optional(r.broken_at.as_ref())),
+                ])
+            };
+            out(args, &r, text)
+        }
+    }
+}
+
+/// Запись журнала — строки «подпись: значение».
+fn journal_entry_record(e: &tp_admin::journal::JournalEntryView) -> String {
+    let r = &e.record;
+    record(&[
+        ("Запись", e.id.clone()),
+        ("Организация", r.tenant.clone()),
+        ("Момент", json_field(r, "at")),
+        ("Отправитель", or_dash(&r.sender)),
+        ("Получатели", r.recipients.join(", ")),
+        ("Message-ID", optional(r.message_id.as_ref())),
+        ("Правило", r.rule.clone()),
+        ("Хеш цепочки", e.hash.clone()),
+    ])
+}
+
 /// Структура запроса tp-admin из значений ключей CLI: разбор и проверка — её serde (время — RFC 3339).
 fn from_json<T: DeserializeOwned>(v: serde_json::Value, what: &str) -> CliResult<T> {
     serde_json::from_value(v)
@@ -2965,9 +3146,9 @@ mod tests {
     use tp_contracts::ext::DecisionHooks;
     use tp_testkit::{
         Clock, FakeAuthenticator, MemAbuseBlocks, MemAppPasswords, MemAuditLog, MemBlobIndex,
-        MemBlobStore, MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemLocalAdminTokens,
-        MemMetadata, MemModeration, MemPolicies, MemQuota, MemSieve, MemTransport, MemTrash,
-        MemTrust, SystemClock,
+        MemBlobStore, MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemJournal,
+        MemLocalAdminTokens, MemMetadata, MemModeration, MemPolicies, MemQuota, MemSieve,
+        MemTransport, MemTrash, MemTrust, SystemClock,
     };
     use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate};
 
@@ -3505,14 +3686,17 @@ mod tests {
     }
 
     /// Admin API tp-admin на хранилищах testkit на loopback: локальный вход подключён, `oidc` — токен OIDC
-    /// администратора инсталляции; страница списков — 2 записи (переход по `Link` в каждом списке длиннее).
-    async fn admin_api() -> (Arc<tp_admin::Admin>, Url) {
+    /// администратора инсталляции, `ja` — аудитор журнала; страница списков — 2 записи (переход по `Link`
+    /// в каждом списке длиннее). Третий результат — журнал переписки для записи тестовых писем.
+    async fn admin_api() -> (Arc<tp_admin::Admin>, Url, MemJournal) {
         admin_api_with(tp_auth::AbuseConfig::default()).await
     }
 
     /// То же с защитой от перебора `abuse`. Учётные данные проверяет путь входа узла ([`crate::services::Guarded`]):
     /// пароль — `PasswordAuthenticator` с паролями приложений, Bearer — `oidc`; адрес клиента — из соединения.
-    async fn admin_api_with(abuse: tp_auth::AbuseConfig) -> (Arc<tp_admin::Admin>, Url) {
+    async fn admin_api_with(
+        abuse: tp_auth::AbuseConfig,
+    ) -> (Arc<tp_admin::Admin>, Url, MemJournal) {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let index = MemBlobIndex::new(clock.clone());
         let meta = MemMetadata::new(clock.clone()).with_blob_index(index.clone());
@@ -3542,6 +3726,16 @@ mod tests {
                 account: AccountId::new(),
                 login: "root@example.test".into(),
                 groups: BTreeSet::from(["mail-root".to_owned()]),
+                scopes: None,
+            },
+        );
+        bearer.add_token(
+            "ja",
+            Principal {
+                tenant: TenantId::DEFAULT,
+                account: AccountId::new(),
+                login: "ja@example.test".into(),
+                groups: BTreeSet::from(["compliance".to_owned()]),
                 scopes: None,
             },
         );
@@ -3583,15 +3777,23 @@ mod tests {
             oidc_issuer: None,
         };
         let cfg = AdminConfig {
-            roles: vec![RoleBinding {
-                role: AdminRole::InstallationAdmin,
-                logins: vec![],
-                groups: vec!["mail-root".into()],
-            }],
+            roles: vec![
+                RoleBinding {
+                    role: AdminRole::InstallationAdmin,
+                    logins: vec![],
+                    groups: vec!["mail-root".into()],
+                },
+                RoleBinding {
+                    role: AdminRole::JournalAuditor,
+                    logins: vec![],
+                    groups: vec!["compliance".into()],
+                },
+            ],
             page_size: 2,
             max_page_size: 2,
             ..AdminConfig::default()
         };
+        let journal = MemJournal::new();
         let admin = Arc::new(
             tp_admin::Admin::new(deps, cfg)
                 .expect("admin")
@@ -3599,6 +3801,7 @@ mod tests {
                 .with_trust(Arc::new(
                     MemTrust::new().with_groups(Arc::new(groups.clone())),
                 ))
+                .with_journal(Arc::new(journal.clone()))
                 .with_sieve(Arc::new(MemSieve::new()), check_script)
                 .with_org_script_check(check_org_script)
                 .with_local_tokens(Arc::new(MemLocalAdminTokens::new()))
@@ -3624,14 +3827,14 @@ mod tests {
             .into_make_service_with_connect_info::<std::net::SocketAddr>();
         tokio::spawn(async move { axum::serve(listener, router).await });
         let url = Url::parse(&format!("http://{addr}")).expect("url");
-        (admin, url)
+        (admin, url, journal)
     }
 
     /// Приёмка ADM-41: перебор пароля с одного адреса — блокировка `AbuseGuard` по адресу клиента, после неё и
     /// верный пароль не принимается (401).
     #[tokio::test]
     async fn password_login_bruteforce_is_blocked() {
-        let (admin, url) = admin_api_with(tp_auth::AbuseConfig {
+        let (admin, url, _) = admin_api_with(tp_auth::AbuseConfig {
             ip_failures: 3,
             ..tp_auth::AbuseConfig::default()
         })
@@ -3775,11 +3978,205 @@ mod tests {
             .collect()
     }
 
+    /// Приёмка ADM-52: журнал переписки в CLI — поиск по страницам, запись, выгрузка `.eml`, проверка
+    /// цепочки; команды ведёт аудитор журнала (`ja`), администратору инсталляции содержимое — 403.
+    #[tokio::test]
+    async fn journal_commands_against_admin_api() {
+        use tp_contracts::journal::JournalStore as _;
+        use tp_contracts::journal::{JournalDirection, JournalRule, JournalScope};
+
+        let (_admin, url, journal) = admin_api().await;
+        let ja = client(&url, "ja");
+        let root = client(&url, "oidc");
+        let json = |out: CliResult<String>| -> Value {
+            serde_json::from_str(&out.expect("ответ")).expect("json")
+        };
+        let d = TenantId::DEFAULT;
+        let rule = JournalRule {
+            id: "org-all".to_owned(),
+            tenant: d,
+            scope: JournalScope::Org,
+            direction: JournalDirection::Both,
+            enabled: true,
+        };
+        for (at, sender, rcpt, mid) in [
+            (
+                1_800_000_000,
+                "a@external.test",
+                "anna@res.test",
+                "m1@external.test",
+            ),
+            (
+                1_800_000_060,
+                "b@external.test",
+                "bob@res.test",
+                "m2@external.test",
+            ),
+        ] {
+            journal
+                .append(
+                    &rule,
+                    &tp_contracts::journal::JournalRecord {
+                        tenant: d,
+                        sender: sender.to_owned(),
+                        recipients: vec![rcpt.to_owned()],
+                        message_id: Some(mid.to_owned()),
+                        at: time::OffsetDateTime::from_unix_timestamp(at).expect("time"),
+                        rule: rule.id.clone(),
+                    },
+                    bytes::Bytes::from(format!("Message-ID: <{mid}>\r\nSubject: x\r\n\r\nbody")),
+                )
+                .await
+                .expect("append");
+        }
+
+        let search = |sender: Option<&str>, limit: Option<usize>, after: Option<String>| {
+            ApiAction::Journal {
+                action: Box::new(JournalAction::Search {
+                    sender: sender.map(str::to_owned),
+                    recipient: None,
+                    message_id: None,
+                    rule: None,
+                    since: None,
+                    until: None,
+                    limit,
+                    after,
+                }),
+            }
+        };
+        // Поиск: страницы по подсказке --after, обе записи организации.
+        let (mut seen, mut after) = (Vec::new(), None);
+        for _ in 0..5 {
+            let page = json(exec(&ja, true, search(None, Some(1), after.clone())).await);
+            seen.push(
+                page["entries"][0]["record"]["sender"]
+                    .as_str()
+                    .expect("sender")
+                    .to_owned(),
+            );
+            let text = exec(&ja, false, search(None, Some(1), after.clone()))
+                .await
+                .expect("search text");
+            after = page["next"]
+                .as_str()
+                .map(|s| s.to_owned())
+                .filter(|_| text.contains("--after"));
+            if after.is_none() {
+                assert!(!text.contains("Есть ещё"), "{text}");
+                break;
+            }
+        }
+        assert_eq!(seen, ["a@external.test", "b@external.test"], "{seen:?}");
+
+        // Фильтр по отправителю и по получателю (в том числе скрытому — записью журнала).
+        let page = json(exec(&ja, true, search(Some("B@EXTERNAL.TEST"), None, None)).await);
+        assert_eq!(
+            page["entries"][0]["record"]["message_id"],
+            "m2@external.test"
+        );
+        let by_rcpt = JournalAction::Search {
+            sender: None,
+            recipient: Some("ANNA@res.test".into()),
+            message_id: None,
+            rule: None,
+            since: None,
+            until: None,
+            limit: None,
+            after: None,
+        };
+        let page = json(exec(&ja, true, by_rcpt).await);
+        assert_eq!(page["entries"].as_array().expect("entries").len(), 1);
+
+        // Запись: конверт и хеш цепочки.
+        let id = page["entries"][0]["id"].as_str().expect("id").to_owned();
+        let entry = json(
+            exec(
+                &ja,
+                true,
+                ApiAction::Journal {
+                    action: Box::new(JournalAction::Get { id: id.clone() }),
+                },
+            )
+            .await,
+        );
+        assert_eq!(entry["record"]["rule"], "org-all");
+        assert_eq!(entry["hash"].as_str().expect("hash").len(), 64);
+        let text = exec(
+            &ja,
+            false,
+            ApiAction::Journal {
+                action: Box::new(JournalAction::Get { id: id.clone() }),
+            },
+        )
+        .await
+        .expect("entry text");
+        assert!(text.contains("Получатели: anna@res.test"), "{text}");
+
+        // Выгрузка: .eml с конвертом — в файл; администратору инсталляции — 403.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("m1.eml");
+        exec(
+            &ja,
+            false,
+            ApiAction::Journal {
+                action: Box::new(JournalAction::Export {
+                    id: id.clone(),
+                    output: Some(out.clone()),
+                }),
+            },
+        )
+        .await
+        .expect("export");
+        let eml = std::fs::read(&out).expect("eml");
+        assert!(
+            eml.starts_with(b"X-ThePost-Journal-Sender: a@external.test\r\n"),
+            "{}",
+            String::from_utf8_lossy(&eml)
+        );
+        let err = exec(
+            &root,
+            false,
+            ApiAction::Journal {
+                action: Box::new(JournalAction::Export { id, output: None }),
+            },
+        )
+        .await
+        .expect_err("installation admin");
+        assert!(err.contains("403"), "{err}");
+
+        // Проверка цепочки: обе записи, целостна.
+        let report = json(
+            exec(
+                &ja,
+                true,
+                ApiAction::Journal {
+                    action: Box::new(JournalAction::Verify),
+                },
+            )
+            .await,
+        );
+        assert_eq!(report["records"], 2);
+        assert_eq!(report["ok"], true);
+        let text = exec(
+            &ja,
+            false,
+            ApiAction::Journal {
+                action: Box::new(JournalAction::Verify),
+            },
+        )
+        .await
+        .expect("verify text");
+        assert!(
+            text.contains("Цепочка целостна") && text.contains("да") && !text.contains("нет"),
+            "{text}"
+        );
+    }
+
     /// Сценарий пилота без curl: admin init → login → домены, учётная запись, пароль приложения, whoami;
     /// вход по токену OIDC.
     #[tokio::test]
     async fn pilot_flow_against_admin_api() {
-        let (admin, url) = admin_api().await;
+        let (admin, url, _) = admin_api().await;
         let granted = admin
             .init(&InitRequest {
                 email: "admin@example.test".into(),
@@ -4035,7 +4432,7 @@ mod tests {
     /// неверный текст — отказ с позицией ошибки, в хранилище не попадает.
     #[tokio::test]
     async fn sieve_commands_against_admin_api() {
-        let (_admin, url) = admin_api().await;
+        let (_admin, url, _) = admin_api().await;
         let c = client(&url, "oidc");
         let sieve = |action| ApiAction::Sieve { action };
         let account = || "a@rules.test".to_owned();
@@ -4348,7 +4745,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_block_against_admin_api() {
-        let (_admin, url) = admin_api().await;
+        let (_admin, url, _) = admin_api().await;
         let c = client(&url, "oidc");
         let login = || "a@block.test".to_owned();
         let account = account_action;
@@ -4399,7 +4796,7 @@ mod tests {
     /// без ключей — ошибка без запроса.
     #[tokio::test]
     async fn account_set_against_admin_api() {
-        let (_admin, url) = admin_api().await;
+        let (_admin, url, _) = admin_api().await;
         let c = client(&url, "oidc");
         let login = || "a@alias.test".to_owned();
         let account = account_action;
@@ -4479,7 +4876,7 @@ mod tests {
     /// повторов; подсказка сохраняет `--prefix`.
     #[tokio::test]
     async fn account_list_after_pages() {
-        let (_admin, url) = admin_api().await;
+        let (_admin, url, _) = admin_api().await;
         let c = client(&url, "oidc");
         let domain = DomainAction::Create {
             name: "page.test".into(),
@@ -4643,7 +5040,7 @@ mod tests {
     /// каждая команда против роутера tp-admin.
     #[tokio::test]
     async fn resource_commands_against_admin_api() {
-        let (_admin, url) = admin_api().await;
+        let (_admin, url, _) = admin_api().await;
         let c = client(&url, "oidc");
         let a = || "a@res.test".to_owned();
         let b = || "b@res.test".to_owned();
@@ -5012,7 +5409,7 @@ mod tests {
     /// колонка «Тип» в `resources list`, смена типа по адресу, неизвестный адрес — ошибка.
     #[tokio::test]
     async fn booking_resources_against_admin_api() {
-        let (_admin, url) = admin_api().await;
+        let (_admin, url, _) = admin_api().await;
         let c = client(&url, "oidc");
         exec(
             &c,
@@ -5121,7 +5518,7 @@ mod tests {
     /// контраст ниже порога — 422 с пояснением; открытый маршрут — без входа.
     #[tokio::test]
     async fn branding_commands_against_admin_api() {
-        let (_admin, url) = admin_api().await;
+        let (_admin, url, _) = admin_api().await;
         let c = client(&url, "oidc");
         let branding = |action: BrandingAction| ApiAction::Branding {
             action: Box::new(action),
@@ -5267,7 +5664,7 @@ mod tests {
     /// клетки выше потолка — 422 с подсказкой; изменения — в журнале аудита.
     #[tokio::test]
     async fn trust_commands_against_admin_api() {
-        let (_admin, url) = admin_api().await;
+        let (_admin, url, _) = admin_api().await;
         let c = client(&url, "oidc");
         let trust = |action: TrustAction| ApiAction::Trust {
             action: Box::new(action),
