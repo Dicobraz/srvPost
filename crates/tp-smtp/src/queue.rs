@@ -45,11 +45,13 @@ use crate::config::{QueueConfig, SmtpConfig};
 use crate::dkim_sign::DkimSign;
 use crate::dsn::{self, DsnSink};
 use crate::metrics::{RcptOutcome, SmtpMetrics};
+use crate::reply::{ReplyMarks, random_tag};
 use crate::routes::Routes;
 use crate::tracking::{self, Mail, Step, Tracking};
 use sched::{Admit, Scheduler};
 use tp_contracts::bus::{EventBus, EventKind, EventStream};
 use tp_contracts::delivery::{DeliveryDecision as Dd, DeliveryEventKind as Ek};
+use tp_contracts::reply::{SentLog, SentRecord};
 use tp_contracts::transport::{DestinationPolicy, DomainKind, TlsRequirement};
 
 pub mod sched;
@@ -197,22 +199,61 @@ impl QueueDeps {
 }
 
 /// Постановка в очередь исходящей почты ([`Outbound`] для доставки); с [`Queue::with_dkim`] письма
-/// подписываются DKIM перед постановкой.
-#[derive(Debug, Clone)]
+/// подписываются DKIM перед постановкой, с [`Queue::with_reply`] — меткой ответа и записью об отправленном.
+#[derive(Clone)]
 pub struct Queue {
     deps: QueueDeps,
     dkim: Option<Arc<DkimSign>>,
+    /// Метка ответа (SMTP-51): Message-ID без метки — ставится, письмо узла (DSN, автоответ) — заменяется.
+    reply: Option<Arc<ReplyMarks>>,
+    /// Запись об отправленном (SMTP-51, CTR-94): письмо с внешними или партнёрскими адресатами.
+    sent: Option<Arc<dyn SentLog>>,
+    /// Домен метки Message-ID, когда домен письма неизвестен.
+    hostname: String,
+}
+
+impl fmt::Debug for Queue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Запись об отправленном в отладочный вывод не попадает.
+        f.debug_struct("Queue")
+            .field("dkim", &self.dkim.is_some())
+            .field("reply", &self.reply.is_some())
+            .field("sent", &self.sent.is_some())
+            .field("hostname", &self.hostname)
+            .finish()
+    }
 }
 
 impl Queue {
     /// Очередь поверх хранилищ `deps`.
     pub fn new(deps: QueueDeps) -> Self {
-        Self { deps, dkim: None }
+        Self {
+            deps,
+            dkim: None,
+            reply: None,
+            sent: None,
+            hostname: "localhost".into(),
+        }
     }
 
     /// Подпись DKIM исходящих писем (SMTP-08).
     pub fn with_dkim(mut self, dkim: Arc<DkimSign>) -> Self {
         self.dkim = Some(dkim);
+        self
+    }
+
+    /// Метка ответа и запись об отправленном (SMTP-51): Message-ID письма без метки, BATV-подпись
+    /// `MAIL FROM` (один раз — в записи очереди) и запись письма с адресатами (BATV — [`ReplyMarks::batv`],
+    /// без секции `smtp.batv` метки нет). `hostname` — домен метки, когда домен письма неизвестен.
+    pub fn with_reply(
+        mut self,
+        reply: Arc<ReplyMarks>,
+        sent: Option<Arc<dyn SentLog>>,
+        hostname: impl Into<String>,
+    ) -> Self {
+        self.reply = Some(reply);
+        self.sent = sent;
+        self.hostname = hostname.into();
         self
     }
 
@@ -231,15 +272,133 @@ impl Queue {
             None => raw,
         })
     }
+
+    /// Постановка с меткой ответа (SMTP-51): письмо без Message-ID получает метку (`replace` — письмо узла:
+    /// DSN, автоответ — метка заменяет прежний Message-ID), затем DKIM-подпись (подписывает и метку),
+    /// BATV-подпись отправителя конверта и запись об отправленном. Сбой метки, BATV или записи — только в
+    /// журнал: письмо уходит.
+    async fn put_marked(
+        &self,
+        tenant: TenantId,
+        owner: Option<AccountId>,
+        from: &str,
+        rcpts: Vec<OutRcpt>,
+        raw: Bytes,
+        release_at: OffsetDateTime,
+        replace: bool,
+    ) -> Result<QueueId> {
+        let now = (self.deps.now)();
+        let domain = raw_domain(&raw)
+            .or_else(|| from_domain(from))
+            .unwrap_or_else(|| self.hostname.clone());
+        let (raw, message_id, tag) = match &self.reply {
+            Some(marks) if replace => {
+                let (raw, tag) = marks
+                    .replace_message_id(raw, &domain, now)
+                    .await
+                    .inspect_err(
+                        |e| tracing::warn!(error = %e, "smtp: метка Message-ID не поставлена"),
+                    )?;
+                let mid = ReplyMarks::current_id(&raw);
+                (raw, mid, tag)
+            }
+            Some(marks) => marks
+                .ensure_message_id(raw, &domain, now)
+                .await
+                .inspect_err(
+                    |e| tracing::warn!(error = %e, "smtp: метка Message-ID не поставлена"),
+                )?,
+            None => (raw, ReplyMarks::current_id(&raw), None),
+        };
+        let raw = self.signed(raw).await?;
+        let tagged = self.batv_from(from, now).await;
+        let from = tagged.as_deref().unwrap_or("");
+        self.record_sent(tenant, owner, from, &rcpts, message_id.as_deref(), tag, now)
+            .await;
+        self.deps
+            .put(tenant, owner, from, rcpts, raw, release_at)
+            .await
+    }
+
+    /// Отправитель конверта с BATV-меткой (`prvs=…`, SMTP-51): без метки — исходный (пустой отправитель,
+    /// SRS-пересылка, адрес из `smtp.batv.exempt`, BATV не настроен).
+    async fn batv_from(&self, from: &str, now: OffsetDateTime) -> Option<String> {
+        let Some(marks) = &self.reply else {
+            return (!from.is_empty()).then(|| from.to_owned());
+        };
+        let Some(batv) = marks.batv() else {
+            return (!from.is_empty()).then(|| from.to_owned());
+        };
+        match batv.sign(from, now) {
+            Ok(Some(tagged)) => Some(tagged),
+            Ok(None) => (!from.is_empty()).then(|| from.to_owned()),
+            Err(e) => {
+                tracing::warn!(error = %e, "smtp: BATV-метка MAIL FROM не поставлена");
+                (!from.is_empty()).then(|| from.to_owned())
+            }
+        }
+    }
+
+    /// Запись об отправленном (SMTP-51): письмо с отправителем-адресом (DSN с конвертом `<>` не пишется —
+    /// на уведомление не отвечают), адресаты — записи очереди (внешние и партнёрские; локальные в очередь не
+    /// попадают). Сбой — только в журнал.
+    #[allow(clippy::too_many_arguments)]
+    async fn record_sent(
+        &self,
+        tenant: TenantId,
+        owner: Option<AccountId>,
+        from: &str,
+        rcpts: &[OutRcpt],
+        message_id: Option<&str>,
+        tag: Option<Vec<u8>>,
+        now: OffsetDateTime,
+    ) {
+        if from.is_empty() {
+            return;
+        }
+        let Some(sent) = &self.sent else {
+            return;
+        };
+        let mut recipients = Vec::new();
+        for r in rcpts {
+            match tp_contracts::reply::normalize_recipient(&r.rcpt.address) {
+                Ok(a) => {
+                    if !recipients
+                        .iter()
+                        .any(|x: &String| x.eq_ignore_ascii_case(&a))
+                    {
+                        recipients.push(a);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(address = %r.rcpt.address, error = %e, "smtp: адресат вне записи об отправленном")
+                }
+            }
+        }
+        if recipients.is_empty() {
+            return;
+        }
+        let record = SentRecord {
+            tenant,
+            account: owner.unwrap_or_else(AccountId::new),
+            tag: tag.unwrap_or_else(random_tag),
+            message_id_hash: ReplyMarks::hash_of(message_id.unwrap_or_default()),
+            recipients,
+            thread: None,
+            sent_at: now,
+        };
+        if let Err(e) = sent.record(record).await {
+            tracing::warn!(error = %e, "smtp: запись об отправленном не создана");
+        }
+    }
 }
 
 #[async_trait]
 impl DsnSink for Queue {
     async fn send_dsn(&self, tenant: TenantId, to: &str, raw: Bytes) -> Result<()> {
-        let raw = self.signed(raw).await?;
+        // Письмо узла (DSN): Message-ID — метка ответа (SMTP-51), конверт `<>` — BATV не подписывается.
         let now = (self.deps.now)();
-        self.deps
-            .put(tenant, None, "", vec![OutRcpt::new(to)], raw, now)
+        self.put_marked(tenant, None, "", vec![OutRcpt::new(to)], raw, now, true)
             .await
             .map(drop)
     }
@@ -294,9 +453,9 @@ impl Outbound for Queue {
             .filter(|r| seen.insert(r.to_lowercase()))
             .map(OutRcpt::new)
             .collect();
-        let raw = self.signed(raw).await?;
-        self.deps
-            .put(tenant, owner, mail_from, rcpts, raw, release_at)
+        // Метка ответа ставится при постановке (SMTP-51): повторы доставки видят тот же Message-ID и ту же
+        // BATV-метку MAIL FROM.
+        self.put_marked(tenant, owner, mail_from, rcpts, raw, release_at, false)
             .await
     }
 
@@ -1044,6 +1203,20 @@ fn dsn_rcpt(r: &QueuedRcpt, action: dsn::Action, reply: &str) -> dsn::Recipient 
         orcpt: r.rcpt.orcpt.clone(),
         ..dsn::Recipient::new(&r.rcpt.address, action, reply)
     }
+}
+
+/// Домен `From` письма (нижний регистр) — домен метки Message-ID.
+fn raw_domain(raw: &[u8]) -> Option<String> {
+    let msg = mail_parser::MessageParser::default().parse_headers(raw)?;
+    let addr = msg.from()?.first()?.address()?;
+    addr.rsplit_once('@').map(|(_, d)| d.to_lowercase())
+}
+
+/// Домен отправителя конверта (нижний регистр).
+fn from_domain(from: &str) -> Option<String> {
+    from.rsplit_once('@')
+        .filter(|(l, _)| !l.is_empty())
+        .map(|(_, d)| d.to_lowercase())
 }
 
 #[cfg(test)]

@@ -58,6 +58,17 @@
 //!     enabled: true
 //!     url: "https://rspamd.example.org:11334"
 //!     password: { secret: "thepost/rspamd#controller" }
+//!   reply:
+//!     keys:
+//!       - id: k1
+//!         secret: { secret: "thepost/reply#k1" }
+//!         active: true
+//!       - id: k0
+//!         secret: { secret: "thepost/reply#k0" }
+//!   batv:
+//!     mode: log
+//!     valid_for: 7d
+//!     exempt: ["newsletter@example.org", "lists.example.net"]
 //! ```
 //!
 //! Слушатели (`inbound`, `submission`) применяются при запуске роли; лимиты и таймауты — к новым сессиям
@@ -107,6 +118,11 @@ pub struct SmtpConfig {
     pub learn: LearnConfig,
     /// Пересылка наружу: SRS-переписывание отправителя и ARC-подпись.
     pub forward: ForwardConfig,
+    /// Метка ответа (SMTP-51, решение 125 в): зашифрованная метка Message-ID исходящих, ключи, срок
+    /// признака «ответ на наше письмо».
+    pub reply: ReplyConfig,
+    /// BATV (SMTP-51, решение 125 г): подпись `MAIL FROM` исходящих и проверка адресов bounce.
+    pub batv: BatvConfig,
 }
 
 impl Default for SmtpConfig {
@@ -126,6 +142,8 @@ impl Default for SmtpConfig {
             addressing: AddressingConfig::default(),
             learn: LearnConfig::default(),
             forward: ForwardConfig::default(),
+            reply: ReplyConfig::default(),
+            batv: BatvConfig::default(),
         }
     }
 }
@@ -173,6 +191,91 @@ pub struct SrsConfig {
 
 fn srs_max_age() -> u32 {
     21
+}
+
+/// Метка ответа (SMTP-51, решение 125 в; [`crate::reply`]). Пустой набор ключей — метки не ставятся и не
+/// проверяются (признак «ответ на наше письмо» — только по записи об отправленном, BATV выключен).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReplyConfig {
+    /// Ключи меток: активный подписывает, все проверяют (ротация — замена набора, перечитывается без
+    /// перезапуска). Значение ключа в хранилище секретов — не меньше 32 байт.
+    pub keys: Vec<ReplyKeyConfig>,
+    /// Наибольший возраст исходного письма для признака «ответ на наше письмо» (`smtp.reply.max_age`,
+    /// решение 125 а).
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub max_age: Duration,
+    /// Время жизни разобранных ключей в кэше (затем перечитываются из хранилища секретов).
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub key_refresh: Duration,
+}
+
+impl Default for ReplyConfig {
+    fn default() -> Self {
+        Self {
+            keys: Vec::new(),
+            max_age: Duration::from_secs(30 * 24 * 3600),
+            key_refresh: Duration::from_secs(3600),
+        }
+    }
+}
+
+/// Ключ метки ответа (CTR-94 `ReplyKey` в схеме конфигурации: контракт без JsonSchema).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReplyKeyConfig {
+    /// Идентификатор ключа в метке (`tp1.<id>.…`, BATV — номер в наборе): 1–16 байт `[a-z0-9.-]`.
+    pub id: String,
+    /// Ключ в хранилище секретов (значение — байты ключа, не меньше 32).
+    pub secret: tp_contracts::secrets::SecretRef,
+    /// Активный: подписывает новые метки. В наборе — ровно один.
+    #[serde(default)]
+    pub active: bool,
+}
+
+/// BATV (SMTP-51, решение 125 г; [`crate::reply`]): подпись `MAIL FROM` исходящих (`prvs=…`,
+/// draft-levine-smtp-batv-01) и проверка адресов bounce на приёме. Ключи — `smtp.reply.keys`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct BatvConfig {
+    /// Режим проверки адресов bounce (переход): `log` — только журнал и метрика, `enforce` — отказ
+    /// `550 5.7.1` на `RCPT`.
+    pub mode: BatvMode,
+    /// Срок метки (`smtp.batv.valid_for`; черновик рекомендует 7 дней).
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub valid_for: Duration,
+    /// Адреса и домены без метки (рассылки, ezmlm): метка не ставится и не требуется.
+    pub exempt: Vec<String>,
+}
+
+impl Default for BatvConfig {
+    fn default() -> Self {
+        Self {
+            mode: BatvMode::default(),
+            valid_for: default_batv_valid_for(),
+            exempt: Vec::new(),
+        }
+    }
+}
+
+/// Срок метки BATV по умолчанию: 7 дней (draft-levine-smtp-batv-01).
+pub(crate) fn default_batv_valid_for() -> Duration {
+    Duration::from_secs(7 * 24 * 3600)
+}
+
+/// Режим проверки адресов bounce (`smtp.batv.mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BatvMode {
+    /// Только журнал и метрика: письмо с пустым `MAIL FROM` на локальный адрес без валидной метки
+    /// доставляется (переходный режим).
+    #[default]
+    Log,
+    /// Отказ `550 5.7.1` на `RCPT` (backscatter).
+    Enforce,
 }
 
 /// ARC-подпись: домен и селектор подписи (`<селектор>._domainkey.<домен>` в DNS), ключ.
@@ -858,7 +961,7 @@ mod tests {
     }
 
     #[test]
-    fn addressing_rewrite_key_is_an_error_with_hint() {
+    fn addressing_rewrite_key_is_gone_with_hint() {
         let ok = registry()
             .parse(
                 &format!("{BASE}smtp:\n  addressing:\n    subaddress_separators: \"+-\"\n"),
@@ -885,5 +988,29 @@ mod tests {
                 assert!(err.contains("smtp.addressing.rewrite"), "{err}");
             }
         }
+    }
+
+    /// SMTP-51: секции `smtp.reply` и `smtp.batv` читаются; без них — безопасные умолчания (ключей нет —
+    /// метки выключены, BATV в режиме журнала).
+    #[test]
+    fn reply_and_batv_sections() {
+        let src = format!(
+            "{BASE}smtp:\n  reply:\n    keys:\n      - id: k1\n        secret: {{ secret: thepost/reply#k1 }}\n        active: true\n    max_age: 14d\n  batv:\n    mode: enforce\n    valid_for: 5d\n    exempt: [\"news@example.org\", \"lists.example.net\"]\n"
+        );
+        let cfg = registry().parse(&src, Vec::new()).expect("parse");
+        let smtp = cfg.section::<SmtpConfig>("smtp").expect("smtp");
+        assert_eq!(smtp.reply.max_age, Duration::from_secs(14 * 24 * 3600));
+        assert_eq!(smtp.reply.keys.len(), 1);
+        assert!(smtp.reply.keys[0].active);
+        assert_eq!(smtp.batv.mode, BatvMode::Enforce);
+        assert_eq!(smtp.batv.valid_for, Duration::from_secs(5 * 24 * 3600));
+        assert_eq!(smtp.batv.exempt.len(), 2);
+        // Умолчания: 30 дней, BATV — журнал и 7 дней.
+        let base = registry().parse(&BASE, Vec::new()).expect("parse");
+        let smtp = base.section::<SmtpConfig>("smtp").expect("smtp");
+        assert_eq!(smtp.reply, ReplyConfig::default());
+        assert_eq!(smtp.reply.max_age, Duration::from_secs(30 * 24 * 3600));
+        assert_eq!(smtp.batv, BatvConfig::default());
+        assert_eq!(smtp.batv.mode, BatvMode::Log);
     }
 }
