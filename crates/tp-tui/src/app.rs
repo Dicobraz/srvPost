@@ -606,7 +606,7 @@ pub enum Stage {
 
 /// Как ответ списка ложится на экран.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Nav {
+pub(crate) enum Nav {
     /// Новый экран вместо текущего.
     Replace,
     /// Следующая страница текущего списка.
@@ -617,8 +617,9 @@ enum Nav {
     Reload,
 }
 
+/// Запрос в пути; раздел «Доверие» оборачивает свои в [`Pending::Trust`] (`crate::trust::Pending`).
 #[derive(Debug, Clone, PartialEq)]
-enum Pending {
+pub(crate) enum Pending {
     Orgs,
     Load {
         req: Request,
@@ -642,12 +643,18 @@ enum Pending {
 /// Запросы в пути и строка состояния.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Bus {
-    pending: BTreeMap<u64, Pending>,
+    /// Запросы в пути; раздел «Доверие» не даёт менять клетки, пока ждём ответа (TUI-09).
+    pub(crate) pending: BTreeMap<u64, Pending>,
     seq: u64,
     status: Option<(Level, String)>,
 }
 
 impl Bus {
+    /// Ждёт ли интерфейс ответа Admin API.
+    pub(crate) fn busy(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub(crate) fn call(&mut self, req: Request, p: Pending) -> Effect {
         self.seq += 1;
         self.pending.insert(self.seq, p);
@@ -1005,6 +1012,8 @@ impl App {
                     None => Vec::new(),
                 }
             }
+            // Запросы «Доверия» разобраны раньше (ветка Pending::Trust выше).
+            Pending::Trust(_) => Vec::new(),
         }
     }
 
@@ -1042,7 +1051,20 @@ fn main_command(m: &Main) -> String {
                 .unwrap_or_default();
         }
         Some(Overlay::ConfigEdit(_)) => return "thepost config check".to_owned(),
-        Some(Overlay::TrustConfirm(req)) => return show(req),
+        Some(Overlay::TrustConfirm(req)) => {
+            // Сброс «Доверия»: уровень группы — по имени (запрос несёт идентификатор).
+            if let View::Trust(t) = &m.view {
+                return crate::trust::reset_command(t);
+            }
+            return show(req);
+        }
+        // Форма выбора уровня «Доверия» — команда поиска; ввод домена — команда записи списков.
+        Some(Overlay::TrustPick { form, .. }) => return show(&form.preview()),
+        Some(Overlay::TrustDomain(_)) => {
+            if let View::Trust(t) = &m.view {
+                return crate::trust::command(t);
+            }
+        }
         Some(Overlay::Help) | None => {}
     }
     if m.focus == Panel::Tree {
@@ -1604,7 +1626,7 @@ fn list_action(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect> {
             },
             None => return Vec::new(),
         },
-        View::Info { .. } | View::Config(_) => return Vec::new(),
+        View::Info { .. } | View::Config(_) | View::Trust(_) => return Vec::new(),
     };
     let n = match key.code {
         KeyCode::Enter => 3,
@@ -1820,7 +1842,7 @@ fn overlay_key(m: &mut Main, bus: &mut Bus, ov: Overlay, key: KeyEvent) -> Vec<E
             }
         },
         Overlay::TrustDomain(d) => crate::trust::domain_key(m, bus, d, key),
-        Overlay::TrustPick { what, mut f } => match form_key(&mut f, key) {
+        Overlay::TrustPick { what, form: mut f } => match form_key(&mut f, key) {
             FormKey::Cancel => Vec::new(),
             FormKey::Submit => match f.request() {
                 Some(req) => {

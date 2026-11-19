@@ -187,8 +187,15 @@ impl App {
                             f.focus = i;
                         }
                     }
+                    Some(Overlay::TrustPick { form: f, .. }) => {
+                        // Форма выбора группы или учётной записи раздела «Доверие» (TUI-09).
+                        if let Some(i) = form_index(f, y) {
+                            f.focus = i;
+                        }
+                    }
                     Some(Overlay::Help) => close_help = true,
                     Some(Overlay::Confirm(_)) | Some(Overlay::ConfigEdit(_)) => {}
+                    Some(Overlay::TrustDomain(_)) | Some(Overlay::TrustConfirm(_)) => {}
                     None => match &mut m.view {
                         View::List(l) => {
                             if let Some(i) = list_index(y, l.top, l.rows.len()) {

@@ -1,19 +1,18 @@
 //! Раздел «Доверие» (TUI-09, решение 124): ручная раскладка — движок форм по схеме матрицу не покажет.
 //!
-//! Таблица функций × четыре типа абонентов (`tp_contracts::trust`), курсор по клеткам стрелками; F4 — следующее
-//! допустимое значение (выше потолка уровня выше не предлагаются), закреплённые клетки — знак ⊘ и пояснение в
-//! строке состояния; «выше потолка» — знак ▲ и цвет роли «внимание». F5 — уровень (установка, организация,
-//! группа), F8 — сброс уровня с подтверждением; вкладка «Партнёры» (F2) — домены-партнёры и домены
-//! автопересылки (F7 — добавить, F8 — удалить); F6 — действующая матрица учётной записи с источником клетки.
-//! Ошибка 422 — текст `detail` сервера у клетки (строки 14–16 и строка состояния). Внизу — эквивалентная
-//! команда `thepost admin trust …` (решение 118). Сети нет: действия возвращают эффекты через [`crate::app::Bus`].
+//! Таблица функций × четыре типа абонентов (контракт `tp_contracts::trust`, маршруты ADM-49), курсор по клеткам
+//! стрелками; F4 — следующее допустимое значение (выше потолка уровня выше не предлагаются), закреплённые
+//! клетки — знак ⊘ и пояснение в строке состояния; «выше потолка» — знак ▲ и цвет роли «внимание». F5 —
+//! уровень (организация → группа → установка у администратора установки), F8 — сброс уровня с
+//! подтверждением; вкладка «Партнёры» (F2) — домены-партнёры и домены автопересылки (F7 — добавить, F8 —
+//! удалить); F6 — действующая матрица учётной записи с источником клетки. Ошибка 422 — текст `detail`
+//! сервера у клетки (строки 14–16 и строка состояния). Внизу — эквивалентная команда
+//! `thepost admin trust …` (решение 118). Сети нет: действия возвращают эффекты через [`crate::app::Bus`].
+//! Ответы Admin API разбираются как JSON (тонкий клиент по схеме): порядок значений клеток, таблица функций
+//! и закреплённые клетки контракта продублированы константами этого модуля, соответствие контракту — тесты.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use serde_json::Map;
-use tp_admin::trust::{TrustBody, TrustView};
-use tp_contracts::trust::{
-    CellValue, Detail, GroupPost, InviteMode, PeerKind, Toggle, TrustFunction, TrustLevel,
-};
+use serde_json::{Map, Value};
 
 use crate::app::{Bus, Effect, Level, Main, Overlay, Page, Pending as Sent, View};
 use crate::engine::{Context, Form, Request};
@@ -28,103 +27,74 @@ pub const CELL_W: u16 = 8;
 pub const SECTION_OP: &str = "get_org_trust";
 
 /// Функция матрицы: подпись в таблице (сокращённая), полное название для строки состояния и допустимые
-/// значения от узкого к широкому.
+/// значения от узкого к широкому (как в JSON контракта).
+#[derive(Debug)]
 pub struct FnDef {
-    /// Функция (`tp_contracts::trust`).
-    pub f: TrustFunction,
+    /// Имя клетки в JSON и сообщениях об ошибке (`invite_new`, `freebusy`, …).
+    pub f: &'static str,
     /// Подпись строки (до [`LABEL_W`] знаков).
     pub short: &'static str,
     /// Полное название — в строке состояния.
     pub full: &'static str,
     /// Значения от узкого к широкому; допустимо не выше потолка.
-    pub values: &'static [CellValue],
+    pub values: &'static [&'static str],
 }
 
 /// Функции матрицы по порядку (строки таблицы).
 pub const FUNCTIONS: [FnDef; 8] = [
     FnDef {
-        f: TrustFunction::InviteNew,
+        f: "invite_new",
         short: "Приглаш",
         full: "Новое приглашение",
-        values: &[
-            CellValue::Invite(InviteMode::Button),
-            CellValue::Invite(InviteMode::Auto),
-        ],
+        values: &["button", "auto"],
     },
     FnDef {
-        f: TrustFunction::ItipUpdates,
+        f: "itip_updates",
         short: "Ответы",
         full: "Ответ и отмена",
-        values: &[
-            CellValue::Toggle(Toggle::Off),
-            CellValue::Toggle(Toggle::On),
-        ],
+        values: &["off", "on"],
     },
     FnDef {
-        f: TrustFunction::AutoReply,
+        f: "auto_reply",
         short: "Автоотв",
         full: "Автоответ",
-        values: &[
-            CellValue::Toggle(Toggle::Off),
-            CellValue::Toggle(Toggle::On),
-        ],
+        // «Только ответ на наше письмо» — решение 125 а, лишь у клеток автоответа и MDN.
+        values: &["off", "reply_only", "on"],
     },
     FnDef {
-        f: TrustFunction::Mdn,
+        f: "mdn",
         short: "MDN",
         full: "Уведомление о прочтении",
-        values: &[
-            CellValue::Toggle(Toggle::Off),
-            CellValue::Toggle(Toggle::On),
-        ],
+        values: &["off", "reply_only", "on"],
     },
     FnDef {
-        f: TrustFunction::AutoForward,
+        f: "auto_forward",
         short: "Пересыл",
         full: "Автопересылка",
-        values: &[
-            CellValue::Toggle(Toggle::Off),
-            CellValue::Toggle(Toggle::On),
-        ],
+        values: &["off", "on"],
     },
     FnDef {
-        f: TrustFunction::FreeBusy,
+        f: "freebusy",
         short: "Занят",
         full: "Занятость",
-        values: &[
-            CellValue::Detail(Detail::None),
-            CellValue::Detail(Detail::FreeBusy),
-            CellValue::Detail(Detail::Limited),
-            CellValue::Detail(Detail::Details),
-            CellValue::Detail(Detail::All),
-        ],
+        values: &["none", "free_busy", "limited", "details", "all"],
     },
     FnDef {
-        f: TrustFunction::Sharing,
+        f: "sharing",
         short: "Общий",
         full: "Общий доступ",
-        values: &[
-            CellValue::Detail(Detail::None),
-            CellValue::Detail(Detail::FreeBusy),
-            CellValue::Detail(Detail::Limited),
-            CellValue::Detail(Detail::Details),
-            CellValue::Detail(Detail::All),
-        ],
+        values: &["none", "free_busy", "limited", "details", "all"],
     },
     FnDef {
-        f: TrustFunction::GroupPost,
+        f: "group_post",
         short: "Группы",
         full: "Письма в группы",
-        values: &[
-            CellValue::Post(GroupPost::Closed),
-            CellValue::Post(GroupPost::Moderated),
-            CellValue::Post(GroupPost::Open),
-        ],
+        values: &["closed", "moderated", "open"],
     },
 ];
 
 /// Типы абонентов по порядку (колонки таблицы).
-pub const PEERS: [PeerKind; 4] = PeerKind::ALL;
+pub const PEERS: [&str; 4] = ["own", "partner", "neighbor", "external"];
 
 /// Заголовки колонок.
 pub const PEER_HEADS: [&str; 4] = ["СВОИ", "ПАРТНЁР", "СОСЕД", "ИНТЕРНЕТ"];
@@ -280,8 +250,8 @@ pub struct Trust {
     pub cur: (usize, usize),
     /// Курсор вкладки «Партнёры» по строке доменов.
     pub pick: usize,
-    /// Ответ `GET` уровня.
-    pub view: Option<TrustView>,
+    /// Ответ `GET` уровня (`TrustView` контракта — как пришёл, JSON).
+    pub view: Option<Value>,
     /// Отказ 422 — текст `detail` сервера у клетки.
     pub err: Option<String>,
 }
@@ -328,7 +298,7 @@ fn ctx(t: &Trust) -> Context {
 fn load(t: &Trust, bus: &mut Bus) -> Effect {
     let (get, _, _) = t.scope.ops();
     let req = Request::new(op(get), &ctx(t), Vec::new()).expect("запрос политики доверия");
-    bus.call(req, Pending::Load)
+    bus.call(req, Sent::Trust(Pending::Load))
 }
 
 /// Открыть раздел из дерева: экран и чтение политики организации.
@@ -339,6 +309,85 @@ pub(crate) fn open(m: &mut Main, bus: &mut Bus) -> Vec<Effect> {
     vec![effect]
 }
 
+/// Значение клетки матрицы: объединение значений функций — объект с одним полем (`{"invite": "auto"}`,
+/// `{"toggle": "on"}`, `{"detail": "free_busy"}`, `{"post": "open"}`); строкой — само значение.
+fn cell_value(v: &Value, f: &str, p: &str) -> String {
+    match &v["effective"]["matrix"][f][p] {
+        Value::Object(map) => map
+            .values()
+            .next()
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        Value::String(s) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Значение потолка клетки (то же объединение значений функций).
+fn ceiling_value(v: &Value, f: &str, p: &str) -> String {
+    match &v["effective"]["ceiling"]["matrix"][f][p] {
+        Value::Object(map) => map
+            .values()
+            .next()
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        _ => String::new(),
+    }
+}
+
+/// Клетка закреплена контрактом.
+pub fn fixed_of(v: &Value, f: &str, p: &str) -> bool {
+    v["fixed"][f][p].as_bool() == Some(true)
+}
+
+/// Клетка выше потолка уровня выше («выше потолка»).
+pub fn over_of(v: &Value, f: &str, p: &str) -> bool {
+    v["effective"]["over_ceiling"]
+        .as_array()
+        .is_some_and(|list| list.iter().any(|o| o["function"] == *f && o["peer"] == *p))
+}
+
+/// Уровень-источник клетки: установка, организация или группа.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Src {
+    /// Установка.
+    Installation,
+    /// Организация.
+    Org,
+    /// Группа.
+    Group,
+}
+
+/// Источник клетки действующей матрицы: уровень, давший значение; `null` — умолчание контракта.
+pub fn source_of(v: &Value, f: &str, p: &str) -> Option<Src> {
+    match &v["effective"]["source"][f][p] {
+        Value::String(s) if s == "installation" => Some(Src::Installation),
+        Value::Object(map) if map.contains_key("org") => Some(Src::Org),
+        Value::Object(map) if map.contains_key("group") => Some(Src::Group),
+        _ => None,
+    }
+}
+
+/// Буква источника клетки: у — установка, о — организация, г — группа.
+pub fn mark_of(src: Src) -> char {
+    match src {
+        Src::Installation => 'у',
+        Src::Org => 'о',
+        Src::Group => 'г',
+    }
+}
+
+/// Название уровня-источника для строки состояния.
+pub fn level_label(src: Src) -> &'static str {
+    match src {
+        Src::Installation => "установка",
+        Src::Org => "организация",
+        Src::Group => "группа",
+    }
+}
+
 /// Клавиша раздела. Стрелки — курсор по клеткам и строкам доменов; F2 — вкладка «Партнёры»; F4 (Enter) —
 /// следующее допустимое значение клетки; F5 — уровень; F6 — учётная запись; F7/F8 — домены; F8 на матрице —
 /// сброс уровня с подтверждением.
@@ -346,7 +395,7 @@ pub(crate) fn key(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect> {
     let View::Trust(t) = &mut m.view else {
         return Vec::new();
     };
-    let busy = !bus.pending.is_empty();
+    let busy = bus.busy();
     let mut overlay: Option<Overlay> = None;
     let out = match key.code {
         KeyCode::Up => {
@@ -532,46 +581,40 @@ fn pick_overlay(t: &Trust, what: Pick) -> Overlay {
 
 /// Следующее допустимое значение клетки (F4): из значений не выше потолка, по циклу от самого широкого к
 /// самому узкому; закреплённая клетка и клетка без вариантов — `None`.
-pub fn next_value(v: &TrustView, f: TrustFunction, p: PeerKind) -> Option<CellValue> {
+pub fn next_value(v: &Value, f: &str, p: &str) -> Option<&'static str> {
     let def = FUNCTIONS.iter().find(|d| d.f == f)?;
-    if v.fixed.get(f, p) {
+    if fixed_of(v, f, p) {
         return None;
     }
-    let ceiling = v.effective.ceiling.matrix.get(f, p);
-    let allowed: Vec<CellValue> = def
-        .values
-        .iter()
-        .copied()
-        .filter(|x| *x <= ceiling)
-        .collect();
-    let cur = v.effective.matrix.get(f, p);
-    let next = match allowed.iter().position(|x| *x == cur) {
-        Some(i) if i + 1 < allowed.len() => allowed[i + 1],
-        Some(_) => allowed[0],
-        None if !allowed.is_empty() => allowed[0],
+    let rank = |s: &str| def.values.iter().position(|x| *x == s);
+    let top = rank(&ceiling_value(v, f, p))?;
+    let cur = cell_value(v, f, p);
+    let next = match rank(&cur) {
+        Some(i) if i < top => def.values[i + 1],
+        Some(_) => def.values[0],
+        None if top == 0 => def.values[0],
+        // Клетка выше потолка (перечитана после смены уровней): предлагаем самое узкое значение.
+        None if def.values[0] != cur => def.values[0],
         None => return None,
     };
     (next != cur).then_some(next)
 }
 
 /// Тело `PUT`: политика уровня целиком (незаданные клетки наследуют уровень выше) со сменённой клеткой.
-fn save_body(v: &TrustView, f: TrustFunction, p: PeerKind, value: CellValue) -> TrustBody {
-    let mut b = v.own.as_ref().map(TrustBody::from).unwrap_or_default();
-    match value {
-        CellValue::Invite(x) => b.invite_new.set(p, Some(x)),
-        CellValue::Toggle(x) => match f {
-            TrustFunction::ItipUpdates => b.itip_updates.set(p, Some(x)),
-            TrustFunction::AutoReply => b.auto_reply.set(p, Some(x)),
-            TrustFunction::Mdn => b.mdn.set(p, Some(x)),
-            _ => b.auto_forward.set(p, Some(x)),
-        },
-        CellValue::Detail(x) => match f {
-            TrustFunction::FreeBusy => b.freebusy.set(p, Some(x)),
-            _ => b.sharing.set(p, Some(x)),
-        },
-        CellValue::Post(x) => b.group_post.set(p, Some(x)),
+/// Клетки тела — plain-строки (`{"invite_new": {"partner": "auto"}}`), как в схеме Admin API.
+fn save_body(v: &Value, f: &str, p: &str, value: &str) -> Value {
+    let mut body = match v.get("own") {
+        Some(o @ Value::Object(_)) => o.clone(),
+        _ => Value::Object(Map::new()),
+    };
+    let map = body.as_object_mut().expect("тело — объект");
+    let cell = map
+        .entry(f.to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(peers) = cell.as_object_mut() {
+        peers.insert(p.to_owned(), Value::String(value.to_owned()));
     }
-    b
+    body
 }
 
 /// F4: сменить значение клетки под курсором на следующее допустимое и записать политику уровня целиком.
@@ -599,7 +642,7 @@ fn change_cell(t: &mut Trust, bus: &mut Bus) -> Vec<Effect> {
     let body = save_body(v, def.f, p, next);
     let (_, put, _) = t.scope.ops();
     let mut req = Request::new(op(put), &ctx(t), Vec::new()).expect("запрос записи политики");
-    req.body = serde_json::to_value(&body).ok();
+    req.body = Some(body);
     t.err = None;
     bus.say(Level::Ok, "запись политики доверия…");
     vec![bus.call(req, Sent::Trust(Pending::Save))]
@@ -607,10 +650,18 @@ fn change_cell(t: &mut Trust, bus: &mut Bus) -> Vec<Effect> {
 
 /// Домены уровня организации: партнёры и автопересылка.
 pub fn domains(t: &Trust) -> (Vec<String>, Vec<String>) {
-    match t.view.as_ref().and_then(|v| v.own.as_ref()) {
-        Some(own) => (own.partners.clone(), own.auto_forward_domains.clone()),
-        None => (Vec::new(), Vec::new()),
-    }
+    let own = t.view.as_ref().and_then(|v| v.get("own"));
+    let list = |name: &str| {
+        own.and_then(|o| o.get(name))
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    (list("partners"), list("auto_forward_domains"))
 }
 
 /// Строки вкладки «Партнёры»: сначала партнёры, затем автопересылка; `true` — автопересылка.
@@ -626,12 +677,22 @@ pub fn partner_rows(t: &Trust) -> Vec<(bool, String)> {
 /// Тело `PUT` доменов: политика уровня целиком с новыми списками.
 fn domains_req(t: &Trust, partners: Vec<String>, forwards: Vec<String>) -> Request {
     let v = t.view.as_ref().expect("политика организации загружена");
-    let mut body = v.own.as_ref().map(TrustBody::from).unwrap_or_default();
-    body.partners = partners;
-    body.auto_forward_domains = forwards;
+    let mut body = match v.get("own") {
+        Some(o @ Value::Object(_)) => o.clone(),
+        _ => Value::Object(Map::new()),
+    };
+    let map = body.as_object_mut().expect("тело — объект");
+    map.insert(
+        "partners".to_owned(),
+        Value::Array(partners.into_iter().map(Value::String).collect()),
+    );
+    map.insert(
+        "auto_forward_domains".to_owned(),
+        Value::Array(forwards.into_iter().map(Value::String).collect()),
+    );
     let (_, put, _) = t.scope.ops();
     let mut req = Request::new(op(put), &ctx(t), Vec::new()).expect("запрос записи доменов");
-    req.body = serde_json::to_value(&body).ok();
+    req.body = Some(body);
     req
 }
 
@@ -706,9 +767,10 @@ pub(crate) fn on_ok(m: &mut Main, bus: &mut Bus, p: Pending, page: Page) -> Vec<
     match p {
         Pending::Load => {
             t.err = None;
-            match serde_json::from_value::<TrustView>(page.value) {
-                Ok(v) => t.view = Some(v),
-                Err(_) => bus.say(Level::Err, "политика доверия: неожиданный ответ сервера"),
+            if page.value.is_object() {
+                t.view = Some(page.value);
+            } else {
+                bus.say(Level::Err, "политика доверия: неожиданный ответ сервера");
             }
             Vec::new()
         }
@@ -836,43 +898,46 @@ pub fn key_labels(t: &Trust) -> [&'static str; 10] {
             "Меню",
             "Выход",
         ],
-        Tab::Matrix => match t.scope.editable() {
-            true => [
-                "Помощь",
-                "Партн",
-                "",
-                "Знач",
-                "Уровень",
-                "Учетн",
-                "",
-                "Сброс",
-                "Меню",
-                "Выход",
-            ],
-            false => [
-                "Помощь",
-                "",
-                "",
-                "",
-                "Уровень",
-                "Учетн",
-                "",
-                "",
-                "Меню",
-                "Выход",
-            ],
-        },
+        Tab::Matrix => {
+            if t.scope.editable() {
+                [
+                    "Помощь",
+                    "Партн",
+                    "",
+                    "Знач",
+                    "Уровень",
+                    "Учетн",
+                    "",
+                    "Сброс",
+                    "Меню",
+                    "Выход",
+                ]
+            } else {
+                [
+                    "Помощь",
+                    "",
+                    "",
+                    "",
+                    "Уровень",
+                    "Учетн",
+                    "",
+                    "",
+                    "Меню",
+                    "Выход",
+                ]
+            }
+        }
     }
 }
 
 /// Короткое значение клетки (в колонку 8 знаков входят знаки ▲, ⊘ и буква источника).
-pub fn value_short(v: &CellValue) -> &'static str {
-    match v.to_string().as_str() {
+pub fn value_short(v: &str) -> &'static str {
+    match v {
         "button" => "кнопка",
         "auto" => "авто",
         "on" => "да",
-        "off" => "нет",
-        "none" => "нет",
+        "off" | "none" => "нет",
+        "reply_only" => "ответ",
         "free_busy" => "св/зан",
         "limited" => "частич",
         "details" => "подроб",
@@ -885,64 +950,21 @@ pub fn value_short(v: &CellValue) -> &'static str {
 }
 
 /// Текст и пометка клетки матрицы; `sources` — показать источник клетки (действующая матрица учётной записи).
-pub fn cell(v: &TrustView, f: TrustFunction, p: PeerKind, sources: bool) -> (String, Mark) {
-    let value = v.effective.matrix.get(f, p);
-    let mut text = value_short(&value).to_owned();
-    if sources && let Some(level) = source_of(v, f, p) {
+pub fn cell(v: &Value, f: &str, p: &str, sources: bool) -> (String, Mark) {
+    let mut text = value_short(&cell_value(v, f, p)).to_owned();
+    if sources && let Some(src) = source_of(v, f, p) {
         text.push(' ');
-        text.push(mark_of(&level));
+        text.push(mark_of(src));
     }
     let mut mark = Mark::Plain;
     if over_of(v, f, p) {
         text = format!("▲{text}");
         mark = Mark::Over;
-    } else if v.fixed.get(f, p) {
+    } else if fixed_of(v, f, p) {
         text.push('⊘');
         mark = Mark::Fixed;
     }
     (text, mark)
-}
-
-/// Клетка выше потолка уровня выше («выше потолка»).
-pub fn over_of(v: &TrustView, f: TrustFunction, p: PeerKind) -> bool {
-    v.effective
-        .over_ceiling
-        .iter()
-        .any(|o| o.function == f && o.peer == p)
-}
-
-/// Источник клетки действующей матрицы: уровень, давший значение; `None` — умолчание контракта.
-pub fn source_of(v: &TrustView, f: TrustFunction, p: PeerKind) -> Option<TrustLevel> {
-    let s = &v.effective.source;
-    let per_peer = match f {
-        TrustFunction::InviteNew => &s.invite_new,
-        TrustFunction::ItipUpdates => &s.itip_updates,
-        TrustFunction::AutoReply => &s.auto_reply,
-        TrustFunction::Mdn => &s.mdn,
-        TrustFunction::AutoForward => &s.auto_forward,
-        TrustFunction::FreeBusy => &s.freebusy,
-        TrustFunction::Sharing => &s.sharing,
-        TrustFunction::GroupPost => &s.group_post,
-    };
-    per_peer.get(p)
-}
-
-/// Буква источника клетки: у — установка, о — организация, г — группа.
-pub fn mark_of(level: &TrustLevel) -> char {
-    match level {
-        TrustLevel::Installation => 'у',
-        TrustLevel::Org(_) => 'о',
-        TrustLevel::Group(_, _) => 'г',
-    }
-}
-
-/// Название уровня-источника для строки состояния.
-pub fn level_label(level: &TrustLevel) -> &'static str {
-    match level {
-        TrustLevel::Installation => "установка",
-        TrustLevel::Org(_) => "организация",
-        TrustLevel::Group(_, _) => "группа",
-    }
 }
 
 /// Строка «Уровень: …» под матрицей.
@@ -950,7 +972,10 @@ pub fn level_line(t: &Trust) -> String {
     match &t.scope {
         Scope::Account(_, login) => format!("Учётная запись: {login}"),
         _ => {
-            let set = t.view.as_ref().is_some_and(|v| v.own.is_some());
+            let set = t
+                .view
+                .as_ref()
+                .is_some_and(|v| v.get("own").is_some_and(Value::is_object));
             format!(
                 "Уровень: {} · политика {}",
                 t.scope.line(),
@@ -984,19 +1009,15 @@ pub fn values_line(t: &Trust) -> Option<String> {
         return None;
     }
     let def = FUNCTIONS.get(t.cur.0)?;
-    let Some(&p) = PEERS.get(t.cur.1) else {
-        return None;
-    };
-    if v.fixed.get(def.f, p) {
+    let p = PEERS.get(t.cur.1)?;
+    if fixed_of(v, def.f, p) {
         return Some("клетка закреплена контрактом — изменить нельзя".to_owned());
     }
-    let ceiling = v.effective.ceiling.matrix.get(def.f, p);
-    let list: Vec<&str> = def
+    let top = def
         .values
         .iter()
-        .filter(|x| **x <= ceiling)
-        .map(|x| value_short(x))
-        .collect();
+        .position(|x| *x == ceiling_value(v, def.f, p))?;
+    let list: Vec<&str> = def.values[..=top].iter().map(|x| value_short(x)).collect();
     if list.is_empty() {
         return None;
     }
@@ -1007,10 +1028,13 @@ pub fn values_line(t: &Trust) -> Option<String> {
 pub fn hint(t: &Trust) -> &'static str {
     match t.tab {
         Tab::Partners => "F7 — добавить · F8 — удалить · F2 — матрица",
-        Tab::Matrix => match t.scope.editable() {
-            true => "F4 — значение · F5 — уровень · F8 — сброс",
-            false => "Esc — назад к уровню · F6 — другая учётная запись",
-        },
+        Tab::Matrix => {
+            if t.scope.editable() {
+                "F4 — значение · F5 — уровень · F8 — сброс"
+            } else {
+                "Esc — назад к уровню · F6 — другая учётная запись"
+            }
+        }
     }
 }
 
@@ -1029,27 +1053,28 @@ pub fn status(t: &Trust) -> String {
             let (Some(def), Some(&p)) = (FUNCTIONS.get(t.cur.0), PEERS.get(t.cur.1)) else {
                 return String::new();
             };
-            let value = v.effective.matrix.get(def.f, p);
             let mut s = format!(
                 "{} · {}: {}",
                 def.full,
                 PEER_RU[t.cur.1],
-                value_short(&value)
+                value_short(&cell_value(v, def.f, p))
             );
             match &t.scope {
                 Scope::Account(_, _) => {
                     let from = source_of(v, def.f, p)
-                        .map(|l| level_label(&l).to_owned())
-                        .unwrap_or_else(|| "умолчание".to_owned());
+                        .map(level_label)
+                        .unwrap_or("умолчание");
                     s.push_str(&format!(" · источник: {from}"));
                 }
                 _ => {
-                    let ceiling = v.effective.ceiling.matrix.get(def.f, p);
-                    s.push_str(&format!(" · потолок: {}", value_short(&ceiling)));
+                    s.push_str(&format!(
+                        " · потолок: {}",
+                        value_short(&ceiling_value(v, def.f, p))
+                    ));
                     if over_of(v, def.f, p) {
                         s.push_str(" · выше потолка — действует потолок");
                     }
-                    if v.fixed.get(def.f, p) {
+                    if fixed_of(v, def.f, p) {
                         s.push_str(" · закреплено — изменить нельзя");
                     }
                 }
@@ -1084,51 +1109,138 @@ pub fn command(t: &Trust) -> String {
     }
 }
 
+/// Команда сброса уровня для подтверждения (F8): уровень группы — по имени группы (запрос несёт
+/// идентификатор, CLI принимает и то и другое); у учётной записи сброса нет — команда показа.
+pub fn reset_command(t: &Trust) -> String {
+    let org = format!("--org {}", t.org);
+    match &t.scope {
+        Scope::Installation => "thepost admin trust reset".to_owned(),
+        Scope::Org => format!("thepost admin trust reset {org}"),
+        Scope::Group(_, name) => format!("thepost admin trust reset {org} --group {name}"),
+        Scope::Account(_, _) => command(t),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::app::tests::{call, key, ok, section, who, with_accounts};
     use crate::app::{App, Effect, LoginForm, Stage};
     use crate::theme::{Brand, Mode, Theme};
-    use serde_json::{Value, json};
+    use serde_json::json;
     use tp_admin::server::AdminRole;
-    use tp_contracts::TenantId;
-    use tp_contracts::trust::{Effective, TrustFixed, effective};
 
-    /// Политика организации с поднятой клеткой (приглашение партнёру — авто) и доменами.
-    fn own() -> TrustPolicy {
-        let mut p = TrustPolicy::default();
-        p.invite_new.partner = Some(InviteMode::Auto);
-        p.partners = vec!["partner.example".into()];
-        p.auto_forward_domains = vec!["mail.example".into()];
-        p
+    /// Политика организации: приглашение партнёру — «авто», домены заданы (как в JSON контракта).
+    fn own() -> Value {
+        json!({
+            "invite_new": {"partner": "auto"},
+            "partners": ["partner.example"],
+            "auto_forward_domains": ["mail.example"],
+        })
     }
 
-    /// Ответ `GET` уровня: политика, действующая матрица, закреплённые клетки контракта.
-    fn view(
-        own: Option<TrustPolicy>,
-        inst: Option<&TrustPolicy>,
-        org: Option<(TrustLevel, &TrustPolicy)>,
-        groups: &[(TrustLevel, &TrustPolicy)],
-    ) -> Value {
-        let e: Effective = effective(inst, org, groups);
-        serde_json::to_value(TrustView {
-            own,
-            effective: e,
-            fixed: TrustFixed::contract(),
+    /// Действующая матрица и потолок контракта по умолчанию (клетки — объединения значений функций).
+    fn default_effective() -> Value {
+        json!({
+            "matrix": {
+                "invite_new": {
+                    "own": {"invite": "auto"}, "partner": {"invite": "button"},
+                    "neighbor": {"invite": "button"}, "external": {"invite": "button"},
+                },
+                "itip_updates": {
+                    "own": {"toggle": "on"}, "partner": {"toggle": "on"},
+                    "neighbor": {"toggle": "on"}, "external": {"toggle": "on"},
+                },
+                "auto_reply": {
+                    "own": {"toggle": "on"}, "partner": {"toggle": "on"},
+                    "neighbor": {"toggle": "on"}, "external": {"toggle": "on"},
+                },
+                "mdn": {
+                    "own": {"toggle": "on"}, "partner": {"toggle": "off"},
+                    "neighbor": {"toggle": "off"}, "external": {"toggle": "off"},
+                },
+                "auto_forward": {
+                    "own": {"toggle": "on"}, "partner": {"toggle": "off"},
+                    "neighbor": {"toggle": "off"}, "external": {"toggle": "off"},
+                },
+                "freebusy": {
+                    "own": {"detail": "free_busy"}, "partner": {"detail": "none"},
+                    "neighbor": {"detail": "none"}, "external": {"detail": "none"},
+                },
+                "sharing": {
+                    "own": {"detail": "all"}, "partner": {"detail": "none"},
+                    "neighbor": {"detail": "none"}, "external": {"detail": "none"},
+                },
+                "group_post": {
+                    "own": {"post": "open"}, "partner": {"post": "closed"},
+                    "neighbor": {"post": "closed"}, "external": {"post": "closed"},
+                },
+            },
+            "ceiling": {"matrix": {
+                "invite_new": {
+                    "own": {"invite": "auto"}, "partner": {"invite": "auto"},
+                    "neighbor": {"invite": "button"}, "external": {"invite": "button"},
+                },
+                "itip_updates": {
+                    "own": {"toggle": "on"}, "partner": {"toggle": "on"},
+                    "neighbor": {"toggle": "on"}, "external": {"toggle": "on"},
+                },
+                "auto_reply": {
+                    "own": {"toggle": "on"}, "partner": {"toggle": "on"},
+                    "neighbor": {"toggle": "on"}, "external": {"toggle": "on"},
+                },
+                "mdn": {
+                    "own": {"toggle": "on"}, "partner": {"toggle": "on"},
+                    "neighbor": {"toggle": "on"}, "external": {"toggle": "on"},
+                },
+                "auto_forward": {
+                    "own": {"toggle": "on"}, "partner": {"toggle": "on"},
+                    "neighbor": {"toggle": "on"}, "external": {"toggle": "on"},
+                },
+                "freebusy": {
+                    "own": {"detail": "details"}, "partner": {"detail": "limited"},
+                    "neighbor": {"detail": "none"}, "external": {"detail": "none"},
+                },
+                "sharing": {
+                    "own": {"detail": "all"}, "partner": {"detail": "details"},
+                    "neighbor": {"detail": "details"}, "external": {"detail": "details"},
+                },
+                "group_post": {
+                    "own": {"post": "open"}, "partner": {"post": "open"},
+                    "neighbor": {"post": "open"}, "external": {"post": "open"},
+                },
+            }},
+            "source": {},
+            "over_ceiling": [],
         })
-        .expect("json")
+    }
+
+    /// Закреплённые клетки контракта: потолок равен самому узкому значению (TrustFixed::contract).
+    fn fixed_json() -> Value {
+        json!({
+            "invite_new": {"own": false, "partner": false, "neighbor": true, "external": true},
+            "itip_updates": {"own": false, "partner": false, "neighbor": false, "external": false},
+            "auto_reply": {"own": false, "partner": false, "neighbor": false, "external": false},
+            "mdn": {"own": false, "partner": false, "neighbor": false, "external": false},
+            "auto_forward": {"own": false, "partner": false, "neighbor": false, "external": false},
+            "freebusy": {"own": false, "partner": false, "neighbor": true, "external": true},
+            "sharing": {"own": false, "partner": false, "neighbor": false, "external": false},
+            "group_post": {"own": false, "partner": false, "neighbor": false, "external": false},
+        })
+    }
+
+    /// Ответ `GET` уровня из собственной политики и действующей матрицы.
+    fn view(own: Value, effective: Value) -> Value {
+        json!({"own": own, "effective": effective, "fixed": fixed_json()})
     }
 
     /// Уровень организации: собственная политика подняла клетку, действует потолок контракта.
     fn org_view() -> Value {
-        let o = own();
-        view(
-            Some(o.clone()),
-            None,
-            Some((TrustLevel::Org(TenantId::new()), &o)),
-            &[],
-        )
+        let mut e = default_effective();
+        e["matrix"]["invite_new"]["partner"] = json!({"invite": "auto"});
+        e["source"] =
+            json!({"invite_new": {"partner": {"org": "00000000-0000-0000-0000-000000000001"}}});
+        view(own(), e)
     }
 
     /// JSON `GET` уровня организации для отрисовки на TestBackend (тесты `ui`).
@@ -1136,18 +1248,16 @@ pub(crate) mod tests {
         org_view()
     }
 
-    /// JSON с клеткой организации выше потолка установки — знак ▲ (тесты `ui`).
+    /// JSON: организация подняла занятость партнёру выше потолка установки — знак ▲ (тесты `ui`).
     pub(crate) fn over_json() -> Value {
-        let mut org = TrustPolicy::default();
-        org.freebusy.partner = Some(Detail::Limited);
-        let mut inst = TrustPolicy::default();
-        inst.freebusy.partner = Some(Detail::None);
-        view(
-            Some(org.clone()),
-            Some(&inst),
-            Some((TrustLevel::Org(TenantId::new()), &org)),
-            &[],
-        )
+        let mut e = default_effective();
+        e["ceiling"]["matrix"]["freebusy"]["partner"] = json!({"detail": "none"});
+        e["over_ceiling"] = json!([{
+            "function": "freebusy", "peer": "partner",
+            "value": {"detail": "limited"}, "ceiling": {"detail": "none"},
+            "level": "installation",
+        }]);
+        view(json!({"freebusy": {"partner": "limited"}}), e)
     }
 
     /// Вошедший интерфейс с открытым разделом «Доверие» (уровень организации).
@@ -1191,7 +1301,7 @@ pub(crate) mod tests {
         })
     }
 
-    fn cell_at(app: &mut App, f: TrustFunction, peer: usize) {
+    fn cell_at(app: &mut App, f: &str, peer: usize) {
         let t = trust_mut(app);
         t.cur = (
             FUNCTIONS.iter().position(|d| d.f == f).expect("функция"),
@@ -1225,36 +1335,32 @@ pub(crate) mod tests {
     #[test]
     fn next_value_stops_at_ceiling() {
         // Установка снизила потолок занятости партнёру до «ограниченных подробностей».
-        let mut inst = TrustPolicy::default();
-        inst.freebusy.partner = Some(Detail::Limited);
-        let mut own = TrustPolicy::default();
-        let step = |own: &TrustPolicy| -> TrustView {
-            serde_json::from_value(view(Some(own.clone()), Some(&inst), None, &[])).expect("view")
+        let mut e = default_effective();
+        e["ceiling"]["matrix"]["freebusy"]["partner"] = json!({"detail": "limited"});
+        let step = |cur: &str| {
+            let mut e = e.clone();
+            e["matrix"]["freebusy"]["partner"] = json!({"detail": cur});
+            view(Value::Null, e)
         };
-        let mut v = step(&own);
-        let mut seen = vec![value_short(
-            &v.effective
-                .matrix
-                .get(TrustFunction::FreeBusy, PeerKind::Partner),
-        )];
+        let mut v = step("none");
+        let mut seen = vec![cell_value(&v, "freebusy", "partner")];
         for _ in 0..4 {
-            let Some(CellValue::Detail(next)) =
-                next_value(&v, TrustFunction::FreeBusy, PeerKind::Partner)
-            else {
+            let Some(next) = next_value(&v, "freebusy", "partner") else {
                 break;
             };
-            seen.push(value_short(&CellValue::Detail(next)));
-            own.freebusy.partner = Some(next);
-            v = step(&own);
+            seen.push(next.to_owned());
+            v = step(next);
         }
-        // «Подробности» и «всё» выше потолка — не предлагаются; цикл завершается самым узким значением.
-        assert_eq!(seen, ["нет", "св/зан", "частич", "нет"], "{seen:?}");
-        // Приглашение соседу закреплено контрактом («кнопка») — значений нет.
-        let fixed: TrustView = serde_json::from_value(view(None, None, None, &[])).expect("view");
+        // «Подробности» и «всё» выше потолка — не предлагаются: цикл остаётся в пределах потолка, после
+        // самого широкого допустимого значения возвращается к самому узкому.
         assert_eq!(
-            next_value(&fixed, TrustFunction::InviteNew, PeerKind::Neighbor),
-            None
+            seen,
+            ["none", "free_busy", "limited", "none", "free_busy"],
+            "{seen:?}"
         );
+        // Приглашение соседу закреплено контрактом («кнопка») — значений нет.
+        let fixed = view(Value::Null, default_effective());
+        assert_eq!(next_value(&fixed, "invite_new", "neighbor"), None);
     }
 
     /// F4: следующее допустимое значение, `PUT` политики уровня целиком; отказ 422 — `detail` у клетки.
@@ -1262,7 +1368,7 @@ pub(crate) mod tests {
     fn f4_changes_cell_and_422_at_cell() {
         let mut app = with_trust();
         // MDN партнёру: по умолчанию «нет», потолок «да» — F4 предлагает «да».
-        cell_at(&mut app, TrustFunction::Mdn, 1);
+        cell_at(&mut app, "mdn", 1);
         assert_eq!(
             app.command_line(),
             "thepost admin trust set --file <ПУТЬ> --org 00000000-0000-0000-0000-000000000001"
@@ -1272,15 +1378,16 @@ pub(crate) mod tests {
             panic!("нет записи: {fx:?}");
         };
         assert_eq!(req.op.id, "put_org_trust");
-        let body: TrustBody =
-            serde_json::from_value(req.body.clone().expect("тело")).expect("тело");
+        // «Только ответ» — промежуточное значение между «нет» и «да» (решение 125 а).
         assert_eq!(
-            body.invite_new.get(PeerKind::Partner),
-            Some(InviteMode::Auto)
+            req.body,
+            Some(json!({
+                "invite_new": {"partner": "auto"},
+                "partners": ["partner.example"],
+                "auto_forward_domains": ["mail.example"],
+                "mdn": {"partner": "reply_only"},
+            }))
         );
-        assert_eq!(body.mdn.get(PeerKind::Partner), Some(Toggle::On));
-        assert_eq!(body.partners, vec!["partner.example".to_owned()]);
-        assert_eq!(body.auto_forward_domains, vec!["mail.example".to_owned()]);
         // Сервер отказал: текст detail у клетки.
         app.on_result(
             *id,
@@ -1309,15 +1416,15 @@ pub(crate) mod tests {
     fn f4_keeps_fixed_cell() {
         let mut app = with_trust();
         // Приглашение интернету — «кнопка», закреплено контрактом.
-        cell_at(&mut app, TrustFunction::InviteNew, 3);
+        cell_at(&mut app, "invite_new", 3);
         let fx = app.on_key(key(KeyCode::F(4)));
         assert!(fx.is_empty(), "закреплённая клетка не меняется: {fx:?}");
+        let t = trust_of(&app);
         assert!(
-            trust_of(&app).err.is_none()
-                && trust_of(&app)
-                    .view
+            t.err.is_none()
+                && t.view
                     .as_ref()
-                    .is_some_and(|v| v.fixed.get(TrustFunction::InviteNew, PeerKind::External)),
+                    .is_some_and(|v| fixed_of(v, "invite_new", "external")),
             "клетка закреплена"
         );
     }
@@ -1360,7 +1467,7 @@ pub(crate) mod tests {
             trust_of(&app).scope,
             Scope::Group("g1".into(), "Продажи".into())
         );
-        app.on_result(id, ok(org_view()));
+        app.on_result(*id, ok(org_view()));
         // F5 — в уровень группы уже можно вернуться без выбора: организация, затем снова группа.
         let fx = app.on_key(key(KeyCode::F(5)));
         let [Effect::Call(id, req)] = fx.as_slice() else {
@@ -1421,14 +1528,14 @@ pub(crate) mod tests {
         app.on_result(ids[0], ok(json!([{"id": "o1", "default": true}])));
         app.on_result(ids[1], ok(json!([])));
         let id = call(&section(&mut app, "Доверие"), SECTION_OP);
-        app.on_result(id, ok(view(None, None, None, &[])));
-        // Организация → установка.
+        app.on_result(id, ok(view(Value::Null, default_effective())));
+        // Организация → установка (администратор установки).
         let fx = app.on_key(key(KeyCode::F(5)));
         let [Effect::Call(id, req)] = fx.as_slice() else {
             panic!("нет чтения установки: {fx:?}");
         };
         assert_eq!(req.op.id, "get_installation_trust");
-        app.on_result(*id, ok(view(None, None, None, &[])));
+        app.on_result(*id, ok(view(Value::Null, default_effective())));
         assert_eq!(
             app.command_line(),
             "thepost admin trust set --file <ПУТЬ>",
@@ -1466,19 +1573,21 @@ pub(crate) mod tests {
             "thepost admin trust show --org 00000000-0000-0000-0000-000000000001 --account user1@it-task.ru"
         );
         // Источник клетки: приглашение партнёру задано организацией — «авто о».
+        cell_at(&mut app, "invite_new", 1);
         let t = trust_of(&app);
         assert!(matches!(t.scope, Scope::Account(_, _)));
         let v = t.view.as_ref().expect("матрица загружена");
-        let (text, mark) = cell(v, TrustFunction::InviteNew, PeerKind::Partner, true);
+        let (text, mark) = cell(v, "invite_new", "partner", true);
         assert_eq!(mark, Mark::Plain);
         assert_eq!(text, "авто о", "значение и источник клетки");
         assert!(status(t).contains("источник: организация"));
         // Esc — назад к уровню организации.
         let fx = app.on_key(key(KeyCode::Esc));
-        let [Effect::Call(_, req)] = fx.as_slice() else {
+        let [Effect::Call(id, req)] = fx.as_slice() else {
             panic!("нет возврата: {fx:?}");
         };
         assert_eq!(req.op.id, "get_org_trust");
+        app.on_result(*id, ok(org_view()));
         assert_eq!(trust_of(&app).scope, Scope::Org);
     }
 
@@ -1499,7 +1608,8 @@ pub(crate) mod tests {
             app.command_line(),
             "thepost admin trust partners set <ДОМЕН>… --org 00000000-0000-0000-0000-000000000001"
         );
-        // F7 на строке партнёра — новый домен-партнёр, каноническая форма (нижний регистр).
+        // F7 на строке партнёра — ввод домена, каноническая форма (нижний регистр).
+        assert!(app.on_key(key(KeyCode::F(7))).is_empty());
         for c in "Partner.Example ".chars() {
             app.on_key(key(KeyCode::Char(c)));
         }
@@ -1508,11 +1618,9 @@ pub(crate) mod tests {
             panic!("нет записи доменов: {fx:?}");
         };
         assert_eq!(req.op.id, "put_org_trust");
-        let body: TrustBody =
-            serde_json::from_value(req.body.clone().expect("тело")).expect("тело");
         assert_eq!(
-            body.partners,
-            vec!["partner.example".to_owned(), "partner.example".to_owned()]
+            req.body.as_ref().and_then(|b| b.get("partners")),
+            Some(&json!(["partner.example", "partner.example"]))
         );
         // Домен из принятых доменов организации — 422, текст detail у списка доменов.
         app.on_result(
@@ -1524,7 +1632,7 @@ pub(crate) mod tests {
             Some("принятый домен организации не может быть партнёром")
         );
         // Повторная запись прошла: список перечитан.
-        let fx = app.on_key(key(KeyCode::F(7)));
+        assert!(app.on_key(key(KeyCode::F(7))).is_empty());
         for c in "mail.example".chars() {
             app.on_key(key(KeyCode::Char(c)));
         }
@@ -1549,11 +1657,11 @@ pub(crate) mod tests {
         let [Effect::Call(id, req)] = fx.as_slice() else {
             panic!("нет записи доменов: {fx:?}");
         };
-        let body: TrustBody =
-            serde_json::from_value(req.body.clone().expect("тело")).expect("тело");
         assert_eq!(
-            body.auto_forward_domains,
-            vec!["mail.example".to_owned(), "other.example".to_owned()]
+            req.body
+                .as_ref()
+                .and_then(|b| b.get("auto_forward_domains")),
+            Some(&json!(["mail.example", "other.example"]))
         );
         let fx = app.on_result(*id, ok(org_view()));
         let [Effect::Call(id, _)] = fx.as_slice() else {
@@ -1566,9 +1674,10 @@ pub(crate) mod tests {
         let [Effect::Call(id, req)] = fx.as_slice() else {
             panic!("нет удаления домена: {fx:?}");
         };
-        let body: TrustBody =
-            serde_json::from_value(req.body.clone().expect("тело")).expect("тело");
-        assert!(body.partners.is_empty(), "домен-партнёр удалён: {body:?}");
+        assert_eq!(
+            req.body.as_ref().and_then(|b| b.get("partners")),
+            Some(&json!([]))
+        );
         let fx = app.on_result(*id, ok(org_view()));
         let [Effect::Call(id, _)] = fx.as_slice() else {
             panic!("нет перечитывания: {fx:?}");
@@ -1589,9 +1698,10 @@ pub(crate) mod tests {
         let mut app = with_accounts();
         let id = call(&section(&mut app, "Доверие"), SECTION_OP);
         app.on_result(id, ok(over_json()));
+        cell_at(&mut app, "freebusy", 1);
         let t = trust_of(&app);
         let v = t.view.as_ref().expect("матрица");
-        let (text, mark) = cell(v, TrustFunction::FreeBusy, PeerKind::Partner, false);
+        let (text, mark) = cell(v, "freebusy", "partner", false);
         assert_eq!(mark, Mark::Over, "клетка выше потолка");
         assert_eq!(text, "▲нет", "действует потолок, знак ▲");
         assert!(status(t).contains("выше потолка"));
@@ -1605,7 +1715,7 @@ pub(crate) mod tests {
         assert!(s.contains("Новое приглашение"), "{s}");
         assert!(s.contains("потолок"), "{s}");
         // Курсор на закреплённой клетке (приглашение соседу — «кнопка»).
-        cell_at(&mut app, TrustFunction::InviteNew, 2);
+        cell_at(&mut app, "invite_new", 2);
         assert!(status(trust_of(&app)).contains("закреплено"));
     }
 
@@ -1659,13 +1769,11 @@ pub(crate) mod tests {
         assert_eq!(t.tab, Tab::Matrix);
         let v = t.view.as_ref().expect("политика");
         assert_eq!(
-            v.effective
-                .matrix
-                .get(TrustFunction::InviteNew, PeerKind::Partner),
-            CellValue::Invite(InviteMode::Auto),
+            cell_value(v, "invite_new", "partner"),
+            "auto",
             "организация подняла клетку"
         );
-        assert_eq!(v.own.as_ref().map(|o| o.partners.len()), Some(1));
+        assert_eq!(domains(t).0.len(), 1);
         assert_eq!(
             command(t),
             "thepost admin trust set --file <ПУТЬ> --org 00000000-0000-0000-0000-000000000001"

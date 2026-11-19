@@ -702,7 +702,7 @@ impl Painter<'_> {
             let y = 3 + i as u16;
             self.put_n(b.x0, y, def.short, Role::Text, crate::trust::LABEL_W);
             for (j, p) in crate::trust::PEERS.iter().enumerate() {
-                let (text, mark) = crate::trust::cell(v, def.f, *p, sources);
+                let (text, mark) = crate::trust::cell(v, def.f, p, sources);
                 let x = crate::trust::cell_x(b.x0, j);
                 let cur = t.cur == (i, j);
                 let role = match (cur, b.active) {
@@ -1061,7 +1061,7 @@ impl Painter<'_> {
         let op = match &m.view {
             View::List(l) => Some(l.req.op),
             View::Card(c) => Some(c.req.op),
-            View::Info { .. } | View::Config(_) => None,
+            View::Info { .. } | View::Config(_) | View::Trust(_) => None,
         };
         if let Some(op) = op {
             for (i, l) in wrap(&op.summary.replace('\n', " "), b.width() as usize)
@@ -1981,8 +1981,8 @@ mod tests {
         );
         assert!(rows[3].contains("Приглаш"), "{}", rows[3]);
         // Значения помещаются в колонки без обрезки (и со знаками).
-        for y in 2..11 {
-            assert!(!rows[y].contains('…'), "обрезка в строке {y}: {}", rows[y]);
+        for (y, row) in rows.iter().enumerate().take(11).skip(2) {
+            assert!(!row.contains('…'), "обрезка в строке {y}: {row}");
         }
         assert!(rows[3].contains("кнопка"), "{}", rows[3]);
         // Закреплённая клетка (приглашение соседу и интернету — «кнопка»): знак замка.
@@ -2004,10 +2004,9 @@ mod tests {
             "{}",
             rows[21]
         );
+        // Команда с полным UUID организации шире 80 колонок — строка обрезана с «…».
         assert!(
-            rows[22].contains(
-                "$ thepost admin trust set --file <ПУТЬ> --org 00000000-0000-0000-0000-000000000001"
-            ),
+            rows[22].contains("$ thepost admin trust set --file <ПУТЬ> --org 00000000"),
             "{}",
             rows[22]
         );
@@ -2056,10 +2055,9 @@ mod tests {
             "{}",
             rows[19]
         );
+        // Команда с полным UUID организации шире 80 колонок — строка обрезана с «…».
         assert!(
-            rows[22].contains(
-                "$ thepost admin trust partners set <ДОМЕН>… --org 00000000-0000-0000-0000-000000000001"
-            ),
+            rows[22].contains("$ thepost admin trust partners set <ДОМЕН>… --org 00000000"),
             "{}",
             rows[22]
         );

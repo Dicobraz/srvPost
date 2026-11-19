@@ -116,6 +116,8 @@ pub fn command(req: &Request, home_org: Option<&str>) -> String {
     }
     if let Some(org) = req.param("org")
         && home_org.is_some_and(|h| h != org)
+        // Шаблоны операций доверия несут `--org` сами: без ключа CLI выбирает уровень установки (ADM-49).
+        && !out.contains(&format!("--org {org}"))
     {
         out.push_str(&format!(" --org {org}"));
     }
@@ -187,6 +189,35 @@ mod tests {
         assert_eq!(
             command(&units, Some("o1")),
             "нет в CLI: GET /api/v1/orgs/{org}/units"
+        );
+        // Уровень организации — всегда с `--org` (без ключа CLI показывает установку), ключ не дублируется.
+        let org_trust = Request::new(
+            c.get("get_org_trust").expect("get_org_trust"),
+            &ctx,
+            Vec::new(),
+        )
+        .expect("запрос");
+        assert_eq!(
+            command(&org_trust, Some("o1")),
+            "thepost admin trust show --org o1"
+        );
+        assert_eq!(
+            command(&org_trust, Some("o2")),
+            "thepost admin trust show --org o1",
+            "без повтора ключа"
+        );
+        let group_trust = Request::new(
+            c.get("get_group_trust").expect("get_group_trust"),
+            &Context::from([
+                ("org".to_owned(), "o1".to_owned()),
+                ("group".to_owned(), "g1".to_owned()),
+            ]),
+            Vec::new(),
+        )
+        .expect("запрос");
+        assert_eq!(
+            command(&group_trust, Some("o1")),
+            "thepost admin trust show --org o1 --group g1"
         );
     }
 }
