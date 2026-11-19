@@ -1,10 +1,13 @@
 //! Запуск интерфейса в терминале: crossterm, клиент Admin API (`tp-admin-client`) и цикл событий; тема по
-//! окружению, знак бренда протоколом графики терминала, палитра консоли Linux на время работы. Мышь (TUI-07):
-//! захват событий `crossterm` c пиксельным режимом `1016`, где терминал его принял, плавный курсор —
-//! [`crate::cursor`], на консоли Linux координаты из `/dev/input` ([`crate::input`]).
+//! окружению, знак бренда протоколом графики терминала, палитра консоли Linux на время работы. Брендинг
+//! сервера (TUI-08): экран входа — открытый маршрут по домену имени входа, после входа — действующий
+//! брендинг своей организации; ошибка или нет сети — тема IT TASK. Мышь (TUI-07): захват событий `crossterm`
+//! c пиксельным режимом `1016`, где терминал его принял, плавный курсор — [`crate::cursor`], на консоли Linux
+//! координаты из `/dev/input` ([`crate::input`]).
 
 use std::io::{self, Write};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEventKind, MouseEvent};
@@ -13,21 +16,25 @@ use ratatui::DefaultTerminal;
 use ratatui_image::picker::{Picker, ProtocolType};
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tp_admin::branding::BrandingView;
 use tp_admin::server::WhoAmI;
 use tp_admin_client::oidc::{DeviceLogin, prompt_text};
-use tp_admin_client::{Client, ENV_TOKEN, ENV_URL, Options, base_url, setting};
+use tp_admin_client::ops::{BRANDING_GET, ORG_BRANDING_GET};
+use tp_admin_client::{Client, ENV_TOKEN, ENV_URL, NO_BODY, Options, base_url, setting};
 
-use crate::app::{App, Effect, LoginField, LoginForm, LoginRequest, Page, Stage};
+use crate::app::{App, BrandingFetch, Effect, LoginField, LoginForm, LoginRequest, Page, Stage};
 use crate::cursor::{self, Caps, Level, SmoothCursor};
 use crate::engine::Request;
 use crate::mouse::MouseConfig;
 use crate::node::{self, ConfigFile, NodeConfig, SaveError, Saved};
 use crate::schema::Response;
-use crate::theme::{ConsolePalette, Theme, console_palette_needed};
+use crate::theme::{Brand, ConsolePalette, Png, Theme, console_palette_needed};
 use crate::ui;
 
 /// Как часто поток ввода проверяет, не закрыт ли интерфейс (ожидание клавиши не дольше).
 const INPUT_POLL: Duration = Duration::from_millis(200);
+/// Пауза набора адреса и домена имени входа перед запросом брендинга (TUI-08).
+const BRANDING_DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// Байты возврата мыши: режим `1016`, захват `crossterm`, загруженные глифы DECDLD.
 fn mouse_reset(pixel: bool, glyphs: bool) -> String {
@@ -72,6 +79,8 @@ pub struct Connect {
 enum Msg {
     Term(Event),
     Login(Result<(Client, WhoAmI, String), String>),
+    /// Брендинг сервера (TUI-08) с номером запроса: перекрашивает тему, ошибка — тема остаётся прежней.
+    Branding(u64, Result<Brand, String>),
     Device(String),
     Done(u64, Result<Page, tp_admin_client::Error>),
     Config(Result<ConfigFile, String>),
@@ -134,7 +143,16 @@ pub async fn run(mut connect: Connect) -> Result<(), String> {
     let glyphs = cursor.level() == Level::Glyphs && console.is_none();
     let _mouse = MouseCapture::set(io::stdout(), pixel, glyphs);
     // Шрифт консоли уходит в цикл: возврат шрифта и карты Unicode (RAII) — при выходе из него.
-    let result = event_loop(&mut terminal, connect, theme, cursor, cfg, console_font).await;
+    let result = event_loop(
+        &mut terminal,
+        connect,
+        theme,
+        cursor,
+        cfg,
+        console_font,
+        picker.as_ref(),
+    )
+    .await;
     let restored = ratatui::try_restore().map_err(|e| format!("терминал: {e}"));
     drop(palette);
     result.and(restored)
@@ -269,6 +287,7 @@ async fn event_loop(
     mut cur: SmoothCursor,
     cfg: MouseConfig,
     mut console_font: ConsoleFont,
+    picker: Option<&Picker>,
 ) -> Result<(), String> {
     let url = setting(connect.url, ENV_URL).unwrap_or_default();
     let token = setting(connect.token, ENV_TOKEN);
@@ -300,6 +319,8 @@ async fn event_loop(
         });
     }
     let mut client: Option<Client> = None;
+    // Номер запроса брендинга: ответ более старого запроса (сменились адрес или домен) тему не меняет.
+    let brand_seq = Arc::new(AtomicU64::new(0));
     if let Some(token) = token {
         let effects = vec![Effect::Login(LoginRequest::Token { url, token })];
         if let Stage::Login(f) = &mut app.stage {
@@ -312,6 +333,21 @@ async fn event_loop(
             &oidc,
             client.as_ref(),
             node.as_ref(),
+            &brand_seq,
+        );
+    } else {
+        // Экран входа: брендинг установки; домен имени входа запросит форма (TUI-08).
+        apply(
+            vec![Effect::Branding(BrandingFetch::Public {
+                url: url.clone(),
+                domain: None,
+            })],
+            &tx,
+            &options,
+            &oidc,
+            client.as_ref(),
+            node.as_ref(),
+            &brand_seq,
         );
     }
     loop {
@@ -359,6 +395,25 @@ async fn event_loop(
                 app.on_login(Ok((who, server)))
             }
             Msg::Login(Err(e)) => app.on_login(Err(e)),
+            Msg::Branding(seq, r) => {
+                if brand_seq.load(Ordering::Relaxed) == seq {
+                    match r {
+                        Ok(brand) => {
+                            let mode = app.theme.mode();
+                            let mut theme = Theme::new(mode, brand);
+                            if let Some(p) = picker {
+                                theme = theme.with_mark(p);
+                            }
+                            app.theme = theme;
+                        }
+                        // Нет брендинга, ошибка или нет сети — тема IT TASK остаётся (TUI-08).
+                        Err(e) => {
+                            let _ = writeln!(io::stderr(), "брендинг: {e}");
+                        }
+                    }
+                }
+                Vec::new()
+            }
             Msg::Device(text) => {
                 app.on_device(text);
                 Vec::new()
@@ -381,6 +436,7 @@ async fn event_loop(
             &oidc,
             client.as_ref(),
             node.as_ref(),
+            &brand_seq,
         );
     }
 }
@@ -419,6 +475,7 @@ fn paint(
 
 /// Выполнить действия интерфейса: вход, запросы и файл конфигурации узла — задачами, ответы — сообщениями в
 /// цикл.
+#[allow(clippy::too_many_arguments)]
 fn apply(
     effects: Vec<Effect>,
     tx: &mpsc::UnboundedSender<Msg>,
@@ -426,10 +483,35 @@ fn apply(
     oidc: &Option<Arc<DeviceLogin>>,
     client: Option<&Client>,
     node: Option<&NodeConfig>,
+    brand_seq: &Arc<AtomicU64>,
 ) {
     for e in effects {
         match e {
             Effect::Quit => {}
+            Effect::Branding(fetch) => {
+                let tx = tx.clone();
+                let seq = brand_seq.fetch_add(1, Ordering::Relaxed) + 1;
+                let live = Arc::clone(brand_seq);
+                let options = options.clone();
+                let client = client.cloned();
+                tokio::spawn(async move {
+                    // Адрес или домен ещё могут измениться — ждём паузу набора.
+                    tokio::time::sleep(BRANDING_DEBOUNCE).await;
+                    if live.load(Ordering::Relaxed) != seq {
+                        return;
+                    }
+                    let r = match fetch {
+                        BrandingFetch::Public { url, domain } => {
+                            public_brand(&url, domain.as_deref(), &options).await
+                        }
+                        BrandingFetch::Own { org } => match client.as_ref() {
+                            Some(c) => own_brand(c, org.as_deref()).await,
+                            None => Err("нет входа".to_owned()),
+                        },
+                    };
+                    let _ = tx.send(Msg::Branding(seq, r));
+                });
+            }
             Effect::ConfigLoad => {
                 let tx = tx.clone();
                 let node = node.cloned();
@@ -558,6 +640,46 @@ async fn login(
     let client = Client::new(base, token, options)?;
     let who = client.whoami().await?;
     Ok((client, who, server))
+}
+
+/// Брендинг экрана входа (TUI-08): открытый маршрут `public_branding` — сначала без домена, затем по домену
+/// введённого имени входа; знак — `branding_logo` по хэшу из ссылки ответа. Ошибка — у вызывающего (тема
+/// остаётся IT TASK).
+async fn public_brand(url: &str, domain: Option<&str>, options: &Options) -> Result<Brand, String> {
+    let anon = Client::anonymous(base_url(url)?, options)?;
+    let branding = anon.public_branding(domain).await?;
+    let mut logo = None;
+    if let Some(hash) = branding.logo.as_deref().and_then(logo_hash) {
+        logo = anon
+            .branding_logo(hash)
+            .await
+            .ok()
+            .map(|bytes| Png(Arc::from(bytes)));
+    }
+    Ok(Brand::from_public(branding, logo))
+}
+
+/// Действующий брендинг после входа (TUI-08): `effective` своей организации (администратор установки —
+/// уровень установки); знак — по хэшу действующего набора.
+async fn own_brand(client: &Client, org: Option<&str>) -> Result<Brand, String> {
+    let view: BrandingView = match org {
+        Some(org) => client.call(ORG_BRANDING_GET, &[org], &[], NO_BODY).await?,
+        None => client.call(BRANDING_GET, &[], &[], NO_BODY).await?,
+    };
+    let mut logo = None;
+    if let Some(l) = view.effective.logo.as_ref() {
+        logo = client
+            .branding_logo(&l.hash.to_string())
+            .await
+            .ok()
+            .map(|bytes| Png(Arc::from(bytes)));
+    }
+    Ok(Brand::from_effective(view, logo))
+}
+
+/// Хэш знака из ссылки открытого маршрута (`/api/v1/public/branding/logo/<hash>`).
+fn logo_hash(path: &str) -> Option<&str> {
+    path.rsplit('/').next().filter(|s| !s.is_empty())
 }
 
 /// Запрос экрана к Admin API; следующая страница — по ссылке `Link: rel="next"`.
