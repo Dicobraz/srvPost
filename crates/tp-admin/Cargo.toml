@@ -36,6 +36,9 @@ opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
+# Выгрузка записей журнала на HTTPS-эндпоинт внешнего архива (ADM-52); та же версия и фичи, что у
+# tp-admin-client.
+reqwest.workspace = true
 # Знак брендинга — полный разбор PNG с Limits (ADM-48); та же версия и фичи, что у tp-tui (DEPS-17), в Cargo.lock
 # новых крейтов нет.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
@@ -44,4 +47,5 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 tp-testkit.workspace = true
 bytes.workspace = true
 futures.workspace = true
+tempfile.workspace = true
 tower = { workspace = true, features = ["util"] }

@@ -127,4 +127,10 @@ export const covered: Record<string, string> = {
   "PUT /api/v1/orgs/{org}/groups/{group}/trust": "pages/organization.tsx",
   "DELETE /api/v1/orgs/{org}/groups/{group}/trust": "pages/organization.tsx",
   "GET /api/v1/orgs/{org}/accounts/{account}/trust": "pages/organization.tsx",
+  // Журнал переписки (ADM-52, UI-25): раздел «Журнал» аудитора журнала — до него операции числятся за
+  // экраном организации.
+  "GET /api/v1/orgs/{org}/journal": "pages/organization.tsx",
+  "GET /api/v1/orgs/{org}/journal/{id}": "pages/organization.tsx",
+  "GET /api/v1/orgs/{org}/journal/{id}/export": "pages/organization.tsx",
+  "GET /api/v1/orgs/{org}/journal/verify": "pages/organization.tsx",
 };
