@@ -10,7 +10,7 @@
 
 use tp_contracts::MailboxId;
 use tp_contracts::meta::{Flag, Flags, Mailbox, SpecialUse};
-use tp_contracts::sieve::{KeepTo, MailboxRef, RulesOutcome};
+use tp_contracts::sieve::{KeepTo, MailboxRef, ProcessCalendar, RulesOutcome};
 
 use crate::run::{Action, Outcome, VacationAction};
 
@@ -32,6 +32,8 @@ pub(crate) struct Merge<'a> {
     flags: Vec<String>,
     errors: Vec<String>,
     vacation: Option<VacationAction>,
+    /// `processcalendar` — первый из выполненных скриптов (скрипт организации раньше пользователя).
+    calendar: Option<ProcessCalendar>,
 }
 
 impl<'a> Merge<'a> {
@@ -46,6 +48,7 @@ impl<'a> Merge<'a> {
             flags: Vec::new(),
             errors: Vec::new(),
             vacation: None,
+            calendar: None,
         }
     }
 
@@ -102,6 +105,11 @@ impl<'a> Merge<'a> {
                         self.vacation = Some(v);
                     }
                 }
+                Action::ProcessCalendar(c) => {
+                    if self.calendar.is_none() {
+                        self.calendar = Some(c);
+                    }
+                }
             }
         }
         self.implicit &= outcome.implicit_keep;
@@ -137,7 +145,7 @@ impl<'a> Merge<'a> {
                 redirect: self.redirect,
                 discard,
                 vacation: None,
-                calendar: None,
+                calendar: self.calendar,
                 errors: self.errors,
             },
             self.vacation,

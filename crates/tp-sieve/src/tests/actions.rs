@@ -3,6 +3,7 @@
 
 use tp_contracts::meta::{Flag, Mailbox};
 use tp_contracts::sieve::{MailboxRef, RulesOutcome};
+use tp_contracts::trust::PeerKind;
 use tp_testkit::corpus::corpus_mail;
 
 use super::mailboxes;
@@ -21,6 +22,7 @@ fn outcome(script: &str, list: &[Mailbox], limits: &Limits) -> RulesOutcome {
         envelope_from: "alice@example.com",
         envelope_to: "bob@example.org",
         mailboxes: &paths,
+        peer: PeerKind::Own,
     };
     merge(run(&program, &ctx, limits), list)
 }

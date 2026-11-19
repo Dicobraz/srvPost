@@ -9,7 +9,7 @@ use tp_contracts::meta::{AccountScope, Flag};
 use tp_contracts::sieve::{
     DeliveryRules, MailboxRef, ReplyBody, RulesInput, RulesOutcome, SieveStore, Vacation,
 };
-use tp_contracts::trust::{PeerKind, TrustMatrix};
+use tp_contracts::trust::{InviteMode, PeerKind, TrustMatrix};
 use tp_contracts::{AccountId, TenantId};
 use tp_testkit::{ManualClock, MemSieve, MemVacationLog};
 
@@ -326,6 +326,7 @@ async fn cache_capacity() {
 }
 
 /// Ошибка выполнения и скрипт, не прошедший проверку, — implicit keep и запись без содержимого письма.
+/// Сбой скрипта организации — отказ (SIEVE-14): письмо не доставляется мимо скрипта.
 #[tokio::test]
 async fn script_errors() {
     let f = Fixture::with(SieveConfig {
@@ -345,7 +346,7 @@ async fn script_errors() {
     f.org("require [\"fileinto\"]; fileinto \"Архив\";").await;
     assert_eq!(f.folders().await, ["Архив", "INBOX"]);
 
-    // Сохранённый скрипт с ошибкой (хранилище текст не проверяет).
+    // Сохранённый пользовательский скрипт с ошибкой (хранилище текст не проверяет).
     f.user("unknown;").await;
     f.store
         .set_org_script(f.scope.tenant, None)
@@ -354,10 +355,63 @@ async fn script_errors() {
     let o = f.eval().await;
     assert_eq!(o.keep, RulesOutcome::implicit_keep().keep);
     assert!(o.errors[0].contains("неизвестная команда"), "{o:?}");
+}
+
+/// Сбой скрипта организации — итог «отказ» (SIEVE-14, решение 124 д): ни автоответ, ни скрипт пользователя,
+/// письмо не доставляется мимо скрипта; SMTP превращает отказ во временный (SMTP-50). Сбой пользователя —
+/// неявный `keep`, как раньше.
+#[tokio::test]
+async fn org_script_failure_is_refusal() {
+    let f = Fixture::with(SieveConfig {
+        max_redirects: 1,
+        ..SieveConfig::default()
+    });
+    f.user("require \"fileinto\"; fileinto \"Work\";").await;
+    f.store
+        .set_vacation(
+            f.scope,
+            Vacation {
+                enabled: true,
+                text_body: Some("нет на месте".into()),
+                ..Vacation::default()
+            },
+        )
+        .await
+        .expect("vacation");
+
+    // Сохранённый текст не проходит проверку — отказ.
     f.org("if {").await;
+    let d = f.rules.decide(&f.input).await.expect("rules");
+    assert!(
+        matches!(d, crate::Decision::Failed(ref e) if e.starts_with("скрипт организации: ")),
+        "{d:?}"
+    );
+    assert_eq!(
+        f.rules.evaluate(&f.input).await,
+        Err(tp_contracts::Error::UNAVAILABLE)
+    );
+
+    // Ошибка выполнения (превышение Limits) — тоже отказ.
+    f.org("redirect \"a@example.net\"; redirect \"b@example.net\";")
+        .await;
+    assert!(matches!(
+        f.rules.decide(&f.input).await.expect("rules"),
+        crate::Decision::Failed(_)
+    ));
+
+    // Исправный скрипт организации: скрипт пользователя и автоответ выполняются (отказа нет).
+    f.org("keep;").await;
     let o = f.eval().await;
-    assert_eq!(o.errors.len(), 2);
-    assert!(o.errors[0].starts_with("скрипт организации: "), "{o:?}");
+    assert_eq!(f.folders().await, ["INBOX", "Work"]);
+    assert!(o.vacation.is_some() && o.errors.is_empty());
+
+    // Превышение Limits в скрипте пользователя — неявный keep, не отказ.
+    f.org("keep;").await;
+    f.user("redirect \"a@example.net\"; redirect \"b@example.net\";")
+        .await;
+    let o = f.eval().await;
+    assert_eq!(o.keep, RulesOutcome::implicit_keep().keep);
+    assert!(o.errors[0].starts_with("скрипт пользователя: "), "{o:?}");
 }
 
 /// Защита `redirect` от петли: по числу `Received` и по метке узла.
@@ -398,6 +452,95 @@ async fn redirect_loop_protection() {
     assert!(o.discard && o.errors.is_empty());
 }
 
+/// `processcalendar` (RFC 9671, SIEVE-14): параметры — в итог правил, новое приглашение вносится только
+/// в пределах матрицы получателя — клетка `invite_new` типа отправителя — `Auto`; иначе итог действия —
+/// `no_action` с причиной «политика доверия» (в журнал). Implicit keep действие не отменяет.
+#[tokio::test]
+async fn processcalendar_within_matrix() {
+    let mut f = Fixture::new();
+    f.org("require [\"processcalendar\", \"vnd.thepost.peer\"];\n\
+            if peer \"partner\" { processcalendar :addresses [\"pm@partner.example\"] :calendarid \"work\"; }")
+        .await;
+    f.input.message = format!(
+        "{MAIL}\r\nContent-Type: text/calendar; method=REQUEST\r\n\r\nBEGIN:VCALENDAR\r\nEND:VCALENDAR"
+    )
+    .into_bytes()
+    .into();
+
+    // Партнёр при открытой клетке (Auto): итог — calendar с параметрами действия; implicit keep остаётся.
+    f.input.peer = PeerKind::Partner;
+    f.input.matrix.invite_new.partner = InviteMode::Auto;
+    let o = f.eval().await;
+    let cal = o.calendar.as_ref().expect("calendar");
+    assert_eq!(
+        (cal.addresses.as_slice(), cal.calendar_id.as_deref()),
+        (["pm@partner.example".to_owned()].as_slice(), Some("work"))
+    );
+    assert_eq!(o.keep, RulesOutcome::implicit_keep().keep);
+    assert!(o.errors.is_empty(), "{o:?}");
+
+    // Партнёр при клетке Button (умолчание): no_action — «политика доверия», без внесения.
+    f.input.matrix.invite_new.partner = InviteMode::Button;
+    let o = f.eval().await;
+    assert!(o.calendar.is_none());
+    assert!(
+        o.errors
+            .iter()
+            .any(|e| e.contains("no_action") && e.contains("политика доверия")),
+        "{o:?}"
+    );
+
+    // Внешнему автодобавление не открывается (потолок установки — кнопка): no_action.
+    f.input.peer = PeerKind::External;
+    let o = f.eval().await;
+    assert!(o.calendar.is_none(), "{o:?}");
+
+    // Скрипт пользователя тоже может вызвать processcalendar — не шире действующей матрицы.
+    f.store
+        .set_org_script(f.scope.tenant, None)
+        .await
+        .expect("org");
+    f.user("require \"processcalendar\"; processcalendar :updatesonly :deletecancelled;")
+        .await;
+    f.input.peer = PeerKind::Own;
+    let o = f.eval().await;
+    let cal = o.calendar.expect("своему — Auto по умолчанию");
+    assert!(cal.updates_only && cal.delete_cancelled && !cal.allow_public);
+
+    // Второй processcalendar в одном скрипте — ошибка выполнения (неявный keep у пользователя).
+    f.user("require \"processcalendar\"; processcalendar; processcalendar;")
+        .await;
+    let o = f.eval().await;
+    assert!(o.calendar.is_none());
+    assert_eq!(o.keep, RulesOutcome::implicit_keep().keep);
+    assert!(o.errors[0].contains("второй раз"), "{o:?}");
+}
+
+/// Тест `peer` (`vnd.thepost.peer`): тип абонента — из контекста ядра, заголовок `X-Peer` письма не влияет.
+#[tokio::test]
+async fn peer_test_ignores_headers() {
+    let mut f = Fixture::new();
+    f.input.message =
+        "X-Peer: external\r\nFrom: alice@example.com\r\nTo: Bob <bob@example.org>\r\n\
+                       Subject: Report\r\n\r\nx"
+            .as_bytes()
+            .to_vec()
+            .into();
+    f.org(
+        "require [\"vnd.thepost.peer\", \"fileinto\"];\n\
+            if peer \"partner\" { fileinto \"Work\"; }\n\
+            if peer \"external\" { fileinto \"Архив\"; }",
+    )
+    .await;
+    f.input.peer = PeerKind::Partner;
+    assert_eq!(f.folders().await, ["Work"]);
+    f.input.peer = PeerKind::External;
+    assert_eq!(f.folders().await, ["Архив"]);
+    // Заголовок X-Peer не меняет тип: partner при заголовке «external» остаётся partner.
+    f.input.peer = PeerKind::Partner;
+    assert_eq!(f.folders().await, ["Work"]);
+}
+
 /// Цели fuzz на примерах: скрипты и письма корпуса проходят проверки инвариантов.
 #[test]
 fn fuzz_examples() {
@@ -409,6 +552,8 @@ fn fuzz_examples() {
         "require [\"body\", \"vacation\"]; if body :contains \"fox\" { vacation \"x\"; discard; }",
         "redirect \"a@example.net\"; redirect \"b@example.net\"; redirect \"c@example.net\";",
         "if header :matches \"subject\" \"*a*a*a*a*b\" { stop; } keep; keep; keep;",
+        "require \"processcalendar\"; processcalendar :updatesonly :deletecancelled;",
+        "require [\"vnd.thepost.peer\", \"processcalendar\"]; if peer \"external\" { processcalendar; }",
         "\u{0}\u{1}require",
     ];
     for s in scripts {

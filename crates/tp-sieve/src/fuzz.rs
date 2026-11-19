@@ -4,6 +4,8 @@
 //! - [`parse`] — текст скрипта: разбор и проверка заканчиваются программой или ошибками с позициями.
 //! - [`run`] — скрипт и письмо (через байт NUL): выполнение укладывается в лимиты, итог согласован.
 
+use tp_contracts::trust::PeerKind;
+
 use crate::outcome::merge;
 use crate::{Context, EXTENSIONS, Limits, compile};
 
@@ -57,6 +59,7 @@ pub fn run(data: &[u8]) {
         envelope_from: "alice@example.com",
         envelope_to: "bob+lists@example.org",
         mailboxes: &mailboxes,
+        peer: PeerKind::External,
     };
     let o = crate::run(&program, &ctx, &LIMITS);
     assert!(
