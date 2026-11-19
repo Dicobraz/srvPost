@@ -60,12 +60,16 @@
           контейнера: адрес возьмётся из фактов — как в stand_generator, FIX-11).
       when: inventory_hostname in groups['smb']
 
+    # FIX-18: генератор — доверенный клиент стенда и для экрана соединений (screen.max_rate, 60/IP за окно):
+    # fill 25 соединений + swaks/imaptest/k6 с одного адреса превышают её — 421 × 267 на Д.7 (beta.3).
     - name: Apply common stand parameters, trusted generator and relay of outgoing mail to smtp-sink
       ansible.builtin.set_fact:
         thepost_config_extra: >-
           {{ stand_common
              | combine({'ratelimit': {'trusted': [stand_generator_address] + stand_trusted}}, recursive=true)
              | combine({'smtp': {'queue': {'relay': stand_generator_address ~ ':' ~ stand_sink_port | default(2525)}}},
+                       recursive=true)
+             | combine({'screen': {'exempt': [stand_generator_address ~ '/32'] + (stand_screen_exempt | default([]))}},
                        recursive=true)
              | combine(stand_config_extra | default({}), recursive=true, list_merge='replace') }}
       when: inventory_hostname in groups['smb']
