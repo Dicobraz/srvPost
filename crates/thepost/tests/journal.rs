@@ -21,6 +21,7 @@ use tp_contracts::meta::{AccountKind, AccountStore, AccountUpsert};
 use tp_contracts::role::CancellationToken;
 use tp_contracts::secrets::{SecretRef, SecretStore};
 use tp_contracts::transport::{AcceptedDomain, DomainKind, TransportStore};
+use tp_contracts::trust::{GroupPost, PerPeer, TrustLevel, TrustPolicy, TrustStore};
 use tp_contracts::{AccountId, TenantId};
 use tp_meta::{MetaConfig, PgMeta};
 use tp_testkit::{MemJournalRecords, MemSecretStore};
@@ -555,8 +556,23 @@ async fn enabled_section_journals_full_envelope() {
         node.account_id("dave@journal.test").await,
     );
     // Группа team@ (carol, dave) — получатель-адрес конверта; carol — скрытый получатель (Bcc):
-    // в заголовках письма — только alice.
+    // в заголовках письма — только alice. Внешним отправителям группа открыта политикой доверия
+    // организации (матрица по умолчанию закрывает клетку `group_post`, решение 124).
     node.group("team@journal.test", &[carol, dave]).await;
+    let open_external_posts = TrustPolicy {
+        group_post: PerPeer {
+            external: Some(GroupPost::Open),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    TrustStore::set_policy(
+        &node.meta,
+        TrustLevel::Org(TenantId::DEFAULT),
+        &open_external_posts,
+    )
+    .await
+    .expect("trust policy");
     node.journal_rule("r-0042").await;
 
     let message = "From: Bob <bob@sender.test>\nTo: alice@journal.test\n\
