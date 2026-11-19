@@ -22,7 +22,7 @@ const sender = (r: Schemas["JournalRecordView"]) => r.sender || "<> (уведо�
 
 /** Конверт записи: просмотр — отдельное обращение к журналу (фиксируется журналом аудита узла), рядом выгрузка `.eml`. */
 function Envelope({ id }: { id: string }) {
-  const { result, query } = useCustom<Entry>({ url: `${URL}/${id}`, method: "get" });
+  const { result } = useCustom<Entry>({ url: `${URL}/${id}`, method: "get" });
   // До ответа Refine отдаёт пустой объект — запись распознаётся по конверту.
   const e = result.data as Entry | undefined;
   const r = e?.record;
@@ -42,9 +42,7 @@ function Envelope({ id }: { id: string }) {
           )}
         </Descriptions.Item>
       </Descriptions>
-      <Button loading={query.isLoading} onClick={() => void download(`${URL}/${id}/export`, `${id}.eml`)}>
-        Выгрузить .eml
-      </Button>
+      <Button onClick={() => void download(`${URL}/${id}/export`, `${id}.eml`)}>Выгрузить .eml</Button>
     </Space>
   );
 }

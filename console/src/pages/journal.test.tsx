@@ -78,7 +78,7 @@ test("запись: конверт со скрытым получателем и
   expect(sent(calls, "GET", `${BASE}/journal/${ID1}`)).toHaveLength(1);
 
   // Панель конверта в jsdom скрыта от accessibility-дерева (нет transition-событий antd) — кнопка с hidden.
-  fireEvent.click(screen.getByRole("button", { name: "Выгрузить .eml", hidden: true }));
+  fireEvent.click(screen.getByRole("button", { name: /Выгрузить \.eml/, hidden: true }));
   const exported = await waitFor(() => sent(calls, "GET", `${BASE}/journal/${ID1}/export`));
   expect(exported).toHaveLength(1);
   expect(exported[0].auth).toBe("Bearer tps_test");
