@@ -12,10 +12,15 @@ const AUDIT = ["audit", "mailbox-audit"];
 
 /**
  * Роли допускают действие с разделом: аудитор — только чтение журналов аудита, оператор — чтение без журналов
- * аудита; изменять (политику аудита ящиков) — администратор организации.
+ * аудита; изменять (политику аудита ящиков) — администратор организации. Журнал переписки (SRS 4.9, 5.2) —
+ * только роли «аудитор журнала»: администраторам установки и организации узел ответит отказом; эта роль,
+ * наоборот, кроме журнала ничего не видит.
  */
 export function allowed(roles: Role[], resource: string | undefined, action: string) {
-  if (!resource || roles.includes("installation_admin") || roles.includes("organization_admin")) return true;
+  if (resource === "journal") return roles.includes("journal_auditor");
+  const admin = roles.includes("installation_admin") || roles.includes("organization_admin");
+  if (!resource || admin) return true;
+  if (roles.includes("journal_auditor")) return false;
   if (WRITE.includes(action)) return false;
   return AUDIT.includes(resource) ? roles.includes("auditor") : roles.includes("operator");
 }
