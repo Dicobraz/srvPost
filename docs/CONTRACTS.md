@@ -975,12 +975,16 @@ text_body, html_body, external_subject, external_text_body, external_html_body }
 каждом изменении скриптов и автоответа (JMAP `state`, версия для кэша программ). Изменяющие методы возвращают новое состояние.
 `VacationLog::seen(scope, sender, handle, period) -> bool` — атомарно «уже отвечали за период» или отметка (RFC 5230 `:days`).
 Точка правил доставки `DeliveryRules::evaluate(&RulesInput { scope, recipient (с подадресом), mail_from, message: Bytes, mailboxes,
-peer: PeerContext, matrix: TrustMatrix }) -> RulesOutcome { keep: Vec<KeepTo { mailbox: MailboxRef::{Inbox, Id, Name { name, create }},
+peer: PeerContext, matrix: TrustMatrix, risk: Verdict, thread_trusted: bool }) -> RulesOutcome { keep: Vec<KeepTo { mailbox: MailboxRef::{Inbox, Id, Name { name, create }},
 flags }>, redirect, discard, vacation: Option<AutoReply { to, from, subject, body: ReplyBody::{Text, Html, Mime}, in_reply_to,
-references }>, calendar: Option<ProcessCalendar>, errors }`; `peer` и `matrix` (CTR-93, решение 124; CTR-94, решение 125 а) вычисляет
+references }>, calendar: Option<ProcessCalendar>, signals: Vec<(SignalId, Option<u16>)>, errors }`; `peer` и `matrix` (CTR-93, решение 124; CTR-94, решение 125 а) вычисляет
 вызывающий (`tp-smtp`): тип абонента и признак «ответ на наше письмо» — от пути письма и записи об отправленном, заголовкам не
 доверяем; матрица ограничивает `processcalendar`, автоответ и `redirect` чужим (шире матрицы действия не выполняются; клетки
-`ReplyOnly` решает `TrustMatrix::effective` по признаку). `ProcessCalendar { allow_public, addresses, updates_only, calendar_id, delete_cancelled }` — действие
+`ReplyOnly` решает `TrustMatrix::effective` по признаку). `risk` — вердикт справочника аномалий до Sieve и `thread_trusted` —
+факт доверенной беседы (CTR-95, решение 126 д): скрипт администратора этапа before читает их через `environment
+"vnd.thepost.risk"`/`"vnd.thepost.thread"`, команда `signal "<id>" [:weight N]` расширения `vnd.thepost.risk` добавляет признак
+к баллу (вес неотрицательный, не выше предела конфигурации — скрипт только повышает риск) — итог в `signals` (до SMTP-52 —
+без срабатываний). `ProcessCalendar { allow_public, addresses, updates_only, calendar_id, delete_cancelled }` — действие
 `processcalendar` (RFC 9671 §3): вносит только новое приглашение типа абонента с `invite_new = auto` (расширить матрицу нельзя); до
 подключения хранилища политик — `TrustMatrix::default()`;
 порядок — скрипт организации, автоответ, активный скрипт; ошибка скрипта — implicit keep (`RulesOutcome::failed`) и `errors` для журнала;
@@ -1104,6 +1108,71 @@ SRS 4; CTR-93; решение 124 (исследование `docs/research/2026-
   (`trust_changed(level)`, системный) — после фиксации `set_policy` и `reset_policy`: узлы сбрасывают кэш действующей матрицы.
 - In-memory — `MemTrust` (`with_groups` — членство через `GroupStore`, `with_accepted` — принятые домены для проверки `partners`);
   набор `suite::trust(store, groups, tenant, foreign, account)`: уровни, потолки, группы, сброс, разделение организаций, `partner_of`.
+
+## Risk
+SRS 4.3, 4.9; CTR-95; решение 126 (исследование `docs/research/2026-11-14-anomaly-ti.md`). Код — `risk.rs`. Каталог
+признаков аномалий — типизированная политика по образцу Trust (решение 124), а не второй язык правил: признак —
+детектор на Rust с параметрами, вес, порог силы, собственное действие и режим «только отчёт»/«применять». Практика:
+символы с баллами и порогами — Rspamd, вендорские правила отдельно от локальных — Stalwart, подписанные карты — Rspamd.
+Отличия: детекторы — типизированный Rust-код, а не выражения или Lua; организация может только ужесточить; признак
+«только отчёт» — с журналом срабатываний.
+- Идентификаторы (serde transparent, `FromStr`): `SignalId` — признак, `[a-z0-9._-]` ≤ `MAX_ID_LEN` = 64 (`valid_id`),
+  префикс `tp.` — только признаки поставщика, `org.` — администратора (согласованность с `Origin` — `Signal::validate`);
+  `ListId` — список TI; `SourceId` — источник TI.
+- `Origin::{Vendor, Admin}`; `Detector` (serde `snake_case`, неизвестный вид — ошибка разбора с именем вида):
+  `thread_new_attachment_type`, `encrypted_archive`, `disk_image_or_shortcut`, `thread_new_link_domain`,
+  `reply_to_changed` (пять признаков беседы, память `ThreadFacts` CTR-94; `drops_reply()` — истинно у них, решение 126 г)
+  и `list_match { list: ListId, field: Field::{SenderIp, LinkDomain, LinkUrl, FromDomain, AttachmentSha256} }`.
+- `RiskAction::{None, Tag, Junk, Quarantine, Reject}` (`Ord` от мягкого к строгому), `Mode::{Report, Enforce}`
+  (`Report` — срабатывания в журнале, балл и действие не применяются). `Signal { id, detector, weight: u16 ≤
+  MAX_WEIGHT = 100, threshold: u8 (минимальная сила срабатывания 0–100), action, mode, origin, since (дата появления —
+  срок «только отчёт» `risk.report_only_days`, APP-78) }`, `validate()`. `Thresholds { tag, junk, quarantine, reject }` —
+  балл, с которого действует действие (`Default` — 1, 6, 10, 15; `action(score)`).
+- Уровни `RiskLevel::{Installation, Org(TenantId)}`; `RiskPolicy { overrides: BTreeMap<SignalId, SignalOverride
+  { weight, action, mode } — поверх признака поставщика (`tp.*`), поля `Option`; signals: Vec<Signal> — полные признаки
+  администратора (`org.*`) }`. `validate(base, level)`: у установки — любые значения (вес не выше `MAX_WEIGHT`), у
+  организации — только в сторону строгости: вес не ниже, действие не мягче, `Report` вместо `Enforce` — `Invalid` с
+  перечнем `PolicyViolation { signal, field, value, base }`; изменение признака, которого нет в пакете, — не ошибка
+  («осиротевшее»). `Catalog::effective(vendor, installation, org) -> EffectiveCatalog { signals: Vec<EffectiveSignal
+  { signal, base: Option<Signal>, source: Option<RiskLevel> }>, thresholds }` — по признаку значение и уровень-источник;
+  `Catalog::apply_update(old, &mut new_vendor) -> UpdateReport { added, removed, changed, orphaned_overrides }` —
+  обновление заменяет только признаки поставщика, изменения администратора сохраняются (модель Stalwart); новые для
+  каталога признаки — `Mode::Report` (в `new_vendor` на месте); удалённый с живым изменением — `orphaned_overrides`.
+- Вердикт: `Fired { signal, strength, source: HitSource::{Detector, Sieve} }` — срабатывание (сила ≥ `threshold`);
+  `Verdict::from_fired(catalog, fired) -> Verdict { score, hits: Vec<Hit { signal, strength, weight, source }>,
+  report_only, action, drops_reply }` — балл — сумма весов `Enforce`-признаков, действие — самое строгое из действия
+  по баллу и собственных действий признаков; `Report`-признак балл не меняет; `Verdict::combine(rspamd: RiskAction)` —
+  самое строгое с вердиктом Rspamd (действие Rspamd приводит вызывающий).
+- Пакет поставщика: `PackageManifest { format: PACKAGE_FORMAT = 1, version: u64 (только растёт), created, min_node:
+  Semver (MAJOR.MINOR.PATCH, в JSON — строка), key_id, signals, lists: Vec<ListFile { id, path, sha256, entries, kind:
+  ListKind::{Ip, Domain, Url, Sha256}, source: SourceId }>, samples: Vec<SampleFile { path, sha256, expect:
+  Vec<SignalId> }> }`, `validate()`; подпись — отдельные байты Ed25519 над каноническим JSON манифеста, проверку делает
+  узел (APP-78) ключом из `risk.trusted_keys` по `key_id` — контракт формат описывает. `PackageState::{Active, Previous,
+  Rejected { report }}`, `PackageEntry { version, state }`.
+- Источники TI (решение 126 е–к): `TiSource { id, tier: Tier::{Bundled, CustomerKey, Import}, kind: SourceKind::
+  {Http { url }, Taxii { api_root, collection }, File (каталог импорта `risk.import.dir`)}, format: FeedFormat::{Txt,
+  Csv { column }, Rpz, MispFeed, Stix21}, ttl, stale: StaleAction::{Reduce { percent }, Report} (по умолчанию
+  `Reduce { 50 }`, «отключить» нет), license: License { terms_url, attribution, commercial }, tenants: Tenants::{All,
+  Only(Vec<TenantId>)}, key: Option<SecretRef>, auth: HttpAuth::{None, Header { name }, Basic { user }, Bearer,
+  ClientCert} (секрет — из `key`; `X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch, Basic `taxii` у TAXII Kaspersky,
+  сертификат клиента у HTTPS-фидов Kaspersky), origin: TiOrigin::{Vendor, GosSopka, FinCert, Own} }`, `validate()`:
+  `Bundled` с хостом или именем из `FORBIDDEN_BUNDLED` (126 ж: OpenPhish Community, Google Safe Browsing, AlienVault
+  OTX, бесплатные Spamhaus ZEN/DBL/ZRD; 126 з: российские фиды — taxii.tip.kaspersky.com, bi.zone, f6.ru,
+  ptsecurity.com, rt-solar.ru; 126 и: rstcloud.net, api.rstcloud.net — до договора), с `commercial: false` или с
+  `origin` `GosSopka`/`FinCert` — `Invalid`; `Import` `GosSopka`/`FinCert` без `tenants: Only` — `Invalid`; снять
+  запрет — только решение владельца и изменение константы. `Tlp::{Clear, Green, Amber, AmberStrict, Red}` — маркировка
+  версии списка из источника (`Option`).
+- `RiskStore`: `effective(tenant)`, пакеты (`put_package` — номер больше любого хранимого, `activate` — строго больше
+  действующего, `rollback(version)` — на хранимую, `packages()` — активный и N прошлых `risk.package.keep`, по
+  убыванию), `policy(level)` / `set_policy` (проверяет `validate` по уровням ниже; пустая политика удаляет уровень) /
+  `reset_policy`, источники (`sources`, `put_source`, `delete_source`), версии списков (`put_list_version { list,
+  source, sha256, blob, entries, fetched_at, tlp }` — источник должен быть известен; `list_current`), учёт
+  (`record_usage(source, tenant, lookups, hits)` по суткам UTC, `usage(source, since) -> Vec<UsageEntry>` — MSSP по
+  каждой организации), срабатывания (`record_hits(tenant, message: BlobHash, &Verdict)` — `hits` с `Enforce`,
+  `report_only` с `Report`; `hits(tenant, HitsQuery { signal, message, since, until, limit })` — свежие первыми,
+  чужая организация не видит). Сигнал `RiskChanged` (`risk_changed()`, системный) — сброс кэша узла. Реализация —
+  `tp-meta` (META-87), Admin API — ADM-51, узел — APP-78, детекторы — SMTP-52, `vnd.thepost.risk` — SIEVE-15.
+  In-memory — `MemRisk` (`with_keep`, время из `Clock`); набор `suite::risk(store, keep)`.
 
 ## Extension points
 SRS 2.5, 1.3. Модуль — cargo feature + `modules.<имя>.enabled`. `Module { name(), schema() -> "mod_<имя>", migrations() -> &[Migration { version, name, sql }],
@@ -1520,3 +1589,20 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   `suite::hold_rules`. Несовместимо: `RulesInput::peer` (вызывающие — `tp-smtp`, `tp-sieve`, `tp-testkit` —
   переведены), `FinalDelete` (конструкторы — `tp-mailstore`, `tp-meta`, `tp-testkit`). PostgreSQL — META-86,
   метка/BATV/признак ответа — SMTP-51.
+- 2026-11-19 — CTR-95 (волна contracts-66, решение 126 «Справочник аномалий и threat intelligence»): модуль
+  `risk::{SignalId, ListId, SourceId, Origin, Detector, Field, RiskAction, Mode, Signal, SignalOverride, Thresholds,
+  RiskLevel, RiskPolicy, PolicyViolation, EffectiveSignal, EffectiveCatalog, UpdateReport, Catalog::{effective,
+  apply_update}, Fired, Hit, HitSource, Verdict::{from_fired, combine}, Semver, PackageManifest, ListFile, ListKind,
+  SampleFile, PackageState, PackageEntry, Tier, SourceKind, HttpAuth, FeedFormat, StaleAction, License, Tenants,
+  TiSource, FORBIDDEN_BUNDLED, Tlp, ListVersion, UsageEntry, HitsQuery, HitRecord, RiskStore, risk_changed}` —
+  каталог признаков аномалий (детекторы — типизированный Rust; балл — сумма весов, пороги 1/6/10/15 переводят в
+  действие, действует самое строгое с вердиктом Rspamd; уровни установка → организация, организация только ужесточает;
+  обновление пакета заменяет признаки поставщика, изменения администратора сохраняются — модель Stalwart, новые
+  признаки — «только отчёт», осиротевшие изменения не удаляются молча), подписанные пакеты поставщика (формат
+  манифеста; подпись Ed25519 проверяет узел), источники TI трёх уровней с запретом поставки `FORBIDDEN_BUNDLED`
+  (126 ж–и), учёт обращений по суткам и журнал срабатываний — раздел «Risk». `sieve`: `RulesInput::{risk, thread_trusted}`
+  (вердикт до Sieve и факт доверенной беседы — `environment "vnd.thepost.*"`, решение 126 д) и
+  `RulesOutcome::signals` (команда `signal` расширения `vnd.thepost.risk`); сигнал шины `RiskChanged`. Несовместимо:
+  `RulesInput` (вызывающие — `tp-smtp`, `tp-sieve`, `tp-testkit` — переведены в этом же PR). In-memory — `MemRisk`;
+  набор `suite::risk`. PostgreSQL — META-87, детекторы — SMTP-52, `vnd.thepost.risk` — SIEVE-15, узел пакетов — APP-78,
+  Admin API — ADM-51.

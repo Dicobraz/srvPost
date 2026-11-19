@@ -146,6 +146,9 @@ impl<'a> Merge<'a> {
                 discard,
                 vacation: None,
                 calendar: self.calendar,
+                // Признаки команды `signal` расширения `vnd.thepost.risk` (CTR-95) — скрипт
+                // администратора этапа before; движок добавит их в SIEVE-15, пока пусто.
+                signals: Vec::new(),
                 errors: self.errors,
             },
             self.vacation,
