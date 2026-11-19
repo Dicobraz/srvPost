@@ -5377,6 +5377,50 @@ mod tests {
         .expect_err("выше потолка");
         assert!(err.contains("422") && err.contains("потолка"), "{err}");
 
+        // Партнёры: список и замена; неканоническая запись — 422. Замена — до снижения потолка
+        // установки: она переотправляет сохранённую политику целиком, и клетка «авто» организации
+        // выше сниженного потолка дала бы законные 422.
+        let listed = org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::List,
+            },
+        )
+        .await
+        .expect("partners list");
+        assert!(listed.contains("partner.example"), "{listed}");
+        let err = org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::Set {
+                    domains: vec!["P.EXAMPLE".into()],
+                },
+            },
+        )
+        .await
+        .expect_err("неканонический");
+        assert!(err.contains("422"), "{err}");
+        org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::Set {
+                    domains: vec!["p.example".into()],
+                },
+            },
+        )
+        .await
+        .expect("partners set");
+        let listed = json(
+            org(
+                true,
+                TrustAction::Partners {
+                    action: PartnersAction::List,
+                },
+            )
+            .await,
+        );
+        assert_eq!(listed, json!(["p.example"]));
+
         // Снижение потолка установки: организация шире — «выше потолка» в show организации.
         let cap = dir.path().join("cap.json");
         std::fs::write(&cap, "{\"invite_new\": {\"partner\": \"button\"}}").expect("write");
@@ -5436,48 +5480,6 @@ mod tests {
             show["effective"]["matrix"]["invite_new"]["partner"], "button",
             "клетка организации обрезана потолком установки"
         );
-
-        // Партнёры: список и замена; неканоническая запись — 422.
-        let listed = org(
-            false,
-            TrustAction::Partners {
-                action: PartnersAction::List,
-            },
-        )
-        .await
-        .expect("partners list");
-        assert!(listed.contains("partner.example"), "{listed}");
-        let err = org(
-            false,
-            TrustAction::Partners {
-                action: PartnersAction::Set {
-                    domains: vec!["P.EXAMPLE".into()],
-                },
-            },
-        )
-        .await
-        .expect_err("неканонический");
-        assert!(err.contains("422"), "{err}");
-        org(
-            false,
-            TrustAction::Partners {
-                action: PartnersAction::Set {
-                    domains: vec!["p.example".into()],
-                },
-            },
-        )
-        .await
-        .expect("partners set");
-        let listed = json(
-            org(
-                true,
-                TrustAction::Partners {
-                    action: PartnersAction::List,
-                },
-            )
-            .await,
-        );
-        assert_eq!(listed, json!(["p.example"]));
 
         // Сброс организации — умолчания; повтор — не ошибка. Аудит: изменения с маршрутом доверия.
         for _ in 0..2 {

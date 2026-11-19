@@ -1261,9 +1261,9 @@ mod tests {
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
         assert_eq!(b["errors"][0]["ceiling"], json!({"invite": "button"}));
 
-        // Аудит: PUT организации, 422, 400, PUT установки, GET не пишется.
+        // Аудит: пишется каждый запрос — PUT организации (200, 422, 400), PUT установки, её 422; GET не пишется.
         let log = env.audit.records();
-        assert_eq!(log.len(), 4, "{log:?}");
+        assert_eq!(log.len(), 5, "{log:?}");
     }
 
     /// Приёмка ADM-49: права — администратор организации не меняет уровень установки и чужую организацию;
