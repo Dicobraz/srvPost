@@ -2533,7 +2533,12 @@ mod tests {
         let report = run_journal(&path, None).await;
         let backend = report.get("journal.backend").expect("journal.backend");
         assert_eq!(backend.status, Status::Skipped, "{report:?}");
-        assert!(backend.message.contains("SRS 4.9"), "{}", backend.message);
+        // Секции нет — она разбирается как выключенная: оба объяснения говорят о журналировании.
+        assert!(
+            backend.message.contains("журналирован"),
+            "{}",
+            backend.message
+        );
         assert!(
             report.get("database.connect").is_none(),
             "прицельный прогон не выполняет общие проверки: {report:?}"
