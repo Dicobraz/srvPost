@@ -286,6 +286,7 @@ impl Store {
                 mailbox: item.origin,
                 message,
                 received_at: item.received_at,
+                thread: None,
             };
             match self.d.hooks.before_final_delete(&op).await {
                 Ok(Decision::Deny(reason)) => {

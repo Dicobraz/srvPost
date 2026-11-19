@@ -7,6 +7,10 @@
 //!
 //! Подсекции `blob.local` и `blob.s3` — секции крейта `tp-blob` как есть (BLOB-11): приложение подставляет только каталог, бакет и префикс из `blob.url`.
 //!
+//! Секция `journal` (APP-83, SRS 4.9) — журналирование переписки: хранилище записей — отдельное от BLOB
+//! ящиков (`s3` бакет с Object Lock или `local` каталог профиля SMB), режим и срок блокировки, выгрузка во
+//! внешний архив; правила журналирования — данные организации (Admin API), не файл узла.
+//!
 //! Секции ролей (APP-04) — секции крейтов как есть: `smtp`, `sieve`, `imap`, `jmap`, `dav`, `search`, `mailstore`; `admin` — секция
 //! `tp-admin` без `listen` (адрес Admin API — один ключ `http.admin.listen`, APP-16); приложение добавляет `auth`
 //! (каталог, OIDC, пароли приложений, Kerberos) и `http` (слушатели jmap, dav и admin).
@@ -18,7 +22,7 @@ use std::time::Duration;
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer};
-use tp_blob::{GcConfig, LocalConfig, OrphanConfig, S3Config};
+use tp_blob::{GcConfig, JournalConfig, LocalConfig, LockMode, OrphanConfig, S3Config};
 use tp_cluster::{LocalBusConfig, RpcConfig};
 use tp_contracts::config::duration;
 use tp_contracts::role::{Role, RoleSet};
@@ -26,12 +30,14 @@ use tp_contracts::tls::{InternalChannel, Profile};
 use tp_contracts::{Error, Result};
 use tp_meta::MetaConfig;
 use tp_meta::pool::PoolConfig;
-use tp_platform::{SectionRegistry, ServiceHttpConfig};
+use tp_platform::{Config, SectionRegistry, ServiceHttpConfig};
 
 use crate::modules;
 
 /// Имя секции хранилища BLOB.
 pub const BLOB: &str = "blob";
+/// Имя секции журнала переписки.
+pub const JOURNAL: &str = "journal";
 /// Имя секции шины уведомлений.
 pub const BUS: &str = "bus";
 /// Имя секции кластера.
@@ -80,6 +86,7 @@ pub fn registry_of(builtin: &[modules::Builtin]) -> Result<SectionRegistry> {
     r.add_section::<PoolConfig>(PoolConfig::SECTION)?;
     r.add_section::<MetaConfig>(MetaConfig::SECTION)?;
     r.add_section::<BlobSection>(BLOB)?;
+    r.add_section::<JournalSection>(JOURNAL)?;
     r.add_section::<BusSection>(BUS)?;
     r.add_section::<ClusterSection>(CLUSTER)?;
     r.add_section::<DoctorSection>(DOCTOR)?;
@@ -102,6 +109,7 @@ pub fn registry_of(builtin: &[modules::Builtin]) -> Result<SectionRegistry> {
         pool_config(c, profile).check().map(drop)
     })?;
     r.add_check::<BlobSection>(BLOB, BlobSection::check)?;
+    r.add_check::<JournalSection>(JOURNAL, |c, profile| c.check(profile))?;
     r.add_check::<StartupSection>(STARTUP, |c, _| c.check())?;
     r.add_check::<MaintenanceSection>(MAINTENANCE, |c, _| c.check())?;
     r.add_check::<CliSection>(CLI, |c, _| c.oidc.check())?;
@@ -231,6 +239,389 @@ impl BlobSection {
             }
         }
     }
+}
+
+// ---------- journal ----------
+
+/// Подсказка для `journal.rules`: правила журналирования — данные организации (Admin API), не файл
+/// узла (SRS 4.9, APP-83): как `JournalRule` Exchange — командлетами, а не конфигом сервера.
+const JOURNAL_RULES_HINT: &str = "journal.rules не используется: правила журналирования — данные \
+     организации, задаются через Admin API; в config.yaml — только параметры узла (хранилище записей, \
+     режим и срок блокировки, выгрузка)";
+
+/// Срок блокировки записей журнала по умолчанию (SRS 4.9: 730 суток, как у tp-blob BLOB-18);
+/// для режима `compliance` срок задаётся явно.
+pub const JOURNAL_RETENTION_DEFAULT: Duration = Duration::from_secs(730 * 24 * 3600);
+
+/// Секция `journal`: журналирование переписки (SRS 4.9, 5.5; APP-83). Выключено по умолчанию —
+/// включается явно. Хранилище записей — отдельное от BLOB ящиков (SRS 4.9): `s3` — бакет с Object Lock
+/// или `local` — каталог на локальном диске (профиль SMB: блокировка только сервером, предупреждение
+/// `thepost doctor`). Правила журналирования — данные организации (Admin API), не здесь.
+///
+/// ```yaml
+/// journal:
+///   enabled: true
+///   s3:
+///     bucket: thepost-journal     # отдельный от бакета BLOB ящиков
+///     lock_mode: governance       # compliance — явно и только с явным сроком (риск 21)
+///     retention: 2555d            # срок блокировки при записи; не задан — 730d
+///     # …прочие параметры S3 — подсекция tp-blob (endpoint, credentials), как у blob.s3
+///   # local:                      # профиль SMB: локальный каталог
+///   #   dir: /var/lib/thepost/journal
+///   export:                       # выгрузка во внешний архив (.eml с конвертом)
+///     address: archive.example.ru:25
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct JournalSection(JournalFields);
+
+/// Поля секции (разбор и схема; `rules` — известный, но отвергаемый ключ, см. [`JOURNAL_RULES_HINT`]).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct JournalFields {
+    /// Журналирование включено; по умолчанию выключено — включается явно (SRS 4.9). Требует перезапуска.
+    pub enabled: bool,
+    /// Хранилище записей — S3: отдельный бакет с Object Lock (Enterprise); одновременно с `local` — ошибка.
+    pub s3: Option<JournalS3>,
+    /// Хранилище записей — локальный каталог (профиль SMB); одновременно с `s3` — ошибка.
+    pub local: Option<JournalLocal>,
+    /// Префикс объектов журнала внутри корня/бакета (`journal`); сегменты через `/`, без пустых.
+    pub prefix: String,
+    /// Минимальный размер части записи, байт: ближе точки сливаются (дедупликация, BLOB-18).
+    pub chunk_min_bytes: usize,
+    /// Средний размер части записи, байт: задаёт порог разреза.
+    pub chunk_avg_bytes: usize,
+    /// Максимальный размер части записи, байт: режется принудительно.
+    pub chunk_max_bytes: usize,
+    /// Выгрузка записей во внешний архив заказчика (.eml с конвертом; SRS 4.9).
+    pub export: JournalExport,
+}
+
+impl Default for JournalFields {
+    fn default() -> Self {
+        let records = JournalConfig::default();
+        Self {
+            enabled: false,
+            s3: None,
+            local: None,
+            prefix: records.prefix,
+            chunk_min_bytes: records.chunk_min_bytes,
+            chunk_avg_bytes: records.chunk_avg_bytes,
+            chunk_max_bytes: records.chunk_max_bytes,
+            export: JournalExport::default(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for JournalSection {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(d)?;
+        if value.is_null() {
+            return Ok(Self::default());
+        }
+        if value.get("rules").is_some() {
+            return Err(D::Error::custom(JOURNAL_RULES_HINT));
+        }
+        JournalFields::deserialize(value)
+            .map(Self)
+            .map_err(D::Error::custom)
+    }
+}
+
+impl JsonSchema for JournalSection {
+    fn schema_name() -> Cow<'static, str> {
+        "JournalSection".into()
+    }
+
+    /// Схема полей; `rules` — известный, но отвергаемый ключ с подсказкой (как `admin.listen`):
+    /// иначе мягкий режим отбросил бы его с предупреждением, не сказав, куда идти.
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let mut schema = JournalFields::json_schema(generator);
+        if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
+            props.insert(
+                "rules".to_owned(),
+                serde_json::json!({ "description": JOURNAL_RULES_HINT, "not": {} }),
+            );
+        }
+        schema
+    }
+}
+
+/// `journal.s3`: хранилище записей журнала — отдельный бакет S3 с Object Lock (SRS 4.9). Режим и срок
+/// блокировки tp-blob пишет в каждый объект при записи (`x-amz-meta-thepost-lock-*`, решение #113,
+/// BLOB-18); бакетный дефолт в срок не входит. Прочие параметры S3 — подсекция `tp-blob` как у
+/// `blob.s3` (endpoint, ключи, таймауты).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+pub struct JournalS3 {
+    /// Бакет записей журнала — отдельный от бакета BLOB ящиков (`blob.url`); проверяет
+    /// `thepost config check`.
+    pub bucket: String,
+    /// Режим блокировки объектов (S3 Object Lock): `governance` по умолчанию; `compliance` — явно и
+    /// только с явным сроком (риск 21: объект compliance не удаляет никто до конца срока).
+    #[serde(default)]
+    pub lock_mode: LockMode,
+    /// Срок блокировки при записи (`retention: 2555d`); не задан — [`JOURNAL_RETENTION_DEFAULT`].
+    /// Для `compliance` обязателен явно. Продлевается только.
+    #[serde(default, with = "duration::option")]
+    #[schemars(with = "Option<duration::HumanDuration>")]
+    pub retention: Option<Duration>,
+    /// Параметры S3 — подсекция `tp-blob` (`endpoint`, `credentials`, таймауты); бакет задаётся
+    /// полем `bucket` этой подсекции.
+    #[serde(flatten)]
+    pub params: S3Config,
+}
+
+/// `journal.local`: хранилище записей журнала на локальном диске (профиль SMB, SRS 4.9). Неизменяемость
+/// обеспечивает только сервер (записи лишь добавляются); от администратора ОС защиты нет — предупреждение
+/// `thepost doctor` (APP-82); для требований неизменяемости — S3 с Object Lock (`journal.s3`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+pub struct JournalLocal {
+    /// Каталог записей журнала (абсолютный путь), отдельный от каталога BLOB ящиков.
+    pub dir: PathBuf,
+    /// Параметры локального хранилища — подсекция `tp-blob` как у `blob.local` (`fsync`, `stale_tmp`);
+    /// каталог задаётся полем `dir` этой подсекции.
+    #[serde(flatten)]
+    pub params: LocalConfig,
+}
+
+/// Формат выгрузки записи во внешний архив (SRS 4.9): .eml с конвертом `X-ThePost-Journal-*`
+/// (модель journal report Exchange).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum JournalExportFormat {
+    /// Письмо целиком с добавленными заголовками конверта.
+    #[default]
+    Eml,
+}
+
+/// `journal.export`: выгрузка записей во внешний архив заказчика (SRS 4.9) — .eml с конвертом; при сбое
+/// приёмника запись ждёт и уходит повторами (пока не истёк `retry_for`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct JournalExport {
+    /// Приёмник архива (`host:port`, SMTP); не задан — выгрузка выключена.
+    pub address: Option<String>,
+    /// Формат выгрузки: `eml` — письмо с конвертом.
+    pub format: JournalExportFormat,
+    /// Пауза перед первым повтором выгрузки (`1m`); дальше удваивается до `retry_max`.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub retry_initial: Duration,
+    /// Наибольшая пауза между повторами (`30m`).
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub retry_max: Duration,
+    /// Срок повторов выгрузки от первой попытки (`72h`); после — запись остаётся в журнале,
+    /// ошибка в журнал узла.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub retry_for: Duration,
+}
+
+impl Default for JournalExport {
+    fn default() -> Self {
+        Self {
+            address: None,
+            format: JournalExportFormat::default(),
+            retry_initial: Duration::from_secs(60),
+            retry_max: Duration::from_secs(30 * 60),
+            retry_for: Duration::from_secs(72 * 3600),
+        }
+    }
+}
+
+/// Где лежат записи журнала: разобранные `journal.s3`/`journal.local` (одно из двух).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JournalLocation {
+    /// Локальный каталог (профиль SMB).
+    Local(PathBuf),
+    /// Бакет S3 (Enterprise, Object Lock).
+    S3 {
+        /// Бакет.
+        bucket: String,
+    },
+}
+
+impl JournalSection {
+    /// Журналирование включено.
+    pub fn enabled(&self) -> bool {
+        self.0.enabled
+    }
+
+    /// Хранилище записей — ровно одно: каталог (SMB) или бакет S3.
+    pub fn location(&self) -> Result<JournalLocation> {
+        match (&self.0.local, &self.0.s3) {
+            (Some(_), Some(_)) => Err(Error::invalid(
+                "хранилище записей: заданы и local, и s3 — одно (каталог SMB или бакет S3)",
+            )),
+            (None, None) => Err(Error::invalid(
+                "хранилище записей: не задано — journal.s3 (бакет) или journal.local (каталог)",
+            )),
+            (Some(local), None) => Ok(JournalLocation::Local(local.dir.clone())),
+            (None, Some(s3)) => Ok(JournalLocation::S3 {
+                bucket: s3.bucket.clone(),
+            }),
+        }
+    }
+
+    /// Конфигурация локального хранилища для каталога `dir` из `local.dir`.
+    pub fn local_config(&self, dir: PathBuf) -> LocalConfig {
+        LocalConfig {
+            root: dir,
+            ..self
+                .0
+                .local
+                .as_ref()
+                .map(|l| l.params.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    /// Конфигурация S3 для бакета из `s3.bucket`.
+    pub fn s3_config(&self, bucket: String) -> S3Config {
+        S3Config {
+            bucket,
+            prefix: String::new(),
+            ..self
+                .0
+                .s3
+                .as_ref()
+                .map(|s| s.params.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    /// Конфигурация записей `tp-blob` (BLOB-18): префикс и размеры частей секции, режим и срок
+    /// блокировки — из `s3` (срок по умолчанию [`JOURNAL_RETENTION_DEFAULT`]; локальное хранилище —
+    /// умолчания: блокирует только сервер). Проверяется `JournalConfig::validate`.
+    pub fn records_config(&self) -> Result<JournalConfig> {
+        let (lock_mode, retention) = match &self.0.s3 {
+            Some(s3) => (
+                s3.lock_mode,
+                s3.retention.unwrap_or(JOURNAL_RETENTION_DEFAULT),
+            ),
+            None => (LockMode::default(), JOURNAL_RETENTION_DEFAULT),
+        };
+        let cfg = JournalConfig {
+            prefix: self.0.prefix.clone(),
+            lock_mode,
+            retention,
+            chunk_min_bytes: self.0.chunk_min_bytes,
+            chunk_avg_bytes: self.0.chunk_avg_bytes,
+            chunk_max_bytes: self.0.chunk_max_bytes,
+        };
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    /// Режим и срок блокировки для сообщений doctor (APP-82).
+    pub fn lock(&self) -> (LockMode, Duration) {
+        match &self.0.s3 {
+            Some(s3) => (
+                s3.lock_mode,
+                s3.retention.unwrap_or(JOURNAL_RETENTION_DEFAULT),
+            ),
+            None => (LockMode::default(), JOURNAL_RETENTION_DEFAULT),
+        }
+    }
+
+    /// Проверка секции (запуск и `thepost config check`): одно хранилище записей (при включённом
+    /// журналировании — обязательно), бакет непустой, `compliance` — только с явным сроком, префикс и
+    /// размеры частей (`records_config`), подсекции `tp-blob` без полей места (каталог и префикс —
+    /// `dir`/`bucket` этой секции), TLS и параметры S3, адрес и паузы выгрузки. Бакет отдельен от
+    /// BLOB ящиков — [`journal_bucket_separate`] (видно только по всей конфигурации).
+    pub fn check(&self, profile: Profile) -> Result<()> {
+        if self.0.local.is_some() && self.0.s3.is_some() {
+            return self.location().map(drop);
+        }
+        if let Some(s3) = &self.0.s3 {
+            if s3.bucket.trim().is_empty() {
+                return Err(Error::invalid("s3.bucket: пуст"));
+            }
+            if s3.lock_mode == LockMode::Compliance && s3.retention.is_none() {
+                return Err(Error::invalid(
+                    "s3.lock_mode: compliance — только с явным сроком (s3.retention): объект не \
+                     удаляет никто до конца срока, ошибка в сроке не освобождает бакет (риск 21)",
+                ));
+            }
+            if !s3.params.prefix.is_empty() {
+                return Err(Error::invalid(
+                    "s3.prefix: не используется — объекты журнала лежат префиксом journal.prefix \
+                     внутри бакета s3.bucket",
+                ));
+            }
+            s3.params.tls.validate(InternalChannel::S3, profile)?;
+            self.s3_config(s3.bucket.clone()).check(profile)?;
+        }
+        if let Some(local) = &self.0.local {
+            if local.dir.as_os_str().is_empty() {
+                return Err(Error::invalid("local.dir: пуст"));
+            }
+            if !local.dir.is_absolute() {
+                return Err(Error::invalid(
+                    "local.dir: путь абсолютный (/var/lib/thepost/journal)",
+                ));
+            }
+            if local.params.root != LocalConfig::default().root {
+                return Err(Error::invalid(
+                    "local.root: не используется — каталог задаётся в journal.local.dir",
+                ));
+            }
+        }
+        if self.0.enabled {
+            self.location()?;
+        }
+        if let Some(address) = &self.0.export.address
+            && host_port(address).is_none()
+        {
+            return Err(Error::invalid(format!(
+                "export.address: ожидается host:port (приёмник SMTP), получено {address:?}"
+            )));
+        }
+        let export = &self.0.export;
+        if export.retry_initial.is_zero()
+            || export.retry_max < export.retry_initial
+            || export.retry_for < export.retry_initial
+        {
+            return Err(Error::invalid(
+                "export: retry_initial положительна и не больше retry_max и retry_for",
+            ));
+        }
+        // Префикс и части записей — JournalConfig tp-blob (сообщения без префикса секции журнала).
+        self.records_config().map_err(|e| match e {
+            Error::Invalid(m) => Error::Invalid(m.trim_start_matches("journal: ").to_owned()),
+            other => other,
+        })?;
+        Ok(())
+    }
+}
+
+/// Бакет журнала отдельен от бакета BLOB ящиков (SRS 4.9): блокировка общих объектов сделала бы
+/// неудаляемыми письма ящиков и связала бы уборщик мусора со сроками журнала. Проверка всей
+/// конфигурации (`thepost config check`, APP-83): проверки секций по отдельности этого не видят.
+pub fn journal_bucket_separate(cfg: &Config) -> Result<()> {
+    let Some(journal) = cfg
+        .section::<JournalSection>(JOURNAL)
+        .ok()
+        .and_then(|j| j.0.s3.clone())
+    else {
+        return Ok(());
+    };
+    let blob_bucket = cfg
+        .section::<BlobSection>(BLOB)
+        .ok()
+        .and_then(|b| match b.location() {
+            Ok(BlobLocation::S3 { bucket, .. }) => Some(bucket),
+            _ => None,
+        });
+    if blob_bucket.as_deref() == Some(journal.bucket.as_str()) {
+        return Err(Error::invalid(format!(
+            "journal: s3.bucket {:?} совпадает с бакетом BLOB ящиков (blob.url): записи журнала — \
+             отдельный бакет с собственной блокировкой (SRS 4.9)",
+            journal.bucket
+        )));
+    }
+    Ok(())
 }
 
 // ---------- bus ----------
@@ -1531,6 +1922,7 @@ blob:
         let schema = registry().expect("registry").schema_json();
         for key in [
             "\"blob\"",
+            "\"journal\"",
             "\"bus\"",
             "\"cluster\"",
             "\"database\"",
@@ -1597,5 +1989,221 @@ blob:
         }
         let schema = registry().expect("registry").schema_json();
         assert!(schema.contains("admin.allow_external не используется"));
+    }
+
+    /// Пресеты секции `journal` (APP-83): Enterprise — S3 с Object Lock (governance по умолчанию,
+    /// compliance — явно), SMB — локальный каталог.
+    const JOURNAL_S3: &str = "journal:\n  enabled: true\n  s3:\n    bucket: thepost-journal\n    \
+                              lock_mode: governance\n    retention: 2555d\n    endpoint: https://seaweedfs:8333\n";
+    const JOURNAL_LOCAL: &str =
+        "journal:\n  enabled: true\n  local:\n    dir: /var/lib/thepost/journal\n";
+
+    fn journal(yaml: &str) -> JournalSection {
+        let cfg = parse(&format!("{MINIMAL_DEV}{yaml}")).expect("config");
+        (*cfg.section::<JournalSection>(JOURNAL).expect("journal")).clone()
+    }
+
+    /// APP-83: секция по умолчанию выключена (журналирование включается явно), пустая секция
+    /// проходит проверку; пресеты разбираются с параметрами бакета и каталога.
+    #[test]
+    fn journal_section_defaults_and_presets() {
+        let d = journal("");
+        assert!(!d.enabled());
+        assert_eq!(d, JournalSection::default());
+        assert!(
+            d.check(Profile::Dev).is_ok(),
+            "выключено — хранилище не обязательно"
+        );
+
+        let s3 = journal(JOURNAL_S3);
+        assert!(s3.enabled());
+        assert_eq!(
+            s3.location().expect("location"),
+            JournalLocation::S3 {
+                bucket: "thepost-journal".into()
+            }
+        );
+        let records = s3.records_config().expect("records");
+        assert_eq!(
+            (
+                records.lock_mode,
+                records.retention,
+                records.prefix.as_str()
+            ),
+            (
+                tp_blob::LockMode::Governance,
+                Duration::from_secs(2555 * 24 * 3600),
+                "journal"
+            )
+        );
+        let s3cfg = s3.s3_config("thepost-journal".into());
+        assert_eq!(
+            (s3cfg.bucket.as_str(), s3cfg.prefix.as_str()),
+            ("thepost-journal", "")
+        );
+        assert_eq!(s3cfg.endpoint.as_deref(), Some("https://seaweedfs:8333"));
+        assert!(s3.check(Profile::Dev).is_ok());
+
+        let local = journal(JOURNAL_LOCAL);
+        assert_eq!(
+            local.location().expect("location"),
+            JournalLocation::Local(PathBuf::from("/var/lib/thepost/journal"))
+        );
+        let local_cfg = local.local_config(PathBuf::from("/var/lib/thepost/journal"));
+        assert_eq!(local_cfg.root, PathBuf::from("/var/lib/thepost/journal"));
+        assert_eq!(local_cfg.fsync, LocalConfig::default().fsync);
+        // Локальное хранилище: режим и срок — умолчания (блокирует только сервер, APP-82 предупреждает).
+        assert_eq!(
+            local.records_config().expect("records").retention,
+            JOURNAL_RETENTION_DEFAULT
+        );
+        assert!(local.check(Profile::Dev).is_ok());
+    }
+
+    /// APP-83: выгрузка во внешний архив — адрес приёмника, формат .eml, повтор при сбое.
+    #[test]
+    fn journal_export_section() {
+        let e = journal("").0.export;
+        assert_eq!((e.address, e.format), (None, JournalExportFormat::Eml));
+        assert_eq!(
+            (e.retry_initial, e.retry_max, e.retry_for),
+            (
+                Duration::from_secs(60),
+                Duration::from_secs(30 * 60),
+                Duration::from_secs(72 * 3600)
+            )
+        );
+        let j = journal(
+            "journal:\n  enabled: true\n  local:\n    dir: /var/lib/thepost/journal\n  export:\n    \
+             address: archive.example.ru:25\n    format: eml\n    retry_initial: 30s\n    retry_max: 10m\n    retry_for: 24h\n",
+        );
+        assert_eq!(j.0.export.address.as_deref(), Some("archive.example.ru:25"));
+        assert_eq!(j.0.export.retry_initial, Duration::from_secs(30));
+        // Неизвестный формат и плохой адрес — ошибки разбора и проверки.
+        for (bad, what) in [
+            ("journal:\n  export:\n    format: mbox\n", "eml"),
+            (
+                "journal:\n  export:\n    address: archive.example.ru\n",
+                "export.address",
+            ),
+            (
+                "journal:\n  export:\n    address: archive.example.ru:0\n",
+                "export.address",
+            ),
+            ("journal:\n  export:\n    retry_initial: 0s\n", "export"),
+        ] {
+            let e = err(parse(&format!("{MINIMAL_DEV}{bad}")));
+            assert!(e.contains(what), "{bad}: {e}");
+        }
+    }
+
+    /// APP-83: проверка секции (разбор и `thepost config check`) отвергает: compliance без срока,
+    /// неизвестный режим, оба хранилища, включённое журналирование без хранилища, пустой бакет,
+    /// относительный каталог, поля места в подсекциях tp-blob.
+    #[test]
+    fn journal_section_check_rejects() {
+        let reject = |yaml: &str, what: &str| {
+            let e = err(parse(&format!("{MINIMAL_DEV}journal:\n{yaml}")));
+            assert!(e.contains(what), "{yaml}: {e}");
+        };
+        // compliance — только с явным сроком (риск 21); с явным сроком — проходит.
+        reject(
+            "  enabled: true\n  s3:\n    bucket: j\n    lock_mode: compliance\n",
+            "compliance",
+        );
+        parse(&format!(
+            "{MINIMAL_DEV}journal:\n  enabled: true\n  s3:\n    bucket: j\n    lock_mode: compliance\n    retention: 3650d\n"
+        ))
+        .expect("compliance со сроком");
+        // Неизвестный режим — ошибка разбора (перечисление governance/compliance).
+        reject(
+            "  s3:\n    bucket: j\n    lock_mode: hardened\n",
+            "governance",
+        );
+        // Оба хранилища и ни одного (при включённом журналировании).
+        reject(
+            "  enabled: true\n  s3:\n    bucket: j\n  local:\n    dir: /var/lib/thepost/journal\n",
+            "хранилище записей",
+        );
+        reject("  enabled: true\n", "хранилище записей");
+        // Пустой бакет, не-абсолютный каталог.
+        reject("  enabled: true\n  s3:\n    bucket: \"  \"\n", "s3.bucket");
+        reject(
+            "  enabled: true\n  local:\n    dir: relative/journal\n",
+            "local.dir",
+        );
+        // Поля места в подсекциях tp-blob — каталог и префикс задаёт секция журнала.
+        reject(
+            "  enabled: true\n  local:\n    dir: /var/lib/thepost/journal\n    root: /other\n",
+            "local.root",
+        );
+        reject(
+            "  enabled: true\n  s3:\n    bucket: j\n    prefix: mail\n",
+            "s3.prefix",
+        );
+        // Префикс и части записей — JournalConfig tp-blob.
+        reject(
+            "  enabled: true\n  local:\n    dir: /var/lib/thepost/journal\n  prefix: \"\"\n",
+            "prefix",
+        );
+        reject(
+            "  enabled: true\n  local:\n    dir: /var/lib/thepost/journal\n  chunk_min_bytes: 0\n",
+            "chunk",
+        );
+        // Выключенное журналирование без хранилища — не ошибка (включается явно).
+        parse(&format!("{MINIMAL_DEV}journal:\n  enabled: false\n")).expect("выключено");
+    }
+
+    /// APP-83: правила журналирования — данные организации (Admin API): ключ `journal.rules` — ошибка
+    /// с подсказкой в обоих режимах, схема помечает ключ.
+    #[test]
+    fn journal_rules_rejected_with_hint() {
+        let yaml = format!(
+            "{MINIMAL_DEV}journal:\n  rules:\n    - id: r-1\n      scope: org\n      direction: both\n"
+        );
+        for r in [parse(&yaml), strict(&yaml)] {
+            let m = err(r);
+            assert!(m.contains("journal.rules"), "{m}");
+            assert!(m.contains("Admin API"), "{m}");
+        }
+        let schema = registry().expect("registry").schema_json();
+        assert!(schema.contains("journal.rules не используется"), "{schema}");
+    }
+
+    /// APP-83: бакет журнала — отдельный от бакета BLOB ящиков (`thepost config check` по всей
+    /// конфигурации; проверки секций по отдельности этого не видят).
+    #[test]
+    fn journal_bucket_must_differ_from_blob() {
+        let cfg = |blob_url: &str, journal_yaml: &str| {
+            parse(&format!(
+                "domain: example.org\nprofile: dev\ndatabase:\n  url: postgres://thepost@localhost/thepost?sslmode=disable\n  tls: {{ allow_plaintext: true }}\nblob:\n  url: {blob_url}\n{journal_yaml}"
+            ))
+            .expect("config")
+        };
+        let journal_s3 =
+            |bucket: &str| format!("journal:\n  enabled: true\n  s3:\n    bucket: {bucket}\n");
+        // Тот же бакет — ошибка; другой бакет и локальный BLOB — проходят.
+        assert!(
+            journal_bucket_separate(&cfg("s3://thepost-blob", &journal_s3("thepost-journal")))
+                .is_ok()
+        );
+        let e =
+            match journal_bucket_separate(&cfg("s3://thepost-blob", &journal_s3("thepost-blob"))) {
+                Err(Error::Invalid(m)) => m,
+                other => panic!("ожидалась ошибка: {other:?}"),
+            };
+        assert!(
+            e.contains("journal") && e.contains("blob.url") && e.contains("отдельный бакет"),
+            "{e}"
+        );
+        assert!(
+            journal_bucket_separate(&cfg(
+                "file:///var/lib/thepost/blob",
+                &journal_s3("thepost-blob")
+            ))
+            .is_ok()
+        );
+        assert!(journal_bucket_separate(&cfg("s3://thepost-blob", JOURNAL_LOCAL)).is_ok());
+        assert!(journal_bucket_separate(&cfg("s3://thepost-blob", "")).is_ok());
     }
 }

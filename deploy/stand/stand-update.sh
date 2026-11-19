@@ -33,6 +33,9 @@ INBOX=${INBOX:-$DIR/inbox}
 REL=${REL:-$DIR/rel}
 INVENTORY=${INVENTORY:-$DIR/inventory.yml}
 NODE=${NODE:-thepost-stand-smb}
+# Генератор стенда (если есть): его /var/lib/thepost-stand — внутренний слой контейнера,
+# счётчики наполнения в нём переживают пересоздание узла (см. RESET_STAND_STATE ниже).
+GEN=${GEN:-}
 NODE_IMAGE=${NODE_IMAGE:-thepost-beta-020-smb:13}
 # Аргументы запуска узла (сеть, --ip, hostname, privileged) — обязательны: без них
 # пересозданный узел уплывёт по IP/сети (ловушка FIX-11: адрес узла в /etc/hosts
@@ -127,6 +130,13 @@ if [ -n "$PRE_INSTALL_CMD" ]; then
   docker exec -u 0 "$NODE" sh -c "$PRE_INSTALL_CMD" || { say "ОШИБКА: гидратация не прошла"; exit 1; }
 fi
 rm -f "$FILL_STATE"
+# Состояние наполнения генератора переживает пересоздание узла: fill-state.json (ящик → писем)
+# и fill-dav-state.json живут во внутреннем слое контейнера генератора — без сброса fill считает
+# «accepted total=15000» на пустом узле (planned=0, visible=0) и падает. Генератор не
+# пересоздаётся — сбрасываем его стенд-состояние изнутри.
+if [ -n "$GEN" ]; then
+  docker exec "$GEN" sh -c 'rm -f /var/lib/thepost-stand/fill-state.json /var/lib/thepost-stand/fill-dav-state.json' || true
+fi
 
 say "установка: ansible --tags $INSTALL_TAGS"
 docker run --rm -v "$DIR":/work -v /var/run/docker.sock:/var/run/docker.sock \

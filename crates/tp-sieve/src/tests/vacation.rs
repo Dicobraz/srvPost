@@ -7,7 +7,7 @@ use tp_contracts::AccountId;
 use tp_contracts::TenantId;
 use tp_contracts::meta::AccountScope;
 use tp_contracts::sieve::{AutoReply, ReplyBody, RulesInput, Vacation};
-use tp_contracts::trust::{PeerKind, Toggle, TrustMatrix};
+use tp_contracts::trust::{PeerContext, PeerKind, Toggle, TrustMatrix};
 use tp_testkit::{ManualClock, MemVacationLog};
 
 use crate::run::parse_headers;
@@ -29,7 +29,7 @@ fn input(mail: &str, mail_from: &str, recipient: &str) -> RulesInput {
         mail_from: mail_from.to_owned(),
         message: mail.as_bytes().to_vec().into(),
         mailboxes: Vec::new(),
-        peer: PeerKind::Own,
+        peer: PeerContext::new(PeerKind::Own),
         matrix: TrustMatrix::default(),
     }
 }
@@ -404,7 +404,7 @@ async fn external_peer_reply() {
     // Каждому отправителю — свой период журнала: успешные ответы чередуем разными адресами.
     let input_at = |peer: PeerKind, from: &str| {
         let mut i = input(MAIL, from, "bob@example.org");
-        i.peer = peer;
+        i.peer = PeerContext::new(peer);
         i
     };
     let v = Vacation {

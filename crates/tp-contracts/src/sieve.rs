@@ -22,7 +22,7 @@ use crate::bus::{Event, EventKind};
 use crate::error::{Error, Result};
 use crate::ids::{MailboxId, TenantId};
 use crate::meta::{AccountScope, Flags, Mailbox};
-use crate::trust::{PeerKind, TrustMatrix};
+use crate::trust::{PeerContext, TrustMatrix};
 
 /// Наибольшая длина имени скрипта, символов.
 pub const MAX_SCRIPT_NAME_LEN: usize = 128;
@@ -249,10 +249,12 @@ pub struct RulesInput {
     pub message: Bytes,
     /// Папки учётной записи (`fileinto`, `mailboxexists`); путь — имена от корня через `/`.
     pub mailboxes: Vec<Mailbox>,
-    /// Тип абонента — отправителя относительно организации получателя (решение 124): тест `peer` расширения
-    /// `vnd.thepost.peer` и проверки матрицы доверия. Вычисляет вызывающий (`tp-smtp`); заголовкам письма не
-    /// доверяем (RFC 5183, RFC 8601 §5).
-    pub peer: PeerKind,
+    /// Контекст абонента — отправителя относительно организации получателя (решения 124 и 125 а): тип абонента
+    /// ([`PeerContext::kind`], тест `peer` расширения `vnd.thepost.peer`) и признак «ответ на наше письмо»
+    /// ([`PeerContext::reply`] — клетки [`crate::trust::Toggle::ReplyOnly`] матрицы). Вычисляет вызывающий
+    /// (`tp-smtp`); заголовкам письма не доверяем (RFC 5183, RFC 8601 §5), признак — по записи об отправленном
+    /// (`crate::reply::SentLog`).
+    pub peer: PeerContext,
     /// Действующая матрица доверия получателя ([`crate::trust::TrustStore::effective_for`]; до подключения
     /// хранилища — [`TrustMatrix::default`]). Ограничивает `processcalendar`, автоответ и `redirect` чужим
     /// (шире матрицы действия не выполняются).

@@ -1155,6 +1155,7 @@ async fn submission_copy_to_local_address() {
 mod addressbook;
 mod imip;
 mod invite;
+mod journal;
 mod moderation;
 mod outbound_milter;
 
@@ -1551,6 +1552,7 @@ async fn outbound_suite() {
 
 mod local_domains;
 mod org_policy;
+mod pipeline;
 mod rcpt_rate;
 mod rules;
 mod scheduled;

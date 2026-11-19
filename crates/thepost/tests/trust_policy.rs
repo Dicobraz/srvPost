@@ -303,13 +303,30 @@ async fn rcpt_reply(addr: std::net::SocketAddr, from: &str, to: &str) -> String 
     reply
 }
 
-/// Ответ `EHLO` новой сессии (объявления слушателя: `XCLIENT` у шлюза и др.).
+/// Ответ `EHLO` новой сессии целиком, все строки ответа (объявления слушателя: `XCLIENT` у шлюза и др.).
 async fn smtp_ehlo(addr: std::net::SocketAddr) -> String {
     let mut s = TcpStream::connect(addr).await.expect("smtp connect");
     assert!(smtp_greeting(&mut s).await.starts_with("220"));
-    let ehlo = smtp_cmd(&mut s, "EHLO client.test").await;
+    s.write_all(b"EHLO client.test\r\n")
+        .await
+        .expect("smtp write");
+    let mut text = String::new();
+    let mut buf = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        s.read_exact(&mut byte).await.expect("smtp read");
+        buf.push(byte[0]);
+        if buf.ends_with(b"\r\n") {
+            let line = String::from_utf8_lossy(&buf).into_owned();
+            buf.clear();
+            text.push_str(&line);
+            if line.len() >= 4 && line.as_bytes()[3] == b' ' {
+                break;
+            }
+        }
+    }
     assert!(smtp_cmd(&mut s, "QUIT").await.starts_with("221"));
-    ehlo
+    text
 }
 
 /// Письмо `message` от `from` к `to` (переводит `\n` в `\r\n`).
@@ -1072,14 +1089,19 @@ async fn trust_policy_in_node() {
     };
     assert!(!answered.contains("Подмена"), "{answered}");
 
-    // 5. Внешнее письмо в закрытую группу — `550 5.7.1` на RCPT (умолчание чужим закрыто); своим — открыто.
+    // 5. Внешнее письмо в закрытую группу — `550 5.7.1` на RCPT (умолчание чужим закрыто). Письмо своего домена
+    // через smtp-in без входа — тоже чужое (решение 124а: домен в `From` своим не делает; «своим — открыто» —
+    // внутренний путь, submission со входом — `deliver::tests::trust::group_post_closed_moderated_open`).
     let reply = rcpt_reply(smtp, "bob@external.test", "all@example.ru").await;
     assert!(
         reply.starts_with("550 5.7.1"),
         "группа открыта чужому: {reply}"
     );
     let reply = rcpt_reply(smtp, "alice@example.ru", "all@example.ru").await;
-    assert!(reply.starts_with("250"), "своему закрыто: {reply}");
+    assert!(
+        reply.starts_with("550 5.7.1"),
+        "свой домен без входа пропущен в группу: {reply}"
+    );
 
     // 6. `redirect` наружу при закрытой автопересылке — не уходит, письмо остаётся в ящике.
     SieveStore::put(

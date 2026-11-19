@@ -75,6 +75,9 @@ insta = { version = "1.49.0", features = ["json"] }
 # `time` — подсказка окна продления от сервера (ARI, RFC 9773; PLT-39): `Account::renewal_info`,
 # `RenewalInfo`, `SuggestedWindow`.
 instant-acme = { version = "0.8.5", features = ["time"] }
+# U-label IDN — в A-label адресатов записи об отправленном (CTR-94, tp-contracts); та же версия, что уже
+# в дереве через url.
+idna = "1.1.0"
 # Префиксы IP списков TI (решение 126, tp-smtp); та же версия, что уже в дереве через hickory и hyper-util.
 ipnet = "2.12.2"
 jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }

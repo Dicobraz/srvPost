@@ -703,7 +703,7 @@
 |---|---|---|---|---|---|---|
 | [PLT-37](PLT-37.md) | ACME — окно продления по доле срока сертификата | platform | A | platform-26 | done | — |
 | [PLT-39](PLT-39.md) | ACME — окно продления от сервера (ARI, RFC 9773) | platform | A | platform-26 | done | PLT-37 |
-| [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | ready | PLT-37 |
+| [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | done | PLT-37 |
 | [DOC-15](DOC-15.md) | INSTALL — выпуск сертификата виден со всех точек наблюдения | docs | A | docs-15 | done | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
@@ -914,10 +914,11 @@
 | [CTR-93](CTR-93.md) | контракт политики доверия — типы абонентов, функции, уровни, потолок, безопасные умолчания | contracts | B | contracts-64 | done | CTR-92 |
 | [META-85](META-85.md) | политика доверия в PostgreSQL — `TrustStore` в `PgMeta`, внешний текст автоответа | meta | A | meta-58 | done | CTR-93 |
 | [ADM-49](ADM-49.md) | политика доверия в Admin API — маршруты уровней, проверка потолка, партнёры, CLI | admin | B | admin-35 | done | CTR-93,ADM-44 |
-| [UI-23](UI-23.md) | консоль — экран «Доверие»: матрица типов абонентов и функций, уровни, партнёры | console | A | console-14 | ready | ADM-49 |
+| [UI-23](UI-23.md) | консоль — экран «Доверие»: матрица типов абонентов и функций, уровни, партнёры | console | A | console-14 | done | ADM-49 |
 | [TUI-09](TUI-09.md) | текстовый интерфейс — раздел «Доверие»: матрица, уровни, партнёры | tui | A | tui-06 | ready | TUI-03,ADM-49 |
 | [SMTP-50](SMTP-50.md) | матрица доверия в SMTP — тип абонента, автоответ, MDN, DSN, группы, автопересылка | smtp | A | smtp-30 | done | CTR-93,SMTP-49 |
 | [SMTP-55](SMTP-55.md) | спам — максимально рано мимо всех автоматических механизмов и без ручного iTIP | smtp | A | smtp-35 | done | SMTP-50 |
+| [JMAP-50](JMAP-50.md) | # JMAP-50. Принятие встречи из письма — API веб-почты (решение #134, вариант 3) |  |  | jmap-35 | done | — |
 | [DAV-44](DAV-44.md) | матрица доверия в CalDAV и CardDAV — iTIP извне, занятость, общий доступ, публикация, GAL | dav | A | dav-21 | done | CTR-93,DAV-43 |
 | [JMAP-47](JMAP-47.md) | матрица доверия в JMAP — принципалы и занятость своей организации, общий доступ, публикация, внешний автоответ | jmap | A | jmap-30 | done | CTR-93 |
 | [SIEVE-14](SIEVE-14.md) | `processcalendar` (RFC 9671), расширение `vnd.thepost.peer`, админский скрипт — только сужение | sieve | A | sieve-07 | done | CTR-93 |
@@ -966,10 +967,11 @@
 | [SMTP-53](SMTP-53.md) | этап журналирования в конвейере — приём, отправка, конверт | smtp | A | smtp-33 | ready | CTR-96,CTR-97 |
 | [SMTP-54](SMTP-54.md) | конвейер как реестр этапов и итоговый контроль действий в доставке | smtp | A | smtp-33 | ready | CTR-96 |
 | [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | ready | CTR-97,META-88 |
-| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | ready | CTR-97,META-88,BLOB-18 |
-| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | ready | CTR-97 |
+| [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | done | CTR-97,META-88,BLOB-18 |
+| [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | done | CTR-97 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | todo | ADM-52 |
-| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | todo | APP-83,BLOB-18 |
+| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | ready | APP-83,BLOB-18 |
+| [APP-84](APP-84.md) | # APP-84. Включение журнала в узле — wiring JournalStore/JournalRules в thepost |  |  | app-81 | todo | — |
 
 ## Вне волн
 
