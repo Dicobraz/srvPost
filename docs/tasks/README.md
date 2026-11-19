@@ -907,7 +907,7 @@
 | [CTR-91](CTR-91.md) | брендинг заказчика в контракте — `BrandingStore`, роли цветов, уровни установки и организации | contracts | B | contracts-62 | done | — |
 | [META-84](META-84.md) | брендинг заказчика в PostgreSQL — миграция 0043 и `BrandingStore` в `PgMeta` | meta | A | meta-57 | done | CTR-91 |
 | [ADM-48](ADM-48.md) | брендинг заказчика в Admin API — чтение, запись, сброс, знак, контраст, открытый маршрут | admin | B | admin-34 | done | CTR-91,DES-01,ADM-44 |
-| [APP-75](APP-75.md) | узел — брендинг заказчика (`BrandingStore` и BLOB в Admin API) | app | A | app-72 | ready | META-84,ADM-48 |
+| [APP-75](APP-75.md) | узел — брендинг заказчика (`BrandingStore` и BLOB в Admin API) | app | A | app-72 | done | META-84,ADM-48 |
 | [UI-22](UI-22.md) | консоль — брендинг заказчика: тема из действующего брендинга, знак на входе и в шапке, настройка | console | A | console-13 | ready | UI-19,ADM-48 |
 | [TUI-08](TUI-08.md) | текстовый интерфейс — тема поверх действующего брендинга, знак на экране входа | tui | A | tui-05 | ready | TUI-06,ADM-48 |
 | [DOC-11](DOC-11.md) | INSTALL — брендинг заказчика | docs | A | docs-11 | ready | ADM-48 |
@@ -958,10 +958,10 @@
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
-| [CTR-96](CTR-96.md) | конвейер обработки — реестр этапов, итоговый набор действий, итоговый контроль | contracts | B | contracts-67 | ready | — |
-| [CTR-97](CTR-97.md) | журналирование — контракт записей, правил и хранилища журнала | contracts | B | contracts-67 | ready | CTR-96 |
-| [META-88](META-88.md) | индекс журнала — схема journal, хеш-цепочка, восстановление из хранилища записей | meta | B | meta-61 | todo | CTR-97 |
-| [BLOB-18](BLOB-18.md) | хранилище записей журнала — отдельный бакет S3 с Object Lock, дедуп, SMB append-only | blob | A | blob-11 | todo | CTR-97 |
+| [CTR-96](CTR-96.md) | конвейер обработки — реестр этапов, итоговый набор действий, итоговый контроль | contracts | B | contracts-67 | done | — |
+| [CTR-97](CTR-97.md) | журналирование — контракт записей, правил и хранилища журнала | contracts | B | contracts-67 | done | CTR-96 |
+| [META-88](META-88.md) | индекс журнала — схема journal, хеш-цепочка, восстановление из хранилища записей | meta | B | meta-61 | ready | CTR-97 |
+| [BLOB-18](BLOB-18.md) | хранилище записей журнала — отдельный бакет S3 с Object Lock, дедуп, SMB append-only | blob | A | blob-11 | ready | CTR-97 |
 | [SMTP-53](SMTP-53.md) | этап журналирования в конвейере — приём, отправка, конверт | smtp | A | smtp-33 | todo | CTR-96,CTR-97 |
 | [SMTP-54](SMTP-54.md) | конвейер как реестр этапов и итоговый контроль действий в доставке | smtp | A | smtp-33 | todo | CTR-96 |
 | [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | todo | CTR-97,META-88 |
