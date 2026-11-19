@@ -892,7 +892,7 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | console-14 | UI-23 | A | admin-35 | 1 |
 | tui-06 | TUI-09 | A | tui-02, admin-35 | 1 |
 | smtp-30 | SMTP-50 | A | contracts-64, решение 123 (`x/inbound-mail-only`) | 4 |
-| smtp-34 | SMTP-55 | A | smtp-30 (решение #112: спам — мимо всех авто-механизмов, ручной iTIP запрещён) | 3 |
+| smtp-35 | SMTP-55 | A | smtp-30 (решение #112: спам — мимо всех авто-механизмов, ручной iTIP запрещён) | 3 |
 | ✅ dav-21 | DAV-44 | A | contracts-64, решение 123 (`x/inbound-mail-only`) | 4 |
 | ✅ jmap-30 | JMAP-47 | A | contracts-64 | 3 |
 | sieve-07 | SIEVE-14 | A | contracts-64 | 2 |
