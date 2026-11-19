@@ -453,7 +453,7 @@ mod tests {
             "письмо старше max_age"
         );
         assert!(
-            !ev.confirms("bob@partner.example", Duration::from_secs(3600)),
+            ev.confirms("bob@partner.example", Duration::from_secs(3600)),
             "возраст ровно max_age — ещё подтверждает"
         );
         assert!(!ev.confirms("не адрес", Duration::from_secs(3600)));

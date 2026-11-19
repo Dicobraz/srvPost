@@ -569,7 +569,7 @@ two
             "Subject: x\r\n\r\n  one\r\n\r\n\ttwo   {}\r\n",
             "щ".repeat(400)
         );
-        let meta = message_meta(&body.as_bytes());
+        let meta = message_meta(body.as_bytes());
         assert!(meta.preview.starts_with("one two щщ"));
         assert_eq!(meta.preview.chars().count(), PREVIEW_CHARS);
     }
@@ -594,16 +594,14 @@ two
 
     #[test]
     fn thread_input_attachment_types() {
-        let raw = format!(
-            "Subject: docs\r\nMIME-Version: 1.0\r\n\
+        let raw = "Subject: docs\r\nMIME-Version: 1.0\r\n\
              Content-Type: multipart/mixed; boundary=b\r\n\r\n\
              --b\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n\
              --b\r\nContent-Type: application/pdf; name=plan.pdf\r\n\
              Content-Disposition: attachment; filename=plan.pdf\r\n\r\n%PDF\r\n\
              --b\r\nContent-Type: application/pdf\r\n\
              Content-Disposition: ATTACHMENT\r\n\r\n%PDF again\r\n\
-             --b--\r\n"
-        );
+             --b--\r\n";
         let input = analyze(raw.as_bytes(), MimeLimits::default()).thread;
         assert_eq!(
             input.facts.attachments,
