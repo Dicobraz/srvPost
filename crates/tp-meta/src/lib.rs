@@ -46,6 +46,7 @@ pub mod signals;
 pub mod submissions;
 mod sync_gate;
 pub mod transport;
+mod trust;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -342,14 +343,15 @@ impl PgMeta {
     ///   `AclStore::set_acl`, `set_send_delegation`, `GroupStore::put` (группа заменяется целиком),
     ///   `Membership::heartbeat` (`upsert_node`), `set_policy`, `set_user_trash_purge`, `ContactStore::put_contact`,
     ///   `OrgStore::put_org_unit`, `set_org`, `DynamicGroupStore::put_dynamic` (замена целиком),
-    ///   `BrandingStore::set_branding` (набор уровня заменяется целиком);
+    ///   `BrandingStore::set_branding` (набор уровня заменяется целиком), `TrustStore::set_policy`
+    ///   (уровень и доменные списки заменяются целиком);
     /// - `set_*` по значению: `MailboxStore::set_subscribed` (повтор лишь добавляет запись `updated` в
     ///   журнал изменений), `AppPasswords::revoke` (`COALESCE` — время первого отзыва),
     ///   `mark_blob_damaged` (`coalesce` — время первой пометки), `disable_account`, `restore_account` (срок
     ///   хранения по значению);
     /// - удаление по ключу без возврата удалённого: `AbuseBlocks::unblock`, `Membership::leave`,
     ///   `DeliveryLog::purge` (секции суток), `purge_events` (число удалённых при повторе — только
-    ///   оставшиеся).
+    ///   оставшиеся), `TrustStore::reset_policy` (удаление уровня без возврата удалённого);
     ///
     /// Не повторяются: CAS по версии (`transport`, `put_manifest`) и номеру захвата (лизы, очередь) —
     /// повтор применённой записи отвечает `Conflict`; счётчики ссылок BLOB, UID и `ModSeq` писем,

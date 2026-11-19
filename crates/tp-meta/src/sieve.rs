@@ -138,6 +138,9 @@ struct VacationRow {
     subject: Option<String>,
     text_body: Option<String>,
     html_body: Option<String>,
+    external_subject: Option<String>,
+    external_text_body: Option<String>,
+    external_html_body: Option<String>,
 }
 
 impl PgMeta {
@@ -499,7 +502,9 @@ impl SieveStore for PgMeta {
         self.idempotent(|| async move {
             let mut tx = begin(&self.read_db(scope).await?.pool, scope.tenant).await?;
             let row: Option<VacationRow> = sqlx::query_as(
-                "SELECT enabled, from_at, to_at, subject, text_body, html_body FROM vacation
+                "SELECT enabled, from_at, to_at, subject, text_body, html_body,
+                        external_subject, external_text_body, external_html_body
+                 FROM vacation
                  WHERE tenant_id = $1 AND account_id = $2",
             )
             .bind(scope.tenant.as_uuid())
@@ -515,10 +520,9 @@ impl SieveStore for PgMeta {
                 subject: r.subject,
                 text_body: r.text_body,
                 html_body: r.html_body,
-                // Внешний текст — не этой волной (CTR-93): столбцов нет, `None` — наружу ответа нет.
-                external_subject: None,
-                external_text_body: None,
-                external_html_body: None,
+                external_subject: r.external_subject,
+                external_text_body: r.external_text_body,
+                external_html_body: r.external_html_body,
             }))
         })
         .await
@@ -530,12 +534,14 @@ impl SieveStore for PgMeta {
             Box::pin(async move {
                 sqlx::query(
                     "INSERT INTO vacation (tenant_id, account_id, enabled, from_at, to_at, subject, text_body,
-                                           html_body)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                                           html_body, external_subject, external_text_body, external_html_body)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                      ON CONFLICT (tenant_id, account_id) DO UPDATE SET
                          enabled = excluded.enabled, from_at = excluded.from_at, to_at = excluded.to_at,
                          subject = excluded.subject, text_body = excluded.text_body,
-                         html_body = excluded.html_body, updated_at = now()",
+                         html_body = excluded.html_body, external_subject = excluded.external_subject,
+                         external_text_body = excluded.external_text_body,
+                         external_html_body = excluded.external_html_body, updated_at = now()",
                 )
                 .bind(scope.tenant.as_uuid())
                 .bind(scope.account.as_uuid())
@@ -545,6 +551,9 @@ impl SieveStore for PgMeta {
                 .bind(&vacation.subject)
                 .bind(&vacation.text_body)
                 .bind(&vacation.html_body)
+                .bind(&vacation.external_subject)
+                .bind(&vacation.external_text_body)
+                .bind(&vacation.external_html_body)
                 .execute(&mut *tx)
                 .await
                 .map_err(db_err)?;
