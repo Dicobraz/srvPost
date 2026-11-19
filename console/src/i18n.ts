@@ -1,6 +1,8 @@
 // Русская локаль Refine (SRS 5.2): словарь в сборке, без внешних ресурсов.
 import type { I18nProvider } from "@refinedev/core";
 
+import { productName } from "./providers/branding";
+
 const ru: Record<string, string> = {
   "buttons.create": "Создать",
   "buttons.add": "Добавить",
@@ -67,7 +69,9 @@ const ru: Record<string, string> = {
 
 export const i18nProvider: I18nProvider = {
   translate: (key: string, options?: unknown, defaultMessage?: string) => {
-    const text = ru[key] ?? (typeof options === "string" ? options : defaultMessage) ?? key;
+    let text = ru[key] ?? (typeof options === "string" ? options : defaultMessage) ?? key;
+    // Заголовок вкладки — название продукта из действующего брендинга (UI-22), нет — The Post.
+    if (key.startsWith("documentTitle")) text = text.replaceAll("The Post", productName() ?? "The Post");
     const vars = options && typeof options === "object" ? (options as Record<string, unknown>) : {};
     return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, name: string) => String(vars[name] ?? ""));
   },

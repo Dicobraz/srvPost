@@ -4,15 +4,35 @@ import { useEffect, useState } from "react";
 
 import type { Schemas } from "../api/client";
 import { Brand } from "../components/logo";
+import { BUILTIN_PRODUCT, useBranding, useBrandingDomain } from "../providers/branding";
 import { type LoginParams, type SessionInfo, sessionInfo } from "../providers/auth";
+
+/** Задержка перезапроса брендинга по домену имени входа: печатание не спрашивает сервер на каждый знак. */
+const DOMAIN_DEBOUNCE_MS = 500;
+
+/** Домен имени входа (после `@`): почтовые домены публичны через MX — по ним открытый маршрут отдаёт брендинг организации. */
+function domainOf(login: string | undefined): string | undefined {
+  const domain = (login?.split("@").pop() ?? "").trim().toLowerCase();
+  // Домен в печати (без точки) не спрашиваем: ответ всё равно — брендинг установки.
+  return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(domain) ? domain : undefined;
+}
 
 /**
  * Экран входа (решение 117): OIDC с PKCE, если узел сообщает поставщика; имя входа и пароль администратора, если вход
- * по паролю включён (`admin.password_login`); иначе — одноразовый токен `thepost admin init` (META-43).
+ * по паролю включён (`admin.password_login`); иначе — одноразовый токен `thepost admin init` (META-43). Знак,
+ * название и тема — действующий брендинг (UI-22): сперва установки, по домену имени входа — организации.
  */
 export function LoginPage() {
   const { mutate: login, isPending } = useLogin<LoginParams>();
   const [info, setInfo] = useState<SessionInfo | null>(null);
+  const setDomain = useBrandingDomain();
+  const [form] = Form.useForm<Schemas["PasswordLogin"]>();
+  const typed = Form.useWatch("login", form) as string | undefined;
+  useEffect(() => {
+    // С задержкой: брендинг перезапрашивается, когда домен в имени входа напечатан.
+    const t = setTimeout(() => setDomain(domainOf(typed)), DOMAIN_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [typed, setDomain]);
   useEffect(() => {
     void sessionInfo().then((i) => {
       setInfo(i);
@@ -27,12 +47,13 @@ export function LoginPage() {
       Войти
     </Button>
   );
+  const product = useBranding()?.name ?? BUILTIN_PRODUCT;
   return (
     <Layout style={{ minHeight: "100vh", justifyContent: "center", alignItems: "center" }}>
       <Card style={{ width: 400 }}>
-        <Brand height={30} style={{ display: "block", margin: "8px auto 16px" }} />
+        <Brand height={30} style={{ display: "flex", justifyContent: "center", margin: "8px auto 16px" }} />
         <Typography.Title level={3} style={{ textAlign: "center" }}>
-          The Post — вход
+          {product} — вход
         </Typography.Title>
         {oidc && (
           <>
@@ -43,7 +64,7 @@ export function LoginPage() {
           </>
         )}
         {info?.password && (
-          <Form layout="vertical" onFinish={(v: Schemas["PasswordLogin"]) => login(v)}>
+          <Form form={form} layout="vertical" onFinish={(v) => login(v)}>
             <Form.Item name="login" label="Имя входа" rules={[{ required: true, message: "Укажите имя входа" }]}>
               <Input autoComplete="username" />
             </Form.Item>

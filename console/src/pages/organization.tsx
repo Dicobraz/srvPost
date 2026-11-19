@@ -3,6 +3,7 @@ import { type HttpError, useCustom, useCustomMutation } from "@refinedev/core";
 import { Alert, Button, Descriptions, Divider, Popconfirm } from "antd";
 
 import type { Schemas } from "../api/client";
+import { BrandingSection } from "../components/branding";
 import { when } from "../components/format";
 import { PolicyForm } from "../components/policy-form";
 import { SharingPolicyForm } from "../components/sharing-policy";
@@ -82,6 +83,8 @@ export function OrganizationPage() {
       />
       <Divider orientation="left">Общий доступ к календарям и адресным книгам</Divider>
       <SharingPolicyForm />
+      <Divider orientation="left">Брендинг</Divider>
+      <BrandingSection />
     </Show>
   );
 }

@@ -103,7 +103,10 @@ test("журнал аудита: условия администратора, м
 test("аудитор: консоль открывается на журнале аудита, других разделов не запрашивает", async () => {
   const calls = open("/", { [`GET ${BASE}/audit`]: { body: { entries: [record(1, "alice@example.org", "GET", "/x")], next: null } } }, ["auditor"]);
   expect(await screen.findByText("alice@example.org")).toBeTruthy();
-  expect(calls.map((c) => c.path).filter((p) => p !== "/api/v1/whoami" && !p.startsWith(`${BASE}/audit`))).toEqual([]);
+  // Брендинг (UI-22) — открытый маршрут оболочки (знак и название), не раздел администратора.
+  expect(
+    calls.map((c) => c.path).filter((p) => p !== "/api/v1/whoami" && p !== "/api/v1/public/branding" && !p.startsWith(`${BASE}/audit`)),
+  ).toEqual([]);
 });
 
 test("роли: аудитор — только журнал аудита, оператор — чтение без журнала аудита", () => {

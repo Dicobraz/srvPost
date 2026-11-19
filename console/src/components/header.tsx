@@ -6,7 +6,8 @@ import { allowed } from "../providers/access";
 import { Brand } from "./logo";
 import { OrgSelect, useOrgs } from "./orgs";
 
-/** Шапка: знак IT TASK (UI-19), кто вошёл, организация (администратор инсталляции выбирает её из списка); выход — в меню. */
+/** Шапка: знак и название (брендинг заказчика, UI-22; нет — знак IT TASK из UI-19), кто вошёл, организация
+ * (администратор инсталляции выбирает её из списка); выход — в меню. */
 export function Header() {
   const { data: me } = useGetIdentity<Schemas["WhoAmI"]>();
   const { data: roles } = usePermissions<Schemas["AdminRole"][]>({});

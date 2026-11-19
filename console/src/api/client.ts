@@ -43,6 +43,11 @@ export function loadSession(): Session | null {
   }
 }
 
+/** Адрес пути API для ресурсов страницы (знак брендинга, UI-22): с `apiBase` из config.json, иначе относительный. */
+export function apiUrl(path: string): string {
+  return `${apiBase}${path}`;
+}
+
 let me: { token?: string; data: Promise<Schemas["WhoAmI"]> } | undefined;
 
 /** Кто вошёл и его роли: один запрос `whoami` на сессию (меню и кнопки спрашивают роли многократно). */
@@ -72,6 +77,8 @@ export type RequestOptions = {
   query?: Record<string, unknown>;
   /** Заменяет токен сессии (обмен токена `admin init`). */
   bearer?: string;
+  /** Тело — файл как есть (знак брендинга `image/png`), без JSON. */
+  file?: File;
 };
 
 /** Запрос к Admin API; `{org}` в пути — выбранная организация. Ошибка — `HttpError` для уведомлений Refine. */
@@ -86,9 +93,9 @@ export async function request<T>(path: string, o: RequestOptions = {}): Promise<
     headers: {
       Accept: "application/json",
       ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
-      ...(o.body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(o.file ? { "Content-Type": o.file.type } : o.body === undefined ? {} : { "Content-Type": "application/json" }),
     },
-    body: o.body === undefined ? undefined : JSON.stringify(o.body),
+    body: o.file ?? (o.body === undefined ? undefined : JSON.stringify(o.body)),
   });
   const text = await resp.text();
   let data: unknown;
