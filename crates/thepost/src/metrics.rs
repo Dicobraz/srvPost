@@ -406,6 +406,24 @@ pub fn register_orphans(metrics: &Metrics) -> OrphanProbe {
     probe
 }
 
+/// Регистрирует метрику политики доверия узла (APP-76): `tp_trust_closed_total` — чтения политики,
+/// отвеченные закрытой матрицей или «не партнёр» из-за недоступного хранилища (почта при этом доставляется,
+/// решение 124 б).
+pub fn register_trust(metrics: &Metrics, trust: Arc<crate::trust::TrustCache>) {
+    let defs: [StatDef<u64>; 1] = [(
+        "tp_trust_closed_total",
+        "Чтения политики доверия, отвеченные закрытой матрицей (хранилище недоступно)",
+        |closed| *closed,
+        true,
+    )];
+    register(
+        metrics,
+        &trust,
+        crate::trust::TrustCache::closed_total,
+        defs,
+    );
+}
+
 /// Регистрирует показатели проверки целостности BLOB по расписанию роли maintenance (APP-44):
 /// `tp_blob_verify_{passes,failed}_total`, расхождения последнего прохода `tp_blob_verify_{missing,size_mismatch,orphans,errors}`,
 /// `tp_blob_verify_duration_seconds`, `tp_blob_verify_finished_timestamp_seconds`. Возвращает держатель для

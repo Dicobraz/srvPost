@@ -24,6 +24,11 @@
 //! (`calendar-proxy`) в хранилища `PgMeta`. Приглашения переговорным и другим ресурсам (DAV-19) решает приём iTIP
 //! узла по правилам бронирования ресурса: ответ организатору организации — в его календарь, внешнему — письмом iMIP.
 //!
+//! Политика доверия (APP-76, решение 124) — один [`Services::trust`] на узел: `TrustStore` поверх `PgMeta`
+//! ([`TrustCache`]) с кэшем действующей матрицы учётной записи (секция `trust`, сброс по `trust_changed` шины,
+//! ошибка чтения — закрытая матрица и метрика). Его получают доставка SMTP, приём iTIP, DAV (занятость и общий
+//! доступ), JMAP и Admin API; в Sieve тип абонента и матрица приходят с письмом из доставки.
+//!
 //! Организация — `TenantId::DEFAULT`: несколько организаций на узле — модуль «Мультитенантность» (SRS 1.3).
 
 use std::net::IpAddr;
@@ -46,6 +51,7 @@ use tp_contracts::sasl::SaslServer;
 use tp_contracts::secrets::SecretStore;
 use tp_contracts::sharing::SharingAuthorizer;
 use tp_contracts::transport::MailFlow;
+use tp_contracts::trust::TrustStore;
 use tp_contracts::{Error, Result, TenantId};
 use tp_meta::PgMeta;
 use tp_platform::{Config, Metrics, RateLimitConfig, RateLimiter, TlsCerts};
@@ -64,8 +70,10 @@ use tp_smtp::{
 
 use crate::infra;
 use crate::sections::{
-    ADMIN, AUTH, AdminSection, AuthSection, DAV, JMAP, MAILSTORE, SEARCH, SIEVE, SMTP,
+    ADMIN, AUTH, AdminSection, AuthSection, DAV, JMAP, MAILSTORE, SEARCH, SIEVE, SMTP, TRUST,
+    TrustSection,
 };
+use crate::trust::TrustCache;
 
 /// Общие сервисы ролей узла.
 pub struct Services {
@@ -148,6 +156,10 @@ pub struct Services {
     pub sieve: Arc<tp_sieve::SieveConfig>,
     /// Приём iTIP в календари учётных записей (APP-28): общий для CalDAV, JMAP и доставки узла.
     pub itip: Arc<tp_dav::ItipInbox>,
+    /// Политика доверия узла (APP-76, решение 124): `TrustStore` поверх `PgMeta` с кэшем на узле (секция
+    /// `trust`, сброс по `trust_changed` шины). Один для доставки SMTP, приёма iTIP, DAV, JMAP и Admin API;
+    /// сигналы шины — [`TrustCache::watch`] (запускает `serve`).
+    pub trust: Arc<TrustCache>,
 }
 
 impl std::fmt::Debug for Services {
@@ -419,10 +431,19 @@ impl Services {
         // Секции, читаемые ролями при запуске, проверяются здесь: ошибка — до запуска ролей.
         cfg.section::<tp_jmap::JmapConfig>(JMAP)?;
         cfg.section::<AdminSection>(ADMIN)?;
+        // Политика доверия узла (APP-76, решение 124): `TrustStore` поверх `PgMeta` с кэшем действующей
+        // матрицы учётной записи (срок и размер — секция `trust`, SRS 5.5), сброс по `trust_changed` шины.
+        // Один для доставки SMTP, приёма iTIP, DAV, JMAP и Admin API; метрика закрытых чтений — в /metrics.
+        let trust = Arc::new(TrustCache::new(
+            Arc::new(meta.clone()),
+            Some(bus.clone()),
+            (*cfg.section::<TrustSection>(TRUST)?).clone(),
+        ));
+        crate::metrics::register_trust(metrics, trust.clone());
         // Приём iTIP — с настройками секции `dav` (календарь по умолчанию, входящие планирования, лимиты).
         // Бронирование ресурсов (DAV-19, APP-71): правила, занятость и группы бронирующих — `PgMeta`; бронирует только
         // организатор из организации ресурса, ответ — в его календарь (решение 123). Доставка узла здесь не подходит:
-        // она сама держит этот приём iTIP (`Delivery::with_itip`).
+        // она сама держит этот приём iTIP (`Delivery::with_itip`). Политика доверия — та же, что у доставки (APP-76).
         let itip = Arc::new(
             tp_dav::ItipInbox::new(
                 Arc::new(meta.clone()),
@@ -433,7 +454,8 @@ impl Services {
                 resources: Arc::new(meta.clone()),
                 freebusy: Arc::new(meta.clone()),
                 group_store: Arc::new(meta.clone()),
-            }),
+            })
+            .with_trust(Some(Arc::clone(&trust) as Arc<dyn TrustStore>)),
         );
         let tracking = Tracking::new(Arc::new(meta.clone()), node);
         // Метка узла в `Received` (`by <smtp.hostname>`) — защита `redirect` от петли.
@@ -481,6 +503,7 @@ impl Services {
             rules,
             sieve: sieve_section,
             itip,
+            trust,
         })
     }
 
@@ -541,7 +564,10 @@ impl Services {
             .with_itip(self.itip.clone())
             .with_delegates(Arc::new(self.meta.clone()))
             .with_authz(self.authz.clone())
-            .with_messages(Arc::new(self.meta.clone())))
+            .with_messages(Arc::new(self.meta.clone()))
+            // Политика доверия (APP-76, решение 124): тип абонента, действующая матрица получателя,
+            // домены-партнёры и автопересылки — тот же кэш узла, что у iTIP, DAV, JMAP и Admin API.
+            .with_trust(Arc::clone(&self.trust) as Arc<dyn TrustStore>))
     }
 
     /// Планирование встреч (APP-28) для CalDAV (`tp_dav::router_shared`) и JMAP (`Jmap::with_schedule`): учётным
@@ -714,7 +740,10 @@ impl Services {
                 authz: self.collections.clone(),
                 acl: Arc::new(self.meta.clone()),
                 notifications: Arc::new(self.meta.clone()),
-            })))
+            }))
+            // Принципалы, занятость и общий доступ — своей организации и по действующей матрице (JMAP-47,
+            // APP-76): тот же кэш узла, что у SMTP, DAV и Admin API.
+            .with_trust(Some(Arc::clone(&self.trust) as Arc<dyn TrustStore>)))
     }
 
     /// Маршруты календарей и контактов (CalDAV, CardDAV; APP-29): хранилище — `PgMeta`, вход — тот же, что у
@@ -743,8 +772,15 @@ impl Services {
             acl: Arc::new(self.meta.clone()),
             delegates: Arc::new(self.meta.clone()),
         };
-        // Книгу GAL маршруты читают из хранилища, заполняет её `Services::gal`.
-        let router = tp_dav::router_shared(deps, Some(self.schedule(outbound)), Some(stores), cfg);
+        // Книгу GAL маршруты читают из хранилища, заполняет её `Services::gal`. Занятость `schedule-outbox` и
+        // уровень выдачи прав — по действующей матрице учётной записи (DAV-44, APP-76): тот же кэш узла.
+        let router = tp_dav::router_with_trust(
+            deps,
+            Some(self.schedule(outbound)),
+            Some(stores),
+            Some(Arc::clone(&self.trust) as Arc<dyn TrustStore>),
+            cfg,
+        );
         if !well_known {
             return Ok(router);
         }
@@ -841,6 +877,9 @@ impl Services {
             .map_err(|e| infra::context("admin", e))?
             // Правила Sieve и автоответ за пользователя (ADM-14).
             .with_sieve(Arc::new(self.meta.clone()), check)
+            // Политика доверия (ADM-49, APP-76): уровни, домены-партнёры; запись публикует `trust_changed`
+            // (публикует обёртка узла [`TrustCache`]) — кэши узлов сбрасываются без перезапуска.
+            .with_trust(Arc::clone(&self.trust) as Arc<dyn TrustStore>)
             // Тема письма очереди модерации (`include=subject`, ADM-19) — из объекта `HeldMessage::blob`; объект
             // мог совпасть по содержимому со сжатой частью письма, поэтому чтение — с распаковкой.
             .with_held_blobs(Arc::new(tp_blob::Decompressing::new(
