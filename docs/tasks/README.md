@@ -701,10 +701,10 @@
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
-| [PLT-37](PLT-37.md) | ACME — окно продления по доле срока сертификата | platform | A | platform-26 | ready | — |
-| [PLT-39](PLT-39.md) | ACME — окно продления от сервера (ARI, RFC 9773) | platform | A | platform-26 | ready | PLT-37 |
-| [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | todo | PLT-37 |
-| [DOC-15](DOC-15.md) | INSTALL — выпуск сертификата виден со всех точек наблюдения | docs | A | docs-15 | ready | — |
+| [PLT-37](PLT-37.md) | ACME — окно продления по доле срока сертификата | platform | A | platform-26 | done | — |
+| [PLT-39](PLT-39.md) | ACME — окно продления от сервера (ARI, RFC 9773) | platform | A | platform-26 | done | PLT-37 |
+| [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | ready | PLT-37 |
+| [DOC-15](DOC-15.md) | INSTALL — выпуск сертификата виден со всех точек наблюдения | docs | A | docs-15 | done | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
 
@@ -994,6 +994,7 @@
 | [DEPS-21](DEPS-21.md) | фича `time` у `instant-acme` — подсказка окна продления (ARI) | deps | B | PLT-39 |
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
+| [FIX-18](FIX-18.md) | # FIX-18 — экран соединений освобождает генератор стенда (screen.exempt) |  |  | — |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
 | [META-89](META-89.md) | история миграций не хранится |  |  | — |
 | [PERF-06](PERF-06.md) | IMAP и JMAP |  |  | — |
