@@ -1,14 +1,15 @@
 //! Набор проверок [`SentLog`] (CTR-94, CONTRACTS.md#Reply; решение 125 в): in-memory `MemSentLog` и `PgMeta`
 //! (META-86) проходят одни и те же проверки.
 
-use time::Duration;
+use std::time::Duration;
+
 use time::OffsetDateTime;
 use tp_contracts::reply::{MessageIdHash, ReplyEvidence, SentLog, SentRecord};
 use tp_contracts::{AccountId, Error, TenantId};
 
 /// Момент отправки записи `n` набора.
 fn sent_at(n: i64) -> OffsetDateTime {
-    OffsetDateTime::UNIX_EPOCH + Duration::minutes(n)
+    OffsetDateTime::UNIX_EPOCH + Duration::from_secs(n.unsigned_abs() * 60)
 }
 
 /// Тестовый хэш Message-ID (32 байта): контракты SHA-256 не считают, форма значения для набора достаточна.
@@ -113,16 +114,16 @@ pub async fn reply(log: &dyn SentLog, tenant: TenantId, foreign: TenantId) {
         sent: resent.clone(),
         age: age_of(&resent, sent_at(80)),
     };
-    assert!(evidence.confirms("bob@partner.example", Duration::minutes(30)));
-    assert!(evidence.confirms("CAROL@External.example", Duration::minutes(30)));
-    assert!(!evidence.confirms("eve@example.net", Duration::minutes(30)));
-    assert!(!evidence.confirms("bob@partner.example", Duration::minutes(5)));
+    assert!(evidence.confirms("bob@partner.example", Duration::from_secs(30 * 60)));
+    assert!(evidence.confirms("CAROL@External.example", Duration::from_secs(30 * 60)));
+    assert!(!evidence.confirms("eve@example.net", Duration::from_secs(30 * 60)));
+    assert!(!evidence.confirms("bob@partner.example", Duration::from_secs(5 * 60)));
     let evidence = ReplyEvidence {
         sent: first.clone(),
         age: age_of(&first, sent_at(80)),
     };
     assert!(
-        !evidence.confirms("bob@partner.example", Duration::minutes(30)),
+        !evidence.confirms("bob@partner.example", Duration::from_secs(30 * 60)),
         "исходное письмо старше max_age"
     );
 
