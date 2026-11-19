@@ -477,31 +477,31 @@ pub struct TrustBody {
     pub invite_new: PerPeer<Option<InviteMode>>,
     /// `REPLY`, `CANCEL` и обновление `REQUEST` к существующим событиям.
     #[serde(default)]
-    #[schema(value_type = PerPeerToggleOptionSchema>)]
+    #[schema(value_type = PerPeerToggleOptionSchema)]
     pub itip_updates: PerPeer<Option<Toggle>>,
     /// Автоответ.
     #[serde(default)]
-    #[schema(value_type = PerPeerToggleOptionSchema>)]
+    #[schema(value_type = PerPeerToggleOptionSchema)]
     pub auto_reply: PerPeer<Option<Toggle>>,
     /// MDN наружу.
     #[serde(default)]
-    #[schema(value_type = PerPeerToggleOptionSchema>)]
+    #[schema(value_type = PerPeerToggleOptionSchema)]
     pub mdn: PerPeer<Option<Toggle>>,
     /// Автопересылка наружу.
     #[serde(default)]
-    #[schema(value_type = PerPeerToggleOptionSchema>)]
+    #[schema(value_type = PerPeerToggleOptionSchema)]
     pub auto_forward: PerPeer<Option<Toggle>>,
     /// Занятость.
     #[serde(default)]
-    #[schema(value_type = PerPeerDetailOptionSchema>)]
+    #[schema(value_type = PerPeerDetailOptionSchema)]
     pub freebusy: PerPeer<Option<Detail>>,
     /// Общий доступ и публикация.
     #[serde(default)]
-    #[schema(value_type = PerPeerDetailOptionSchema>)]
+    #[schema(value_type = PerPeerDetailOptionSchema)]
     pub sharing: PerPeer<Option<Detail>>,
     /// Письма в группы рассылки.
     #[serde(default)]
-    #[schema(value_type = PerPeerGroupPostOptionSchema>)]
+    #[schema(value_type = PerPeerGroupPostOptionSchema)]
     pub group_post: PerPeer<Option<GroupPost>>,
     /// Домены-партнёры (только уровень организации): канонические имена — нижний регистр, A-label IDN.
     #[serde(default)]
@@ -634,7 +634,7 @@ pub struct TrustView {
     #[schema(value_type = EffectiveSchema)]
     pub effective: Effective,
     /// Клетки, закреплённые контрактом (не меняются ни на одном уровне).
-    #[schema(value_type = TrustFixedSchema>)]
+    #[schema(value_type = TrustFixedSchema)]
     pub fixed: TrustFixed,
 }
 
