@@ -315,7 +315,7 @@ impl JournalRecords {
             prev,
             retention: Retention {
                 mode: self.cfg.lock_mode,
-                until: after(self.now(), self.cfg.retention),
+                until: after((self.now)(), self.cfg.retention),
             },
         };
         let body = serde_json::to_vec(&stored)
@@ -421,9 +421,11 @@ impl JournalRecords {
         let mut broken: Vec<JournalId> = Vec::new();
         let mut by_prev: HashMap<BlobHash, Vec<&StoredRecord>> = HashMap::new();
         for stored in &records {
-            if by_prev.entry(stored.prev).or_default().push(stored).len() > 1 {
+            let slot = by_prev.entry(stored.prev).or_default();
+            slot.push(stored);
+            if slot.len() > 1 {
                 // Развилка: продолжает цепь запись раньше по (at, id), прочие — нарушение.
-                let mut fork: Vec<&StoredRecord> = by_prev[&stored.prev].iter().copied().collect();
+                let mut fork: Vec<&StoredRecord> = slot.iter().copied().collect();
                 fork.sort_by_key(|s| (s.record.at, s.id));
                 broken.extend(fork[1..].iter().map(|s| s.id));
             }
@@ -529,7 +531,7 @@ impl JournalRecords {
                 .collect::<Vec<_>>()
         })
         .await
-        .map_err(|e| Error::internal(format!("journal: chunking: {e}")))?
+        .map_err(|e| Error::internal(format!("journal: chunking: {e}")))
     }
 
     /// Блокировка индекса организации (запись создаётся при первом обращении).
