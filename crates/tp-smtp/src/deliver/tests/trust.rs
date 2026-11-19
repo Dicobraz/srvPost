@@ -178,12 +178,14 @@ async fn smtp_in_peer_by_from_domain_and_dmarc() {
     );
     // Матрица получателя — действующая: умолчания контракта с политикой организации (группы открыты,
     // без политик учётной записи).
-    let mut matrix = TrustMatrix::default();
-    matrix.group_post = PerPeer {
-        own: GroupPost::Open,
-        partner: GroupPost::Open,
-        neighbor: GroupPost::Open,
-        external: GroupPost::Open,
+    let matrix = TrustMatrix {
+        group_post: PerPeer {
+            own: GroupPost::Open,
+            partner: GroupPost::Open,
+            neighbor: GroupPost::Open,
+            external: GroupPost::Open,
+        },
+        ..TrustMatrix::default()
     };
     assert_eq!(rules.calls()[0].matrix, matrix);
     assert_eq!(env.inbox("bob@example.org").await.len(), 4);
