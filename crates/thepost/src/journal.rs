@@ -56,6 +56,12 @@ pub struct NodeRecords {
     pool: DbPool,
 }
 
+impl std::fmt::Debug for NodeRecords {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeRecords").finish_non_exhaustive()
+    }
+}
+
 impl NodeRecords {
     /// Порт над хранилищем записей `records` (BLOB-18, бакет/каталог секции `journal`) с блокировкой
     /// писателя на пуле `pool`.
@@ -153,6 +159,12 @@ pub struct NodeJournal {
     rules: Arc<NodeRules>,
     /// Индекс и хранилище записей (двухфазная запись).
     store: Arc<PgJournal>,
+}
+
+impl std::fmt::Debug for NodeJournal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeJournal").finish_non_exhaustive()
+    }
 }
 
 impl NodeJournal {
