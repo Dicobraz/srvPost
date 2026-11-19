@@ -44,6 +44,10 @@ HEALTH_UNITS=${HEALTH_UNITS:-thepost openbao postgresql}
 FILL_STATE=${FILL_STATE:-$DIR/fill-state.json}
 KEEP=${KEEP:-2}
 BUSY_PATTERNS=${BUSY_PATTERNS:-'[a]nsible-playbook|[r]un-perf|[r]un-only|[r]un-d7'}
+# Гидратация свежего узла до ansible: образ узла голый (Debian+systemd), а become: true
+# требует sudo — в прежних узлах он был установлен вручную в слой контейнера и терялся
+# при пересоздании. Пустая строка — пропустить шаг.
+PRE_INSTALL_CMD=${PRE_INSTALL_CMD:-'command -v sudo >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo >/dev/null; }'}
 
 mode=update
 if [ "$#" -ge 1 ]; then
@@ -118,6 +122,10 @@ docker run -d --name "$NODE" $NODE_RUN_ARGS "$NODE_IMAGE" /sbin/init >/dev/null
 i=0; until docker exec "$NODE" true >/dev/null 2>&1; do
   i=$((i + 1)); [ "$i" -lt 60 ] || { say "ОШИБКА: узел не поднялся"; exit 1; }; sleep 1
 done
+if [ -n "$PRE_INSTALL_CMD" ]; then
+  say "гидратация узла (PRE_INSTALL_CMD)"
+  docker exec -u 0 "$NODE" sh -c "$PRE_INSTALL_CMD" || { say "ОШИБКА: гидратация не прошла"; exit 1; }
+fi
 rm -f "$FILL_STATE"
 
 say "установка: ansible --tags $INSTALL_TAGS"
