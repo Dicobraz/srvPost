@@ -51,6 +51,13 @@ BUSY_PATTERNS=${BUSY_PATTERNS:-'[a]nsible-playbook|[r]un-perf|[r]un-only|[r]un-d
 # требует sudo — в прежних узлах он был установлен вручную в слой контейнера и терялся
 # при пересоздании. Пустая строка — пропустить шаг.
 PRE_INSTALL_CMD=${PRE_INSTALL_CMD:-'command -v sudo >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo >/dev/null; }'}
+# Политика автообновления (решение владельца 19.11): не чаще UPDATE_EVERY_DAYS дней, только безопасно
+# (простой стенда, sha256, чистая установка, приёмка md5+служб, откат на предыдущую версию при провале).
+# По умолчанию ВЫКЛЮЧЕНО (AUTO_UPDATE=no) — в проде не включать; на тестовых/перф-стендах включают явно
+# в update.conf (AUTO_UPDATE=yes). Ручные --check/--tag работают всегда.
+AUTO_UPDATE=${AUTO_UPDATE:-no}
+UPDATE_EVERY_DAYS=${UPDATE_EVERY_DAYS:-3}
+LAST_UPDATE=${LAST_UPDATE:-$DIR/.last-update}
 
 mode=update
 if [ "$#" -ge 1 ]; then
@@ -74,6 +81,16 @@ for p in $busy; do
   [ "$p" != "$$" ] || continue
   say "стенд занят (pid $p) — пропуск"; exit 0
 done
+
+if [ "$mode" = update ]; then
+  [ "$AUTO_UPDATE" = yes ] || { say "автообновление выключено (AUTO_UPDATE=no) — пропуск"; exit 0; }
+  now=$(date +%s)
+  last=$(cat "$LAST_UPDATE" 2>/dev/null || true)
+  case "$last" in ''|*[!0-9]*) last=0;; esac
+  age=$(( (now - last) / 86400 ))
+  [ "$age" -ge "$UPDATE_EVERY_DAYS" ] || {
+    say "с прошлого обновления ${age} дн. (< $UPDATE_EVERY_DAYS) — пропуск"; exit 0; }
+fi
 
 if [ "$mode" != force ]; then
   # Первая запись tag_name в выдаче /releases — самая свежая (включая pre-release).
@@ -138,25 +155,36 @@ if [ -n "$GEN" ]; then
   docker exec "$GEN" sh -c 'rm -f /var/lib/thepost-stand/fill-state.json /var/lib/thepost-stand/fill-dav-state.json' || true
 fi
 
-say "установка: ansible --tags $INSTALL_TAGS"
-docker run --rm -v "$DIR":/work -v /var/run/docker.sock:/var/run/docker.sock \
-  "$ANSIBLE_IMAGE" \
-  sh -c "cd /work && ansible-playbook -i inventory.yml repo/deploy/stand/stand.yml --tags $INSTALL_TAGS" \
-  > "$DIR/install-last.log" 2>&1 || {
-  say "ОШИБКА: установка не прошла (install-last.log) — маркер не обновлён, повтор при следующем вызове"
-  exit 1
+# Установка версии из rel/<pkg> в пересозданный узел + приёмка (md5 бинарника = тарболлу, службы живы).
+install_and_verify() { # $1 = каталог в rel/
+  sed -i "s#thepost_binary_src: .*#thepost_binary_src: /work/rel/$1/thepost#" "$INVENTORY"
+  docker run --rm -v "$DIR":/work -v /var/run/docker.sock:/var/run/docker.sock     "$ANSIBLE_IMAGE"     sh -c "cd /work && ansible-playbook -i inventory.yml repo/deploy/stand/stand.yml --tags $INSTALL_TAGS"     > "$DIR/install-last.log" 2>&1 || return 1
+  want=$(md5sum "$REL/$1/thepost" | cut -d' ' -f1)
+  got=$(docker exec "$NODE" md5sum /usr/local/bin/thepost | cut -d' ' -f1) || return 1
+  [ "$want" = "$got" ] || return 1
+  for u in $HEALTH_UNITS; do
+    docker exec "$NODE" systemctl is-active --quiet "$u" || return 1
+  done
+  return 0
 }
 
-# Приёмка: бинарник узла = тарболлу; службы живы.
-want=$(md5sum "$REL/$pkg/thepost" | cut -d' ' -f1)
-got=$(docker exec "$NODE" md5sum /usr/local/bin/thepost | cut -d' ' -f1)
-[ "$want" = "$got" ] || { say "ОШИБКА: md5 бинарника узла ($got) != тарболла ($want)"; exit 1; }
-for u in $HEALTH_UNITS; do
-  docker exec "$NODE" systemctl is-active --quiet "$u" || { say "ОШИБКА: служба $u не активна"; exit 1; }
-done
-
-echo "$latest" > "$DIR/installed-version"
-say "готово: $latest установлена и проверена"
+say "установка: ansible --tags $INSTALL_TAGS"
+if install_and_verify "$pkg"; then
+  echo "$latest" > "$DIR/installed-version"
+  date +%s > "$LAST_UPDATE"
+  say "готово: $latest установлена и проверена"
+else
+  say "ОШИБКА: установка/приёмка $latest не прошла (install-last.log)"
+  if [ -n "$installed" ] && [ "$installed" != "$latest" ]      && [ -x "$REL/thepost-$installed-$ASSET_ARCH/thepost" ]; then
+    say "безопасный откат на $installed"
+    if install_and_verify "thepost-$installed-$ASSET_ARCH"; then
+      say "откат выполнен: узел на $installed (маркер не менялся)"
+    else
+      say "ОШИБКА: откат не прошёл — узел требует ручного вмешательства (install-last.log)"
+    fi
+  fi
+  exit 1
+fi
 
 # Подчистка: последние KEEP версий в rel/ и inbox.
 ls -1dt "$REL"/thepost-* 2>/dev/null | tail -n +"$((KEEP + 1))" | while IFS= read -r d; do rm -rf "$d"; done
