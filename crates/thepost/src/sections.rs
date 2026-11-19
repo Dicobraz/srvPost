@@ -1960,11 +1960,8 @@ blob:
         "journal:\n  enabled: true\n  local:\n    dir: /var/lib/thepost/journal\n";
 
     fn journal(yaml: &str) -> JournalSection {
-        parse(&format!("{MINIMAL_DEV}{yaml}"))
-            .expect("config")
-            .section::<JournalSection>(JOURNAL)
-            .expect("journal")
-            .clone()
+        let cfg = parse(&format!("{MINIMAL_DEV}{yaml}")).expect("config");
+        (*cfg.section::<JournalSection>(JOURNAL).expect("journal")).clone()
     }
 
     /// APP-83: секция по умолчанию выключена (журналирование включается явно), пустая секция
@@ -2151,10 +2148,11 @@ blob:
             journal_bucket_separate(&cfg("s3://thepost-blob", &journal_s3("thepost-journal")))
                 .is_ok()
         );
-        let e = err(journal_bucket_separate(&cfg(
-            "s3://thepost-blob",
-            &journal_s3("thepost-blob"),
-        )));
+        let e =
+            match journal_bucket_separate(&cfg("s3://thepost-blob", &journal_s3("thepost-blob"))) {
+                Err(Error::Invalid(m)) => m,
+                other => panic!("ожидалась ошибка: {other:?}"),
+            };
         assert!(
             e.contains("journal") && e.contains("blob.url") && e.contains("отдельный бакет"),
             "{e}"

@@ -20,7 +20,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use futures::TryStreamExt;
 use serde::Serialize;
-use time::OffsetDateTime;
 use tp_admin_client::style::{self, Role, State, Theme};
 use tp_cluster::NodeTls;
 use tp_contracts::blob::BlobStore;
@@ -561,9 +560,7 @@ pub async fn journal(
     targeted: bool,
     report: &mut Report,
 ) {
-    let section = cfg
-        .section::<JournalSection>(JOURNAL)
-        .map(|s| (**s).clone());
+    let section = cfg.section::<JournalSection>(JOURNAL).map(|s| (*s).clone());
     let Ok(section) = section else {
         if targeted {
             report.push(
@@ -656,7 +653,7 @@ pub async fn journal(
             // Индекс журнала — PgJournal (META-88) над пулом и хранилищем записей.
             match cfg
                 .section::<MetaConfig>(MetaConfig::SECTION)
-                .map(|m| (**m).clone())
+                .map(|m| (*m).clone())
             {
                 Ok(meta) => {
                     let port = Arc::new(StorageRecords(records.clone()));
@@ -883,10 +880,14 @@ pub async fn journal_volume(
 ) -> JournalVolume {
     /// Записей выборки для среднего размера письма.
     const SAMPLE: usize = 32;
-    let mut entries: Vec<(TenantId, JournalId, OffsetDateTime)> = Vec::new();
+    let mut entries: Vec<(TenantId, JournalId, i64)> = Vec::new();
     for tenant in tenants {
         if let Ok(chain) = records.chain(*tenant).await {
-            entries.extend(chain.into_iter().map(|s| (*tenant, s.id, s.record.at)));
+            entries.extend(
+                chain
+                    .into_iter()
+                    .map(|s| (*tenant, s.id, s.record.at.unix_timestamp())),
+            );
         }
     }
     let total = entries.len() as u64;
@@ -897,7 +898,7 @@ pub async fn journal_volume(
             min = min.min(*at);
             max = max.max(*at);
         }
-        let span_days = ((max - min).whole_seconds().max(0) as f64 / 86_400.0).max(1.0);
+        let span_days = ((max - min).max(0) as f64 / 86_400.0).max(1.0);
         entries.len() as f64 / span_days
     });
     let avg_record_bytes = if entries.is_empty() {
@@ -2333,7 +2334,8 @@ mod tests {
             sender: format!("s{i}@external.example"),
             recipients: vec!["anna@internal.example".to_owned()],
             message_id: Some(format!("m{i}@external.example")),
-            at: OffsetDateTime::from_unix_timestamp(1_800_000_000 + i * 86_400).expect("time"),
+            at: x509_parser::time::OffsetDateTime::from_unix_timestamp(1_800_000_000 + i * 86_400)
+                .expect("time"),
             rule: "r-0042".to_owned(),
         };
 
@@ -2449,7 +2451,10 @@ mod tests {
                 sender: format!("s{i}@external.example"),
                 recipients: vec!["anna@internal.example".to_owned()],
                 message_id: Some(format!("m{i}@external.example")),
-                at: OffsetDateTime::from_unix_timestamp(1_800_000_000 + i * 86_400).expect("time"),
+                at: x509_parser::time::OffsetDateTime::from_unix_timestamp(
+                    1_800_000_000 + i * 86_400,
+                )
+                .expect("time"),
                 rule: "r-0042".to_owned(),
             };
             prev = records
