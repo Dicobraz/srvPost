@@ -696,7 +696,7 @@
 | [PERF-08](PERF-08.md) | 108 мс, порог 100 мс — добить кэшем/прогревом (Д.7 №2) |  |  | mailstore-20 | done | — |
 | [FIND-02](FIND-02.md) | — | — | — | smtp-34 | done | — |
 | [FIX-18](FIX-18.md) | # FIX-18 — экран соединений освобождает генератор стенда (screen.exempt) |  |  | smtp-34 | done | — |
-| [PERF-09](PERF-09.md) | mailbox_state FOR UPDATE держит приём (класс B) |  |  | perf-09 | ready | — |
+| [PERF-09](PERF-09.md) | mailbox_state FOR UPDATE держит приём (класс B) |  |  | perf-09 | done | — |
 | [FIX-17](FIX-17.md) | соединение DAV на учётную запись (beta.3 привязывает сессию к соединению) |  |  | deploy-52 | done | — |
 
 ## Ф1 · ACME: короткие сертификаты (ballot SC-081v3, RFC 9773)
