@@ -807,6 +807,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{org}/journal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Поиск по журналу организации: записи в порядке (`at`, `id`), продолжение — `after`. */
+        get: operations["search_journal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/journal/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Запись журнала по идентификатору: конверт и хеш цепочки; нет записи — 404. */
+        get: operations["get_journal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/journal/{id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Выгрузка записи: `.eml` с конвертом (заголовки `X-ThePost-Journal-*` и письмо целиком). */
+        get: operations["export_journal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/journal/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Отчёт целостности хеш-цепочки индекса организации (`hash = SHA-256(prev_hash ‖ canonical)`). */
+        get: operations["verify_journal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{org}/mailbox-audit": {
         parameters: {
             query?: never;
@@ -1600,7 +1668,7 @@ export interface components {
             path: string;
             /**
              * @description Роли администратора на момент операции (`installation_admin`, `organization_admin`, `operator`,
-             *     `auditor`); пусто — ролей нет (отказ).
+             *     `auditor`, `journal_auditor`); пусто — ролей нет (отказ).
              */
             roles: string[];
             /** @description Шаблон маршрута (`/api/v1/orgs/{org}/transport/domains`); неизвестный маршрут — путь. */
@@ -1786,6 +1854,15 @@ export interface components {
         } | {
             /** @description Клетка «письма в группы». */
             post: components["schemas"]["GroupPost"];
+        };
+        /** @description Отчёт проверки хеш-цепочки индекса организации. */
+        ChainReportView: {
+            /** @description Число проверенных записей. */
+            records: number;
+            /** @description Цепочка целостна. */
+            ok: boolean;
+            /** @description Первая запись с нарушением; `null` — нарушений нет. */
+            broken_at?: string | null;
         };
         /** @description Снимок уровня кластера. */
         ClusterView: {
@@ -2133,6 +2210,40 @@ export interface components {
         IssuedAppPassword: components["schemas"]["AppPasswordInfo"] & {
             /** @description Значение пароля. */
             password: string;
+        };
+        /** @description Запись журнала: идентификатор, конверт и хеш цепочки. */
+        JournalEntryView: {
+            /** @description Идентификатор записи (UUID). */
+            id: string;
+            /** @description Конверт. */
+            record: components["schemas"]["JournalRecordView"];
+            /** @description Хеш цепочки записи (SHA-256, hex); проверяется маршрутом `verify`. */
+            hash: string;
+        };
+        /** @description Страница журнала: записи в порядке (`at`, `id`). */
+        JournalPageView: {
+            /** @description Записи страницы. */
+            entries: components["schemas"]["JournalEntryView"][];
+            /** @description `after` следующей страницы; `null` — записей больше нет. */
+            next?: string | null;
+        };
+        /** @description Конверт записи журнала в ответе API ([`JournalRecord`] контракта; обе стороны serde — ADM-13). */
+        JournalRecordView: {
+            /** @description Организация. */
+            tenant: string;
+            /** @description Отправитель конверта; пустой — уведомление о доставке. */
+            sender: string;
+            /** @description Все получатели конверта, включая скрытых и раскрытых из групп. */
+            recipients: string[];
+            /** @description Message-ID без угловых скобок; `null` — нет. */
+            message_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Момент письма (UTC).
+             */
+            at: string;
+            /** @description Правило журналирования. */
+            rule: string;
         };
         /** @description Запись аудита ящика. */
         MailboxAuditEntry: {
@@ -6624,6 +6735,243 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    search_journal: {
+        parameters: {
+            query?: {
+                /** @description Отправитель конверта (точно, без учёта регистра ASCII). */
+                sender?: string;
+                /** @description Один из получателей записи, включая скрытых (точно, без учёта регистра ASCII). */
+                recipient?: string;
+                /** @description Message-ID без угловых скобок (точно). */
+                message_id?: string;
+                /** @description Правило журналирования (точно). */
+                rule?: string;
+                /** @description Начало интервала (RFC 3339), включительно. */
+                since?: string;
+                /** @description Конец интервала (RFC 3339), не включительно. */
+                until?: string;
+                /** @description Размер страницы (по умолчанию и наибольший — из конфигурации). */
+                limit?: number;
+                /** @description Продолжение: `next` предыдущей страницы с теми же условиями. */
+                after?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalPageView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_journal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Запись журнала (UUID) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntryView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    export_journal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Запись журнала (UUID) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "message/rfc822": unknown;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    verify_journal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChainReportView"];
                 };
             };
             400: {
