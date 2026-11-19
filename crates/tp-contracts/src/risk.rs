@@ -1795,7 +1795,9 @@ mod tests {
     #[test]
     fn validate_org_only_tightens() {
         let tenant = TenantId::new();
-        let vendor = vec![signal("tp.a", 6)];
+        let mut vendor = vec![signal("tp.a", 6)];
+        // Действие пакета — Quarantine: случай «действие мягче» ниже — None против Quarantine.
+        vendor[0].action = RiskAction::Quarantine;
         let base = Catalog::effective(&vendor, None, None);
         // Установка — любые значения.
         let mut any = RiskPolicy::default();
@@ -1998,6 +2000,14 @@ mod tests {
             weight: 50,
             ..signal("tp.d", 50)
         });
+        // Детектор всех признаков — совпадение со списком TI: не снимает признак ответа
+        // (признак беседы проверяется ниже отдельно).
+        for s in &mut vendor {
+            s.detector = Detector::ListMatch {
+                list: ListId::new("feodo-ip").expect("list"),
+                field: Field::SenderIp,
+            };
+        }
         let catalog = Catalog::effective(&vendor, None, None);
         let by_id = |id: &str| {
             catalog
