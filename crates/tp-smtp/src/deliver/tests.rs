@@ -1552,6 +1552,7 @@ async fn outbound_suite() {
 
 mod local_domains;
 mod org_policy;
+mod pipeline;
 mod rcpt_rate;
 mod rules;
 mod scheduled;
