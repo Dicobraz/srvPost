@@ -134,7 +134,8 @@ mod tests {
 
     /// Письмо беседы: `mid` — собственный Message-ID, `parent` — In-Reply-To.
     fn letter(mid: &str, parent: Option<&str>) -> Vec<u8> {
-        let mut head = format!("From: peer@example.net\r\nTo: u@example.org\r\nSubject: deal\r\n");
+        let mut head =
+            "From: peer@example.net\r\nTo: u@example.org\r\nSubject: deal\r\n".to_string();
         head.push_str(&format!("Message-ID: <{mid}>\r\n"));
         if let Some(p) = parent {
             head.push_str(&format!("In-Reply-To: <{p}>\r\nReferences: <{p}>\r\n"));
