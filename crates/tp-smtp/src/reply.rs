@@ -30,10 +30,11 @@ use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::common::getrandom::SysRng;
+use chacha20poly1305::aead::rand_core::UnwrapErr;
+use chacha20poly1305::aead::{Aead, Generate, KeyInit, Payload};
 use chacha20poly1305::{Key, KeySizeUser, XChaCha20Poly1305, XNonce};
 use hmac::{Hmac, Mac};
-use rand::RngExt;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -78,26 +79,29 @@ pub struct OpenedMark {
 /// Ключи в кэше: момент загрузки → материал.
 type KeyCache = HashMap<String, (Instant, Arc<[u8]>)>;
 
+/// Набор ключей и их кэш (разделяются клонами [`ReplyMarks`]).
+#[derive(Debug, Default)]
+struct KeyState {
+    keys: RwLock<Arc<Vec<ReplyKeyConfig>>>,
+    cache: Mutex<KeyCache>,
+}
+
 /// Метка ответа: ключи из хранилища секретов, метки Message-ID исходящих и BATV (секция `smtp.batv`).
-/// Клоны разделяют кэш ключей.
+/// Клоны разделяют набор ключей и кэш.
 #[derive(Clone)]
 pub struct ReplyMarks {
     secrets: Arc<dyn SecretStore>,
-    keys: RwLock<Arc<Vec<ReplyKeyConfig>>>,
-    cache: Mutex<KeyCache>,
+    st: Arc<KeyState>,
     refresh: Duration,
     /// BATV поверх тех же ключей.
-    batv: Option<Batv>,
+    batv: Option<Box<Batv>>,
 }
 
 impl fmt::Debug for ReplyMarks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Материал ключей в отладочный вывод не попадает.
         f.debug_struct("ReplyMarks")
-            .field(
-                "keys",
-                &self.keys.read().map(|k| k.len()).unwrap_or_default(),
-            )
+            .field("keys", &read(&self.st.keys).len())
             .field("batv", &self.batv.is_some())
             .finish()
     }
@@ -108,8 +112,10 @@ impl ReplyMarks {
     pub fn new(secrets: Arc<dyn SecretStore>, cfg: ReplyConfig) -> Self {
         Self {
             secrets,
-            keys: RwLock::new(Arc::new(cfg.keys.clone())),
-            cache: Mutex::new(HashMap::new()),
+            st: Arc::new(KeyState {
+                keys: RwLock::new(Arc::new(cfg.keys.clone())),
+                cache: Mutex::new(HashMap::new()),
+            }),
             refresh: cfg.key_refresh,
             batv: None,
         }
@@ -118,41 +124,42 @@ impl ReplyMarks {
     /// BATV поверх ключей метки (секция `smtp.batv`): подпись `MAIL FROM` исходящих и проверка адресов
     /// bounce на приёме.
     pub fn with_batv(mut self, cfg: &crate::config::BatvConfig) -> Self {
-        self.batv = Some(Batv {
+        self.batv = Some(Box::new(Batv {
             marks: self.clone(),
             mode: cfg.mode,
             valid_for: cfg.valid_for,
             exempt: cfg.exempt.clone(),
-        });
+        }));
         self
     }
 
     /// BATV этой метки; `None` — секция `smtp.batv` не задана.
     pub fn batv(&self) -> Option<&Batv> {
-        self.batv.as_ref()
+        self.batv.as_deref()
     }
 
     /// Новая версия секции (hot reload): ключи перечитываются, прежние продолжают проверять метки до конца
     /// их срока.
     pub fn update(&self, cfg: ReplyConfig) {
         *self
+            .st
             .keys
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(cfg.keys.clone());
-        lock(&self.cache).clear();
+        lock(&self.st.cache).clear();
     }
 
     /// Метки выключены (ключей нет).
     fn disabled(&self) -> bool {
-        read(&self.keys).is_empty()
+        read(&self.st.keys).is_empty()
     }
 
     /// Материал ключа из хранилища секретов (кэш на `smtp.reply.key_refresh`); `None` — ключа нет в наборе.
     async fn material(&self, id: &str) -> Result<Option<Arc<[u8]>>> {
-        let Some(key) = read(&self.keys).iter().find(|k| k.id == id).cloned() else {
+        let Some(key) = read(&self.st.keys).iter().find(|k| k.id == id).cloned() else {
             return Ok(None);
         };
-        if let Some((at, m)) = lock(&self.cache).get(&key.id).cloned()
+        if let Some((at, m)) = lock(&self.st.cache).get(&key.id).cloned()
             && at.elapsed() < self.refresh
         {
             return Ok(Some(m));
@@ -167,13 +174,13 @@ impl ReplyMarks {
             )));
         }
         let material: Arc<[u8]> = Arc::from(bytes);
-        lock(&self.cache).insert(key.id.clone(), (Instant::now(), material.clone()));
+        lock(&self.st.cache).insert(key.id.clone(), (Instant::now(), material.clone()));
         Ok(Some(material))
     }
 
     /// Действующий (активный) ключ и его номер в наборе.
     fn active(&self) -> Option<(usize, ReplyKeyConfig)> {
-        read(&self.keys)
+        read(&self.st.keys)
             .iter()
             .enumerate()
             .find(|(_, k)| k.active)
@@ -196,16 +203,15 @@ impl ReplyMarks {
         let Some(material) = self.material(&key.id).await? else {
             return Ok(None);
         };
-        let mut tag = [0u8; TAG_LEN];
-        rand::rng().fill(&mut tag);
+        let mut rng = UnwrapErr(SysRng);
+        let tag: [u8; TAG_LEN] = Generate::generate_from_rng(&mut rng);
         let mut pt = Vec::with_capacity(TAG_LEN + TIME_LEN);
         pt.extend_from_slice(&tag);
         pt.extend_from_slice(&now.unix_timestamp().to_be_bytes());
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&material));
+        let cipher_key = Key::try_from(&material[..]).expect("длина ключа проверена");
+        let cipher = XChaCha20Poly1305::new(&cipher_key);
         // Nonce 24 байта случайный (XChaCha20: столкновения практически исключены, DEPS-18).
-        let mut nonce = [0u8; NONCE_LEN];
-        rand::rng().fill(&mut nonce);
-        let nonce = XNonce::from(nonce);
+        let nonce: XNonce = Generate::generate_from_rng(&mut rng);
         let aad = format!("{MARK_PREFIX}.{}@{}", key.id, domain_of(domain));
         let mut wire = nonce.to_vec();
         wire.extend_from_slice(
@@ -238,10 +244,12 @@ impl ReplyMarks {
             return Ok(None);
         };
         let (nonce, ct) = wire.split_at(NONCE_LEN);
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&material));
+        let cipher_key = Key::try_from(&material[..]).expect("длина ключа проверена");
+        let cipher = XChaCha20Poly1305::new(&cipher_key);
         let aad = format!("{MARK_PREFIX}.{id}@{}", domain_of(&domain));
+        let nonce = XNonce::try_from(nonce).expect("nonce метки");
         let pt = match cipher.decrypt(
-            XNonce::from_slice(nonce),
+            &nonce,
             Payload {
                 msg: ct,
                 aad: aad.as_bytes(),
@@ -325,9 +333,11 @@ impl ReplyMarks {
     /// SHA-256 канонического Message-ID — ключ записи об отправленном для ответов с чужим Message-ID
     /// (решение 125 в, как Rspamd `replies`).
     pub fn hash_of(message_id: &str) -> MessageIdHash {
-        MessageIdHash(Sha256::digest(
-            tp_contracts::reply::canonical_message_id(message_id).as_bytes(),
-        ))
+        let digest =
+            Sha256::digest(tp_contracts::reply::canonical_message_id(message_id).as_bytes());
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&digest);
+        MessageIdHash(hash)
     }
 }
 
@@ -424,7 +434,9 @@ impl Batv {
         if !k.is_ascii_digit() {
             return Ok(Some(BatvAddress::Invalid("bad key number")));
         }
-        let key = read(&self.marks.keys).get(usize::from(k - b'0')).cloned();
+        let key = read(&self.marks.st.keys)
+            .get(usize::from(k - b'0'))
+            .cloned();
         let Some(key) = key else {
             return Ok(Some(BatvAddress::Invalid("foreign key")));
         };
@@ -469,9 +481,8 @@ fn days(now: OffsetDateTime) -> u32 {
 /// День истечения метки (строка из трёх цифр): сегодня + `valid_for` (срок ограничен половиной цикла 1000
 /// дней — окно неоднозначности проверки).
 fn expiry(now: OffsetDateTime, valid_for: Duration) -> String {
-    let d = now.unix_timestamp().div_euclid(86_400)
-        + i64::from((valid_for.as_secs() / 86_400).min(498))
-        + 1;
+    let days = (valid_for.as_secs() / 86_400).min(498);
+    let d = now.unix_timestamp().div_euclid(86_400) + i64::try_from(days).unwrap_or(0) + 1;
     format!("{:03}", d.rem_euclid(1000))
 }
 
@@ -485,8 +496,8 @@ fn expired(today: u32, ddd: u32) -> bool {
 /// HMAC-SHA1 (draft-levine-smtp-batv-01) от `K`, `DDD` и исходного адреса: первые 3 байта, hex (6 знаков).
 fn prvs_hash(key: &[u8], k: u8, ddd: &str, from: &str) -> String {
     let mut mac =
-        <Hmac<Sha1> as Mac>::new_from_slice(key).expect("HMAC принимает любую длину ключа");
-    mac.update([k]);
+        <Hmac<Sha1> as KeyInit>::new_from_slice(key).expect("HMAC принимает любую длину ключа");
+    mac.update(&[k]);
     mac.update(ddd.as_bytes());
     mac.update(from.as_bytes());
     let out = mac.finalize().into_bytes();
@@ -510,14 +521,17 @@ fn split_mark(message_id: &str) -> Option<(String, String, Vec<u8>)> {
     let trimmed = message_id.trim().trim_start_matches('<');
     let (local, domain) = trimmed.split_once('@')?;
     let domain = domain.trim_end_matches('>').to_owned();
-    let mut parts = local.split('.');
-    let head = parts.next()?;
-    if !head.eq_ignore_ascii_case(MARK_PREFIX) {
+    // Голова — `tp1.` (без учёта регистра), хвост — payload base32; срезы — только по ASCII-точкам
+    // (Message-ID задаёт отправитель, граница символа не гарантирована).
+    let head = MARK_PREFIX.len();
+    if local.len() < head + 2 || !local.is_char_boundary(head) || !local.is_char_boundary(head + 1)
+    {
         return None;
     }
-    let b32 = parts.next_back()?;
-    // Остаток между `tp1.` и последним куском — id ключа (может содержать точки).
-    let id = parts.as_str();
+    if !local[..head].eq_ignore_ascii_case(MARK_PREFIX) || local.as_bytes()[head] != b'.' {
+        return None;
+    }
+    let (id, b32) = local[head + 1..].rsplit_once('.')?;
     if id.is_empty() || !base32_ok(b32) {
         return None;
     }
@@ -543,11 +557,10 @@ fn replace_header(raw: &[u8], name: &str, value: &str) -> bytes::Bytes {
     let mut out = Vec::with_capacity(raw.len() + name.len() + value.len());
     let mut replaced = false;
     for line in header_lines(raw) {
-        let is = line.split_once(b':').is_some_and(|(n, _)| {
-            std::str::from_utf8_lossy(n)
-                .trim()
-                .eq_ignore_ascii_case(name)
-        });
+        let is = std::str::from_utf8(line)
+            .ok()
+            .and_then(|l| l.split_once(':'))
+            .is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case(name));
         if !is {
             out.extend_from_slice(line);
             continue;
@@ -574,11 +587,10 @@ pub(crate) fn strip_header(raw: &[u8], name: &str) -> bytes::Bytes {
     let mut out = Vec::with_capacity(raw.len());
     let mut changed = false;
     for line in header_lines(raw) {
-        let is = line.split_once(b':').is_some_and(|(n, _)| {
-            std::str::from_utf8_lossy(n)
-                .trim()
-                .eq_ignore_ascii_case(name)
-        });
+        let is = std::str::from_utf8(line)
+            .ok()
+            .and_then(|l| l.split_once(':'))
+            .is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case(name));
         if is {
             changed = true;
             continue;
@@ -672,8 +684,8 @@ fn base32_decode(s: &str) -> Option<Vec<u8>> {
 /// Случайное значение метки для записи об отправленном письма с Message-ID клиента (решение 125 в: замена
 /// сломала бы копию в «Отправленных» — запись ведётся по хэшу, случайное значение только для уникальности).
 pub(crate) fn random_tag() -> Vec<u8> {
-    let mut tag = [0u8; TAG_LEN];
-    rand::rng().fill(&mut tag);
+    let mut rng = UnwrapErr(SysRng);
+    let tag: [u8; TAG_LEN] = Generate::generate_from_rng(&mut rng);
     tag.to_vec()
 }
 

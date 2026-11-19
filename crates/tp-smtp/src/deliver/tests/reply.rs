@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use tp_contracts::reply::{SentRecord, normalize_recipient};
 use tp_contracts::secrets::SecretRef;
 use tp_contracts::sieve::{RulesInput, RulesOutcome};
-use tp_testkit::{MemSecretStore, MemSentLog, MemThreads, SystemClock};
+use tp_contracts::thread::ThreadStore;
+use tp_testkit::{MemSecretStore, MemSentLog, SystemClock};
 
 use super::*;
 use crate::authcheck::tests as fx;
@@ -40,7 +41,7 @@ impl ReplyRules {
 }
 
 /// Стоматометка: ключ `k1`, BATV в режиме `mode` (exempt — реальный адрес `bob@example.org`).
-async fn rig(mode: BatvMode) -> (Env, Arc<ReplyMarks>, Arc<MemSentLog>, MemThreads) {
+async fn rig(mode: BatvMode) -> (Env, Arc<ReplyMarks>, Arc<MemSentLog>) {
     let env = Env::new(DecisionHooks::default()).await;
     let store = MemSecretStore::new(Arc::new(SystemClock));
     store.set(
@@ -65,7 +66,7 @@ async fn rig(mode: BatvMode) -> (Env, Arc<ReplyMarks>, Arc<MemSentLog>, MemThrea
             ..BatvConfig::default()
         }),
     );
-    (env, marks, Arc::new(MemSentLog::new()), MemThreads::new())
+    (env, marks, Arc::new(MemSentLog::new()))
 }
 
 /// Проверки отправителя: домен партнёра `partner.example` (SPF — `192.0.2.0/24`, DMARC `p=none`).
@@ -75,18 +76,12 @@ fn partner_check() -> AuthCheck {
     check
 }
 
-/// Доставка с меткой, записью об отправленном, беседами и проверками отправителя.
-async fn delivery(
-    env: &Env,
-    marks: &Arc<ReplyMarks>,
-    sent: &Arc<MemSentLog>,
-    threads: &MemThreads,
-) -> Delivery {
+/// Доставка с меткой, записью об отправленном и проверками отправителя (беседы — в хранилище `Env`).
+async fn delivery(env: &Env, marks: &Arc<ReplyMarks>, sent: &Arc<MemSentLog>) -> Delivery {
     let mut d = env
         .delivery(false)
         .with_reply_marks(marks.clone())
-        .with_sent_log(sent.clone())
-        .with_threads(Arc::new(threads.clone()));
+        .with_sent_log(sent.clone());
     d.deps.authcheck = Some(Arc::new(partner_check()));
     d
 }
@@ -155,7 +150,7 @@ const CLIENT_BAD: &str = "203.0.113.5:1000";
 /// Ответ внешнего адресата на наше письмо (метка в `In-Reply-To`) с пройденным DMARC — признак есть.
 #[tokio::test]
 async fn reply_from_recipient_is_flagged() {
-    let (env, marks, sent, threads) = rig(BatvMode::Log).await;
+    let (env, marks, sent) = rig(BatvMode::Log).await;
     let mid = sent_marked(
         &marks,
         &sent,
@@ -164,7 +159,7 @@ async fn reply_from_recipient_is_flagged() {
     )
     .await;
     let rules = Arc::new(ReplyRules::default());
-    let d = delivery(&env, &marks, &sent, &threads)
+    let d = delivery(&env, &marks, &sent)
         .await
         .with_rules(rules.clone());
     let raw = reply_letter("bob@partner.example", &format!("In-Reply-To: <{mid}>\r\n"));
@@ -188,7 +183,7 @@ async fn reply_from_recipient_is_flagged() {
 /// метка — признака нет.
 #[tokio::test]
 async fn reply_flag_needs_every_condition() {
-    let (env, marks, sent, threads) = rig(BatvMode::Log).await;
+    let (env, marks, sent) = rig(BatvMode::Log).await;
 
     // Не адресат записи (письмо ушли carol, отвечает bob).
     let mid = sent_marked(
@@ -198,7 +193,7 @@ async fn reply_flag_needs_every_condition() {
         time::Duration::minutes(5),
     )
     .await;
-    let d = delivery(&env, &marks, &sent, &threads).await;
+    let d = delivery(&env, &marks, &sent).await;
     let raw = reply_letter("bob@partner.example", &format!("In-Reply-To: <{mid}>\r\n"));
     assert_eq!(
         d.data(
@@ -296,7 +291,7 @@ async fn reply_flag_needs_every_condition() {
 /// Ответ на письмо с Message-ID клиента — признак по хэшу в записи об отправленном.
 #[tokio::test]
 async fn reply_to_client_message_id_by_hash() {
-    let (env, marks, sent, threads) = rig(BatvMode::Log).await;
+    let (env, marks, sent) = rig(BatvMode::Log).await;
     sent_client_id(
         &sent,
         "client-1@mail.example.net",
@@ -304,7 +299,7 @@ async fn reply_to_client_message_id_by_hash() {
         time::Duration::minutes(5),
     )
     .await;
-    let d = delivery(&env, &marks, &sent, &threads).await;
+    let d = delivery(&env, &marks, &sent).await;
     // Хэш ищется без учёта регистра и скобок (каноническая форма).
     let raw = reply_letter(
         "bob@partner.example",
@@ -357,8 +352,8 @@ async fn reply_to_client_message_id_by_hash() {
 /// Пришедший извне `X-ThePost-Reply` удаляется до проверок — признак ставит только узел.
 #[tokio::test]
 async fn inbound_reply_header_is_removed() {
-    let (env, marks, sent, threads) = rig(BatvMode::Log).await;
-    let d = delivery(&env, &marks, &sent, &threads).await;
+    let (env, marks, sent) = rig(BatvMode::Log).await;
+    let d = delivery(&env, &marks, &sent).await;
     let raw = Bytes::from(
         "X-ThePost-Reply: yes\r\nFrom: bob@partner.example\r\nTo: alice@example.org\r\n\
          Subject: hi\r\n\r\nno reply here\r\n",
@@ -380,7 +375,7 @@ async fn inbound_reply_header_is_removed() {
 /// Ответ с карантином фильтра (антивирус) — в «Спам» при любом признаке ответа.
 #[tokio::test]
 async fn reply_with_virus_is_junk_despite_flag() {
-    let (env, marks, sent, threads) = rig(BatvMode::Log).await;
+    let (env, marks, sent) = rig(BatvMode::Log).await;
     let mid = sent_marked(
         &marks,
         &sent,
@@ -396,7 +391,7 @@ async fn reply_with_virus_is_junk_despite_flag() {
         )]),
     )
     .await;
-    let mut d = delivery(&env, &marks, &sent, &threads).await;
+    let mut d = delivery(&env, &marks, &sent).await;
     d.deps.milter = Some(Arc::new(Milters::new(
         crate::config::MilterConfig {
             filters: vec![virus.filter("av")],
@@ -424,8 +419,8 @@ async fn reply_with_virus_is_junk_despite_flag() {
 /// адрес из `smtp.batv.exempt` метки не требует.
 #[tokio::test]
 async fn batv_bounce_rejected_in_enforce_only() {
-    let (env, marks, sent, threads) = rig(BatvMode::Enforce).await;
-    let d = delivery(&env, &marks, &sent, &threads).await;
+    let (env, marks, sent) = rig(BatvMode::Enforce).await;
+    let d = delivery(&env, &marks, &sent).await;
     let e = inbound(CLIENT_OK, "", "alice@example.org");
     assert_eq!(
         d.rcpt(&e, "alice@example.org").await.code,
@@ -441,8 +436,8 @@ async fn batv_bounce_rejected_in_enforce_only() {
     assert_eq!(d.rcpt(&e, "bob@example.org").await.code, 250);
 
     // Тот же bounce в `log` — доставляется (только журнал и метрика).
-    let (env, marks, sent, threads) = rig(BatvMode::Log).await;
-    let d = delivery(&env, &marks, &sent, &threads).await;
+    let (env, marks, sent) = rig(BatvMode::Log).await;
+    let d = delivery(&env, &marks, &sent).await;
     let e = inbound(CLIENT_OK, "", "alice@example.org");
     assert_eq!(d.rcpt(&e, "alice@example.org").await.code, 250);
 }
@@ -451,14 +446,14 @@ async fn batv_bounce_rejected_in_enforce_only() {
 /// отклоняется.
 #[tokio::test]
 async fn batv_valid_mark_is_stripped_and_delivered() {
-    let (env, marks, sent, threads) = rig(BatvMode::Enforce).await;
+    let (env, marks, sent) = rig(BatvMode::Enforce).await;
     let batv = marks.batv().expect("batv");
     let tagged = batv
         .sign("alice@example.org", OffsetDateTime::now_utc())
         .await
         .expect("sign")
         .expect("tagged");
-    let d = delivery(&env, &marks, &sent, &threads).await;
+    let d = delivery(&env, &marks, &sent).await;
     // RCPT: валидная метка снимается — bounce принят.
     let e = inbound(CLIENT_OK, "", "alice@example.org");
     assert_eq!(d.rcpt(&e, &tagged).await.code, 250);
@@ -480,7 +475,7 @@ async fn batv_valid_mark_is_stripped_and_delivered() {
 /// Метка BATV одна и та же в повторах одного письма: подпись детерминирована (тот же отправитель и момент).
 #[tokio::test]
 async fn batv_mark_is_stable_for_the_same_letter() {
-    let (_env, marks, _sent, _threads) = rig(BatvMode::Log).await;
+    let (_env, marks, _sent) = rig(BatvMode::Log).await;
     let batv = marks.batv().expect("batv");
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("time");
     let first = batv
@@ -502,7 +497,7 @@ async fn batv_mark_is_stable_for_the_same_letter() {
 /// Письмо с вложением, ссылкой и `Reply-To` — память беседы получателя получает все три.
 #[tokio::test]
 async fn thread_memory_after_reply() {
-    let (env, marks, sent, threads) = rig(BatvMode::Log).await;
+    let (env, marks, sent) = rig(BatvMode::Log).await;
     let mid = sent_marked(
         &marks,
         &sent,
@@ -510,7 +505,7 @@ async fn thread_memory_after_reply() {
         time::Duration::minutes(5),
     )
     .await;
-    let d = delivery(&env, &marks, &sent, &threads).await;
+    let d = delivery(&env, &marks, &sent).await;
     let raw = Bytes::from(format!(
         "From: bob@{PARTNER}\r\nTo: alice@example.org\r\nSubject: Re: docs\r\n\
          In-Reply-To: <{mid}>\r\nReply-To: news@example.net\r\nMIME-Version: 1.0\r\n\
@@ -542,12 +537,13 @@ async fn thread_memory_after_reply() {
         .await
         .expect("list");
     assert_eq!(messages.len(), 1);
-    let thread = threads
+    let thread = env
+        .threads
         .thread_of(scope, messages[0].id)
         .await
         .expect("thread_of")
         .expect("bound");
-    let facts = threads.facts(scope, thread).await.expect("facts");
+    let facts = env.threads.facts(scope, thread).await.expect("facts");
     assert_eq!(facts.attachments, vec!["application/pdf"]);
     assert_eq!(
         facts.link_domains,

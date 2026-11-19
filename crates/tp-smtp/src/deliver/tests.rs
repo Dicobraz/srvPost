@@ -78,6 +78,8 @@ struct Env {
     groups: MemGroups,
     quota: MemQuota,
     store: Arc<dyn MailStore>,
+    /// Беседы учётных записей (MS-21): хранилище привязывает письма при `ingest`.
+    threads: MemThreads,
     dir: FakeDirectory,
     /// Настройки транспорта: `example.org` — принятый домен организации.
     transport: MemTransport,
@@ -104,6 +106,7 @@ impl Env {
         let index = MemBlobIndex::new(clock.clone());
         let meta = MemMetadata::new(clock).with_blob_index(index.clone());
         let quota = MemQuota::new(&meta);
+        let threads = MemThreads::new();
         let store = tp_mailstore::Store::new(tp_mailstore::Deps {
             blobs: Arc::new(blobs.clone()),
             index: Arc::new(index.clone()),
@@ -112,7 +115,7 @@ impl Env {
             trash: Arc::new(MemTrash::new(&meta)),
             quota: Arc::new(quota.clone()),
             bus: Arc::new(MemEventBus::default()),
-            threads: Some(Arc::new(MemThreads::new())),
+            threads: Some(Arc::new(threads.clone())),
             hooks,
         });
         for login in ["alice@example.org", "bob@example.org", "carol@example.org"] {
@@ -185,6 +188,7 @@ impl Env {
             groups: MemGroups::new(),
             quota,
             store: Arc::new(store),
+            threads,
             dir,
             transport,
             queue: Arc::new(Queue::default()),

@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use rand::RngExt;
 use time::OffsetDateTime;
 use tp_contracts::secrets::SecretRef;
 use tp_testkit::{MemSecretStore, SystemClock};
@@ -18,7 +17,7 @@ fn config(ids: &[(&str, bool)]) -> ReplyConfig {
         .iter()
         .map(|(id, active)| ReplyKeyConfig {
             id: (*id).to_owned(),
-            secret: SecretRef::new("thepost/reply", id).expect("ref"),
+            secret: SecretRef::new("thepost/reply", *id).expect("ref"),
             active: *active,
         })
         .collect();
@@ -257,7 +256,7 @@ async fn replace_message_id_for_node_letters() {
     // DSN/автоответ узла: прежний Message-ID заменяется меткой.
     let dsn = format!("Message-ID: <dsn.42@mx.example.org>\r\n{LETTER}");
     let (out, tag) = marks
-        .replace_message_id(bytes::Bytes::from(dsn), "example.org", now())
+        .replace_message_id(bytes::Bytes::from(dsn.clone()), "example.org", now())
         .await
         .expect("replace");
     assert!(tag.is_some());
@@ -480,8 +479,10 @@ fn exempt_lookup() {
 #[test]
 fn base32_roundtrip() {
     for len in [0usize, 1, 4, 5, 6, 19, 32, 64] {
-        let mut data = vec![0u8; len];
-        rand::rng().fill(&mut data[..]);
+        // Детерминированный набор с разными байтами.
+        let data: Vec<u8> = (0..len as u64)
+            .map(|i| (i.wrapping_mul(89) ^ (i << 3)).rem_euclid(256) as u8)
+            .collect();
         let encoded = base32(&data);
         assert!(!encoded.contains('='), "{encoded}");
         assert!(base32_ok(&encoded), "{encoded}");

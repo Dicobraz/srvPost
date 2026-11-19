@@ -111,9 +111,7 @@ use tp_contracts::blob::{BlobIndex, BlobStore};
 use tp_contracts::ext::{CopyTo, Decision, DecisionHooks, SubmissionInfo};
 use tp_contracts::groups::{DistributionGroup, MAX_RULE_NAME_LEN};
 use tp_contracts::journal::JournalDirection;
-use tp_contracts::mailstore::{
-    Delivered, Delivery as MailDelivery, IngestRequest, Ingested, MailStore,
-};
+use tp_contracts::mailstore::{Delivery as MailDelivery, IngestRequest, Ingested, MailStore};
 use tp_contracts::meta::{
     Account, AccountScope, AccountStore, Mailbox, MailboxStore, MessageQuery, MessageStore, Policy,
     PolicyResolver, SpecialUse,
@@ -126,7 +124,6 @@ use tp_contracts::schedule::{ItipDelivery, ItipMessage, ItipMethod};
 use tp_contracts::senders::{SenderLists, SenderVerdict};
 use tp_contracts::sharing::DelegateStore;
 use tp_contracts::sieve::{AutoReply, DeliveryRules, MailboxRef, RulesInput, RulesOutcome};
-use tp_contracts::thread::{ThreadFacts, ThreadStore};
 use tp_contracts::transport::{
     AcceptedDomain, BlobRef, DomainKind, EnvelopeSide, FlowDirection, FlowEnvelope, FlowInput,
     FlowOutcome, FlowVerdict, MailFlow,
@@ -323,8 +320,6 @@ pub struct Delivery {
     reply: Option<Arc<ReplyMarks>>,
     /// Запись об отправленном (SMTP-51, CTR-94): поиск исходного письма для признака ответа.
     sent: Option<Arc<dyn SentLog>>,
-    /// Беседы учётных записей (SMTP-51, CTR-94): привязка доставленных писем и память беседы для аномалий.
-    threads: Option<Arc<dyn ThreadStore>>,
     /// Метрики (SMTP-51: признак ответа и BATV).
     metrics: Option<Arc<SmtpMetrics>>,
     /// `smtp.reply.max_age`.
@@ -468,7 +463,6 @@ impl Delivery {
             org_policy: OrgPolicy::default(),
             reply: None,
             sent: None,
-            threads: None,
             metrics: None,
             reply_max_age: cfg.reply.max_age,
         }
@@ -487,13 +481,6 @@ impl Delivery {
     /// `tp-meta` (META-86), in-memory — `MemSentLog`; пишет очередь при постановке письма с адресатами.
     pub fn with_sent_log(mut self, sent: Arc<dyn SentLog>) -> Self {
         self.sent = Some(sent);
-        self
-    }
-
-    /// Беседы учётных записей (SMTP-51, CTR-94): привязка доставленных писем (`In-Reply-To`/`References`) и
-    /// память беседы для аномалий — типы вложений, домены ссылок, `Reply-To` (сами аномалии — SMTP-52).
-    pub fn with_threads(mut self, threads: Arc<dyn ThreadStore>) -> Self {
-        self.threads = Some(threads);
         self
     }
 
@@ -2220,10 +2207,10 @@ impl Delivery {
         // хэш Message-ID найден в записи об отправленном; отправитель `From` — среди адресатов записи, DMARC
         // pass с выравниванием и возраст ≤ `smtp.reply.max_age` — всё сразу. Своей меткой — до Milter
         // (Rspamd снижает балл, DEP-56); проверки признак не отменяет (антивирус, URL, DMARC — как всем).
-        let reply = self
+        let flagged = self
             .detect_reply(env, &full, check.as_ref().is_some_and(|c| c.dmarc_pass))
             .await;
-        if reply {
+        if flagged {
             let mut marked = Vec::with_capacity(full.len() + reply::REPLY_HEADER.len() + 8);
             marked.extend_from_slice(format!("{}: yes\r\n", reply::REPLY_HEADER).as_bytes());
             marked.extend_from_slice(&full);
@@ -2495,7 +2482,7 @@ impl Delivery {
                 &env.mail_from,
                 &full,
                 &mut prepared.deliveries,
-                &RuleContext::new(peer, reply, &prepared.junk, &prepared.group),
+                &RuleContext::new(peer, flagged, &prepared.junk, &prepared.group),
                 false,
                 true,
             )
@@ -2584,15 +2571,6 @@ impl Delivery {
                     &mut failed,
                 )
                 .await?;
-            // Беседы получателей (SMTP-51, CTR-94): привязка письма по `Message-ID`/`In-Reply-To`/
-            // `References` и память беседы для аномалий — вложения, домены ссылок, `Reply-To`
-            // (детекторы — SMTP-52). Сбой — только в журнал: доставке письмо не мешает.
-            if let Some(threads) = &self.threads {
-                let keys = thread_keys(&full);
-                let facts = thread_facts(&full);
-                self.bind_threads(threads, &keys, &facts, &ingested.delivered)
-                    .await;
-            }
             push_unique(&mut forward, ingested.forward);
         }
         let itip_steps = match origin.filter(|_| !itip_to.is_empty()) {
@@ -2727,7 +2705,7 @@ impl Delivery {
             .and_then(|a| a.rsplit_once('@').map(|(_, d)| d.to_lowercase()))
             .unwrap_or_else(|| self.hostname.clone());
         match marks
-            .ensure_message_id(raw, &domain, OffsetDateTime::now_utc())
+            .ensure_message_id(raw.clone(), &domain, OffsetDateTime::now_utc())
             .await
         {
             Ok((raw, _, _)) => raw,
@@ -2904,9 +2882,7 @@ impl Delivery {
         let Some(marks) = &self.reply else {
             return None;
         };
-        let Some(batv) = marks.batv() else {
-            return None;
-        };
+        let batv = marks.batv()?;
         if env.mode != Mode::Inbound || !env.mail_from.is_empty() || !local {
             return None;
         }
@@ -2919,37 +2895,6 @@ impl Delivery {
         tracing::info!(id = %env.id, address = %rcpt, "smtp: bounce на адрес без BATV-метки");
         batv.enforce()
             .then(|| reply(550, [5, 7, 1], "Bad or missing BATV signature"))
-    }
-
-    /// Привязка доставленных писем к беседам учётных записей (SMTP-51, CTR-94) и память беседы для
-    /// аномалий. Сбой привязки или памяти — только в журнал: письмо уже доставлено.
-    async fn bind_threads(
-        &self,
-        threads: &Arc<dyn ThreadStore>,
-        keys: &[String],
-        facts: &ThreadFacts,
-        delivered: &[Delivered],
-    ) {
-        if keys.is_empty() && facts == &ThreadFacts::new() {
-            return;
-        }
-        let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-        for d in delivered {
-            let scope = AccountScope {
-                tenant: self.deps.tenant,
-                account: d.account,
-            };
-            match threads.bind(scope, d.message, &refs).await {
-                Ok(thread) => {
-                    if facts != &ThreadFacts::new()
-                        && let Err(e) = threads.remember_facts(scope, thread, facts).await
-                    {
-                        tracing::warn!(error = %e, "smtp: память беседы не дополнена");
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "smtp: письмо не привязано к беседе"),
-            }
-        }
     }
 
     /// Обработка письма отправки вне сессии SMTP до доставки и очереди: фильтры Milter исходящей почты
@@ -4592,141 +4537,6 @@ fn temporary(e: &Error) -> Reply {
 /// Значение для заголовка: без управляющих символов (CR, LF) — защита от внедрения заголовков.
 fn clean(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
-}
-
-/// Ключи присоединения письма к беседе (SMTP-51, CTR-94): собственный `Message-ID`, затем `In-Reply-To`
-/// и `References` ([`tp_contracts::thread::join_key`] при привязке канонизирует каждый).
-fn thread_keys(raw: &[u8]) -> Vec<String> {
-    let Some(msg) = mail_parser::MessageParser::default().parse_headers(raw) else {
-        return Vec::new();
-    };
-    let mut keys = referenced_ids(raw);
-    if let Some(id) = msg.message_id() {
-        let id = id.trim();
-        if !id.is_empty() {
-            keys.push(format!("<{id}>"));
-        }
-    }
-    keys
-}
-
-/// Память беседы из письма (SMTP-51, решение 125 д): типы вложений (`media/subtype`), домены ссылок
-/// (`href` из HTML-частей, канонические имена) и значения `Reply-To` (канонические адреса). Сами
-/// аномалии по памяти — детекторы каталога (SMTP-52).
-fn thread_facts(raw: &[u8]) -> ThreadFacts {
-    use mail_parser::MimeHeaders;
-    let mut facts = ThreadFacts::new();
-    let Some(msg) = mail_parser::MessageParser::default().parse(raw) else {
-        return facts;
-    };
-    for part in msg.attachments() {
-        if let Some(ct) = part.content_type() {
-            let kind = match ct.subtype() {
-                Some(sub) => format!("{}/{}", ct.ctype(), sub),
-                None => ct.ctype().to_owned(),
-            };
-            if !facts.attachments.iter().any(|x| *x == kind) {
-                facts.attachments.push(kind);
-            }
-        }
-    }
-    for part in msg.html_bodies() {
-        if let Some(html) = part.text_contents() {
-            for domain in href_domains(html) {
-                if !facts.link_domains.iter().any(|x| *x == domain) {
-                    facts.link_domains.push(domain);
-                }
-            }
-        }
-    }
-    if let Some(addrs) = msg.reply_to() {
-        for a in addrs.iter().filter_map(|a| a.address()) {
-            if let Ok(canonical) = tp_contracts::reply::normalize_recipient(a)
-                && !facts.reply_to.iter().any(|x| *x == canonical)
-            {
-                facts.reply_to.push(canonical);
-            }
-        }
-    }
-    facts
-}
-
-/// Домены ссылок HTML (SMTP-51): значения `href` со схемой http/https — host до пути, порт и userinfo
-/// отбрасываются, домен канонизируется ([`tp_contracts::transport::normalize_domain`], IDN — A-label).
-/// Относительные ссылки и прочие схемы — пропускаются.
-fn href_domains(html: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let lower = html.to_ascii_lowercase();
-    let mut from = 0usize;
-    while let Some(found) = lower[from..].find("href") {
-        let mut i = from + found + 4;
-        let bytes = html.as_bytes();
-        while i < html.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if bytes.get(i) != Some(&b'=') {
-            from = i;
-            continue;
-        }
-        i += 1;
-        while i < html.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        let (url, next) = match bytes.get(i) {
-            Some(&q) if q == b'"' || q == b'\'' => match html[i + 1..].find(q as char) {
-                Some(end) => (html[i + 1..i + 1 + end].to_owned(), i + end + 2),
-                None => break,
-            },
-            Some(_) => {
-                let end = html[i..]
-                    .find(|c: char| c.is_ascii_whitespace() || c == '>')
-                    .unwrap_or(html.len() - i);
-                (html[i..i + end].to_owned(), i + end)
-            }
-            None => break,
-        };
-        from = next;
-        if let Some(domain) = href_host(&url)
-            && !out.contains(&domain)
-        {
-            out.push(domain);
-        }
-    }
-    out
-}
-
-/// Host значения `href`: только `http://` и `https://`; userinfo, порт и IPv6-скобки отбрасываются,
-/// домен канонизируется. `None` — не абсолютная http-ссылка или host не домен.
-fn href_host(url: &str) -> Option<String> {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))?;
-    // Путь, запрос и фрагмент не входят.
-    let authority = rest
-        .find(|c| c == '/' || c == '?' || c == '#')
-        .map(|i| &rest[..i])
-        .unwrap_or(rest);
-    // Userinfo отбрасывается (до последней `@`), IPv6 — в скобках, порт — после последней `:`.
-    let authority = authority
-        .rsplit_once('@')
-        .map(|(_, h)| h)
-        .unwrap_or(authority);
-    let host = if authority.starts_with('[') {
-        return None;
-    } else {
-        match authority.rsplit_once(':') {
-            Some((h, _)) if !h.is_empty() => h,
-            _ => authority,
-        }
-    };
-    let domain = if host.is_ascii() {
-        tp_contracts::transport::normalize_domain(host).ok()
-    } else {
-        idna::domain_to_ascii(host)
-            .ok()
-            .and_then(|a| tp_contracts::transport::normalize_domain(&a).ok())
-    };
-    domain
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

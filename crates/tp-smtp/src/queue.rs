@@ -277,6 +277,7 @@ impl Queue {
     /// DSN, автоответ — метка заменяет прежний Message-ID), затем DKIM-подпись (подписывает и метку),
     /// BATV-подпись отправителя конверта и запись об отправленном. Сбой метки, BATV или записи — только в
     /// журнал: письмо уходит.
+    #[allow(clippy::too_many_arguments)]
     async fn put_marked(
         &self,
         tenant: TenantId,
@@ -294,7 +295,7 @@ impl Queue {
         let (raw, message_id, tag) = match &self.reply {
             Some(marks) if replace => {
                 let (raw, tag) = marks
-                    .replace_message_id(raw, &domain, now)
+                    .replace_message_id(raw.clone(), &domain, now)
                     .await
                     .inspect_err(
                         |e| tracing::warn!(error = %e, "smtp: метка Message-ID не поставлена"),
@@ -303,12 +304,15 @@ impl Queue {
                 (raw, mid, tag)
             }
             Some(marks) => marks
-                .ensure_message_id(raw, &domain, now)
+                .ensure_message_id(raw.clone(), &domain, now)
                 .await
                 .inspect_err(
                     |e| tracing::warn!(error = %e, "smtp: метка Message-ID не поставлена"),
                 )?,
-            None => (raw, ReplyMarks::current_id(&raw), None),
+            None => {
+                let id = ReplyMarks::current_id(&raw);
+                (raw, id, None)
+            }
         };
         let raw = self.signed(raw).await?;
         let tagged = self.batv_from(from, now).await;
@@ -329,7 +333,7 @@ impl Queue {
         let Some(batv) = marks.batv() else {
             return (!from.is_empty()).then(|| from.to_owned());
         };
-        match batv.sign(from, now) {
+        match batv.sign(from, now).await {
             Ok(Some(tagged)) => Some(tagged),
             Ok(None) => (!from.is_empty()).then(|| from.to_owned()),
             Err(e) => {
@@ -361,7 +365,7 @@ impl Queue {
         };
         let mut recipients = Vec::new();
         for r in rcpts {
-            match tp_contracts::reply::normalize_recipient(&r.rcpt.address) {
+            match tp_contracts::reply::normalize_recipient(&r.address) {
                 Ok(a) => {
                     if !recipients
                         .iter()
@@ -371,7 +375,7 @@ impl Queue {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(address = %r.rcpt.address, error = %e, "smtp: адресат вне записи об отправленном")
+                    tracing::warn!(address = %r.address, error = %e, "smtp: адресат вне записи об отправленном")
                 }
             }
         }
@@ -380,7 +384,7 @@ impl Queue {
         }
         let record = SentRecord {
             tenant,
-            account: owner.unwrap_or_else(AccountId::new),
+            account: owner.unwrap_or_default(),
             tag: tag.unwrap_or_else(random_tag),
             message_id_hash: ReplyMarks::hash_of(message_id.unwrap_or_default()),
             recipients,
