@@ -17,11 +17,11 @@ KEEP=2
 
 # --- podium-dev: /home/admin2/thepost-perf (Д.7 на 172.22.0.0/24) -------------
 # NODE=thepost-perf-smb
-# NODE_RUN_ARGS=--network thepost-perf --hostname mail --ip 172.22.0.2 --privileged
+# NODE_RUN_ARGS='--network thepost-perf --hostname mail --ip 172.22.0.2 --privileged'
 
 # --- school-99-stand: /home/<user>/thepost-d7 (Д.7 на 172.21.0.0/24) ----------
 # NODE=thepost-d7-smb
-# NODE_RUN_ARGS=--network thepost-d7 --hostname mail --ip 172.21.0.2 --privileged --restart unless-stopped
+# NODE_RUN_ARGS='--network thepost-d7 --hostname mail --ip 172.21.0.2 --privileged --restart unless-stopped'
 
 # --- Cron (на хосте стенда, от того же пользователя, что и стенд) -------------
 # Проверка раз в 15 минут; журнал — update.log:

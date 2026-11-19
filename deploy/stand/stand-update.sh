@@ -70,10 +70,10 @@ done
 
 if [ "$mode" != force ]; then
   # Первая запись tag_name в выдаче /releases — самая свежая (включая pre-release).
-  latest=$(curl -fsSL --max-time 30 \
-    "https://api.github.com/repos/$REPO/releases?per_page=10" \
-    | grep -m1 '"tag_name"' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/') || {
+  api=$(curl -fsSL --max-time 30 \
+    "https://api.github.com/repos/$REPO/releases?per_page=10") || {
     say "ОШИБКА: releases API недоступен"; exit 1; }
+  latest=$(printf '%s' "$api" | grep -m1 '"tag_name"' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
   [ -n "$latest" ] || { say "ОШИБКА: пустой ответ releases API"; exit 1; }
 else
   latest=$tag_force
