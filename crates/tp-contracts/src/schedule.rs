@@ -26,6 +26,7 @@ use crate::error::{Error, Result};
 use crate::ids::{AccountId, ModSeq, TenantId};
 use crate::meta::AccountScope;
 use crate::queue::Submitted;
+use crate::sieve::ProcessCalendar;
 use crate::trust::PeerKind;
 
 /// Наибольшая длина адреса календарного пользователя (без `mailto:`), байт.
@@ -177,6 +178,11 @@ pub struct ItipMessage {
     /// Кто отправитель относительно организации получателя; что ему можно —
     /// [`TrustMatrix::inbound`](crate::trust::TrustMatrix::inbound).
     pub sender: PeerKind,
+    /// Итог действия `processcalendar` правил Sieve (RFC 9671, [`crate::sieve::RulesOutcome::calendar`]): параметры,
+    /// с которыми приём вносит новое приглашение чужого в пределах действующей матрицы получателя и её потолка
+    /// (SMTP-50, DAV-44); действия правил не было — `None` (и в сообщениях, сохранённых без поля).
+    #[serde(default)]
+    pub calendar: Option<ProcessCalendar>,
 }
 
 impl ItipMessage {
@@ -543,6 +549,7 @@ mod tests {
             method: ItipMethod::Request,
             ics: "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n".into(),
             sender: PeerKind::Partner,
+            calendar: None,
         };
         assert_eq!(msg.validate(), Ok(()));
         assert!(
@@ -678,5 +685,56 @@ mod tests {
         assert!(s.contains("\"unavailable\""), "{s}");
         assert_eq!(serde_json::from_str::<BusyPeriod>(&s).expect("parse"), p);
         assert_eq!(BusyKind::Tentative.as_str(), "BUSY-TENTATIVE");
+    }
+
+    #[test]
+    fn itip_message_calendar_serde() {
+        let scope = AccountScope {
+            tenant: TenantId::new(),
+            account: AccountId::new(),
+        };
+        let msg = ItipMessage {
+            recipient: scope,
+            to: "anna@example.org".into(),
+            from: "boss@partner.example".into(),
+            method: ItipMethod::Request,
+            ics: "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n".into(),
+            sender: PeerKind::Partner,
+            calendar: Some(ProcessCalendar {
+                addresses: vec!["boss@partner.example".into()],
+                ..ProcessCalendar::default()
+            }),
+        };
+        let s = serde_json::to_string(&msg).expect("json");
+        assert!(s.contains("\"calendar\""), "{s}");
+        assert_eq!(
+            serde_json::from_str::<ItipMessage>(&s).expect("parse"),
+            msg,
+            "туда-обратно с полем"
+        );
+        // Без действия (`None`) поле пишется `null` и читается `None`; сообщение, сохранённое до появления
+        // поля (без ключа), читается со значением `default` — тоже `None`.
+        let msg = ItipMessage {
+            calendar: None,
+            ..msg
+        };
+        let s = serde_json::to_string(&msg).expect("json");
+        assert!(s.contains("\"calendar\":null"), "{s}");
+        assert_eq!(
+            serde_json::from_str::<ItipMessage>(&s).expect("parse"),
+            msg,
+            "null читается как отсутствие"
+        );
+        let mut old = serde_json::to_value(&msg).expect("json");
+        old.as_object_mut()
+            .expect("object")
+            .remove("calendar")
+            .expect("поле было");
+        let old = serde_json::to_string(&old).expect("json");
+        assert_eq!(
+            serde_json::from_str::<ItipMessage>(&old).expect("parse"),
+            msg,
+            "отсутствующее поле — default None"
+        );
     }
 }

@@ -241,6 +241,7 @@ impl Sched {
                 method,
                 ics: ics.to_owned(),
                 sender,
+                calendar: None,
             })
             .await
             .expect("доставка")
