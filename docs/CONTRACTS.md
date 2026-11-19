@@ -467,7 +467,10 @@ until, limit, after })` -> `AuditPage` (как `DeliveryLog::search`), `purge_au
 ## AdminAuditLog
 SRS 5.2, 6.8, решение 98 (CTR-25; код — `admin_audit.rs`). Журнал аудита Admin API, только добавление. `AdminAuditRecord { at, tenant?
 (`None` — уровень инсталляции), actor_tenant, actor, actor_login, roles: Vec<String> (роли Admin API), method, route, path, status,
-content_messages? }` — без тела запроса и секретов. `AuditLog`: `append(&record) -> seq` (номер ≥ 1, растёт в порядке добавления);
+content_messages?, details? }` — без тела запроса и секретов. Детали — решение владельца 19.11 (issue #108,
+ADM-49): журнал аудита пишет и старое, и новое значение — `AuditDetails::Trust { from?, to? }`, прежняя и новая
+политика доверия уровня целиком (сброс — `to` нет); технологические журналы узла пишут только новое значение.
+`AuditLog`: `append(&record) -> seq` (номер ≥ 1, растёт в порядке добавления);
 `search(tenant, &AdminAuditQuery { since?, until?, actor?, method?, route_prefix?, limit ≥ 1, after? }) -> AdminAuditPage { entries:
 Vec<AdminAuditEntry { seq, record }>, next? }` — только записи организации (без уровня инсталляции), по возрастанию `seq`, условия по «и»
 (`AdminAuditQuery::matches`: `at` в [`since`, `until`), `actor` — имя входа без учёта регистра или UUID, `method` — точно, `route_prefix` —
@@ -814,9 +817,13 @@ iMIP (RFC 6047), занятость. iCalendar контракты не разб�
 с JMAP (`sendSchedulingMessages`, JMAP-31; JMAP Calendars — по черновику IETF, решение 35). Адрес календарного пользователя —
 без `mailto:`, `valid_address` (1–320 байт, без пробелов и управляющих; нормализует вызывающий).
 - `ItipMethod::{Publish, Request, Reply, Add, Cancel, Refresh, Counter, DeclineCounter}` (`as_str`, `FromStr` без регистра, `from_organizer`).
-- `ItipDelivery::deliver(&ItipMessage { recipient: AccountScope, to, from, method, ics, sender: PeerKind }) ->
-  ItipOutcome::{Applied, Ignored(reason)}` — приём iTIP учётной записью: `REQUEST`, `ADD` — событие в календаре по умолчанию
+- `ItipDelivery::deliver(&ItipMessage { recipient: AccountScope, to, from, method, ics, sender: PeerKind,
+  calendar: Option<ProcessCalendar> }) -> ItipOutcome::{Applied, Ignored(reason)}` — приём iTIP учётной записью:
+  `REQUEST`, `ADD` — событие в календаре по умолчанию
   (`PARTSTAT=NEEDS-ACTION`), `REPLY` — статус участника у организатора, `CANCEL` — `STATUS:CANCELLED`, все — во входящие планирования.
+  `calendar` (issue #89, решение владельца — вариант 1) — итог действия `processcalendar` правил Sieve (RFC 9671,
+  `RulesOutcome::calendar`), которое приём исполняет в пределах действующей матрицы получателя (`invite_new = auto`);
+  действия не было или сообщение сохранено без поля — `None` (`#[serde(default)]`).
   `from` проверен вызывающим (iMIP — `From`, прошедший DMARC; внутри — адрес учётной записи). CTR-59 (решение 78): своя организация — также
   приглашение из почтового клиента (submission, JMAP `EmailSubmission`; SMTP-36), если `From` письма принадлежит вошедшей учётной записи
   (свой адрес, псевдоним, право Send As); иначе — письмо без доставки iTIP. CTR-92 → CTR-93 (решения 123 → 124): `sender` — тип отправителя
@@ -1411,3 +1418,8 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   `tp_journal_clear` восстановления; `rules` — правила журналирования организации, RLS); порядок цепочки — `seq`
   организации под рекомендательной блокировкой; поиск по (`at`, `id`) с курсором; набор `suite::journal` проходит на
   PostgreSQL (подмена записи ловится, восстановление из хранилища записей возвращает поиск).
+
+- 2026-11-19 — x/contracts-68 (issue #89, решение владельца — вариант 1): `ItipMessage::calendar: Option<ProcessCalendar>`
+  (`#[serde(default)]`) — итог действия `processcalendar` правил Sieve (RFC 9671) приём передаёт вместе с сообщением:
+  SMTP-50 (PR #104) пишет, DAV-44 читает. Совместимо: absent/null — `None`; вызывающие (`tp-smtp`, `tp-dav`, `tp-testkit`)
+  переведены в этом же PR.

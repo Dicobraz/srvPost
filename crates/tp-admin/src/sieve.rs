@@ -1,9 +1,12 @@
-//! Правила Sieve и автоответ учётной записи, скрипт организации (SRS 4.3, 5.2; ADM-14).
+//! Правила Sieve и автоответ учётной записи, скрипт организации (SRS 4.3, 5.2; ADM-14, ADM-49).
 //!
 //! Администратор ведёт скрипты и автоответ за пользователя (как в Exchange Admin Center): список, текст, замена,
 //! удаление, выбор активного; скрипт организации выполняется до скрипта пользователя у всех её учётных записей.
 //! Текст проверяется до записи ([`ScriptCheck`], у узла — разбор с пределами секции `sieve`): ошибки с позициями — 422
-//! ([`ScriptProblem`]), в хранилище такой текст не попадает. Лимиты хранилища — 507, удаление активного скрипта — 409.
+//! ([`ScriptProblem`]), в хранилище такой текст не попадает. Скрипт организации проверяется и профилем «админский»
+//! ([`OrgScriptCheck`], SIEVE-14, решение 124 д): `vacation` запрещён, `redirect` наружу — только на домен, куда
+//! открыта автопересылка (домены — из политики доверия организации, [`crate::trust`]); недопустимое — 422 со строкой
+//! и столбцом, как у скриптов пользователя. Лимиты хранилища — 507, удаление активного скрипта — 409.
 //! Хранилище подключает [`Admin::with_sieve`]; без него маршруты отвечают 503. Тексты скриптов и автоответа в аудит
 //! не попадают (запись — метод, маршрут, путь, код).
 
@@ -19,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
 use tp_contracts::meta::AccountScope;
 use tp_contracts::sieve::{ScriptInfo, SieveStore, Vacation};
+use tp_contracts::trust::{Toggle, TrustLevel};
 use tp_contracts::{AccountId, Error, TenantId};
 use utoipa::{OpenApi, ToSchema};
 
@@ -54,26 +58,62 @@ where
     }
 }
 
+/// Проверка скрипта организации профилем «админский» (SIEVE-14, решение 124 д): `vacation` запрещён, `redirect`
+/// на внешний адрес — только на домен из `forward` (домены, куда открыта автопересылка), внутренний адрес — домен
+/// из `internal` (принятые домены организации); «сузить, пометить, отбросить» он не может. Реализована и для
+/// замыканий `Fn(&str, &[String], &[String]) -> Vec<ScriptError>`.
+pub trait OrgScriptCheck: Send + Sync + 'static {
+    /// Ошибки текста с позициями; пусто — скрипт верен.
+    fn check(&self, text: &str, internal: &[String], forward: &[String]) -> Vec<ScriptError>;
+}
+
+impl<F> OrgScriptCheck for F
+where
+    F: Fn(&str, &[String], &[String]) -> Vec<ScriptError> + Send + Sync + 'static,
+{
+    fn check(&self, text: &str, internal: &[String], forward: &[String]) -> Vec<ScriptError> {
+        self(text, internal, forward)
+    }
+}
+
 /// Хранилище скриптов и проверка текста.
 #[derive(Clone)]
 pub(crate) struct Sieve {
     store: Arc<dyn SieveStore>,
     check: Arc<dyn ScriptCheck>,
+    /// Профиль «админский» для скрипта организации (SIEVE-14); `None` — проверка только синтаксиса (узел подключает
+    /// профиль вместе с остальным, APP-76).
+    org_check: Option<Arc<dyn OrgScriptCheck>>,
 }
 
 impl fmt::Debug for Sieve {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sieve").finish_non_exhaustive()
+        f.debug_struct("Sieve")
+            .field("org_check", &self.org_check.is_some())
+            .finish_non_exhaustive()
     }
 }
 
 impl Admin {
     /// Подключает правила Sieve и автоответ ([`crate::sieve`]): хранилище и проверку текста скрипта.
     pub fn with_sieve(mut self, store: Arc<dyn SieveStore>, check: impl ScriptCheck) -> Self {
+        let org_check = self.org_script_check.clone();
         self.sieve = Some(Sieve {
             store,
             check: Arc::new(check),
+            org_check,
         });
+        self
+    }
+
+    /// Подключает проверку скрипта организации профилем «админский» (SIEVE-14, ADM-49): `vacation` запрещён,
+    /// `redirect` наружу — только на домены автопересылки организации (политика доверия, [`crate::trust`]).
+    /// Работает до и после [`Admin::with_sieve`].
+    pub fn with_org_script_check(mut self, check: impl OrgScriptCheck) -> Self {
+        self.org_script_check = Some(Arc::new(check));
+        if let Some(sieve) = &mut self.sieve {
+            sieve.org_check = self.org_script_check.clone();
+        }
         self
     }
 }
@@ -129,6 +169,7 @@ pub struct ScriptProblem {
 }
 
 /// Автоответ учётной записи (модель JMAP `VacationResponse`, RFC 8621 §8); выполняется до активного скрипта.
+/// Чужим отправителям — только внешний текст (CTR-93, RFC 3834): не задан — наружу ответа нет.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VacationBody {
@@ -152,6 +193,15 @@ pub struct VacationBody {
     /// Текст ответа HTML.
     #[serde(default)]
     pub html_body: Option<String>,
+    /// Тема ответа чужим; `null` — наружу ответа нет.
+    #[serde(default)]
+    pub external_subject: Option<String>,
+    /// Текст ответа чужим.
+    #[serde(default)]
+    pub external_text_body: Option<String>,
+    /// Текст ответа чужим HTML.
+    #[serde(default)]
+    pub external_html_body: Option<String>,
 }
 
 impl From<Vacation> for VacationBody {
@@ -163,6 +213,9 @@ impl From<Vacation> for VacationBody {
             subject: v.subject,
             text_body: v.text_body,
             html_body: v.html_body,
+            external_subject: v.external_subject,
+            external_text_body: v.external_text_body,
+            external_html_body: v.external_html_body,
         }
     }
 }
@@ -176,10 +229,9 @@ impl From<VacationBody> for Vacation {
             subject: v.subject,
             text_body: v.text_body,
             html_body: v.html_body,
-            // Внешний текст — не этой волной (CTR-93): Admin API его не задаёт, `None` — наружу ответа нет.
-            external_subject: None,
-            external_text_body: None,
-            external_html_body: None,
+            external_subject: v.external_subject,
+            external_text_body: v.external_text_body,
+            external_html_body: v.external_html_body,
         }
     }
 }
@@ -256,6 +308,57 @@ fn verify(s: &Sieve, text: &str) -> ApiResult<Option<Response>> {
         return Err(Error::QuotaExceeded.into());
     }
     let errors = s.check.check(text);
+    if errors.is_empty() {
+        return Ok(None);
+    }
+    let status = StatusCode::UNPROCESSABLE_ENTITY;
+    let body = ScriptProblem {
+        status: status.as_u16(),
+        title: status.canonical_reason().unwrap_or_default().to_owned(),
+        errors,
+    };
+    let mut resp = (status, Json(body)).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    Ok(Some(resp))
+}
+
+/// Проверка скрипта организации (ADM-49): синтаксис — как у скриптов пользователя, затем профиль «админский»
+/// (SIEVE-14): `vacation` запрещён, `redirect` на внешний адрес — только на домен из `forward` (домены
+/// автопересылки организации при `auto_forward.external = on`; политика недоступна или не задана — закрыта),
+/// внутренний адрес — домен из `internal` (принятые домены организации). Ошибки — 422 со строкой и столбцом.
+async fn verify_org(a: &Admin, org: TenantId, text: &str) -> ApiResult<Option<Response>> {
+    let s = sieve(a)?;
+    if let Some(rejected) = verify(s, text)? {
+        return Ok(Some(rejected));
+    }
+    let Some(org_check) = &s.org_check else {
+        return Ok(None);
+    };
+    let internal = match &a.transport {
+        Some(transport) => transport
+            .cluster()
+            .await?
+            .domains
+            .into_iter()
+            .filter(|d| d.tenant == org)
+            .map(|d| d.name)
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+    // Автопересылка наружу закрыта, пока политика организации её не открыла (клетка `auto_forward.external`).
+    let forward = match &a.trust {
+        Some(trust) => trust
+            .policy(TrustLevel::Org(org))
+            .await?
+            .filter(|p| p.auto_forward.external == Some(Toggle::On))
+            .map(|p| p.auto_forward_domains)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let errors = org_check.check(text, &internal, &forward);
     if errors.is_empty() {
         return Ok(None);
     }
@@ -424,7 +527,9 @@ async fn org_script(
     }))
 }
 
-/// Задаёт скрипт организации; текст проверяется до записи.
+/// Задаёт скрипт организации; текст проверяется до записи: синтаксис с пределами секции `sieve` и профиль
+/// «админский» (SIEVE-14): `vacation` запрещён, `redirect` на внешний адрес — только на домен, куда открыта
+/// автопересылка организации; ошибки — 422 со строкой и столбцом.
 #[utoipa::path(put, path = "/api/v1/orgs/{org}/sieve", tag = "sieve",
     params(("org" = String, Path, description = "Организация (UUID)")),
     request_body = ScriptText,
@@ -435,11 +540,13 @@ async fn set_org_script(
     Path(org): Path<TenantId>,
     Json(body): Json<ScriptText>,
 ) -> ApiResult<Response> {
-    let s = sieve(&a)?;
-    if let Some(rejected) = verify(s, &body.text)? {
+    if let Some(rejected) = verify_org(&a, org, &body.text).await? {
         return Ok(rejected);
     }
-    s.store.set_org_script(org, Some(body.text)).await?;
+    sieve(&a)?
+        .store
+        .set_org_script(org, Some(body.text))
+        .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -749,6 +856,107 @@ mod tests {
         let (s, _, _) = env.call("GET", &path, Some("org"), None).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
         assert_eq!(env.audit.records().len(), 4);
+    }
+
+    /// Приёмка ADM-49 (профиль «админский», SIEVE-14): `vacation` в скрипте организации и `redirect` на внешний
+    /// адрес при закрытой автопересылке — 422 со строкой и столбцом; открытая автопересылка и внутренний адрес
+    /// (принятый домен организации) — допустимы; в хранилище недопустимое не попадает.
+    #[tokio::test]
+    async fn org_script_admin_profile() {
+        let env = Env::new();
+        let path = format!("/api/v1/orgs/{}/sieve", TenantId::DEFAULT);
+        env.put_domain(TenantId::DEFAULT, "example.org").await;
+        let put = |text: &str| env.call("PUT", &path, Some("org"), Some(json!({ "text": text })));
+
+        // vacation запрещён.
+        let (s, _, b) = put("vacation :days 3 \"Уехал\";\n").await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(
+            b["errors"],
+            json!([{"line": 1, "column": 1, "message": "vacation в скрипте организации запрещён"}])
+        );
+
+        // redirect на внешний адрес при закрытой автопересылке — ошибка со строкой и столбцом.
+        let (s, _, b) = put("redirect \"x@gmail.com\";\n").await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(b["errors"][0]["line"], 1);
+        assert!(
+            b["errors"][0]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("gmail.com")
+        );
+        assert_eq!(env.sieve.org_script(TenantId::DEFAULT).await, Ok(None));
+
+        // Внутренний адрес (принятый домен) — допустим.
+        let (s, _, _) = put("redirect \"user@example.org\";\n").await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+
+        // Автопересылка открыта для домена — redirect туда допустим.
+        let trust =
+            json!({"auto_forward": {"external": "on"}, "auto_forward_domains": ["example.net"]});
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                &format!("/api/v1/orgs/{}/trust", TenantId::DEFAULT),
+                Some("org"),
+                Some(trust),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = put("redirect \"team@example.net\";\n").await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+
+        // Автопересылка выключена — домен больше не проходит.
+        let trust =
+            json!({"auto_forward": {"external": "off"}, "auto_forward_domains": ["example.net"]});
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                &format!("/api/v1/orgs/{}/trust", TenantId::DEFAULT),
+                Some("org"),
+                Some(trust),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = put("redirect \"team@example.net\";\n").await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Приёмка ADM-49 (CTR-93): внешний текст автоответа — маршрут принимает и отдаёт.
+    #[tokio::test]
+    async fn vacation_external_text() {
+        let env = Env::new();
+        let scope = env.account("user@example.org").await;
+        let path = format!(
+            "/api/v1/orgs/{}/accounts/{}/vacation",
+            TenantId::DEFAULT,
+            scope.account
+        );
+        let body = json!({
+            "enabled": true,
+            "subject": "В отпуске",
+            "text_body": "Вернусь в январе.",
+            "external_subject": "Away",
+            "external_text_body": "Back in January.",
+        });
+        let (s, _, b) = env.call("PUT", &path, Some("org"), Some(body)).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["external_subject"], "Away");
+        assert_eq!(b["external_text_body"], "Back in January.");
+        assert_eq!(b["external_html_body"], Value::Null);
+        let stored = env.sieve.vacation(scope).await.expect("vacation");
+        assert_eq!(stored.external_subject.as_deref(), Some("Away"));
+        assert_eq!(
+            stored.external_text_body.as_deref(),
+            Some("Back in January.")
+        );
+        // Замена целиком: без внешних полей — их нет.
+        let (s, _, b) = env
+            .call("PUT", &path, Some("org"), Some(json!({"enabled": false})))
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["external_subject"], Value::Null);
     }
 
     #[tokio::test]
