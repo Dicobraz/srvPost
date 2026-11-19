@@ -266,6 +266,7 @@ impl ThreadStore for MemThreads {
 mod tests {
     use super::*;
     use crate::suite;
+    use tp_contracts::ids::{AccountId, TenantId};
 
     #[tokio::test]
     async fn suite_mem_threads() {
