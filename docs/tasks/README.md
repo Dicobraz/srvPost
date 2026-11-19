@@ -929,9 +929,9 @@
 | [DEPS-18](DEPS-18.md) | зависимости метки ответа и BATV — `chacha20poly1305`, `hmac`, `sha1` в tp-smtp | deps | B | deps-18 | done | — |
 | [CTR-94](CTR-94.md) | контракты ответа и беседы — запись об отправленном, ключи меток, беседа, удержание и действия по беседе | contracts | B | contracts-65 | done | CTR-93 |
 | [META-86](META-86.md) | запись об отправленном и беседы в PostgreSQL — `SentLog`, `ThreadStore`, удержание и действия по беседе | meta | A | meta-59 | ready | CTR-94 |
-| [MS-21](MS-21.md) | приём письма — беседа и политики беседы в той же транзакции | mailstore | A | mailstore-15 | ready | CTR-94 |
+| [MS-21](MS-21.md) | приём письма — беседа и политики беседы в той же транзакции | mailstore | A | mailstore-15 | done | CTR-94 |
 | [SMTP-51](SMTP-51.md) | ответ на наше письмо — метка в Message-ID, BATV, признак ответа, память беседы | smtp | A | smtp-31 | ready | CTR-94,DEPS-18,SMTP-50 |
-| [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | todo | CTR-94,MS-21 |
+| [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | ready | CTR-94,MS-21 |
 | [JMAP-49](JMAP-49.md) | доступ к чужим ящикам почты в JMAP — делегированные Email/query и Email/get по ACL | jmap | A | jmap-33 | done | JMAP-32,CTR-82 |
 | [ADM-50](ADM-50.md) | удержание беседы в Admin API — удержать, снять, перечислить, выгрузить; CLI | admin | B | admin-36 | ready | CTR-94,ADM-44 |
 | [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | app-74 | todo | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
@@ -972,7 +972,7 @@
 | [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | done | CTR-97,META-88,BLOB-18 |
 | [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | done | CTR-97 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | ready | ADM-52 |
-| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | ready | APP-83,BLOB-18 |
+| [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | done | APP-83,BLOB-18 |
 | [APP-84](APP-84.md) | # APP-84. Включение журнала в узле — wiring JournalStore/JournalRules в thepost |  |  | app-81 | todo | — |
 
 ## Вне волн
