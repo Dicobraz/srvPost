@@ -13,6 +13,7 @@
 #   (без аргументов)  обновить до последней версии, если есть; занято — пропустить
 #   --check           только сообщить (exit 2 — есть новая версия, 0 — актуален)
 #   --tag <тег>       установить указанный тег, не сверяясь с releases API
+#   --install-cron    взвести cron стенда из UPDATE_EVERY_DAYS (раз в N дней, утром) — один раз
 #
 # Конфиг — update.conf рядом (пример: update.conf.example): каталоги inbox/rel, имена
 # контейнеров узла/генератора, образы, аргументы запуска узла (сеть, --ip, hostname),
@@ -57,15 +58,24 @@ PRE_INSTALL_CMD=${PRE_INSTALL_CMD:-'command -v sudo >/dev/null 2>&1 || { apt-get
 # в update.conf (AUTO_UPDATE=yes). Ручные --check/--tag работают всегда.
 AUTO_UPDATE=${AUTO_UPDATE:-no}
 UPDATE_EVERY_DAYS=${UPDATE_EVERY_DAYS:-3}
-LAST_UPDATE=${LAST_UPDATE:-$DIR/.last-update}
+LOG=${LOG:-$DIR/update.log}
 
 mode=update
 if [ "$#" -ge 1 ]; then
   case "$1" in
     --check) mode=check ;;
     --tag) mode=force; tag_force=${2:?--tag требует тег} ;;
+    --install-cron) mode=cron ;;
     *) echo "неизвестный аргумент: $1 (см. шапку)" >&2; exit 64 ;;
   esac
+fi
+
+if [ "$mode" = cron ]; then
+  # Крон стенда из UPDATE_EVERY_DAYS: раз в N дней утром. Единственный источник интервала — update.conf.
+  line="17 4 */$UPDATE_EVERY_DAYS * * $DIR/stand-update.sh >> $LOG 2>&1"
+  (crontab -l 2>/dev/null | grep -v 'stand-update.sh'; echo "$line") | crontab -
+  say "cron взведён из UPDATE_EVERY_DAYS=$UPDATE_EVERY_DAYS: $(crontab -l | grep stand-update.sh)"
+  exit 0
 fi
 
 # Lock: повторный вызов поверх идущего обновления — не входить (mkdir атомарен).
@@ -84,12 +94,6 @@ done
 
 if [ "$mode" = update ]; then
   [ "$AUTO_UPDATE" = yes ] || { say "автообновление выключено (AUTO_UPDATE=no) — пропуск"; exit 0; }
-  now=$(date +%s)
-  last=$(cat "$LAST_UPDATE" 2>/dev/null || true)
-  case "$last" in ''|*[!0-9]*) last=0;; esac
-  age=$(( (now - last) / 86400 ))
-  [ "$age" -ge "$UPDATE_EVERY_DAYS" ] || {
-    say "с прошлого обновления ${age} дн. (< $UPDATE_EVERY_DAYS) — пропуск"; exit 0; }
 fi
 
 if [ "$mode" != force ]; then
@@ -171,7 +175,6 @@ install_and_verify() { # $1 = каталог в rel/
 say "установка: ansible --tags $INSTALL_TAGS"
 if install_and_verify "$pkg"; then
   echo "$latest" > "$DIR/installed-version"
-  date +%s > "$LAST_UPDATE"
   say "готово: $latest установлена и проверена"
 else
   say "ОШИБКА: установка/приёмка $latest не прошла (install-last.log)"
