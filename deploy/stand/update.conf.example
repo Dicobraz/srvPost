@@ -33,10 +33,10 @@ KEEP=2
 # GEN=thepost-d7-gen
 
 # --- Cron (на хосте стенда, от того же пользователя, что и стенд) -------------
-# Проверка раз в 15 минут; журнал — update.log:
-#   */15 * * * * /home/admin2/thepost-perf/stand-update.sh >> /home/admin2/thepost-perf/update.log 2>&1
+# Раз в 3 дня (решение владельца 19.11), тихим утром; журнал — update.log:
+#   17 4 */3 * * /home/admin2/thepost-perf/stand-update.sh >> /home/admin2/thepost-perf/update.log 2>&1
 # Ручной контроль:
 #   stand-update.sh --check   # exit 2 — есть новая версия
 #   stand-update.sh --tag v0.2.1-beta.4
-# При AUTO_UPDATE=yes крон сам ставит новое не чаще раза в UPDATE_EVERY_DAYS дней; --check/--tag — вручную
-# всегда (без ограничения).
+# Cron — раз в 3 дня; UPDATE_EVERY_DAYS в скрипте — второй заслон (гейт по .last-update) на случай
+# срабатывания крона раньше срока (стык месяцев у */3). --check/--tag — вручную, без ограничений.
