@@ -116,15 +116,16 @@ export const covered: Record<string, string> = {
   "DELETE /api/v1/orgs/{org}/branding/logo": "components/branding.tsx",
   "GET /api/v1/public/branding": "pages/login.tsx",
   "GET /api/v1/public/branding/logo/{hash}": "pages/login.tsx",
-  // Политика доверия (ADM-49): раздел «Доверие» — UI-23, до него — экран организации.
-  "GET /api/v1/trust": "pages/organization.tsx",
-  "PUT /api/v1/trust": "pages/organization.tsx",
-  "DELETE /api/v1/trust": "pages/organization.tsx",
-  "GET /api/v1/orgs/{org}/trust": "pages/organization.tsx",
-  "PUT /api/v1/orgs/{org}/trust": "pages/organization.tsx",
-  "DELETE /api/v1/orgs/{org}/trust": "pages/organization.tsx",
-  "GET /api/v1/orgs/{org}/groups/{group}/trust": "pages/organization.tsx",
-  "PUT /api/v1/orgs/{org}/groups/{group}/trust": "pages/organization.tsx",
-  "DELETE /api/v1/orgs/{org}/groups/{group}/trust": "pages/organization.tsx",
-  "GET /api/v1/orgs/{org}/accounts/{account}/trust": "pages/organization.tsx",
+  // Политика доверия (ADM-49, UI-23): раздел «Доверие» — уровни, матрица, партнёры; действующая
+  // матрица учётной записи — на её карточке.
+  "GET /api/v1/trust": "pages/trust.tsx",
+  "PUT /api/v1/trust": "pages/trust.tsx",
+  "DELETE /api/v1/trust": "pages/trust.tsx",
+  "GET /api/v1/orgs/{org}/trust": "pages/trust.tsx",
+  "PUT /api/v1/orgs/{org}/trust": "pages/trust.tsx",
+  "DELETE /api/v1/orgs/{org}/trust": "pages/trust.tsx",
+  "GET /api/v1/orgs/{org}/groups/{group}/trust": "pages/trust.tsx",
+  "PUT /api/v1/orgs/{org}/groups/{group}/trust": "pages/trust.tsx",
+  "DELETE /api/v1/orgs/{org}/groups/{group}/trust": "pages/trust.tsx",
+  "GET /api/v1/orgs/{org}/accounts/{account}/trust": "pages/accounts.tsx",
 };

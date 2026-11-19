@@ -29,6 +29,7 @@ import { ResourceCreate, ResourceList, ResourceShow } from "./pages/resources";
 import { AccountSieve, OrgSieve } from "./pages/sieve";
 import { AccountTrash } from "./pages/trash";
 import { TransportPage } from "./pages/transport";
+import { TrustPage } from "./pages/trust";
 import { UnitsPage } from "./pages/units";
 import { accessControlProvider, allowed } from "./providers/access";
 import { authProvider } from "./providers/auth";
@@ -107,6 +108,7 @@ export function App() {
               { name: "moderation", list: "/moderation", meta: { label: "Модерация" } },
               { name: "queue", list: "/queue", meta: { label: "Очередь" } },
               { name: "sieve", list: "/sieve", meta: { label: "Правила организации" } },
+              { name: "trust", list: "/trust", meta: { label: "Доверие" } },
               { name: "transport", list: "/transport", meta: { label: "Транспорт" } },
               { name: "delivery", list: "/delivery", meta: { label: "Журнал доставки" } },
               { name: "audit", list: "/audit", meta: { label: "Журнал аудита" } },
@@ -157,6 +159,7 @@ export function App() {
                 <Route path="/moderation" element={<ModerationPage />} />
                 <Route path="/queue" element={<QueuePage />} />
                 <Route path="/sieve" element={<OrgSieve />} />
+                <Route path="/trust" element={<TrustPage />} />
                 <Route path="/transport" element={<TransportPage />} />
                 <Route path="/delivery" element={<DeliveryPage />} />
                 <Route path="/audit" element={<AuditPage />} />
