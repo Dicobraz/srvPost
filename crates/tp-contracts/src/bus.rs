@@ -125,6 +125,11 @@ pub enum EventKind {
         /// Уровень.
         level: TrustLevel,
     },
+    /// Изменился справочник аномалий (CTR-95, решение 126): после фиксации активации или отката пакета
+    /// поставщика, политики уровня, источника TI или версии списка ([`crate::risk::RiskStore`]).
+    /// Подписчики — узлы: сбрасывают кэш действующего каталога и списков TI; `tenant` —
+    /// `TenantId::DEFAULT`. Сигнал — [`crate::risk::risk_changed`].
+    RiskChanged,
     /// Сигналы подписки потеряны (переполнение буфера подписчика, переподключение слушателя): сверка с хранилищем.
     /// Шина вставляет его в поток подписки с `tenant`/`account` этой подписки (системная — `TenantId::DEFAULT`,
     /// `None`); `publish` с этим видом — `Invalid`.
@@ -245,6 +250,7 @@ mod tests {
             EventKind::TrustChanged {
                 level: TrustLevel::Org(TenantId::new()),
             },
+            EventKind::RiskChanged,
         ] {
             assert!(kind.is_system(), "{kind:?}");
         }

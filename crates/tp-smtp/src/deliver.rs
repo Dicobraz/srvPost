@@ -3244,6 +3244,10 @@ impl Delivery {
                 // наше письмо» ставит SMTP-51 по записи об отправленном (CTR-94); до неё — false.
                 peer: PeerContext::new(ctx.peer),
                 matrix: self.matrix_for(scope).await,
+                // Вердикт справочника аномалий до Sieve и факт доверенной беседы (CTR-95, решение 126 д)
+                // считает SMTP-52 по действующему каталогу и памяти беседы; до него — без срабатываний.
+                risk: tp_contracts::risk::Verdict::default(),
+                thread_trusted: false,
             };
             let mut notes = Vec::new();
             let outcome = match rules.evaluate(&input).await {
