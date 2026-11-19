@@ -194,16 +194,6 @@ impl LocalStore {
         self.write(path, once(data)).await
     }
 
-    /// Атрибуты объекта: локальный бэкенд их не хранит — пустой набор, если объект есть;
-    /// нет объекта — `NotFound`.
-    pub(crate) async fn raw_attributes(&self, path: &str) -> Result<object_store::Attributes> {
-        check_raw_path(path)?;
-        match self.size(path).await? {
-            Some(_) => Ok(object_store::Attributes::new()),
-            None => Err(Error::NotFound),
-        }
-    }
-
     /// Листинг файлов с путём на `prefix`, изменённых раньше `older_than`.
     /// Обходятся только каталоги, совместимые с префиксом.
     fn walk(&self, prefix: &str, older_than: SystemTime) -> ObjectStream {
