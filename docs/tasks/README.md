@@ -939,9 +939,9 @@
 | [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | todo | APP-77,DEP-56 |
 | [DEPS-19](DEPS-19.md) | зависимости каталога признаков и TI — `ring` (Ed25519), `regex`, `publicsuffix`, `winnow`; `zip`, `infer`, `ipnet` в крейты | deps | B | deps-19 | done | — |
 | [DEPS-20](DEPS-20.md) | — | — | — | deps-20 | done | — |
-| [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | ready | CTR-94 |
-| [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | todo | CTR-95 |
-| [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | todo | CTR-95,DEPS-19,SIEVE-14 |
+| [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | done | CTR-94 |
+| [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | ready | CTR-95 |
+| [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | ready | CTR-95,DEPS-19,SIEVE-14 |
 | [SMTP-52](SMTP-52.md) | детекторы каталога признаков и применение балла на smtp-in | smtp | A | smtp-32 | todo | CTR-95,DEPS-19,SMTP-51 |
 | [ADM-51](ADM-51.md) | каталог признаков и TI в Admin API — признаки, пороги, пакеты, источники, срабатывания; CLI | admin | B | admin-37 | todo | CTR-95,ADM-44 |
 | [UI-24](UI-24.md) | консоль — экран «Признаки риска»: каталог, пороги, пакеты, источники TI, срабатывания | console | A | console-15 | todo | ADM-51 |
