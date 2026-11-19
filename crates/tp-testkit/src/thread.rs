@@ -66,7 +66,7 @@ impl MemThreads {
     }
 
     /// Пределы памяти бесед ([`ThreadLimits`]); умолчание — [`ThreadLimits::default`].
-    pub fn with_limits(mut self, limits: ThreadLimits) -> Self {
+    pub fn with_limits(self, limits: ThreadLimits) -> Self {
         lock(&self.state).limits = Some(limits);
         self
     }

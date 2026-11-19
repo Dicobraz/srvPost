@@ -191,7 +191,7 @@ impl ReplyEvidence {
         let Ok(sender) = normalize_recipient(sender) else {
             return false;
         };
-        self.age <= max_age && self.sent.recipients.iter().any(|r| *r == sender)
+        self.age <= max_age && self.sent.recipients.contains(&sender)
     }
 }
 
