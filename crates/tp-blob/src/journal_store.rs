@@ -1050,9 +1050,10 @@ mod tests {
 
     /// Замыкание `corrupt` набора `suite::journal`: подмена записи в отдельном потоке со своим
     /// маленьким рантаймом (замыкание синхронное, из задачи его не вызвать). Организация записи
-    /// неизвестна вызывающему — подмена ищет запись по глобально уникальному идентификатору.
-    fn corrupt_hook(journal: Arc<JournalRecords>) -> impl Fn(JournalId) + Send + Sync {
-        move |id: JournalId| {
+    /// неизвестна вызывающему — подмена ищет запись по глобально уникальному идентификатору,
+    /// арендатор suite::journal игнорируется (хранилище записей журнала не знает арендаторов).
+    fn corrupt_hook(journal: Arc<JournalRecords>) -> impl Fn(TenantId, JournalId) + Send + Sync {
+        move |_tenant: TenantId, id: JournalId| {
             let journal = journal.clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
