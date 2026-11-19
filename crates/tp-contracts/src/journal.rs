@@ -127,7 +127,9 @@ pub struct JournalRecord {
     pub recipients: Vec<String>,
     /// Message-ID без угловых скобок; `None` — нет.
     pub message_id: Option<String>,
-    /// Момент письма (UTC).
+    /// Момент письма (UTC); в каноническом JSON — строка RFC 3339: её приводит к timestamptz
+    /// проверка цепочки чистым SQL (`journal.tp_consistent`).
+    #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
     /// Правило ([`JournalRule::id`]).
     pub rule: String,

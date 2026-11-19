@@ -188,10 +188,11 @@ async fn rules_org_group_mailbox() {
     assert_eq!(rules.len(), 3, "правила организации, группы и ящика");
     rules.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(rules[0].id, "all-mail");
-    assert_eq!(rules[1].scope, JournalScope::Group(group.id));
-    assert_eq!(rules[1].direction, JournalDirection::In);
-    assert_eq!(rules[2].scope, JournalScope::Mailbox(account));
-    assert!(!rules[2].enabled);
+    assert_eq!(rules[1].scope, JournalScope::Mailbox(account));
+    assert_eq!(rules[1].direction, JournalDirection::Out);
+    assert!(!rules[1].enabled);
+    assert_eq!(rules[2].scope, JournalScope::Group(group.id));
+    assert_eq!(rules[2].direction, JournalDirection::In);
     // Замена целиком: выключенное правило организации.
     let off = JournalRule {
         enabled: false,
@@ -279,40 +280,67 @@ async fn entries_and_rules_rls() {
         .await
         .expect("append");
 
+    // Роль узла: тестовое соединение — владелец схемы, RLS для него действует только с ролью
+    // приложения (как в тестах RLS pg_dav, pg_trust).
     let mut tx = schema::begin(&pool, foreign).await.expect("begin");
+    sqlx::query("SET LOCAL ROLE thepost_app")
+        .execute(&mut *tx)
+        .await
+        .expect("role");
     let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM journal.entries")
         .fetch_one(&mut *tx)
         .await
         .expect("count");
     assert_eq!(seen, 0, "чужая организация записей индекса не видит");
-    let err = sqlx::query(
-        "INSERT INTO journal.entries (tenant_id, seq, id, sender, sender_key, recipients, rcpt_keys,
-                                      at, rule, storage, canonical, prev_hash, hash)
-         VALUES ($1, 1, gen_random_uuid(), 's@x.example', 's@x.example', ARRAY['r@x.example'],
-                 ARRAY['r@x.example'], now(), 'r', 'mem/x', '{}',
-                 '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea,
-                 '\x0100000000000000000000000000000000000000000000000000000000000000'::bytea)",
-    )
-    .bind(*foreign.as_uuid())
-    .execute(&mut *tx)
-    .await
-    .expect_err("вставка чужой организации");
-    assert_eq!(code(&err), "42501");
     let rules: i64 = sqlx::query_scalar("SELECT count(*) FROM journal.rules")
         .fetch_one(&mut *tx)
         .await
         .expect("count");
     assert_eq!(rules, 0, "чужая организация правил не видит");
-    let err = sqlx::query(
-        "INSERT INTO journal.rules (tenant_id, id, scope_kind, direction, enabled)
-         VALUES ($1, 'x', 'org', 'both', true)",
-    )
-    .bind(*foreign.as_uuid())
-    .execute(&mut *tx)
-    .await
-    .expect_err("вставка правила чужой организации");
-    assert_eq!(code(&err), "42501");
     tx.commit().await.expect("commit");
+
+    // Вставка чужой организации отклоняется (WITH CHECK); после ошибки RLS транзакция прервана —
+    // каждая проверка в своей транзакции.
+    let err = {
+        let mut tx = schema::begin(&pool, foreign).await.expect("begin");
+        sqlx::query("SET LOCAL ROLE thepost_app")
+            .execute(&mut *tx)
+            .await
+            .expect("role");
+        let err = sqlx::query(
+            "INSERT INTO journal.entries (tenant_id, seq, id, sender, sender_key, recipients, rcpt_keys,
+                                          at, rule, storage, canonical, prev_hash, hash)
+             VALUES ($1, 1, gen_random_uuid(), 's@x.example', 's@x.example', ARRAY['r@x.example'],
+                     ARRAY['r@x.example'], now(), 'r', 'mem/x', '{}',
+                     '\\x0000000000000000000000000000000000000000000000000000000000000000'::bytea,
+                     '\\x0100000000000000000000000000000000000000000000000000000000000000'::bytea)",
+        )
+        .bind(*foreign.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect_err("вставка чужой организации");
+        tx.rollback().await.expect("rollback");
+        err
+    };
+    assert_eq!(code(&err), "42501");
+    let err = {
+        let mut tx = schema::begin(&pool, foreign).await.expect("begin");
+        sqlx::query("SET LOCAL ROLE thepost_app")
+            .execute(&mut *tx)
+            .await
+            .expect("role");
+        let err = sqlx::query(
+            "INSERT INTO journal.rules (tenant_id, id, scope_kind, direction, enabled)
+             VALUES ($1, 'x', 'org', 'both', true)",
+        )
+        .bind(*foreign.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect_err("вставка правила чужой организации");
+        tx.rollback().await.expect("rollback");
+        err
+    };
+    assert_eq!(code(&err), "42501");
 
     // Своей организации записи видны и доступны аудиторскому поиску.
     let cap = JournalAudit::grant();
