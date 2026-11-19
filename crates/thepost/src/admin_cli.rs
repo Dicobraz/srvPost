@@ -5276,8 +5276,10 @@ mod tests {
             serde_json::from_str(&out.expect("ответ")).expect("json")
         };
         // Уровень организации: --org явный; без него (как у брендинга) — уровень установки.
-        let mut args = ApiArgs::default();
-        args.org = Some(TenantId::DEFAULT.to_string());
+        let args = ApiArgs {
+            org: Some(TenantId::DEFAULT.to_string()),
+            ..ApiArgs::default()
+        };
         let org = |action: TrustAction| execute(&c, &args, trust(action));
 
         // Уровень установки: show — умолчания и закреплённые клетки.
@@ -5474,7 +5476,7 @@ mod tests {
             .as_array()
             .expect("entries")
             .iter()
-            .filter_map(|e| Some(e["route"].as_str()?))
+            .filter_map(|e| e["route"].as_str())
             .filter(|r| r.contains("/trust"))
             .collect();
         assert!(

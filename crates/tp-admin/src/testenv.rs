@@ -15,7 +15,7 @@ use tp_contracts::admin_audit::AdminAuditRecord;
 use tp_contracts::auth::Principal;
 use tp_contracts::ext::AdminRoutes;
 use tp_contracts::ext::DecisionHooks;
-use tp_contracts::groups::{DistributionGroup, GroupMember, SenderRestriction};
+use tp_contracts::groups::{DistributionGroup, GroupMember, GroupStore, SenderRestriction};
 use tp_contracts::mailstore::{Delivery, IngestRequest, MailStore};
 use tp_contracts::meta::{
     Account, AccountKind, AccountScope, AccountState, AccountStore, AccountUpsert, AddressTarget,

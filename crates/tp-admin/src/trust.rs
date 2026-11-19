@@ -639,7 +639,7 @@ pub struct TrustView {
 }
 
 /// Отказ записи политики: клетки выше потолка или недопустимые домены (RFC 9457 с расширением `errors`).
-#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct TrustProblem {
     /// Код HTTP (422).
     pub status: u16,
@@ -1250,8 +1250,7 @@ mod tests {
 
         // Аудит: PUT организации, 422, 400, PUT установки, GET не пишется.
         let log = env.audit.records();
-        let got: Vec<(u16, u16)> = log.iter().map(|r| (r.status, r.route.len())).collect();
-        assert_eq!(log.len(), 4, "{got:?}");
+        assert_eq!(log.len(), 4, "{log:?}");
     }
 
     /// Приёмка ADM-49: права — администратор организации не меняет уровень установки и чужую организацию;
@@ -1413,7 +1412,10 @@ mod tests {
 
         // Хранилище не подключено — 503.
         let bare = crate::server::Admin::new(crate::testenv::deps(), config()).expect("admin");
-        assert_eq!(store(&bare).err().map(|e| e.0), Some(Error::UNAVAILABLE));
+        assert!(matches!(
+            store(&bare).err(),
+            Some(Error::Unavailable { .. })
+        ));
     }
 
     /// Схема: маршруты доверия с типами ответов и 422; `TrustBody`/`TrustView` — туда и обратно (ADM-13).
