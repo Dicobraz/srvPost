@@ -24,7 +24,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tp_contracts::audit::AuditAction;
 use tp_contracts::meta::{Flag, FlagOp, Flags, Message, SpecialUse};
-use tp_contracts::thread::{ThreadRule, ThreadStore};
+use tp_contracts::thread::ThreadRule;
 use tp_contracts::{Error, MailboxId, MessageId, ThreadId};
 
 use crate::core::error::{MethodError, MethodResult, set_error};
@@ -287,12 +287,14 @@ pub(crate) async fn set(
             }
         };
         // Папка `alwaysMove` — существует (перенос в удалённую папку не осмыслен).
-        if let ThreadRule::AlwaysMove(to) = &rule {
-            if mailbox_exists(ctx, *to).await?.is_none() {
-                out.not_created
-                    .insert(cid, set_error("invalidProperties", None, &["mailboxId"]));
-                continue;
-            }
+        let bad_mailbox = match &rule {
+            ThreadRule::AlwaysMove(to) => mailbox_exists(ctx, *to).await?.is_none(),
+            _ => false,
+        };
+        if bad_mailbox {
+            out.not_created
+                .insert(cid, set_error("invalidProperties", None, &["mailboxId"]));
+            continue;
         }
         match store.set_rule(ctx.scope, thread, Some(rule.clone())).await {
             Ok(()) => {
@@ -327,12 +329,14 @@ pub(crate) async fn set(
                 continue;
             }
         };
-        if let ThreadRule::AlwaysMove(to) = &rule {
-            if mailbox_exists(ctx, *to).await?.is_none() {
-                out.not_updated
-                    .insert(id, set_error("invalidProperties", None, &["mailboxId"]));
-                continue;
-            }
+        let bad_mailbox = match &rule {
+            ThreadRule::AlwaysMove(to) => mailbox_exists(ctx, *to).await?.is_none(),
+            _ => false,
+        };
+        if bad_mailbox {
+            out.not_updated
+                .insert(id, set_error("invalidProperties", None, &["mailboxId"]));
+            continue;
         }
         match store.set_rule(ctx.scope, thread, Some(rule.clone())).await {
             Ok(()) => {
