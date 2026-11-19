@@ -10,7 +10,9 @@ use tp_contracts::groups::GroupStore;
 use tp_contracts::membership::NodeId;
 use tp_contracts::queue::SubmitStatus;
 use tp_contracts::sieve::{DeliveryRules, ReplyBody, RulesInput, RulesOutcome};
-use tp_contracts::trust::{GroupPost, PeerKind, Toggle, TrustLevel, TrustMatrix, TrustPolicy};
+use tp_contracts::trust::{
+    GroupPost, PeerKind, PerPeer, Toggle, TrustLevel, TrustMatrix, TrustPolicy,
+};
 use tp_testkit::{MemDeliveryLog, MemTrust};
 
 use super::*;
@@ -174,8 +176,16 @@ async fn smtp_in_peer_by_from_domain_and_dmarc() {
             PeerKind::Own
         ]
     );
-    // Матрица получателя — действующая (без политик учётной записи — умолчания).
-    assert_eq!(rules.calls()[0].matrix, TrustMatrix::default());
+    // Матрица получателя — действующая: умолчания контракта с политикой организации (группы открыты,
+    // без политик учётной записи).
+    let mut matrix = TrustMatrix::default();
+    matrix.group_post = PerPeer {
+        own: GroupPost::Open,
+        partner: GroupPost::Open,
+        neighbor: GroupPost::Open,
+        external: GroupPost::Open,
+    };
+    assert_eq!(rules.calls()[0].matrix, matrix);
     assert_eq!(env.inbox("bob@example.org").await.len(), 4);
 }
 
@@ -307,14 +317,17 @@ async fn group_post_closed_moderated_open() {
     let r = closed.rcpt(&e, "team@example.org").await;
     assert_eq!((r.code, r.esc), (550, [5, 7, 1]), "чужим закрыто");
 
-    // Своему (submission со входом) — доставлено.
-    let mut own = envelope(Mode::Submission, &["team@example.org"]);
-    own.mail_from = "alice@example.org".into();
-    own.principal = Some(tp_testkit::principal(
+    // Своему (submission со входом, `From` вошедшего) — доставлено.
+    let mut own_mail = envelope(Mode::Submission, &["team@example.org"]);
+    own_mail.mail_from = "alice@example.org".into();
+    own_mail.principal = Some(tp_testkit::principal(
         TenantId::DEFAULT,
         "alice@example.org",
     ));
-    assert_eq!(closed.data(&own, Bytes::from_static(MAIL)).await.code, 250);
+    assert_eq!(
+        closed.data(&own_mail, own("alice@example.org")).await.code,
+        250
+    );
     for login in ["alice@example.org", "bob@example.org", "carol@example.org"] {
         assert_eq!(env.inbox(login).await.len(), 1, "{login}");
     }
@@ -376,11 +389,12 @@ async fn dsn_plain_for_foreign_and_silent_for_junk() {
     let env = Env::new(DecisionHooks::default()).await;
     let d = env.delivery(true);
     let bob = env.scope("bob@example.org").await;
-    env.quota.set_limit(bob, Some(1));
     // Ящик заполняется: следующее письмо — принятое и недоставленное, отправителю — уведомление на конверт.
     let fill = envelope(Mode::Inbound, &["bob@example.org"]);
     assert_eq!(d.data(&fill, Bytes::from_static(MAIL)).await.code, 250);
-    let e = envelope(Mode::Inbound, &["bob@example.org"]);
+    // Лимит исчерпан (квота — в байтах): приём не отменяется — carol доставлено, bob — уведомление.
+    env.quota.set_limit(bob, Some(0));
+    let e = envelope(Mode::Inbound, &["bob@example.org", "carol@example.org"]);
     assert_eq!(d.data(&e, Bytes::from_static(MAIL)).await.code, 250);
     let queued = env.queue.0.lock().expect("lock").clone();
     assert_eq!(queued.len(), 1, "принятое и недоставленное — уведомление");

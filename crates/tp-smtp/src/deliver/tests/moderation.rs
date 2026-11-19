@@ -322,7 +322,8 @@ impl Env {
 
 /// Правило с исходом Moderate (приём): отправителю — 250, письмо — в очереди модерации с исходными
 /// получателями и модераторами, ссылка на объект — у очереди; модератору — уведомление с исходным письмом
-/// во вложении. Одобрение доставляет письмо исходным получателям, отказ — DSN отправителю.
+/// во вложении. Одобрение доставляет письмо исходным получателям, отказ чужому отправителю — без уведомления
+/// (backscatter, SMTP-50, решение 124 г).
 #[tokio::test]
 async fn flow_rule_moderation_holds_then_approve_or_reject() {
     let env = Env::new(DecisionHooks::default()).await;
@@ -387,7 +388,7 @@ async fn flow_rule_moderation_holds_then_approve_or_reject() {
     );
     assert_eq!(env.refs(&held), 0);
 
-    // Отказ — DSN отправителю с причиной модератора; получателям ничего.
+    // Отказ чужому отправителю — без уведомления (backscatter, SMTP-50): только журнал, получателям ничего.
     assert_eq!(
         d.data(&e, letter("smtp30-r", "sender@example.net"))
             .await
@@ -404,12 +405,11 @@ async fn flow_rule_moderation_holds_then_approve_or_reject() {
     d.reject(T, &held, "не для внешней рассылки")
         .await
         .expect("reject");
-    let queued = env.queued();
-    assert_eq!(queued.len(), 1, "{queued:?}");
-    assert_eq!(queued[0].1, ["sender@example.net"]);
-    let dsn = String::from_utf8_lossy(&queued[0].2);
-    assert!(dsn.contains("Status: 5.7.1"), "{dsn}");
-    assert!(dsn.contains("не для внешней рассылки"), "{dsn}");
+    assert!(
+        env.queued().is_empty(),
+        "чужому — без уведомления: {:?}",
+        env.queued()
+    );
     assert_eq!(env.inbox("bob@example.org").await.len(), 1, "после отказа");
 }
 

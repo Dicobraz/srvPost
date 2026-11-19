@@ -1333,7 +1333,11 @@ mod groups {
     #[tokio::test]
     async fn moderated_group_holds_message() {
         let env = Env::new(DecisionHooks::default()).await;
-        let d = env.with_groups(env.delivery(false));
+        // Матрица доверия открывает группы письму извне (SMTP-50): письмо задерживает модерация самой группы.
+        let d = env.with_groups(
+            env.delivery(false)
+                .with_trust(Arc::new(trust(&[], GroupPost::Open, &[]).await)),
+        );
         let g = env
             .group(
                 "news@example.org",
