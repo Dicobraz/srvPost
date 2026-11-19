@@ -72,7 +72,9 @@ imap-codec = { version = "2.0.0-alpha.9", features = ["starttls", "ext_id", "ext
 # Сигнатуры форматов для пропуска сжатия BLOB (BLOB-13); без std: OLE-документы не распознаются, они сжимаемы.
 infer = { version = "0.22.0", default-features = false, features = ["alloc"] }
 insta = { version = "1.49.0", features = ["json"] }
-instant-acme = "0.8.5"
+# `time` — подсказка окна продления от сервера (ARI, RFC 9773; PLT-39): `Account::renewal_info`,
+# `RenewalInfo`, `SuggestedWindow`.
+instant-acme = { version = "0.8.5", features = ["time"] }
 # Префиксы IP списков TI (решение 126, tp-smtp); та же версия, что уже в дереве через hickory и hyper-util.
 ipnet = "2.12.2"
 jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }
