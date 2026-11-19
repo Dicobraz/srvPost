@@ -3,7 +3,8 @@
 
 use super::assert_error;
 use crate::compile::{Cmd, Comparator, MatchKind, Part, Rel, Test, decode_encoded};
-use crate::{EXTENSIONS, Limits, Program, compile};
+use crate::{AdminProfile, EXTENSIONS, Limits, Program, compile, compile_admin};
+use tp_contracts::sieve::ProcessCalendar;
 
 fn ok(text: &str) -> Program {
     match compile(text.as_bytes(), &Limits::default()) {
@@ -480,5 +481,144 @@ fn encoded_character() {
             address: "a@b.example".into(),
             copy: false
         }
+    );
+}
+
+/// `processcalendar` (RFC 9671, SIEVE-14): теги, конфликт `:updatesonly`/`:calendarid`, `:organizers` без
+/// `extlists`, `require`.
+#[test]
+fn processcalendar() {
+    let p = ok(
+        "require \"processcalendar\";\nprocesscalendar :allowpublic :addresses [\"a@b.example\"] \
+         :calendarid \"work\" :deletecancelled :outcome \"o\" :reason \"r\";",
+    );
+    let Cmd::ProcessCalendar(c) = &p.commands[0] else {
+        panic!("{:?}", p.commands);
+    };
+    assert!(c.allow_public && c.delete_cancelled);
+    assert_eq!(c.addresses, ["a@b.example"]);
+    assert_eq!(c.calendar_id.as_deref(), Some("work"));
+    assert!(!c.updates_only);
+    // Без require и без тегов.
+    let p = ok("require \"processcalendar\"; processcalendar;");
+    let Cmd::ProcessCalendar(c) = &p.commands[0] else {
+        panic!("{:?}", p.commands);
+    };
+    assert_eq!(*c, ProcessCalendar::default());
+    assert_error("processcalendar;", 1, 1, "\"processcalendar\" не объявлено");
+    assert_error(
+        "require \"processcalendar\"; processcalendar :updatesonly :calendarid \"work\";",
+        1,
+        57,
+        ":updatesonly и :calendarid вместе",
+    );
+    assert_error(
+        "require \"processcalendar\"; processcalendar :organizers \"partners\";",
+        1,
+        44,
+        ":organizers требует расширение extlists",
+    );
+    assert_error(
+        "require \"processcalendar\"; processcalendar :allowpublic :allowpublic;",
+        1,
+        57,
+        "тег :allowpublic указан дважды",
+    );
+    assert_error(
+        "require \"processcalendar\"; processcalendar \"x\";",
+        1,
+        44,
+        "ожидается позиционных аргументов: 0",
+    );
+}
+
+/// Тест `peer` расширения `vnd.thepost.peer` (SIEVE-14): типы сравнения и компараторы — общие, `require`.
+#[test]
+fn peer_test() {
+    let p = ok("require \"vnd.thepost.peer\"; if peer :is [\"partner\", \"external\"] { stop; }");
+    let Cmd::If { branches, .. } = &p.commands[0] else {
+        panic!("{:?}", p.commands);
+    };
+    let Test::Peer { m, keys } = &branches[0].0 else {
+        panic!("{branches:?}");
+    };
+    assert_eq!(m.kind, MatchKind::Is);
+    assert_eq!(keys, &["partner", "external"]);
+    ok(
+        "require \"vnd.thepost.peer\"; if allof (peer \"own\", not peer :contains \"part\") { stop; }",
+    );
+    assert_error(
+        "if peer \"own\" {}",
+        1,
+        4,
+        "\"vnd.thepost.peer\" не объявлено",
+    );
+    assert_error(
+        "require \"vnd.thepost.peer\"; if peer \"own\" \"x\" {}",
+        1,
+        43,
+        "ожидается позиционных аргументов: 1",
+    );
+}
+
+/// Профиль «админский» (SIEVE-14): vacation запрещён; redirect — на внутренний адрес или домен с открытой
+/// автопересылкой; прочее — как у пользователя (processcalendar, peer, fileinto).
+#[test]
+fn admin_profile() {
+    let profile = AdminProfile {
+        internal_domains: vec!["example.org".into()],
+        forward_domains: vec!["partner.example".into()],
+    };
+    let admin_ok =
+        |text: &str| compile_admin(text.as_bytes(), &Limits::default(), &profile).is_ok();
+    let first = |text: &str| {
+        compile_admin(text.as_bytes(), &Limits::default(), &profile)
+            .expect_err("ошибки")
+            .into_iter()
+            .next()
+            .expect("ошибка")
+    };
+
+    // vacation — ошибка со строкой и столбцом.
+    let d = first("require \"vacation\";\nvacation \"x\";");
+    assert_eq!((d.line, d.column), (2, 1), "{d}");
+    assert!(
+        d.message
+            .contains("vacation в скрипте организации запрещён"),
+        "{d}"
+    );
+
+    // redirect на внешний адрес при закрытой автопересылке — ошибка; на свой и на домен пересылки — допустим.
+    let d = first("redirect \"a@gmail.com\";");
+    assert_eq!((d.line, d.column), (1, 10), "{d}");
+    assert!(d.message.contains("a@gmail.com"), "{d}");
+    assert!(admin_ok("redirect \"a@example.org\";"));
+    assert!(admin_ok("redirect \"PM@Partner.Example\";"));
+    // Без доменов пересылки профиль закрывает всё наружное.
+    let closed = AdminProfile {
+        internal_domains: vec!["example.org".into()],
+        forward_domains: Vec::new(),
+    };
+    assert!(
+        compile_admin(
+            "redirect \"a@partner.example\";".as_bytes(),
+            &Limits::default(),
+            &closed
+        )
+        .is_err()
+    );
+
+    // Прочее — как у пользователя.
+    assert!(admin_ok(
+        "require [\"processcalendar\", \"vnd.thepost.peer\", \"fileinto\"];\n\
+         if peer \"partner\" { processcalendar; fileinto \"Архив\"; }"
+    ));
+    // Профиль не меняет проверку пользовательских скриптов: compile — без запретов.
+    assert!(
+        compile(
+            "require \"vacation\"; vacation \"x\";".as_bytes(),
+            &Limits::default()
+        )
+        .is_ok()
     );
 }

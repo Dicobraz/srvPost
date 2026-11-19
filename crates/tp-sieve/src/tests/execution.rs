@@ -2,6 +2,7 @@
 //! лимиты шагов и действий.
 
 use proptest::prelude::*;
+use tp_contracts::trust::PeerKind;
 use tp_testkit::corpus::corpus_mail;
 
 use crate::{Action, Context, Limits, Outcome, compile, run};
@@ -20,6 +21,7 @@ pub(super) fn exec_raw(script: &str, message: &[u8], limits: &Limits) -> Outcome
         envelope_from: ENV_FROM,
         envelope_to: ENV_TO,
         mailboxes: &mailboxes,
+        peer: PeerKind::Own,
     };
     run(&program, &ctx, limits)
 }
@@ -40,6 +42,7 @@ pub(super) fn summary(o: &Outcome) -> String {
                 format!("redirect{} {address}", if *copy { " :copy" } else { "" })
             }
             Action::Vacation(_) => "vacation".to_owned(),
+            Action::ProcessCalendar(_) => "processcalendar".to_owned(),
         })
         .collect();
     if o.error.is_some() {

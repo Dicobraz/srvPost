@@ -1,13 +1,18 @@
 //! Проверка скрипта и компиляция в программу (SIEVE-02): известные команды и тесты, аргументы, `require` для каждого
-//! расширения (RFC 5228 §3.2), компараторы и типы сравнения.
+//! расширения (RFC 5228 §3.2), компараторы и типы сравнения. Профиль «админский» для скрипта организации
+//! ([`AdminProfile`], SIEVE-14) добавляет к общей проверке запреты решения 124 д.
 
 use std::collections::BTreeSet;
+
+use tp_contracts::sieve::ProcessCalendar;
 
 use crate::ast::{self, Arg, Command};
 use crate::run::VacationAction;
 use crate::{Diagnostic, Limits, Pos};
 
 /// Поддерживаемые расширения — их же объявляют ManageSieve (`SIEVE`) и JMAP Sieve (`sieveExtensions`).
+/// `processcalendar` (RFC 9671, SIEVE-14) и `vnd.thepost.peer` (вендорское, RFC 5228 §6) — доверенная матрица:
+/// тип абонента из контекста ядра, не из заголовков письма.
 pub const EXTENSIONS: &[&str] = &[
     "fileinto",
     "envelope",
@@ -20,6 +25,8 @@ pub const EXTENSIONS: &[&str] = &[
     "mailbox",
     "encoded-character",
     "comparator-i;ascii-numeric",
+    "processcalendar",
+    "vnd.thepost.peer",
 ];
 
 /// Компараторы ядра: в `require` допустимы, но не обязательны (RFC 5228 §2.7.3).
@@ -65,6 +72,9 @@ pub(crate) enum Cmd {
         flags: Vec<String>,
     },
     Vacation(VacationAction),
+    /// `processcalendar` (RFC 9671 §3, SIEVE-14): параметры вносят приглашение применяющий (приём iTIP у
+    /// вызывающего); интерпретатор лишь записывает их в [`crate::run::Action::ProcessCalendar`].
+    ProcessCalendar(ProcessCalendar),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +123,12 @@ pub(crate) enum Test {
         keys: Vec<String>,
     },
     MailboxExists(Vec<String>),
+    /// `peer` расширения `vnd.thepost.peer` (RFC 5228 §6, SIEVE-14): тип абонента из контекста ядра
+    /// ([`crate::run::Context::peer`], CTR-93), не из заголовков письма.
+    Peer {
+        m: Match,
+        keys: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,10 +186,45 @@ pub fn check(text: &str) -> Result<Program, Vec<Diagnostic>> {
     compile(text.as_bytes(), &Limits::default())
 }
 
+/// Профиль проверки «админский» — скрипт организации (этап before, доверенный; SIEVE-14, решение 124 д):
+/// админский Sieve сужает внутри потолка, расширить права не может. `vacation` запрещён; `redirect` — на
+/// внутренний адрес или на домен, куда открыта автопересылка (адреса литеральные: расширения `variables` нет);
+/// прочее — как у пользователя. Проверку при сохранении вызывает Admin API (ADM-49), ошибка — [`Diagnostic`] со
+/// строкой и столбцом.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminProfile {
+    /// Внутренние домены (принятые домены организаций установки, нижний регистр): пересылка на них — внутренняя.
+    pub internal_domains: Vec<String>,
+    /// Домены, куда открыта автопересылка (`TrustPolicy::auto_forward_domains`, нижний регистр): `redirect`
+    /// наружу — только на них.
+    pub forward_domains: Vec<String>,
+}
+
 /// Разбор и проверка: все найденные ошибки с позициями (ошибка разбора — одна).
 pub fn compile(src: &[u8], limits: &Limits) -> Result<Program, Vec<Diagnostic>> {
+    compile_with(src, limits, None)
+}
+
+/// Проверка профилем «админский» (скрипт организации, SIEVE-14): к проверке [`compile`] добавляются запреты
+/// [`AdminProfile`].
+pub fn compile_admin(
+    src: &[u8],
+    limits: &Limits,
+    profile: &AdminProfile,
+) -> Result<Program, Vec<Diagnostic>> {
+    compile_with(src, limits, Some(profile))
+}
+
+fn compile_with(
+    src: &[u8],
+    limits: &Limits,
+    admin: Option<&AdminProfile>,
+) -> Result<Program, Vec<Diagnostic>> {
     let script = ast::parse(src, limits).map_err(|d| vec![d])?;
-    let mut c = Compiler::default();
+    let mut c = Compiler {
+        admin,
+        ..Compiler::default()
+    };
     let commands = c.block(&script.commands, true);
     if c.diags.is_empty() {
         Ok(Program {
@@ -283,13 +334,15 @@ const BODY_TAGS: &[(&str, Kind)] = &[
 // ---------- Компилятор ----------
 
 #[derive(Debug, Default)]
-struct Compiler {
+struct Compiler<'a> {
     exts: BTreeSet<String>,
     diags: Vec<Diagnostic>,
     encoded: bool,
+    /// Профиль «админский» (скрипт организации, SIEVE-14): запреты решения 124 д.
+    admin: Option<&'a AdminProfile>,
 }
 
-impl Compiler {
+impl Compiler<'_> {
     fn err(&mut self, pos: Pos, message: impl Into<String>) {
         self.diags.push(Diagnostic::new(pos, message));
     }
@@ -680,6 +733,7 @@ impl Compiler {
                         format!("redirect: некорректный адрес {address:?}"),
                     );
                 }
+                self.admin_redirect(&address, p.pos[0].1);
                 Some(Cmd::Redirect { address, copy })
             }
             "setflag" | "addflag" | "removeflag" => {
@@ -714,6 +768,12 @@ impl Compiler {
                 let handle = p.get("handle").map(|v| self.string(v));
                 let addresses = p.get("addresses").map(|v| self.list(v)).unwrap_or_default();
                 let reason = self.string(p.pos[0]);
+                if self.admin.is_some() {
+                    self.err(
+                        c.pos,
+                        "vacation в скрипте организации запрещён (решение 124 д): автоответ — настройка учётной записи",
+                    );
+                }
                 Some(Cmd::Vacation(VacationAction {
                     days: p.num("days"),
                     subject,
@@ -722,6 +782,50 @@ impl Compiler {
                     mime: p.has("mime"),
                     handle,
                     reason,
+                }))
+            }
+            "processcalendar" => {
+                self.need("processcalendar", c.pos);
+                let p = self.args(
+                    name,
+                    c.pos,
+                    &c.args,
+                    &[
+                        ("allowpublic", Kind::Flag),
+                        ("addresses", Kind::List),
+                        ("updatesonly", Kind::Flag),
+                        ("calendarid", Kind::Str),
+                        ("deletecancelled", Kind::Flag),
+                        ("organizers", Kind::Str),
+                        ("outcome", Kind::Str),
+                        ("reason", Kind::Str),
+                    ],
+                    &[],
+                )?;
+                if let Some((_, pos)) = p.get("organizers") {
+                    // RFC 6134 `extlists` не поддерживается — списки внешние указать неоткуда.
+                    self.err(
+                        pos,
+                        "processcalendar: :organizers требует расширение extlists (RFC 6134) — не поддерживается",
+                    );
+                }
+                let updates_only = p.has("updatesonly");
+                if updates_only && let Some((_, pos)) = p.get("calendarid") {
+                    self.err(
+                        pos,
+                        "processcalendar: :updatesonly и :calendarid вместе не задаются (RFC 9671 §3)",
+                    );
+                }
+                // :outcome и :reason (RFC 9671 §3) принимаются: расширения variables нет, итог действия и его
+                // причина — в журнале доставки (RulesOutcome), не в переменных скрипта.
+                let addresses = p.get("addresses").map(|v| self.list(v)).unwrap_or_default();
+                let calendar_id = p.get("calendarid").map(|v| self.string(v));
+                Some(Cmd::ProcessCalendar(ProcessCalendar {
+                    allow_public: p.has("allowpublic"),
+                    addresses,
+                    updates_only,
+                    calendar_id,
+                    delete_cancelled: p.has("deletecancelled"),
                 }))
             }
             _ => {
@@ -738,6 +842,34 @@ impl Compiler {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Профиль «админский» (SIEVE-14): `redirect` скрипта организации — только на внутренний адрес (домен из
+    /// `AdminProfile::internal_domains`) или на домен с открытой автопересылкой (`forward_domains`); адреса
+    /// литеральные, расширения `variables` нет.
+    fn admin_redirect(&mut self, address: &str, pos: Pos) {
+        let Some(profile) = self.admin else {
+            return;
+        };
+        let domain = address
+            .rsplit('@')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let allowed = profile
+            .internal_domains
+            .iter()
+            .chain(&profile.forward_domains)
+            .any(|d| d.eq_ignore_ascii_case(&domain));
+        if !allowed {
+            self.err(
+                pos,
+                format!(
+                    "redirect в скрипте организации — только на внутренний адрес или домен с открытой \
+                     автопересылкой: {address:?}"
+                ),
+            );
         }
     }
 
@@ -916,6 +1048,15 @@ impl Compiler {
                     return Test::False;
                 };
                 Test::MailboxExists(self.list(p.pos[0]))
+            }
+            "peer" => {
+                self.need("vnd.thepost.peer", t.pos);
+                let Some(p) = self.args(name, t.pos, &t.args, MATCH_TAGS, &[Kind::List]) else {
+                    return Test::False;
+                };
+                let m = self.matcher(&p);
+                let keys = self.list(p.pos[0]);
+                Test::Peer { m, keys }
             }
             _ => {
                 self.err(t.pos, format!("неизвестный тест {name}"));

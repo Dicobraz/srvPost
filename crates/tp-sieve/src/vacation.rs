@@ -5,6 +5,10 @@
 //! заголовки `List-*`, `Precedence: bulk|list|junk`, письмо от собственного адреса, адреса пользователя (получатель
 //! конверта без подадреса и `:addresses`) нет среди получателей письма. Период (`:days`, по `:handle`) — через
 //! [`VacationLog::seen`]; письмо собирает `tp-smtp`.
+//!
+//! Чужим отправителям ([`PeerKind`] не `Own`, SIEVE-14, решение 124 г) — только внешний текст настройки
+//! (`Vacation::external_*`, как `ExternalMessage` в Exchange): его нет или у получателя `auto_reply = Off` —
+//! наружу ничего. Действие `vacation` скрипта внешнего текста не имеет — чужим по нему ответа нет.
 
 use std::time::Duration;
 
@@ -13,6 +17,7 @@ use tp_contracts::Result;
 use tp_contracts::sieve::{
     AutoReply, MAX_VACATION_SUBJECT_LEN, ReplyBody, RulesInput, Vacation, VacationLog,
 };
+use tp_contracts::trust::{PeerKind, Toggle};
 
 use crate::compile::Part;
 use crate::config::VacationConfig;
@@ -64,6 +69,22 @@ pub(crate) fn suppressed(
         && !v.is_active(now)
     {
         return Some("автоответ выключен или вне срока действия");
+    }
+    if input.peer != PeerKind::Own {
+        // Чужим — только внешним текстом и только при auto_reply = On (решение 124 г, RFC 3834).
+        if input.matrix.auto_reply.get(input.peer) == Toggle::Off {
+            return Some("автоответ чужим выключен политикой доверия");
+        }
+        match source {
+            Source::Setting(v, _) if !v.has_external() => {
+                return Some("внешний текст автоответа не задан — наружу ответа нет");
+            }
+            // У действия vacation один текст (расширения variables нет): наружу он не уходит.
+            Source::Script(_) => {
+                return Some("у vacation скрипта нет внешнего текста — наружу ответа нет");
+            }
+            _ => {}
+        }
     }
     if strip_angle(&input.mail_from).is_empty() {
         return Some("пустой отправитель конверта");
@@ -136,6 +157,7 @@ pub(crate) async fn reply(
     }
 
     let recipient = strip_angle(&input.recipient).to_owned();
+    let external = input.peer != PeerKind::Own;
     let (from, subject, body) = match source {
         Source::Script(v) => (
             v.from.as_deref().and_then(|f| own_from(f, &recipient)),
@@ -146,17 +168,34 @@ pub(crate) async fn reply(
                 ReplyBody::Text(v.reason.clone())
             },
         ),
-        Source::Setting(v, _) => (
-            None,
-            v.subject.clone(),
-            match (&v.text_body, &v.html_body) {
-                (text, Some(html)) => ReplyBody::Html {
-                    text: text.clone(),
-                    html: html.clone(),
+        Source::Setting(v, _) => {
+            // Чужим — внешний текст (SIEVE-14, решение 124 г); незаданное внешнее поле берётся из общего
+            // (тема и тело раздельно, Exchange `ExternalMessage`).
+            let (text, html) = if external {
+                (
+                    v.external_text_body.as_ref().or(v.text_body.as_ref()),
+                    v.external_html_body.as_ref().or(v.html_body.as_ref()),
+                )
+            } else {
+                (v.text_body.as_ref(), v.html_body.as_ref())
+            };
+            let subject = if external {
+                v.external_subject.clone().or_else(|| v.subject.clone())
+            } else {
+                v.subject.clone()
+            };
+            (
+                None,
+                subject,
+                match (text, html) {
+                    (text, Some(html)) => ReplyBody::Html {
+                        text: text.cloned(),
+                        html: html.clone(),
+                    },
+                    (text, None) => ReplyBody::Text(text.cloned().unwrap_or_default()),
                 },
-                (text, None) => ReplyBody::Text(text.clone().unwrap_or_default()),
-            },
-        ),
+            )
+        }
     };
     let subject = subject.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
         match header(headers, "Subject") {

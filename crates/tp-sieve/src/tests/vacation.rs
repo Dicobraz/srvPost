@@ -7,7 +7,7 @@ use tp_contracts::AccountId;
 use tp_contracts::TenantId;
 use tp_contracts::meta::AccountScope;
 use tp_contracts::sieve::{AutoReply, ReplyBody, RulesInput, Vacation};
-use tp_contracts::trust::{PeerKind, TrustMatrix};
+use tp_contracts::trust::{PeerKind, Toggle, TrustMatrix};
 use tp_testkit::{ManualClock, MemVacationLog};
 
 use crate::run::parse_headers;
@@ -29,7 +29,7 @@ fn input(mail: &str, mail_from: &str, recipient: &str) -> RulesInput {
         mail_from: mail_from.to_owned(),
         message: mail.as_bytes().to_vec().into(),
         mailboxes: Vec::new(),
-        peer: PeerKind::External,
+        peer: PeerKind::Own,
         matrix: TrustMatrix::default(),
     }
 }
@@ -394,4 +394,101 @@ async fn reply_from_setting() {
     };
     assert_eq!(f.setting(&html, &bounce).await, None);
     assert!(f.setting(&html, &dave).await.is_some());
+}
+
+/// Чужим отправителям (SIEVE-14, решение 124 г, RFC 3834) — только внешний текст настройки: его нет или
+/// `auto_reply = Off` — ответа нет; действие `vacation` скрипта внешнего текста не имеет.
+#[tokio::test]
+async fn external_peer_reply() {
+    let f = Fixture::new();
+    // Каждому отправителю — свой период журнала: успешные ответы чередуем разными адресами.
+    let input_at = |peer: PeerKind, from: &str| {
+        let mut i = input(MAIL, from, "bob@example.org");
+        i.peer = peer;
+        i
+    };
+    let v = Vacation {
+        enabled: true,
+        subject: Some("Внутренний".into()),
+        text_body: Some("Внутренний текст".into()),
+        ..Vacation::default()
+    };
+    // Внешнего текста нет — наружу ничего; своему — общий текст.
+    let ext = input_at(PeerKind::External, "a@example.com");
+    assert_eq!(f.setting(&v, &ext).await, None);
+    let r = f
+        .setting(&v, &input_at(PeerKind::Own, "b@example.com"))
+        .await
+        .expect("своему — общий");
+    assert_eq!(r.body, ReplyBody::Text("Внутренний текст".into()));
+
+    // Внешний текст задан — чужим идёт он, своим — общий (Exchange `ExternalMessage`).
+    let mut external = v.clone();
+    external.external_subject = Some("Away".into());
+    external.external_text_body = Some("On vacation".into());
+    external.external_html_body = Some("<p>On vacation</p>".into());
+    let r = f
+        .setting(&external, &input_at(PeerKind::External, "c@example.com"))
+        .await
+        .expect("внешний текст");
+    assert_eq!(r.subject, "Away");
+    assert_eq!(
+        r.body,
+        ReplyBody::Html {
+            text: Some("On vacation".into()),
+            html: "<p>On vacation</p>".into()
+        }
+    );
+    let r = f
+        .setting(&external, &input_at(PeerKind::Own, "d@example.com"))
+        .await
+        .expect("своему — общий");
+    assert_eq!(r.subject, "Внутренний");
+    assert_eq!(r.body, ReplyBody::Text("Внутренний текст".into()));
+
+    // Только внешняя тема: тема — внешняя, тело — общее.
+    let mut subject_only = v.clone();
+    subject_only.external_subject = Some("Away".into());
+    let r = f
+        .setting(
+            &subject_only,
+            &input_at(PeerKind::External, "e@example.com"),
+        )
+        .await
+        .expect("reply");
+    assert_eq!(r.subject, "Away");
+    assert_eq!(r.body, ReplyBody::Text("Внутренний текст".into()));
+
+    // Партнёру — как внешнему (отдельный внешний текст); `auto_reply = Off` у типа — ответа нет.
+    assert!(
+        f.setting(&v, &input_at(PeerKind::Partner, "f@example.com"))
+            .await
+            .is_none()
+    );
+    assert!(
+        f.setting(&external, &input_at(PeerKind::Partner, "g@example.com"))
+            .await
+            .is_some()
+    );
+    let mut closed = input_at(PeerKind::External, "h@example.com");
+    closed.matrix.auto_reply.external = Toggle::Off;
+    assert_eq!(f.setting(&external, &closed).await, None);
+    let mut partner_off = input_at(PeerKind::Partner, "i@example.com");
+    partner_off.matrix.auto_reply.partner = Toggle::Off;
+    assert_eq!(f.setting(&external, &partner_off).await, None);
+
+    // Действие vacation скрипта чужим не отвечает: внешнего текста у него нет.
+    let v = action("vacation \"из скрипта\";");
+    let ext = input_at(PeerKind::External, "j@example.com");
+    let headers = parse_headers(&ext.message);
+    assert!(
+        suppressed(Source::Script(&v), &ext, &headers).is_some_and(|r| r.contains("внешнего")),
+        "скрипт чужим не отвечает"
+    );
+    assert_eq!(f.script(&v, &ext).await, None);
+    assert!(
+        f.script(&v, &input_at(PeerKind::Own, "k@example.com"))
+            .await
+            .is_some()
+    );
 }

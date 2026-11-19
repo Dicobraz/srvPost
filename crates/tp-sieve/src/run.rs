@@ -13,6 +13,8 @@ use mail_parser::{
     Address, HeaderName, HeaderValue, Message, MessageParser, MimeHeaders, PartType,
 };
 use serde::{Deserialize, Serialize};
+use tp_contracts::sieve::ProcessCalendar;
+use tp_contracts::trust::PeerKind;
 
 use crate::Limits;
 use crate::compile::{
@@ -20,7 +22,7 @@ use crate::compile::{
 };
 
 /// Письмо и конверт на входе выполнения.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Context<'a> {
     /// Письмо целиком (RFC 5322).
     pub message: &'a [u8],
@@ -30,6 +32,22 @@ pub struct Context<'a> {
     pub envelope_to: &'a str,
     /// Существующие папки (`mailboxexists`), путь через `/`.
     pub mailboxes: &'a [String],
+    /// Тип абонента — отправителя относительно организации получателя (CTR-93, решение 124): тест `peer`
+    /// расширения `vnd.thepost.peer`. Вычисляет вызывающий (ядро); заголовкам письма не доверяем
+    /// (RFC 5183, RFC 8601 §5). Умолчание — `external` (безопасное).
+    pub peer: PeerKind,
+}
+
+impl Default for Context<'_> {
+    fn default() -> Self {
+        Self {
+            message: b"",
+            envelope_from: "",
+            envelope_to: "",
+            mailboxes: &[],
+            peer: PeerKind::External,
+        }
+    }
 }
 
 /// Параметры `vacation` из скрипта (RFC 5230); решение «отвечать ли» — SIEVE-06.
@@ -81,6 +99,9 @@ pub enum Action {
     },
     /// `vacation`.
     Vacation(VacationAction),
+    /// `processcalendar` (RFC 9671 §3, SIEVE-14): параметры для приёма iTIP; интерпретатор их только
+    /// записывает, применяет вызывающий. Не отменяет implicit keep (RFC 9671 §3).
+    ProcessCalendar(ProcessCalendar),
 }
 
 /// Итог выполнения.
@@ -109,6 +130,7 @@ pub fn run(program: &Program, ctx: &Context<'_>, limits: &Limits) -> Outcome {
         flags: Vec::new(),
         cancel_keep: false,
         vacation: false,
+        calendar: false,
         body: None,
     };
     match ex.block(&program.commands) {
@@ -152,6 +174,7 @@ struct Exec<'a> {
     flags: Vec<String>,
     cancel_keep: bool,
     vacation: bool,
+    calendar: bool,
     /// Разобранное письмо для теста `body` (разбирается при первом тесте; `Some(None)` — не разобрано).
     body: Option<Option<Message<'a>>>,
 }
@@ -227,6 +250,14 @@ impl Exec<'_> {
                 }
                 self.vacation = true;
                 self.act(Action::Vacation(v.clone()), false)?;
+            }
+            Cmd::ProcessCalendar(p) => {
+                // Не чаще одного раза за скрипт (RFC 9671 §3); implicit keep не отменяет.
+                if self.calendar {
+                    return Err(Fail("processcalendar выполнен второй раз".into()));
+                }
+                self.calendar = true;
+                self.act(Action::ProcessCalendar(p.clone()), false)?;
             }
         }
         Ok(Flow::Next)
@@ -347,6 +378,11 @@ impl Exec<'_> {
                     mb == n || (mb.eq_ignore_ascii_case("INBOX") && n.eq_ignore_ascii_case("INBOX"))
                 })
             }),
+            Test::Peer { m, keys } => {
+                // Тип абонента — из контекста ядра (CTR-93), заголовки письма не читаются (решение 124).
+                let values = [self.ctx.peer.as_str().to_owned()];
+                self.matches(m, &values, keys)?
+            }
         })
     }
 
