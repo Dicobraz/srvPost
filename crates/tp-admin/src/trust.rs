@@ -946,6 +946,11 @@ async fn put(
     body: TrustBody,
 ) -> std::result::Result<Response, RefusedResponse> {
     let err = |e: Error| RefusedResponse::from(ApiError(e).into_response());
+    // Прежняя политика — читается до локальной `policy`, затеняющей одноимённую функцию.
+    let old = match policy(a, level).await {
+        Ok(p) => p,
+        Err(e) => return Err(err(e)),
+    };
     let policy: TrustPolicy = body.into();
     let (ceiling, accepted) = match write_ceiling(a, level).await {
         Ok(c) => c,
@@ -972,10 +977,6 @@ async fn put(
     }
     let store = match store(a) {
         Ok(s) => s,
-        Err(e) => return Err(err(e)),
-    };
-    let old = match policy(a, level).await {
-        Ok(p) => p,
         Err(e) => return Err(err(e)),
     };
     if let Err(e) = store.set_policy(level, &policy).await {
