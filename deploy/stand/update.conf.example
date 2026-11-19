@@ -1,0 +1,31 @@
+# update.conf.example — параметры stand-update.sh (автообновление стенда, DEP-59).
+# Скопировать в update.conf рядом со скриптом и подставить значения своего стенда.
+# Два эталонных стенда ниже: раскомментировать нужный блок.
+
+# --- Общее -------------------------------------------------------------------
+# Репозиторий релизов и архитектура тарболла (asset thepost-<тег>-<ASSET_ARCH>.tar.gz).
+REPO=Dicobraz/srvPost
+ASSET_ARCH=x86_64-unknown-linux-gnu
+# Образы узла (Debian+systemd) и контейнера ansible; теги установки stand.yml.
+NODE_IMAGE=thepost-beta-020-smb:13
+ANSIBLE_IMAGE=thepost-beta-020-ansible:1
+INSTALL_TAGS=install,provision
+# Юниты приёмки после установки.
+HEALTH_UNITS=thepost openbao postgresql
+# Сколько последних версий держать в rel/ и inbox (диск стенда).
+KEEP=2
+
+# --- podium-dev: /home/admin2/thepost-perf (Д.7 на 172.22.0.0/24) -------------
+# NODE=thepost-perf-smb
+# NODE_RUN_ARGS=--network thepost-perf --hostname mail --ip 172.22.0.2 --privileged
+
+# --- school-99-stand: /home/<user>/thepost-d7 (Д.7 на 172.21.0.0/24) ----------
+# NODE=thepost-d7-smb
+# NODE_RUN_ARGS=--network thepost-d7 --hostname mail --ip 172.21.0.2 --privileged --restart unless-stopped
+
+# --- Cron (на хосте стенда, от того же пользователя, что и стенд) -------------
+# Проверка раз в 15 минут; журнал — update.log:
+#   */15 * * * * /home/admin2/thepost-perf/stand-update.sh >> /home/admin2/thepost-perf/update.log 2>&1
+# Ручной контроль:
+#   stand-update.sh --check   # exit 2 — есть новая версия
+#   stand-update.sh --tag v0.2.1-beta.4
