@@ -704,6 +704,10 @@ impl Services {
             .with_freebusy(Some(Arc::new(self.meta.clone())))
             // Приглашения из JMAP (`sendSchedulingMessages`, JMAP-31) — теми же зависимостями, что у CalDAV.
             .with_schedule(Some(self.schedule(outbound)))
+            // Личные списки отправителей (JMAP-17): `SenderList/get|set` и спам-вердикт получателя в
+            // `Invitation/respond` — принятие встречи из письма (JMAP-50, волна jmap-35; без списков вердикт
+            // в методе не проверяется).
+            .with_sender_lists(Some(Arc::new(self.meta.clone())))
             // Общий доступ к календарям и книгам (JMAP-32): права — единый слой `collections`, записи прав и
             // уведомления о доступе (JMAP-46) — `PgMeta`.
             .with_sharing(Some(tp_jmap::SharingDeps {
