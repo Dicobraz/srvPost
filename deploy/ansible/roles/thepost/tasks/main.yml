@@ -7,9 +7,14 @@
       - thepost_tls_mode != 'acme' or thepost_acme_email | length > 0
       - thepost_tls_mode != 'files' or (thepost_tls_cert_src | length > 0 and thepost_tls_key_src | length > 0)
       - thepost_binary_url | length == 0 or thepost_binary_checksum | length > 0
+      # Журнал (DEP-58): compliance — явно и только с явным сроком (риск 21: объект compliance не удаляет
+      # никто до конца срока, ошибка в сроке не освобождает бакет); бакет отдельен от BLOB — в thepost config check.
+      - thepost_journal.s3 is not defined or thepost_journal.s3.lock_mode | default('governance') != 'compliance'
+        or thepost_journal.s3.retention is defined
     fail_msg: >-
       thepost_tls_mode — acme, internal или files; для acme нужен thepost_acme_email,
-      для files — thepost_tls_cert_src и thepost_tls_key_src; thepost_binary_url — с thepost_binary_checksum
+      для files — thepost_tls_cert_src и thepost_tls_key_src; thepost_binary_url — с thepost_binary_checksum;
+      journal: режим compliance — только с явным retention (риск 21)
 
 # До бинарного файла: проверка config.yaml (validate) уже запускает thepost.
 - name: Install system libraries
@@ -196,6 +201,19 @@
     path: "{{ thepost_gssapi_keytab }}"
     state: absent
   when: thepost_gssapi_keytab_src | length == 0
+
+# Каталог записей журнала (SRS 4.9, DEP-58) — профиль SMB: неизменяемость обеспечивает только сервер
+# (записи лишь добавляются), от администратора ОС защиты нет — thepost doctor предупреждает (риск 23).
+# Внутри /var/lib/thepost (StateDirectory юнита, узел пишет); каталог вне него — drop-in ReadWritePaths=.
+# Владелец-узел: S3-хранилище (thepost_journal.s3) каталога не требует.
+- name: Create journal records directory
+  ansible.builtin.file:
+    path: "{{ thepost_journal.local.dir | default(thepost_journal_local_dir) }}"
+    state: directory
+    owner: thepost
+    group: thepost
+    mode: "0750"
+  when: thepost_journal_enabled | bool and thepost_journal.s3 is not defined
 
 # Проверка auth.gssapi.keytab сверяет KRB5_KTNAME — та же переменная, что в drop-in gssapi.conf.
 - name: Write config.yaml

@@ -4,10 +4,13 @@
 //! `OidcAuthenticator`; многофакторную аутентификацию обеспечивает поставщик удостоверений) или сессия Admin API
 //! (`tps_…`, [`crate::init`]: вход по паролю администратора или обмен токена `admin init`). Роли администраторов
 //! назначает секция `admin` config.yaml по имени входа или группе каталога ([`RoleBinding`]):
-//! - [`AdminRole::InstallationAdmin`] — все организации;
-//! - [`AdminRole::OrganizationAdmin`] — только организация администратора;
-//! - [`AdminRole::Operator`] — оператор только для чтения (`GET`/`HEAD`) своей организации, кроме журнала аудита;
-//! - [`AdminRole::Auditor`] — аудитор: только чтение журнала аудита своей организации.
+//! - [`AdminRole::InstallationAdmin`] — все организации (кроме содержимого журнала переписки);
+//! - [`AdminRole::OrganizationAdmin`] — только организация администратора (кроме содержимого журнала переписки);
+//! - [`AdminRole::Operator`] — оператор только для чтения (`GET`/`HEAD`) своей организации, кроме журналов аудита
+//!   и переписки;
+//! - [`AdminRole::Auditor`] — аудитор: только чтение журнала аудита своей организации;
+//! - [`AdminRole::JournalAuditor`] — аудитор журнала переписки: только чтение журнала своей организации
+//!   ([`crate::journal`], SRS 5.2).
 //!
 //! Ресурсы организации — под `/api/v1/orgs/{org}/...`: слой доступа ([`guard`]) проверяет вход, роль и область
 //! роли до обработчика ([`Caller::permits`]) и пишет каждое изменение (не `GET`/`HEAD`), включая отказ, в журнал
@@ -88,16 +91,21 @@ pub enum AdminRole {
     Operator,
     /// Аудитор: только чтение журнала аудита своей организации.
     Auditor,
+    /// Аудитор журнала переписки (SRS 5.2): только чтение журнала своей организации
+    /// ([`crate::journal`]); прочим ролям содержимое журнала недоступно.
+    JournalAuditor,
 }
 
 impl AdminRole {
-    /// Имя роли в журнале аудита и API (`installation_admin`, `organization_admin`, `operator`, `auditor`).
+    /// Имя роли в журнале аудита и API (`installation_admin`, `organization_admin`, `operator`,
+    /// `auditor`, `journal_auditor`).
     pub fn as_str(self) -> &'static str {
         match self {
             AdminRole::InstallationAdmin => "installation_admin",
             AdminRole::OrganizationAdmin => "organization_admin",
             AdminRole::Operator => "operator",
             AdminRole::Auditor => "auditor",
+            AdminRole::JournalAuditor => "journal_auditor",
         }
     }
 
@@ -123,12 +131,20 @@ impl AdminRole {
         // организации и оператору нельзя.
         let installation = route.starts_with(crate::branding::BRANDING_PREFIX)
             || route.starts_with(crate::trust::INSTALLATION_TRUST);
+        // Содержимое журнала переписки — только роли «аудитор журнала» (SRS 4.9, 5.2; ADM-52): прочим
+        // администраторам нельзя.
+        let journal = route.starts_with(crate::journal::JOURNAL_PREFIX);
         match self {
-            AdminRole::InstallationAdmin => true,
-            AdminRole::OrganizationAdmin => own_scope && !cluster && !installation,
-            AdminRole::Operator => own_scope && read && !audit && !cluster && !installation,
+            AdminRole::InstallationAdmin => !journal,
+            AdminRole::OrganizationAdmin => own_scope && !cluster && !installation && !journal,
+            AdminRole::Operator => {
+                own_scope && read && !audit && !cluster && !installation && !journal
+            }
             AdminRole::Auditor => {
                 read && (route == WHOAMI_ROUTE || (audit && tenant.is_some_and(|t| t == own)))
+            }
+            AdminRole::JournalAuditor => {
+                read && (route == WHOAMI_ROUTE || (journal && tenant.is_some_and(|t| t == own)))
             }
         }
     }
@@ -196,6 +212,9 @@ pub struct AdminConfig {
     /// Выгрузка журнала аудита из базы во внешнюю SIEM (syslog, OTLP; выполняет роль maintenance узла); по
     /// умолчанию выключена.
     pub audit: AuditExportConfig,
+    /// Выгрузка новых записей журнала переписки во внешний архив заказчика (каталог/HTTPS, SRS 4.9;
+    /// выполняет роль maintenance узла); по умолчанию выключена.
+    pub journal_archive: crate::journal::JournalArchiveConfig,
     /// Первый администратор без OIDC (`thepost admin init`, [`crate::init`]).
     pub init: InitConfig,
     /// Веб-консоль администратора ([`crate::console`]); по умолчанию раздаётся.
@@ -221,6 +240,7 @@ impl Default for AdminConfig {
             listen: SocketAddr::from(([127, 0, 0, 1], 8443)),
             allow_external: false,
             audit: AuditExportConfig::default(),
+            journal_archive: crate::journal::JournalArchiveConfig::default(),
             init: InitConfig::default(),
             console: ConsoleConfig::default(),
             oidc: None,
@@ -256,6 +276,7 @@ impl AdminConfig {
             )));
         }
         self.audit.check()?;
+        self.journal_archive.check()?;
         self.init.check()?;
         self.console.check()?;
         if let Some(o) = &self.oidc {
@@ -404,6 +425,9 @@ pub struct Admin {
     pub(crate) queue: Option<Arc<dyn QueueStore>>,
     /// Брендинг установки и организаций ([`crate::branding`]); `None` — не подключено (маршруты — 503).
     pub(crate) branding: Option<crate::branding::BrandingStores>,
+    /// Журнал переписки ([`crate::journal`]); `None` — не подключено (маршруты — 503): записи пишет этап
+    /// ядра конвейера, читает готовое хранилище (BLOB-18, META-88).
+    pub(crate) journal: Option<Arc<dyn tp_contracts::journal::JournalStore>>,
     /// Политика доверия ([`crate::trust`]); `None` — не подключено (маршруты — 503).
     pub(crate) trust: Option<Arc<dyn TrustStore>>,
     /// Организации инсталляции: без модуля «Мультитенантность» — только организация по умолчанию (решение 10).
@@ -423,6 +447,7 @@ impl fmt::Debug for Admin {
             .field("sharing", &self.sharing.is_some())
             .field("queue", &self.queue.is_some())
             .field("branding", &self.branding.is_some())
+            .field("journal", &self.journal.is_some())
             .field("trust", &self.trust.is_some())
             .field("organizations", &self.organizations)
             .finish()
@@ -463,6 +488,7 @@ impl Admin {
             sharing: None,
             queue: None,
             branding: None,
+            journal: None,
             trust: None,
             organizations: BTreeSet::from([TenantId::DEFAULT]),
         })
@@ -481,6 +507,13 @@ impl Admin {
         blobs: Arc<dyn BlobStore>,
     ) -> Self {
         self.branding = Some(crate::branding::BrandingStores { store, blobs });
+        self
+    }
+
+    /// Подключает журнал переписки ([`crate::journal`]): поиск, просмотр, выгрузка `.eml`, проверка
+    /// цепочки — роль «аудитор журнала» ([`AdminRole::JournalAuditor`]).
+    pub fn with_journal(mut self, journal: Arc<dyn tp_contracts::journal::JournalStore>) -> Self {
+        self.journal = Some(journal);
         self
     }
 
@@ -515,6 +548,7 @@ impl Admin {
         api = crate::resources::routes(api);
         api = crate::queue::routes(api);
         api = crate::branding::routes(api);
+        api = crate::journal::routes(api);
         api = crate::trust::routes(api);
         for m in &self.d.modules {
             let prefix = m.prefix().to_owned();
@@ -881,6 +915,7 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     api.merge(crate::resources::Doc::openapi());
     api.merge(crate::queue::Doc::openapi());
     api.merge(crate::branding::Doc::openapi());
+    api.merge(crate::journal::Doc::openapi());
     api.merge(crate::trust::Doc::openapi());
     CommonErrors.modify(&mut api);
     api

@@ -107,6 +107,31 @@ thepost_milter_submission: false
 thepost_blob_gc_window: >-
   {{ (thepost_backup_retention_days | default(7) | int + 8) ~ 'd' if thepost_backup | default(true) | bool else '' }}
 
+# Журналирование переписки (секция journal, SRS 4.9; DEP-58): по умолчанию выключено — включается явно.
+# Профиль SMB — локальный каталог (journal.local пресета): записи только добавляет сервер, от администратора
+# ОС защиты нет — thepost doctor предупреждает (риск 23); для требований неизменяемости — S3 с Object Lock
+# (journal.s3, бакет отдельный от BLOB ящиков, режим governance по умолчанию, compliance — явно и только
+# с явным сроком, риск 21). Каталог — thepost_journal_local_dir (внутри /var/lib/thepost юнита; вне его —
+# drop-in ReadWritePaths=, как у BLOB). Правила журналирования — данные организации (Admin API), не файл узла.
+thepost_journal_enabled: false
+thepost_journal_local_dir: /var/lib/thepost/journal
+# Поля секции journal поверх пресета (рекурсивно), например:
+#   thepost_journal_enabled: true
+#   thepost_journal:
+#     s3:                                   # S3 с Object Lock вместо локального каталога
+#       bucket: thepost-journal
+#       lock_mode: governance               # compliance — только с retention
+#       retention: 2555d
+#       endpoint: https://s3.example.ru:8333
+#       path_style: true
+#       credentials:
+#         access_key_id: { secret: "thepost/s3#access_key_id" }
+#         secret_access_key: { secret: "thepost/s3#secret_access_key" }
+#       tls: { ca_file: /etc/thepost/pki/ca.pem }
+#     export: { address: archive.example.ru:25 }   # выгрузка .eml с конвертом во внешний архив
+# Сюда же — local.dir (переопределить каталог SMB); заданы и s3, и local — ошибка конфигурации.
+thepost_journal: {}
+
 # Дополнительные параметры config.yaml — рекурсивно поверх эталона (списки заменяются), например:
 #   thepost_config_extra: { auth: { ldap: { … } }, meta: { retention: { trash_retention: 15m } } }
 thepost_config_extra: {}

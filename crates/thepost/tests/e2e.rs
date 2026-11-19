@@ -923,6 +923,7 @@ async fn mvp_mail_flow() {
         bus: Arc::new(tp_cluster::LocalBus::new(
             &tp_cluster::LocalBusConfig::default(),
         )),
+        threads: None, // восстановление Admin API — беседы не участвуют
         hooks: DecisionHooks::default(),
     });
     let restored = store.restore(scope, &[id]).await.expect("restore");

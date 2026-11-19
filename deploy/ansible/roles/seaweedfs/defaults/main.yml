@@ -63,3 +63,10 @@ seaweedfs_jwt_filer_signing_key: ""
 seaweedfs_s3_identities: []
 # Бакеты — создаёт первый узел группы filer (weed shell).
 seaweedfs_buckets: []
+# Бакеты с S3 Object Lock (DEP-58, SRS 4.9 — бакет журнала переписки): создаются с версионированием и
+# Object Lock (`s3.bucket.create -withLock`, SeaweedFS ≥ 4.x), существующие — `s3.bucket.lock -enable`
+# (идемпотентно). Object Lock необратим: выключить нельзя, удалить объект до конца срока — нельзя
+# (compliance — вообще никто, governance — только роль с правом обхода). Включать только для бакетов,
+# которые обязаны быть неизменяемыми (журнал); бакет BLOB ящиков сюда ставить нельзя — письма ящиков
+# стали бы неудаляемыми (SRS 4.9: блокировка общих BLOB связала бы GC ящиков со сроками журнала).
+seaweedfs_lock_buckets: []

@@ -5,6 +5,8 @@
 //! - [`audit`] — журнал аудита изменений и его чтение;
 //! - [`export`] — выгрузка журнала аудита из базы в SIEM: syslog (RFC 5424 поверх TLS) и OTLP;
 //! - [`delivery`] — поиск в журнале доставки;
+//! - [`journal`] — журнал переписки для роли «аудитор журнала»: поиск, просмотр, выгрузка `.eml`,
+//!   проверка цепочки, выгрузка во внешний архив заказчика;
 //! - [`groups`] — группы рассылки: ограничения, скрытие из GAL, очередь модерации;
 //! - [`accounts`] — организация, домены, учётные записи, квоты и политики уровней;
 //! - [`queue`] — очередь исходящей почты: список записей с фильтрами, повтор доставки;
@@ -39,6 +41,7 @@ pub mod export;
 mod extract;
 pub mod groups;
 pub mod init;
+pub mod journal;
 pub mod mailboxes;
 pub mod queue;
 pub mod resources;
@@ -60,6 +63,11 @@ pub use export::{
 pub use groups::Moderation;
 pub use init::{
     InitConfig, InitGranted, InitReply, InitRequest, OidcClient, OidcLogin, SessionInfo,
+};
+pub use journal::{
+    ArchiveLedger, ArchivePosition, ArchiveSink, ChainReportView, DirectoryArchive, HttpsArchive,
+    HttpsArchiveConfig, JournalArchiveConfig, JournalEntryView, JournalPageView, JournalParams,
+    JournalRecordView, MemArchiveLedger, archive_pass,
 };
 pub use server::{Admin, AdminConfig, AdminRole, Deps, RoleBinding};
 pub use sharing::SharingStores;

@@ -288,6 +288,12 @@ impl Client {
             .map(|(r, _)| r)
     }
 
+    /// Запрос `op` без тела; ответ 2xx — байты как есть (выгрузка `.eml` журнала переписки), отказ —
+    /// [`Error::Api`].
+    pub async fn bytes(&self, op: Op, params: &[&str]) -> Result<Vec<u8>> {
+        self.send::<()>(op, params, &[], None).await.map(|(_, b)| b)
+    }
+
     /// Запрос `op`; ответ — структура ответа tp-admin `R` и цель ссылки `Link: <…>; rel="next"` (RFC 8288), если есть.
     pub async fn call_page<B: Serialize + ?Sized, R: DeserializeOwned>(
         &self,
