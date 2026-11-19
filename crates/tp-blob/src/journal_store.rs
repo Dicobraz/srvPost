@@ -614,7 +614,7 @@ impl JournalRecords {
     async fn load_records(&self, tenant: TenantId) -> Result<Vec<StoredRecord>> {
         let prefix = format!("{}/t/{}/", self.cfg.prefix, tenant);
         let mut paths: Vec<String> = self
-            .store
+            .backend
             .list(&prefix, far_future())
             .map_ok(|entry| entry.path)
             .try_collect()
@@ -660,7 +660,7 @@ impl JournalRecords {
     async fn find_under(&self, prefix: &str, id: JournalId) -> Result<String> {
         let suffix = format!("/{id}");
         let mut paths: Vec<String> = self
-            .store
+            .backend
             .list(prefix, far_future())
             .map_ok(|entry| entry.path)
             .try_collect()
