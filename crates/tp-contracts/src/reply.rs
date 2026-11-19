@@ -46,8 +46,8 @@ pub fn canonical_message_id(raw: &str) -> String {
     s.trim().to_ascii_lowercase()
 }
 
-/// Каноническая форма адресата: домен — нижний регистр, A-label IDN ([`normalize_domain`]); local-part —
-/// как задан. Некорректный адрес — `Invalid`.
+/// Каноническая форма адресата: домен — нижний регистр, A-label IDN (Unicode — punycode, затем
+/// [`normalize_domain`]); local-part — как задан. Некорректный адрес — `Invalid`.
 pub fn normalize_recipient(addr: &str) -> Result<String> {
     let Some((local, domain)) = addr.rsplit_once('@') else {
         return Err(Error::invalid(format!("адрес без домена: {addr:?}")));
@@ -55,7 +55,13 @@ pub fn normalize_recipient(addr: &str) -> Result<String> {
     if local.is_empty() || domain.is_empty() {
         return Err(Error::invalid(format!("неполный адрес: {addr:?}")));
     }
-    Ok(format!("{local}@{}", normalize_domain(domain)?))
+    let ascii = if domain.is_ascii() {
+        domain.to_owned()
+    } else {
+        idna::domain_to_ascii(domain)
+            .map_err(|_| Error::invalid(format!("invalid domain {domain:?}")))?
+    };
+    Ok(format!("{local}@{}", normalize_domain(&ascii)?))
 }
 
 /// SHA-256 канонической формы Message-ID клиента ([`canonical_message_id`]): ключ записи об отправленном
@@ -186,12 +192,18 @@ pub struct ReplyEvidence {
 
 impl ReplyEvidence {
     /// Отправитель `sender` (канонизируется) — среди адресатов записи и письмо не старше `max_age`
-    /// (`smtp.reply.max_age`). DMARC проверяет вызывающий; все три условия сразу — признак ответа.
+    /// (`smtp.reply.max_age`). local-part сравнивается без учёта регистра (каноническая форма хранит
+    /// как задано, RFC 5321 2.3.11). DMARC проверяет вызывающий; все три условия сразу — признак ответа.
     pub fn confirms(&self, sender: &str, max_age: Duration) -> bool {
         let Ok(sender) = normalize_recipient(sender) else {
             return false;
         };
-        self.age <= max_age && self.sent.recipients.contains(&sender)
+        self.age <= max_age
+            && self
+                .sent
+                .recipients
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(&sender))
     }
 }
 
