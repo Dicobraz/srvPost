@@ -896,7 +896,7 @@ mod tests {
             let journal = journal.clone();
             move || journal.drop_index()
         };
-        suite::journal(&journal, &corrupt, &drop_idx).await;
+        suite::journal(journal.as_ref(), &corrupt, &drop_idx).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -919,7 +919,7 @@ mod tests {
             let journal = journal.clone();
             move || journal.drop_index()
         };
-        suite::journal(&journal, &corrupt, &drop_idx).await;
+        suite::journal(journal.as_ref(), &corrupt, &drop_idx).await;
     }
 
     #[tokio::test]
