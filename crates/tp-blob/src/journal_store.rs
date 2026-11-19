@@ -10,8 +10,8 @@
 //! Макет объектов (пути `put_raw` внутри корня журнала):
 //! - запись `{prefix}/t/{tenant}/{YYMMDD}/{JournalId}` — JSON [`StoredRecord`]: конверт письма
 //!   (метаданные), манифест частей, хеш цепочки со ссылкой на предыдущую запись, блокировка;
-//! - часть `{prefix}/p/{hash[0..2]}/{hash}` — содержимое части по хешу SHA-256 (дедупликация внутри
-//!   журнала; с BLOB ящиками части не разделяются).
+//! - часть `{prefix}/p/{tenant}/{hash[0..2]}/{hash}` — содержимое части по хешу SHA-256
+//!   (дедупликация внутри организации; с BLOB ящиками части не разделяются).
 //!
 //! Дедупликация (SRS 4.9): письмо режется на части по содержимому (content-defined chunking: окно
 //! 48 байт, порог из конфигурации) — границы частей зависят только от самих байтов, поэтому
@@ -19,14 +19,18 @@
 //! раз. «Тело, вложения» как у Exchange single-instance storage, но без разбора MIME: часть —
 //! сегмент содержимого, экономия достигается при любом расположении повтора.
 //!
-//! Срок блокировки (SRS 4.9): при записи в объект записи кладутся режим (`compliance`/`governance`,
-//! задаёт заказчик) и срок `retain_until = время записи + retention`. Срок объекта части —
-//! наибольший из ссылающихся записей ([`JournalRecords::part_retention`]): новая ссылка только
-//! продлевает, уменьшить нельзя — записи неизменяемы. Принудительное WORM-исполнение — Object Lock
-//! бакета S3 (SeaweedFS): режим и срок по умолчанию задаются при создании бакета, клиент
-//! `object_store` не передаёт заголовки `x-amz-object-lock-*` с PUT, поэтому серверная блокировка
-//! ставится на уровне бакета, а режим и срок каждой записи — в её объекте (восстанавливаются
-//! индексом и видны `thepost doctor`).
+//! Срок блокировки (SRS 4.9; решение #113): tp-blob сам пишет режим (`compliance`/`governance`,
+//! задаёт заказчик) и срок `retain_until = время записи + retention` в каждый объект при записи —
+//! `x-amz-meta-thepost-lock-mode`/`-until` на S3 ([`lock_attributes`]), в объекте записи — и в
+//! JSON ([`StoredRecord::retention`]). Метаданные объекта — источник истины по сроку: у старого
+//! бакета дефолтный срок Object Lock может быть короче нужного, на него нельзя полагаться;
+//! бакетный Object Lock — только уровень исполнения (сервер реально запретит удаление). Дефолт
+//! бакета клиент `object_store` не читает, рассинхрон проверяет thepost doctor (APP-82); срок
+//! короче суток в конфигурации — предупреждение в журнал узла ([`JournalRecords::new`]).
+//! Срок объекта части — наибольший из ссылающихся записей ([`JournalRecords::part_retention`]):
+//! новая ссылка перезаписывает метаданные части на больший срок, уменьшить нельзя — записи
+//! неизменяемы; локальный бэкенд метаданных объектов не хранит — срок части выводится из записей
+//! организации (защита от администратора ОС и не требуется: профиль SMB — warning doctor).
 //!
 //! Хеш-цепочка (CTR-97): каждая запись хранит `hash = SHA-256(chain_input(prev, record))` и `prev`
 //! — хеш предыдущей записи организации (у первой [`GENESIS_HASH`]). Порядок цепи восстанавливается
@@ -51,8 +55,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
+use object_store::{Attribute, AttributeValue, Attributes};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::Entry;
 use time::{OffsetDateTime, PrimitiveDateTime};
 use tokio::sync::Mutex as AsyncMutex;
 use tp_contracts::blob::BlobStore;
@@ -64,7 +70,7 @@ use tp_contracts::journal::{
 };
 use tp_contracts::{Error, Result};
 
-use crate::{BlobHasher, Now};
+use crate::{BlobHasher, LocalStore, Now, S3Store};
 
 /// Размер окна разреза частей, байт: границы зависят от содержимого окна, а не позиции.
 const CHUNK_WINDOW: usize = 48;
@@ -100,6 +106,57 @@ pub enum LockMode {
     Governance,
     /// Объект не удаляет никто до окончания срока, включая администратора хранилища.
     Compliance,
+}
+
+impl LockMode {
+    /// Строка в метаданных объекта и config.yaml (`governance`, `compliance`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            LockMode::Governance => "governance",
+            LockMode::Compliance => "compliance",
+        }
+    }
+
+    /// Разбор строки метаданных; иное — `None`.
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "governance" => Some(LockMode::Governance),
+            "compliance" => Some(LockMode::Compliance),
+            _ => None,
+        }
+    }
+}
+
+/// Ключи метаданных блокировки объекта журнала (`x-amz-meta-thepost-lock-*` на S3; решение #113:
+/// tp-blob сам пишет режим и срок при записи — источник истины по сроку, бакетный Object Lock
+/// только исполняет запрет удаления: у старого бакета дефолтный срок может быть короче).
+const LOCK_MODE_KEY: &str = "thepost-lock-mode";
+const LOCK_UNTIL_KEY: &str = "thepost-lock-until";
+
+/// Метаданные блокировки `retention` как атрибуты объекта.
+fn lock_attributes(retention: &Retention) -> Attributes {
+    let mut attrs = Attributes::new();
+    attrs.insert(
+        Attribute::Metadata(LOCK_MODE_KEY.into()),
+        AttributeValue::from(retention.mode.as_str()),
+    );
+    attrs.insert(
+        Attribute::Metadata(LOCK_UNTIL_KEY.into()),
+        AttributeValue::from(retention.until.unix_timestamp().to_string()),
+    );
+    attrs
+}
+
+/// Блокировка из атрибутов объекта; метаданных нет или не разбираются — `None`.
+fn lock_from_attributes(attrs: &Attributes) -> Option<Retention> {
+    let mode = attrs
+        .get(&Attribute::Metadata(LOCK_MODE_KEY.into()))
+        .and_then(|v| LockMode::parse(v.as_ref()))?;
+    let until = attrs
+        .get(&Attribute::Metadata(LOCK_UNTIL_KEY.into()))
+        .and_then(|v| v.as_ref().parse::<i64>().ok())
+        .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())?;
+    Some(Retention { mode, until })
 }
 
 /// Блокировка объекта: режим и срок (SRS 4.9). Срок продлевается только.
@@ -210,11 +267,52 @@ pub struct StoredRecord {
     pub retention: Retention,
 }
 
-/// Хранилище записей журнала (SRS 4.9) поверх отдельного от BLOB ящиков [`BlobStore`].
-/// Реализует [`JournalStore`] с индексом в памяти; полные установки используют индекс PostgreSQL
-/// (META-88) поверх [`JournalRecords::put`]/[`JournalRecords::chain`].
+/// Бэкенд записей журнала: хранилище объектов с записью метаданных блокировки (SRS 4.9; решение
+/// #113 — режим и срок в каждый объект пишет tp-blob при записи, бакетный дефолт в срок не
+/// входит). Реализации крейта: [`S3Store`] (`x-amz-meta-thepost-lock-*`) и [`LocalStore`]
+/// (локальный диск метаданных объектов не хранит — срок живёт в объекте записи).
+#[async_trait]
+pub trait JournalBackend: BlobStore {
+    /// Записывает объект `path` с содержимым `data` и метаданными блокировки `lock`
+    /// (существующий объект заменяется — срок метаданных только продлевается).
+    async fn put_raw_locked(&self, path: &str, data: Bytes, lock: &Retention) -> Result<()>;
+
+    /// Метаданные блокировки объекта `path`. Нет объекта — `NotFound`; бэкенд без метаданных
+    /// объектов — `None`.
+    async fn raw_lock(&self, path: &str) -> Result<Option<Retention>>;
+}
+
+#[async_trait]
+impl JournalBackend for S3Store {
+    async fn put_raw_locked(&self, path: &str, data: Bytes, lock: &Retention) -> Result<()> {
+        self.put_raw_with_attributes(path, data, lock_attributes(lock))
+            .await
+    }
+
+    async fn raw_lock(&self, path: &str) -> Result<Option<Retention>> {
+        Ok(lock_from_attributes(&self.raw_attributes(path).await?))
+    }
+}
+
+#[async_trait]
+impl JournalBackend for LocalStore {
+    async fn put_raw_locked(&self, path: &str, data: Bytes, _lock: &Retention) -> Result<()> {
+        self.put_raw_with_attributes(path, data, Attributes::new())
+            .await
+    }
+
+    async fn raw_lock(&self, _path: &str) -> Result<Option<Retention>> {
+        // Локальный бэкенд метаданных не хранит: срок части выводится из записей организации,
+        // срок записи — в её объекте ([`StoredRecord::retention`]).
+        Ok(None)
+    }
+}
+
+/// Хранилище записей журнала (SRS 4.9) поверх отдельного от BLOB ящиков бэкенда
+/// ([`JournalBackend`]). Реализует [`JournalStore`] с индексом в памяти; полные установки
+/// используют индекс PostgreSQL (META-88) поверх [`JournalRecords::put`]/[`JournalRecords::chain`].
 pub struct JournalRecords {
-    store: Arc<dyn BlobStore>,
+    backend: Arc<dyn JournalBackend>,
     cfg: JournalConfig,
     now: Now,
     /// Индексы организаций; карта — на короткой блокировке без await.
@@ -242,12 +340,21 @@ impl std::fmt::Debug for JournalRecords {
 }
 
 impl JournalRecords {
-    /// Хранилище над `store` — отдельным от BLOB ящиков корнем/бакетом — с конфигурацией `cfg`
+    /// Хранилище над `backend` — отдельным от BLOB ящиков корнем/бакетом — с конфигурацией `cfg`
     /// и часами `now` ([`crate::system_now`]). Конфигурация проверяется, ошибка — `Invalid`.
-    pub fn new(store: Arc<dyn BlobStore>, cfg: JournalConfig, now: Now) -> Result<Self> {
+    /// Срок блокировки короче суток — предупреждение в журнал узла (решение #113: бакетный
+    /// дефолт в срок не входит, короткий срок — почти всегда ошибка конфигурации).
+    pub fn new(backend: Arc<dyn JournalBackend>, cfg: JournalConfig, now: Now) -> Result<Self> {
         cfg.validate()?;
+        if cfg.retention < Duration::from_secs(24 * 3600) {
+            tracing::warn!(
+                retention = ?cfg.retention,
+                "journal: срок блокировки меньше суток — проверьте секцию журнала и Object Lock \
+                 бакета (дефолт бакета клиент не читает, срок гарантируют метаданные объектов)"
+            );
+        }
         Ok(Self {
-            store,
+            backend,
             cfg,
             now,
             index: Mutex::new(HashMap::new()),
@@ -273,17 +380,23 @@ impl JournalRecords {
         )
     }
 
-    /// Путь объекта части: `{prefix}/p/{hash[0..2]}/{hash}`.
-    fn part_path(&self, hash: &BlobHash) -> String {
+    /// Путь объекта части: `{prefix}/p/{tenant}/{hash[0..2]}/{hash}` — дедупликация внутри
+    /// организации: сроки блокировки разных организаций не смешиваются.
+    fn part_path(&self, tenant: TenantId, hash: &BlobHash) -> String {
         let hex = hash.to_string();
-        format!("{}/p/{}/{}", self.cfg.prefix, &hex[..2], hex)
+        format!("{}/p/{}/{}/{}", self.cfg.prefix, tenant, &hex[..2], hex)
     }
 
     /// Записывает письмо частями (дедупликация) и объект записи; возвращает хеш цепочки записи.
     /// `prev` — хеш предыдущей записи организации (у первой [`GENESIS_HASH`]); порядок записей и
     /// единственность писателя обеспечивает вызывающий: транзакция индекса (META-88) или блокировка
-    /// индекса этого экземпляра ([`JournalStore::append`]). Пустое письмо — `Invalid`;
-    /// существующие части не перезаписываются — объекты неизменяемы.
+    /// индекса этого экземпляра ([`JournalStore::append`]). Пустое письмо — `Invalid`.
+    ///
+    /// Блокировка (SRS 4.9, решение #113): режим и срок (`время записи + retention` из
+    /// конфигурации) tp-blob пишет в каждый объект сам — метаданные объекта, не бакетный дефолт.
+    /// Срок части — наибольший из ссылающихся записей: новая ссылка продлевает метаданные объекта
+    /// части на больший срок (уменьшить нельзя — записи неизменяемы); содержимое существующих
+    /// частей не меняется.
     pub async fn put(
         &self,
         id: JournalId,
@@ -296,15 +409,51 @@ impl JournalRecords {
             return Err(Error::invalid("journal: empty message"));
         }
         let parts = self.split_parts(message).await?;
+        let retention = Retention {
+            mode: self.cfg.lock_mode,
+            until: after((self.now)(), self.cfg.retention),
+        };
+        // Наибольший срок каждой существующей части организации: сканирование записей раз на запись
+        // (часть может быть старше новой записи и держать больший срок).
+        let mut referenced: HashMap<BlobHash, Retention> = HashMap::new();
+        for stored in self.load_records(record.tenant).await? {
+            for hash in &stored.parts {
+                match referenced.entry(*hash) {
+                    Entry::Occupied(mut slot) if slot.get().until < stored.retention.until => {
+                        slot.insert(stored.retention);
+                    }
+                    Entry::Vacant(slot) => {
+                        slot.insert(stored.retention);
+                    }
+                    _ => {}
+                }
+            }
+        }
         for (hash, chunk) in parts.iter() {
-            let path = self.part_path(hash);
-            // Часть неизменяема: есть — не трогаем (на бакете с Object Lock перезапись не прошла бы).
-            match self.store.get_raw(&path, Some(0..0)).await {
-                Ok(_) => continue,
-                Err(Error::NotFound) => {}
+            let path = self.part_path(record.tenant, hash);
+            let target = match referenced.get(hash) {
+                Some(existing) if existing.until > retention.until => *existing,
+                _ => retention,
+            };
+            match self.backend.get_raw(&path, Some(0..0)).await {
+                Ok(_) => {
+                    // Содержимое части неизменяемо; новая ссылка продлевает срок метаданными.
+                    let extended = referenced
+                        .get(hash)
+                        .is_none_or(|existing| target.until > existing.until);
+                    if extended {
+                        self.backend
+                            .put_raw_locked(&path, chunk.clone(), &target)
+                            .await?;
+                    }
+                }
+                Err(Error::NotFound) => {
+                    self.backend
+                        .put_raw_locked(&path, chunk.clone(), &target)
+                        .await?;
+                }
                 Err(e) => return Err(e),
             }
-            self.store.put_raw(&path, chunk.clone()).await?;
         }
         let hash = BlobHasher::digest(&chain_input(&prev, record));
         let stored = StoredRecord {
@@ -313,15 +462,14 @@ impl JournalRecords {
             parts: parts.iter().map(|(h, _)| *h).collect(),
             hash,
             prev,
-            retention: Retention {
-                mode: self.cfg.lock_mode,
-                until: after((self.now)(), self.cfg.retention),
-            },
+            retention,
         };
         let body = serde_json::to_vec(&stored)
             .map_err(|e| Error::internal(format!("journal: encode record: {e}")))?;
         let path = self.record_path(record.tenant, record.at, id);
-        self.store.put_raw(&path, Bytes::from(body)).await?;
+        self.backend
+            .put_raw_locked(&path, Bytes::from(body), &retention)
+            .await?;
         tracing::debug!(
             tenant = %record.tenant, %id, parts = stored.parts.len(),
             "journal: record stored"
@@ -382,7 +530,9 @@ impl JournalRecords {
 
     /// Действующая блокировка части: режим и наибольший срок из ссылающихся записей организации
     /// (SRS 4.9: новая ссылка продлевает срок части до наибольшего из ссылающихся; уменьшить
-    /// нельзя — записи неизменяемы). Нет ссылок — `None`.
+    /// нельзя — записи неизменяемы). Источник истины — записи (решение #113); метаданные объекта
+    /// части поддерживаются в том же значении при записи ([`JournalRecords::put`], S3
+    /// `x-amz-meta-thepost-lock-*`). Нет ссылок — `None`.
     pub async fn part_retention(
         &self,
         tenant: TenantId,
@@ -402,7 +552,9 @@ impl JournalRecords {
     async fn assemble(&self, stored: &StoredRecord) -> Result<Bytes> {
         let mut out = Vec::new();
         for hash in &stored.parts {
-            let body = self.read_object(&self.part_path(hash)).await?;
+            let body = self
+                .read_object(&self.part_path(stored.record.tenant, hash))
+                .await?;
             if BlobHasher::digest(&body) != *hash {
                 return Err(Error::internal(format!(
                     "journal: part {hash} of record {} is corrupt",
@@ -522,7 +674,12 @@ impl JournalRecords {
 
     /// Чтение объекта целиком.
     async fn read_object(&self, path: &str) -> Result<Bytes> {
-        let chunks: Vec<Bytes> = self.store.get_raw(path, None).await?.try_collect().await?;
+        let chunks: Vec<Bytes> = self
+            .backend
+            .get_raw(path, None)
+            .await?
+            .try_collect()
+            .await?;
         Ok(Bytes::from(chunks.concat()))
     }
 
@@ -585,7 +742,7 @@ impl JournalRecords {
         stored.record.sender = "tampered@example.invalid".to_owned();
         let body = serde_json::to_vec(&stored)
             .map_err(|e| Error::internal(format!("journal: encode record: {e}")))?;
-        self.store.put_raw(&path, Bytes::from(body)).await
+        self.backend.put_raw(&path, Bytes::from(body)).await
     }
 
     /// Тест набора `suite::journal`: теряет индекс в памяти, не трогая хранилище записей;
@@ -794,8 +951,9 @@ mod tests {
         (clock, Arc::new(move || shared.now()))
     }
 
-    /// S3-бэкенд поверх InMemory object_store (как s3-тесты blob).
-    fn backend_memory() -> Arc<dyn BlobStore> {
+    /// S3-бэкенд поверх InMemory object_store (как s3-тесты blob; InMemory хранит атрибуты
+    /// объектов — roundtrip метаданных блокировки проверяется без сети).
+    fn backend_memory() -> Arc<S3Store> {
         Arc::new(S3Store::with_object_store(
             Arc::new(InMemory::new()),
             S3Config::default(),
@@ -803,7 +961,7 @@ mod tests {
     }
 
     /// Локальный бэкенд (профиль SMB) во временном каталоге.
-    async fn backend_local(dir: &std::path::Path) -> Arc<dyn BlobStore> {
+    async fn backend_local(dir: &std::path::Path) -> Arc<LocalStore> {
         Arc::new(
             LocalStore::open(LocalConfig {
                 root: dir.to_path_buf(),
@@ -868,9 +1026,9 @@ mod tests {
         Bytes::from(out)
     }
 
-    async fn part_count(store: &dyn BlobStore, cfg: &JournalConfig) -> usize {
+    async fn part_count(store: &dyn BlobStore, cfg: &JournalConfig, tenant: TenantId) -> usize {
         store
-            .list(&format!("{}/p/", cfg.prefix), far_future())
+            .list(&format!("{}/p/{tenant}/", cfg.prefix), far_future())
             .map_ok(|e: ObjectEntry| e.path)
             .try_collect::<Vec<_>>()
             .await
@@ -1016,14 +1174,14 @@ mod tests {
             .append(&rule(tenant), &record(tenant, 0, "m1@x"), first.clone())
             .await
             .expect("first append");
-        let parts1 = part_count(backend.as_ref(), &cfg()).await;
+        let parts1 = part_count(backend.as_ref(), &cfg(), tenant).await;
         assert!(parts1 > 1, "вложение режется на части: {parts1}");
 
         journal
             .append(&rule(tenant), &record(tenant, 10, "m2@x"), second.clone())
             .await
             .expect("second append");
-        let parts2 = part_count(backend.as_ref(), &cfg()).await;
+        let parts2 = part_count(backend.as_ref(), &cfg(), tenant).await;
 
         // Дедуп: объекты частей = уникальные части писем; второе письмо добавило только свои,
         // общее вложение двух писем хранится один раз.
@@ -1069,7 +1227,7 @@ mod tests {
         let backend = backend_memory();
         let mut cfg = cfg();
         cfg.retention = Duration::from_secs(3600);
-        let journal = JournalRecords::new(backend, cfg, now).expect("journal");
+        let journal = JournalRecords::new(backend.clone(), cfg, now).expect("journal");
         let tenant = TenantId::DEFAULT;
 
         let attach = random_bytes(9, 2048);
@@ -1115,12 +1273,93 @@ mod tests {
             "срок блокировки только растёт"
         );
 
+        // Метаданные объекта части продлены новой ссылкой (решение #113: срок пишет tp-blob,
+        // x-amz-meta-thepost-lock-* на S3, бакетный дефолт в срок не входит).
+        let lock = backend
+            .raw_lock(&journal.part_path(tenant, &part))
+            .await
+            .expect("raw lock")
+            .expect("part metadata");
+        assert_eq!(lock, extended);
+
         // Часть без ссылок (не из манифеста) — None.
         let stray = BlobHasher::digest(b"no such part");
         assert_eq!(
             journal.part_retention(tenant, &stray).await.expect("scan"),
             None
         );
+    }
+
+    /// Метаданные блокировки пишет tp-blob и читает обратно (решение #113): режим и срок из
+    /// конфигурации — в объекте записи и в каждом объекте части; без бакетного дефолта
+    /// (compliance + 2 суток из секции конфигурации). Локальный бэкенд метаданных объектов
+    /// не хранит — срок живёт в объекте записи, письмо собирается как прежде.
+    #[tokio::test]
+    async fn lock_metadata_written_and_read_back() {
+        let start = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("t");
+        let (_, now) = test_clock(start);
+        let mut cfg = cfg();
+        cfg.lock_mode = LockMode::Compliance;
+        cfg.retention = Duration::from_secs(2 * 24 * 3600);
+
+        let backend = backend_memory();
+        let journal = JournalRecords::new(backend.clone(), cfg.clone(), now).expect("journal");
+        let tenant = TenantId::DEFAULT;
+        let message = random_bytes(2, 400);
+        let id = journal
+            .append(&rule(tenant), &record(tenant, 0, "m1@x"), message.clone())
+            .await
+            .expect("append");
+        let stored = journal.stored(tenant, id).await.expect("stored");
+        let expected = Retention {
+            mode: LockMode::Compliance,
+            until: start + time::Duration::days(2),
+        };
+        assert_eq!(
+            stored.retention, expected,
+            "срок из конфигурации, не бакета"
+        );
+
+        // Объект записи: x-amz-meta-thepost-lock-mode/-until читаются обратно.
+        let record_path = journal.record_path(tenant, stored.record.at, id);
+        assert_eq!(
+            backend.raw_lock(&record_path).await.expect("record lock"),
+            Some(expected)
+        );
+
+        // Каждый объект части: те же режим и срок.
+        for hash in &stored.parts {
+            let lock = backend
+                .raw_lock(&journal.part_path(tenant, hash))
+                .await
+                .expect("part lock")
+                .expect("part metadata");
+            assert_eq!(lock, expected, "часть {hash}");
+        }
+
+        // Локальный бэкенд (SMB): метаданных объектов нет, срок — в объекте записи.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let local = backend_local(dir.path()).await;
+        let journal_local = JournalRecords::new(local.clone(), cfg, now).expect("journal");
+        let id_local = journal_local
+            .append(&rule(tenant), &record(tenant, 0, "m2@x"), message)
+            .await
+            .expect("append local");
+        let stored_local = journal_local
+            .stored(tenant, id_local)
+            .await
+            .expect("stored");
+        assert_eq!(stored_local.retention, expected);
+        for hash in &stored_local.parts {
+            assert_eq!(
+                local
+                    .raw_lock(&journal_local.part_path(tenant, hash))
+                    .await
+                    .expect("local lock"),
+                None,
+                "часть {hash}: локальный бэкенд без метаданных"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1499,7 +1738,8 @@ mod tests {
             S3Config::default(),
         ));
         let (_, now) = test_clock(OffsetDateTime::UNIX_EPOCH);
-        let journal = JournalRecords::new(backend, cfg(), now).expect("journal over seaweedfs");
+        let journal =
+            JournalRecords::new(backend.clone(), cfg(), now).expect("journal over seaweedfs");
         let tenant = TenantId::DEFAULT;
 
         // Запись, чтение обратно, дедуп одного вложения в двух письмах, метаданные блокировки.
@@ -1517,6 +1757,21 @@ mod tests {
         let stored = journal.stored(tenant, id1).await.expect("stored");
         assert_eq!(stored.retention.mode, LockMode::default());
         assert!(stored.parts.len() > 1, "части записаны");
+
+        // Метаданные блокировки в объектах S3 (x-amz-meta-thepost-lock-*; решение #113).
+        let record_lock = backend
+            .raw_lock(&journal.record_path(tenant, stored.record.at, id1))
+            .await
+            .expect("record lock")
+            .expect("record metadata");
+        assert_eq!(record_lock, stored.retention);
+        let part_lock = backend
+            .raw_lock(&journal.part_path(tenant, &stored.parts[0]))
+            .await
+            .expect("part lock")
+            .expect("part metadata");
+        assert_eq!(part_lock.mode, stored.retention.mode);
+
         let eml = journal
             .export(&JournalAudit::grant(), tenant, id1)
             .await

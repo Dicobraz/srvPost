@@ -24,8 +24,8 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
 use object_store::{
-    BackoffConfig, Certificate, ClientOptions, GetOptions, GetRange, ObjectStore, ObjectStoreExt,
-    PutPayload, RetryConfig, WriteMultipart,
+    Attributes, BackoffConfig, Certificate, ClientOptions, GetOptions, GetRange, ObjectStore,
+    ObjectStoreExt, PutMode, PutOptions, PutPayload, RetryConfig, WriteMultipart,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -393,6 +393,36 @@ impl S3Store {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(e) => Err(map_err(e)),
         }
+    }
+
+    /// Записывает объект по произвольному пути с атрибутами (метаданные блокировки записей
+    /// журнала, BLOB-18, решение #113: режим и срок пишет tp-blob); атрибуты уходят в
+    /// `x-amz-meta-*`, существующий объект заменяется.
+    pub(crate) async fn put_raw_with_attributes(
+        &self,
+        path: &str,
+        data: Bytes,
+        attributes: Attributes,
+    ) -> Result<()> {
+        self.store
+            .put_opts(
+                &raw(path)?,
+                data.into(),
+                PutOptions {
+                    mode: PutMode::Overwrite,
+                    attributes,
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .map(drop)
+            .map_err(map_err)
+    }
+
+    /// Атрибуты объекта (метаданные блокировки записей журнала). Нет объекта — `NotFound`.
+    pub(crate) async fn raw_attributes(&self, path: &str) -> Result<Attributes> {
+        let res = self.store.get(&raw(path)?).await.map_err(map_err)?;
+        Ok(res.attributes)
     }
 }
 
