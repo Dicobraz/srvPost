@@ -70,6 +70,8 @@ if [ "$#" -ge 1 ]; then
   esac
 fi
 
+say() { echo "$(date '+%F %T') $*"; }
+
 if [ "$mode" = cron ]; then
   # Крон стенда из UPDATE_EVERY_DAYS: раз в N дней утром. Единственный источник интервала — update.conf.
   line="17 4 */$UPDATE_EVERY_DAYS * * $DIR/stand-update.sh >> $LOG 2>&1"
@@ -83,7 +85,6 @@ LOCK="$DIR/.update.lock"
 mkdir "$LOCK" 2>/dev/null || { echo "$(date '+%F %T') обновление уже выполняется — пропуск"; exit 0; }
 trap 'rmdir "$LOCK"' EXIT INT TERM
 
-say() { echo "$(date '+%F %T') $*"; }
 
 # Стенд занят (установка/прогон/наполнение) — обновление отложим до следующего вызова.
 busy=$(pgrep -f "$BUSY_PATTERNS" 2>/dev/null || true)
