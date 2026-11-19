@@ -1539,6 +1539,16 @@ export interface components {
             /** @description Учётная запись, к которой подключается ящик (её запись удаляется, вход и адрес переходят к ящику). */
             to: string;
         };
+        /**
+         * @description Детали записи аудита: что именно менялось (журнал аудита пишет и старое, и новое значение — решение
+         *     владельца 19.11, issue #108, ADM-49; технологические журналы — только новое).
+         */
+        AuditDetailsSchema: {
+            from?: components["schemas"]["TrustPolicy"] | null;
+            to?: components["schemas"]["TrustPolicy"] | null;
+            /** @enum {string} */
+            what: "trust";
+        };
         /** @description Запись журнала с номером в ответе API. */
         AuditEntry: components["schemas"]["AuditRecord"] & {
             /**
@@ -1583,6 +1593,7 @@ export interface components {
              *     отправитель которых запрошены; `None` — запрос содержимое не отдаёт. Самих тем в записи нет.
              */
             content_messages?: number | null;
+            details?: components["schemas"]["AuditDetailsSchema"] | null;
             /** @description Метод HTTP. */
             method: string;
             /** @description Путь запроса. */

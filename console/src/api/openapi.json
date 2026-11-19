@@ -260,6 +260,48 @@
         ],
         "type": "object"
       },
+      "AuditDetailsSchema": {
+        "description": "Детали записи аудита: что именно менялось (журнал аудита пишет и старое, и новое значение — решение\nвладельца 19.11, issue #108, ADM-49; технологические журналы — только новое).",
+        "oneOf": [
+          {
+            "description": "Политика доверия уровня: прежняя и новая политика целиком (клетки матрицы, домены-партнёры, домены\nавтопересылки) — пара «старое → новое».",
+            "properties": {
+              "from": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/TrustPolicy",
+                    "description": "Прежняя политика уровня; `null` — не была задана."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "to": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/TrustPolicy",
+                    "description": "Новая политика уровня; `null` — сброс к умолчаниям уровня выше."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "what": {
+                "enum": [
+                  "trust"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "what"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "AuditEntry": {
         "allOf": [
           {
@@ -357,6 +399,17 @@
             "type": [
               "integer",
               "null"
+            ]
+          },
+          "details": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuditDetailsSchema",
+                "description": "Детали изменения: старое и новое значение ([`AuditDetailsSchema`], только журнал аудита — решение\nвладельца 19.11); отсутствует — операция деталей не несёт."
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "method": {
