@@ -1263,7 +1263,7 @@ mod tests {
         let label = rows[8].find("Адрес").map(|x| x as u16).unwrap_or_default();
         assert_eq!(
             buf[(label, 8)].fg,
-            Some(Color::Rgb(0xD8, 0xE7, 0xF4)),
+            Color::Rgb(0xD8, 0xE7, 0xF4),
             "текст — цвет IT TASK"
         );
     }

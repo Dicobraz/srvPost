@@ -776,7 +776,7 @@ impl App {
         };
         // После входа — действующий брендинг своей организации; администратор установки — уровень
         // установки (TUI-08).
-        let brand_org = if who.roles.iter().any(|r| *r == AdminRole::InstallationAdmin) {
+        let brand_org = if who.roles.contains(&AdminRole::InstallationAdmin) {
             None
         } else {
             Some(who.tenant.clone())

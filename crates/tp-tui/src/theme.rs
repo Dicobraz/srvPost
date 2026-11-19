@@ -749,7 +749,7 @@ pub(crate) mod tests {
             serde_json::Map::from_iter(
                 pairs
                     .iter()
-                    .map(|(r, c)| (r.to_owned(), serde_json::json!(c))),
+                    .map(|(r, c)| (r.to_string(), serde_json::json!(c))),
             )
         };
         let pb: PublicBranding = serde_json::from_value(serde_json::json!({
@@ -987,7 +987,7 @@ pub(crate) mod tests {
     #[test]
     fn customer_mark() {
         let mut png = Vec::new();
-        let mut img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 40, 40]));
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 40, 40]));
         img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .expect("png");
         let brand = Brand {
