@@ -44,6 +44,7 @@ const ORDER_LOCK: &str =
 
 /// Строка индекса для добавления: конверт, ключи поиска (нижний регистр ASCII), ссылка на запись
 /// хранилища и каноническое представление записи (образ хеша).
+#[derive(Clone)]
 struct EntryInsert {
     id: JournalId,
     sender: String,
@@ -189,6 +190,7 @@ impl PgJournal {
         let (id, direction, enabled) = (rule.id.clone(), rule.direction, rule.enabled);
         self.meta
             .rewrite(|| {
+                let id = id.clone();
                 with_tenant(self.meta.pool(), tenant, move |tx| {
                     Box::pin(async move {
                         sqlx::query(
@@ -223,6 +225,7 @@ impl PgJournal {
         let id = id.to_owned();
         self.meta
             .rewrite(|| {
+                let id = id.clone();
                 with_tenant(self.meta.pool(), tenant, move |tx| {
                     Box::pin(async move {
                         sqlx::query("DELETE FROM journal.rules WHERE tenant_id = $1 AND id = $2")
@@ -456,16 +459,13 @@ impl JournalStore for PgJournal {
             .keyed(
                 tenant,
                 |tx| {
-                    let entry = &entry;
+                    let entry = entry.clone();
                     Box::pin(async move {
-                        insert_entry(tx, tenant, entry).await?;
+                        insert_entry(tx, tenant, &entry).await?;
                         Ok(id)
                     })
                 },
-                |tx| {
-                    let id = id;
-                    Box::pin(committed_entry(tx, tenant, id))
-                },
+                |tx| Box::pin(committed_entry(tx, tenant, id)),
             )
             .await?;
         Ok(id)
