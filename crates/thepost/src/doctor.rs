@@ -2329,14 +2329,20 @@ mod tests {
             direction: JournalDirection::Both,
             enabled: true,
         };
-        let record = |i: i64| JournalRecord {
-            tenant,
-            sender: format!("s{i}@external.example"),
-            recipients: vec!["anna@internal.example".to_owned()],
-            message_id: Some(format!("m{i}@external.example")),
-            at: x509_parser::time::OffsetDateTime::from_unix_timestamp(1_800_000_000 + i * 86_400)
-                .expect("time"),
-            rule: "r-0042".to_owned(),
+        // Запись — из JSON (крейт thepost не зависит от time; `at` — строкой RFC 3339, сутки между
+        // записями — для размаха дат прогноза).
+        let record = |i: i64| {
+            serde_json::from_value::<JournalRecord>(serde_json::json!({
+                "tenant": tenant.to_string(),
+                "sender": format!("s{i}@external.example"),
+                "recipients": ["anna@internal.example"],
+                "message_id": format!("m{i}@external.example"),
+                "at": [
+                    "2026-12-14T00:00:00Z", "2026-12-15T00:00:00Z", "2026-12-16T00:00:00Z"
+                ][i as usize],
+                "rule": "r-0042",
+            }))
+            .expect("record")
         };
 
         let journal = MemJournal::new();
@@ -2446,17 +2452,17 @@ mod tests {
         let tenant = TenantId::DEFAULT;
         let mut prev = GENESIS_HASH;
         for i in 0..3i64 {
-            let record = JournalRecord {
-                tenant,
-                sender: format!("s{i}@external.example"),
-                recipients: vec!["anna@internal.example".to_owned()],
-                message_id: Some(format!("m{i}@external.example")),
-                at: x509_parser::time::OffsetDateTime::from_unix_timestamp(
-                    1_800_000_000 + i * 86_400,
-                )
-                .expect("time"),
-                rule: "r-0042".to_owned(),
-            };
+            let record = serde_json::from_value::<JournalRecord>(serde_json::json!({
+                "tenant": tenant.to_string(),
+                "sender": format!("s{i}@external.example"),
+                "recipients": ["anna@internal.example"],
+                "message_id": format!("m{i}@external.example"),
+                "at": [
+                    "2026-12-14T00:00:00Z", "2026-12-15T00:00:00Z", "2026-12-16T00:00:00Z"
+                ][i as usize],
+                "rule": "r-0042",
+            }))
+            .expect("record");
             prev = records
                 .put(
                     JournalId::new(),
