@@ -4,7 +4,8 @@
 //! пробного объекта), синхронизация часов узла и СУБД,
 //! минимальные привилегии процесса (PLT-16): учётная запись, capabilities, no_new_privs, seccomp, Landlock;
 //! DNS почтового домена (MX, SPF, DKIM, DMARC, MTA-STS, PTR), сертификаты и PROXY v2 — `doctor_dns` (APP-06);
-//! сроки внутренних сертификатов (CA СУБД и OpenBao, сертификат узла от них) — `pki.*` (APP-25); приёмники экспорта
+//! сроки внутренних сертификатов (CA СУБД и OpenBao, сертификат узла от них) — `pki.*` (APP-25); короткий
+//! сертификат узла (срок меньше двух окон продления) — предупреждение о смене режима (APP-81); приёмники экспорта
 //! журнала аудита — `admin.audit.syslog`, `admin.audit.otlp` (APP-59).
 //!
 //! Вывод — таблица или JSON; код возврата ≠ 0, если хотя бы одна проверка не пройдена (`fail`).
@@ -23,7 +24,7 @@ use tp_contracts::secrets::{Secret, SecretStore};
 use tp_contracts::{Error, Result};
 use tp_meta::MetaConfig;
 use tp_meta::pool::DbPool;
-use tp_platform::Config;
+use tp_platform::{AcmeConfig, Config};
 
 use crate::doctor_dns::{self, Dns};
 use crate::infra;
@@ -839,8 +840,10 @@ const PKI_RENEW_CERT: &str = "перевыпуск — повторный про
 const PKI_RENEW_CA: &str = "новый CA — удалить каталог роли thepost_pki (/etc/thepost/pki) и повторно прогнать \
                             плейбук; клиентам — новый ca.pem";
 
-/// Сертификаты PEM-файла: ближайшее окончание срока, субъекты (DER) и издатель первого сертификата (DER).
+/// Сертификаты PEM-файла: срок первого сертификата (листа цепочки), ближайшее окончание срока,
+/// субъекты (DER) и издатель первого сертификата (DER).
 struct PemCerts {
+    not_before: SystemTime,
     not_after: SystemTime,
     subjects: Vec<Vec<u8>>,
     issuer: Vec<u8>,
@@ -854,8 +857,14 @@ fn pem_certs(pem: &[u8]) -> std::result::Result<PemCerts, String> {
             continue;
         }
         let cert = block.parse_x509().map_err(|e| e.to_string())?;
-        let secs = cert.validity().not_after.timestamp();
-        let not_after = UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).unwrap_or(0));
+        let not_before = UNIX_EPOCH
+            + Duration::from_secs(
+                u64::try_from(cert.validity().not_before.timestamp()).unwrap_or(0),
+            );
+        let not_after = UNIX_EPOCH
+            + Duration::from_secs(
+                u64::try_from(cert.validity().not_after.timestamp()).unwrap_or(0),
+            );
         let subject = cert.subject().as_raw().to_vec();
         match &mut out {
             Some(c) => {
@@ -864,6 +873,7 @@ fn pem_certs(pem: &[u8]) -> std::result::Result<PemCerts, String> {
             }
             None => {
                 out = Some(PemCerts {
+                    not_before,
                     not_after,
                     subjects: vec![subject],
                     issuer: cert.issuer().as_raw().to_vec(),
@@ -924,6 +934,38 @@ fn pki_expiry(not_after: SystemTime, now: SystemTime, renew: &str) -> (Status, S
         Status::Warn => (Status::Warn, format!("истекает через {days} сут.: {renew}")),
         s => (s, format!("действителен ещё {days} сут.")),
     }
+}
+
+/// Сутки.
+const DAY: Duration = Duration::from_secs(86_400);
+
+/// Предупреждение о коротком сертификате узла (APP-81): срок жизни меньше `2 ×` максимального окна
+/// продления (`acme.renew_before`, 30 сут.) — окно режется до трети срока (правило PLT-37:
+/// `min(renew_before, треть срока)`), продление начинается через `срок − окно` после выпуска, обращения
+/// к серверу частые. Короткий сертификат — норма нового графика CA/B Forum (ballot SC-081v3: 47 сут. с
+/// 03.2029, профиль Let's Encrypt — 6 сут.), поэтому тон — предупреждение о смене режима обслуживания,
+/// а не ошибка: при `acme.enabled` продлением занимается узел, иначе перевыпуск — вручную или внешним
+/// средством. `None` — срок не короткий, `notBefore`/`notAfter` нестандартны или окно не уместилось.
+fn short_cert_note(cfg: &Config, c: &PemCerts) -> Option<String> {
+    let acme = cfg.section::<AcmeConfig>("acme").unwrap_or_default();
+    let lifetime = c.not_after.duration_since(c.not_before).ok()?;
+    if lifetime >= acme.renew_before.checked_mul(2)? {
+        return None;
+    }
+    // Эффективное окно — как у узла (PLT-37): продление начинается, когда до конца остаётся меньше окна.
+    let window = acme.renew_before.min(lifetime / 3);
+    let days = |d: Duration| usize::try_from(d.as_secs() / DAY.as_secs()).unwrap_or(0);
+    let who = if acme.enabled {
+        "продлением занимается узел (встроенный ACME)"
+    } else {
+        "автоматическое продление не настроено: перевыпуск — вручную или внешним средством"
+    };
+    Some(format!(
+        "сертификат живёт {}, продление начнётся через {} после выпуска — частые обращения к серверу; \
+         ожидаемо при переходе CA на короткие сертификаты; {who}",
+        plural(days(lifetime), "день", "дня", "дней"),
+        plural(days(lifetime - window), "день", "дня", "дней"),
+    ))
 }
 
 /// Срок CA из файла `path` (проверка `id`); субъекты CA — для сопоставления с издателем сертификата узла.
@@ -1049,7 +1091,9 @@ pub async fn internal_keys(
 
 /// Сроки внутренних сертификатов (решение 2026-11-11 №27, APP-25): CA СУБД (`pki.database_ca`), CA OpenBao
 /// (`pki.secrets_ca`) и сертификат узла `tls.cert_file`, если его выпустил один из этих CA (`pki.node`;
-/// сертификат другого издателя — проверка `tls.certificate`). `WARN` — за [`PKI_WARN_BEFORE`], `FAIL` — после срока.
+/// сертификат другого издателя — проверка `tls.certificate`). `WARN` — за [`PKI_WARN_BEFORE`], `FAIL` — после
+/// срока. Короткий сертификат узла — предупреждение о частых продлениях (APP-81, [`short_cert_note`]) —
+/// читается и у другого издателя: срок меньше двух окон продления означает смену режима обслуживания.
 pub async fn internal_pki(cfg: &Config, now: SystemTime, report: &mut Report) {
     let mut issuers = Vec::new();
     match database_ca(cfg) {
@@ -1066,30 +1110,38 @@ pub async fn internal_pki(cfg: &Config, now: SystemTime, report: &mut Report) {
         .map(|t| t.cert_file.clone())
         .unwrap_or_default();
     let shown = file.display().to_string();
-    if issuers.is_empty() {
-        report.push(id, Status::Skipped, shown, "внутреннего CA нет");
-        return;
-    }
     let node = match tokio::fs::read(&file).await {
         Ok(pem) => pem_certs(&pem),
         Err(e) => Err(format!("файл не прочитан: {e}")),
     };
+    let no_issuer = if issuers.is_empty() {
+        "внутреннего CA нет"
+    } else {
+        "выпущен не внутренним CA: срок — проверка tls.certificate"
+    };
     match node {
-        Ok(c) if issuers.contains(&c.issuer) => {
+        Ok(c) if !issuers.is_empty() && issuers.contains(&c.issuer) => {
             let (status, msg) = pki_expiry(c.not_after, now, PKI_RENEW_CERT);
+            let msg = match short_cert_note(cfg, &c) {
+                Some(note) => format!("{msg}; {note}"),
+                None => msg,
+            };
             report.push(id, status, shown, msg);
         }
-        Ok(_) => report.push(
-            id,
-            Status::Skipped,
-            shown,
-            "выпущен не внутренним CA: срок — проверка tls.certificate",
-        ),
+        Ok(c) => match short_cert_note(cfg, &c) {
+            Some(note) => report.push(id, Status::Warn, shown, note),
+            None => report.push(id, Status::Skipped, shown, no_issuer),
+        },
+        // Нечитаемый файл — прежнее поведение: срок и читаемость — проверка tls.certificate.
         Err(e) => report.push(
             id,
             Status::Skipped,
             shown,
-            format!("{e}: см. tls.certificate"),
+            if issuers.is_empty() {
+                no_issuer.to_owned()
+            } else {
+                format!("{e}: см. tls.certificate")
+            },
         ),
     }
 }
@@ -1792,6 +1844,142 @@ mod tests {
             pki_status(&r, "pki.database_ca"),
             Some(Status::Warn),
             "{r:?}"
+        );
+    }
+
+    /// Самоподписанные сертификаты mx.example.org со сроком 47 сут. (график CA/B Forum с 03.2029,
+    /// ballot SC-081v3) и 398 сут. (нынешний предел публичных CA); выпущены 2026-01-01.
+    const SHORT: &[u8] = include_bytes!("testdata/cert-47d.pem");
+    const NOT_SHORT: &[u8] = include_bytes!("testdata/cert-398d.pem");
+
+    /// APP-81: сертификат узла на 47 сут. — предупреждение с числами (срок и начало продления по
+    /// правилу PLT-37: окно — треть срока, продление — через 47 − 15⅔ = 31 сут. после выпуска); при
+    /// `acme.enabled` — приписка про встроенный ACME, без секции и при выключенном — про ручной
+    /// перевыпуск. На 398 сут. предупреждения нет — прежний пропуск.
+    #[tokio::test]
+    async fn short_node_certificate_warns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let short = dir.path().join("short.pem");
+        let long = dir.path().join("long.pem");
+        std::fs::write(&short, SHORT).expect("short");
+        std::fs::write(&long, NOT_SHORT).expect("long");
+        let slash = |p: &Path| p.display().to_string().replace('\\', "/");
+        // «Сейчас» — внутри срока сертификатов: проверка короткого срока не зависит от него,
+        // но так сообщение не спорит с проверкой tls.certificate.
+        let now = pem_certs(SHORT).expect("short").not_before + DAY;
+        let config = |cert: &Path, extra: &str| {
+            sections::registry()
+                .expect("registry")
+                .parse(
+                    &format!(
+                        "domain: example.org\nprofile: dev\ndatabase:\n  url: postgres://x@y/z?sslmode=disable\n  tls: {{ allow_plaintext: true }}\n\
+                         blob:\n  url: file:///tmp/b\ntls:\n  cert_file: \"{}\"\n{extra}",
+                        slash(cert)
+                    ),
+                    Vec::new(),
+                )
+                .expect("config")
+        };
+
+        // Продлением занимается узел (встроенный ACME).
+        let cfg = config(
+            &short,
+            "acme:\n  enabled: true\n  domains: [mx.example.org]\n",
+        );
+        let r = pki_report(&cfg, now).await;
+        let node = r.get("pki.node").expect("pki.node");
+        assert_eq!(node.status, Status::Warn, "{r:?}");
+        for part in [
+            "сертификат живёт 47 дней",
+            "продление начнётся через 31 день",
+            "короткие сертификаты",
+            "продлением занимается узел (встроенный ACME)",
+        ] {
+            assert!(node.message.contains(part), "{}: {part}", node.message);
+        }
+
+        // Секции acme нет и включена с false — автоматического продления нет, перевыпуск вручную.
+        for extra in ["", "acme:\n  enabled: false\n"] {
+            let r = pki_report(&config(&short, extra), now).await;
+            let node = r.get("pki.node").expect("pki.node");
+            assert_eq!(node.status, Status::Warn, "{extra}: {r:?}");
+            for part in [
+                "сертификат живёт 47 дней",
+                "автоматическое продление не настроено: перевыпуск — вручную или внешним средством",
+            ] {
+                assert!(node.message.contains(part), "{extra}: {part}");
+            }
+            assert!(!node.message.contains("ACME"), "{extra}: {}", node.message);
+        }
+
+        // 398 сут. — не короткий: прежний пропуск («внутреннего CA нет» и у другого издателя).
+        let cfg = config(
+            &long,
+            "acme:\n  enabled: true\n  domains: [mx.example.org]\n",
+        );
+        let r = pki_report(&cfg, now).await;
+        assert_eq!(pki_status(&r, "pki.node"), Some(Status::Skipped), "{r:?}");
+        assert_eq!(
+            r.get("pki.node").expect("node").message,
+            "внутреннего CA нет"
+        );
+
+        // Внутренний CA настроен, сертификат короткий, но другого издателя (ACME, коммерческий CA) —
+        // предупреждение вместо прежнего пропуска «срок — проверка tls.certificate»; длинный — пропуск.
+        let ca = dir.path().join("ca.pem");
+        std::fs::write(&ca, PKI_CA).expect("ca");
+        let cfg = pki_config(
+            dir.path(),
+            &format!("&sslrootcert={}", slash(&ca)),
+            "",
+            &short,
+        );
+        let r = pki_report(&cfg, now).await;
+        let node = r.get("pki.node").expect("pki.node");
+        assert_eq!(node.status, Status::Warn, "{r:?}");
+        assert!(node.message.contains("47 дней"), "{}", node.message);
+        let cfg = pki_config(
+            dir.path(),
+            &format!("&sslrootcert={}", slash(&ca)),
+            "",
+            &long,
+        );
+        let r = pki_report(&cfg, now).await;
+        assert_eq!(pki_status(&r, "pki.node"), Some(Status::Skipped), "{r:?}");
+        assert_eq!(
+            r.get("pki.node").expect("node").message,
+            "выпущен не внутренним CA: срок — проверка tls.certificate"
+        );
+    }
+
+    /// APP-81: файл сертификата узла не читается — прежнее поведение doctor, без паники: с внутренним
+    /// CA — пропуск с причиной («файл не прочитан … см. tls.certificate»), без него — «внутреннего CA нет».
+    #[tokio::test]
+    async fn unreadable_node_certificate_keeps_prior_result() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca = dir.path().join("ca.pem");
+        std::fs::write(&ca, PKI_CA).expect("ca");
+        let missing = dir.path().join("missing.pem");
+        let slash = |p: &Path| p.display().to_string().replace('\\', "/");
+
+        let cfg = pki_config(
+            dir.path(),
+            &format!("&sslrootcert={}", slash(&ca)),
+            "",
+            &missing,
+        );
+        let r = pki_report(&cfg, SystemTime::now()).await;
+        assert_eq!(pki_status(&r, "pki.node"), Some(Status::Skipped), "{r:?}");
+        let msg = &r.get("pki.node").expect("node").message;
+        assert!(msg.contains("файл не прочитан"), "{msg}");
+        assert!(msg.contains("см. tls.certificate"), "{msg}");
+
+        let cfg = pki_config(dir.path(), "", "", &missing);
+        let r = pki_report(&cfg, SystemTime::now()).await;
+        assert_eq!(pki_status(&r, "pki.node"), Some(Status::Skipped), "{r:?}");
+        assert_eq!(
+            r.get("pki.node").expect("node").message,
+            "внутреннего CA нет"
         );
     }
 }
