@@ -524,7 +524,7 @@ impl MessageStore for PgMeta {
         let id = MessageId::new();
         let mut inserted =
             Writers::write(&self.writers, self, scope, vec![(scope, mailbox, id, msg)]).await?;
-        inserted.pop().expect("письмо писателя учётной записи")
+        Ok(inserted.pop().expect("письмо писателя учётной записи"))
     }
 
     async fn insert_batch(

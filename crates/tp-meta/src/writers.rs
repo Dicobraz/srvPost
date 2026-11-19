@@ -121,7 +121,7 @@ impl Writers {
         items: Vec<Item>,
     ) -> Result<Vec<Inserted>> {
         let (reply, rx) = oneshot::channel();
-        let mut job = Job { items, reply: rx };
+        let mut job = Job { items, reply };
         let mut recreated = false;
         loop {
             let entry = Self::entry(writers, meta, key);
@@ -261,8 +261,8 @@ async fn execute(meta: &PgMeta, jobs: Vec<Job>) {
         }
     };
     let inserted = {
-        // Письма всех заданий и их ключи — на время транзакции.
-        let items: Vec<&Item> = jobs.iter().flat_map(|j| j.items.iter()).collect();
+        // Письма всех заданий и их ключи — клоны на время транзакции (повтор keyed_at получает свой).
+        let items: Vec<Item> = jobs.iter().flat_map(|j| j.items.clone()).collect();
         let keys: Vec<(AccountId, MessageId)> = items
             .iter()
             .map(|(scope, _, id, _)| (scope.account, *id))
@@ -275,9 +275,7 @@ async fn execute(meta: &PgMeta, jobs: Vec<Job>) {
                 Box::pin(async move {
                     let mut out = Vec::with_capacity(items.len());
                     for (scope, mailbox, id, msg) in items {
-                        out.push(
-                            insert_one(tx, partitions, *scope, *mailbox, *id, msg.clone()).await?,
-                        );
+                        out.push(insert_one(tx, partitions, scope, mailbox, id, msg).await?);
                     }
                     Ok(out)
                 })
