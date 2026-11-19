@@ -1196,6 +1196,14 @@ mod tests {
         assert_eq!(log[0].route, ORG_TRUST);
         assert_eq!(log[0].status, 200);
         assert_eq!(log[0].tenant, Some(TenantId::DEFAULT));
+        // Политика записана в хранилище (Env.trust — то же хранилище, что у Admin API).
+        let mut written = TrustPolicy::default();
+        written.invite_new.partner = Some(InviteMode::Auto);
+        written.partners = vec!["partner.example".into()];
+        assert_eq!(
+            env.trust.policy(TrustLevel::Org(TenantId::DEFAULT)).await,
+            Ok(Some(written))
+        );
 
         // Выше потолка контракта: новое приглашение интернету — кнопка, закреплено.
         let body = json!({"invite_new": {"external": "auto"}});
