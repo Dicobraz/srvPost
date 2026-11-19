@@ -95,7 +95,8 @@ function LevelForm({ level }: { level: "installation" | "org" }) {
     };
   }, [level]);
 
-  if (query.isLoading || !result.data) return null;
+  // До ответа и при отказе Refine отдаёт пустой объект: ждём `effective`.
+  if (query.isLoading || !result.data?.effective) return null;
   const own = result.data.own ?? null;
   const effective = result.data.effective;
   const initial: Values = {

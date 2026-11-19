@@ -96,7 +96,7 @@ test("раздел «Брендинг»: ошибка контраста 422 —
     "PUT /api/v1/branding": { status: 422, body: { status: 422, title: "Unprocessable Entity", detail, errors: [{ field: "dark.sel", role: "sel", theme: "dark", bg: "panel", contrast: 1.3, min: 3 }] } },
   });
   const form = await levelForm("Брендинг установки");
-  expect(await within(form).findByText("Действует: Сервер")).toBeTruthy();
+  expect(await within(form).findByText(/Действует: Сервер/)).toBeTruthy();
   fireEvent.click(within(form).getByRole("button", { name: "Сохранить брендинг" }));
   // Ошибка — у поля роли (тёмная тема, sel) с текстом detail сервера.
   fireEvent.click(await screen.findByRole("tab", { name: "Тёмная тема" }));
