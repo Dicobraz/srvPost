@@ -6,7 +6,10 @@
 //! DNS почтового домена (MX, SPF, DKIM, DMARC, MTA-STS, PTR), сертификаты и PROXY v2 — `doctor_dns` (APP-06);
 //! сроки внутренних сертификатов (CA СУБД и OpenBao, сертификат узла от них) — `pki.*` (APP-25); короткий
 //! сертификат узла (срок меньше двух окон продления) — предупреждение о смене режима (APP-81); приёмники экспорта
-//! журнала аудита — `admin.audit.syslog`, `admin.audit.otlp` (APP-59).
+//! журнала аудита — `admin.audit.syslog`, `admin.audit.otlp` (APP-59);
+//! журнал переписки (APP-82, SRS 4.9) — хеш-цепочка индекса и сверка с хранилищем записей (`journal.chain`,
+//! `journal.index`), прогноз объёма на срок блокировки (`journal.retention`), предупреждение SMB о локальном
+//! хранилище записей (`journal.backend`); прицельно — `thepost doctor journal [chain|retention]`.
 //!
 //! Вывод — таблица или JSON; код возврата ≠ 0, если хотя бы одна проверка не пройдена (`fail`).
 
@@ -20,16 +23,19 @@ use serde::Serialize;
 use tp_admin_client::style::{self, Role, State, Theme};
 use tp_cluster::NodeTls;
 use tp_contracts::blob::BlobStore;
+use tp_contracts::ids::{JournalId, TenantId};
+use tp_contracts::journal::{JournalAudit, JournalRecord, JournalRecords, JournalStore};
 use tp_contracts::secrets::{Secret, SecretStore};
 use tp_contracts::{Error, Result};
-use tp_meta::MetaConfig;
+use tp_meta::journal::PgJournal;
 use tp_meta::pool::DbPool;
+use tp_meta::{MetaConfig, PgMeta};
 use tp_platform::{AcmeConfig, Config};
 
 use crate::doctor_dns::{self, Dns};
 use crate::infra;
 use crate::secrets;
-use crate::sections::{self, DOCTOR, DoctorSection};
+use crate::sections::{self, DOCTOR, DoctorSection, JOURNAL, JournalLocation, JournalSection};
 
 /// Итог проверки; порядок — по тяжести.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -228,6 +234,31 @@ pub async fn run_with(
     store: Option<Arc<dyn SecretStore>>,
     dns: Option<&dyn Dns>,
 ) -> Report {
+    run_scoped_with(path, store, dns, Scope::All).await
+}
+
+/// Прицельные проверки журнала переписки (`thepost doctor journal [chain|retention]`, APP-82):
+/// только проверки `journal.*` — остальные общим прогоном; `topic` — подмножество или все.
+pub async fn run_journal(path: &Path, topic: Option<JournalTopic>) -> Report {
+    run_scoped_with(path, None, None, Scope::Journal(topic)).await
+}
+
+/// Прогон doctor: общий или прицельный.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// Все проверки окружения (включая журнал).
+    All,
+    /// Только проверки журнала; `None` — все проверки журнала.
+    Journal(Option<JournalTopic>),
+}
+
+/// Прогоны doctor: общий или прицельный (`journal`).
+async fn run_scoped_with(
+    path: &Path,
+    store: Option<Arc<dyn SecretStore>>,
+    dns: Option<&dyn Dns>,
+    scope: Scope,
+) -> Report {
     let mut report = Report::default();
     let loaded = sections::registry().and_then(|r| r.load(path));
     let cfg = match loaded {
@@ -251,10 +282,48 @@ pub async fn run_with(
     for w in cfg.warnings() {
         report.push("config.unknown", Status::Warn, "", w.clone());
     }
-    let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
-    let confine = crate::startup::has_section(&text, tp_platform::privileges::CONFINE);
-    check(&cfg, confine, store, dns, &mut report).await;
+    match scope {
+        Scope::All => {
+            let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
+            let confine = crate::startup::has_section(&text, tp_platform::privileges::CONFINE);
+            check(&cfg, confine, store, dns, &mut report).await;
+        }
+        Scope::Journal(topic) => check_journal_only(&cfg, topic, &mut report).await,
+    }
     report
+}
+
+/// Прицельный прогон журнала: хранилище секретов и СУБД — насколько нужны самому журналу (ключи S3,
+/// индекс, правила); их причины — в сообщениях проверок `journal.*` (FIX-10), остальные проверки
+/// общего прогона не выполняются.
+async fn check_journal_only(cfg: &Config, topic: Option<JournalTopic>, report: &mut Report) {
+    let secrets_report = secrets::doctor(cfg).await;
+    let cause = secrets::unavailable_cause(&secrets_report);
+    let store = secrets::doctor_store(cfg, None).await.ok();
+    let meta = cfg
+        .section::<MetaConfig>(MetaConfig::SECTION)
+        .map(|m| m.doctor.clone())
+        .unwrap_or_default();
+    let pool = match &store {
+        Some(store) => tokio::time::timeout(meta.timeout, infra::connect_db(cfg, store.as_ref()))
+            .await
+            .ok()
+            .and_then(|r| r.ok()),
+        None => None,
+    };
+    journal(
+        cfg,
+        store.as_ref(),
+        pool.as_ref(),
+        cause.as_deref(),
+        topic,
+        true,
+        report,
+    )
+    .await;
+    if let Some(pool) = pool {
+        pool.close().await;
+    }
 }
 
 /// Проверки по разобранной конфигурации; `confine` — в файле есть секция `confine` (нет — seccomp в режиме `log`,
@@ -305,15 +374,18 @@ pub async fn check(
         }
     };
 
-    match &store {
+    let db = match &store {
         Some(store) => database(cfg, store.as_ref(), &doctor, cause, slow_store, report).await,
-        None => report.push(
-            "database.connect",
-            Status::Skipped,
-            "",
-            "хранилище секретов не настроено",
-        ),
-    }
+        None => {
+            report.push(
+                "database.connect",
+                Status::Skipped,
+                "",
+                "хранилище секретов не настроено",
+            );
+            None
+        }
+    };
     match &store {
         Some(store) => match infra::open_blob(cfg, store.as_ref()).await {
             Ok(blob) => {
@@ -337,6 +409,10 @@ pub async fn check(
     internal_pki(cfg, SystemTime::now(), report).await;
     dav_well_known(cfg, report);
     admin_audit(cfg, store.as_ref(), cause, report).await;
+    journal(cfg, store.as_ref(), db.as_ref(), cause, None, false, report).await;
+    if let Some(pool) = db {
+        pool.close().await;
+    }
 }
 
 /// Отказ зависимой проверки, которой нужен секрет из хранилища (FIX-10, issue #5): если хранилище не
@@ -451,6 +527,572 @@ pub async fn admin_audit(
             None => report.push(id, Status::Ok, value, "приёмник OTLP принимает соединения"),
         }
     }
+}
+
+// ---------- журнал переписки (APP-82, SRS 4.9) ----------
+
+/// Порог предупреждения о сроке блокировки журнала (APP-82, риск 21): записи не удаляются весь срок,
+/// ошибка в сроке compliance не освобождает бакет — дольше порога предупреждение.
+pub const JOURNAL_RETENTION_WARN: Duration = Duration::from_secs(10 * 365 * 86_400);
+
+/// Прицельная проверка журнала (`thepost doctor journal <проверка>`); общий прогон выполняет все.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JournalTopic {
+    /// Целостность хеш-цепочки индекса и сверка с хранилищем записей (`journal.chain`, `journal.index`).
+    Chain,
+    /// Прогноз объёма на срок блокировки и предупреждения о сроке (`journal.retention`).
+    Retention,
+}
+
+/// Проверки журнала переписки (SRS 4.9, APP-82): `journal.backend` — хранилище записей (предупреждение
+/// SMB о локальном диске, риск 23), `journal.chain` — хеш-цепочка индекса (`verify_chain`, разрыв с
+/// записью), `journal.index` — число записей индекса против объектов хранилища записей (хвост после
+/// обрыва между фазами записи чинит восстановление индекса из хранилища), `journal.retention` — прогноз
+/// объёма на срок блокировки (риск 21). `topic` — подмножество прицельного прогона; `targeted` — прогон
+/// только журнала: выключенный журнал объясняется, общий прогон молчит (как роль dav без роли).
+/// `cause` — причина отказавшего хранилища секретов (FIX-10): открытие S3 — `warn` с ней, не `fail`.
+pub async fn journal(
+    cfg: &Config,
+    store: Option<&Arc<dyn SecretStore>>,
+    pool: Option<&DbPool>,
+    cause: Option<&str>,
+    topic: Option<JournalTopic>,
+    targeted: bool,
+    report: &mut Report,
+) {
+    let section = cfg.section::<JournalSection>(JOURNAL).map(|s| (*s).clone());
+    let Ok(section) = section else {
+        if targeted {
+            report.push(
+                "journal.backend",
+                Status::Skipped,
+                "",
+                "секция journal не настроена (журналирование переписки, SRS 4.9)",
+            );
+        }
+        return;
+    };
+    if !section.enabled() {
+        if targeted {
+            report.push(
+                "journal.backend",
+                Status::Skipped,
+                "",
+                "журналирование выключено (journal.enabled: false) — включается явно",
+            );
+        }
+        return;
+    }
+    let chain = topic.is_none_or(|t| t == JournalTopic::Chain);
+    let retention = topic.is_none_or(|t| t == JournalTopic::Retention);
+    // Хранилище записей — отдельное от BLOB ящиков (SRS 4.9).
+    let records = match infra::open_journal_records(cfg, &section, store).await {
+        Ok(records) => {
+            let (status, value, msg) = journal_backend_status(&section);
+            report.push("journal.backend", status, value, msg);
+            Some(records)
+        }
+        Err(e) => {
+            let value = match section.location() {
+                Ok(JournalLocation::Local(dir)) => dir.display().to_string(),
+                Ok(JournalLocation::S3 { bucket }) => format!("s3 {bucket}"),
+                Err(_) => String::new(),
+            };
+            let (status, msg) = dependent(cause, &e, "открытие хранилища журнала");
+            report.push("journal.backend", status, value, msg);
+            None
+        }
+    };
+    // Организации каталога и счётчики записей индекса (системная транзакция, RLS) — нужны цепочке и
+    // прогнозу; ошибка чтения — отказ цепочки, прогноз считает по записям хранилища без правил.
+    let indexed: Option<JournalTenants> = match pool {
+        Some(pool) if chain || retention => match journal_tenants_and_counts(pool).await {
+            Ok(x) => Some(x),
+            Err(e) => {
+                if chain {
+                    report.push(
+                        "journal.chain",
+                        Status::Fail,
+                        "",
+                        format!("индекс журнала не прочитан: {}", message(&e)),
+                    );
+                    report.push(
+                        "journal.index",
+                        Status::Skipped,
+                        "",
+                        "индекс журнала не прочитан",
+                    );
+                }
+                None
+            }
+        },
+        _ => None,
+    };
+    if chain {
+        if pool.is_none() {
+            for id in ["journal.chain", "journal.index"] {
+                report.push(
+                    id,
+                    Status::Skipped,
+                    "",
+                    "индекс журнала — в СУБД, подключение не установлено (см. database.connect)",
+                );
+            }
+        } else if records.is_none() {
+            for id in ["journal.chain", "journal.index"] {
+                report.push(
+                    id,
+                    Status::Skipped,
+                    "",
+                    "хранилище записей не открыто (см. journal.backend)",
+                );
+            }
+        } else if let (Some(pool), Some(records), Some((tenants, counts))) =
+            (pool, &records, &indexed)
+        {
+            // Индекс журнала — PgJournal (META-88) над пулом и хранилищем записей.
+            match cfg
+                .section::<MetaConfig>(MetaConfig::SECTION)
+                .map(|m| (*m).clone())
+            {
+                Ok(meta) => {
+                    let port = Arc::new(StorageRecords(records.clone()));
+                    let index = PgJournal::new(PgMeta::new(pool.clone(), meta), port.clone());
+                    journal_chain(
+                        &index,
+                        Some(port.as_ref()),
+                        Some(records.as_ref()),
+                        tenants,
+                        counts,
+                        report,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    report.push("journal.chain", Status::Fail, "", message(&e));
+                    report.push(
+                        "journal.index",
+                        Status::Skipped,
+                        "",
+                        "секция meta не прочитана",
+                    );
+                }
+            }
+        }
+    }
+    if retention {
+        let (_, retention) = section.lock();
+        match &records {
+            Some(records) => {
+                let tenants: &[TenantId] = indexed.as_ref().map_or(&[], |(t, _)| t);
+                let volume = journal_volume(records.as_ref(), tenants, pool).await;
+                let (status, value, msg) = journal_retention_status(retention, &volume);
+                report.push("journal.retention", status, value, msg);
+            }
+            None => report.push(
+                "journal.retention",
+                Status::Skipped,
+                "",
+                "хранилище записей не открыто (см. journal.backend)",
+            ),
+        }
+    }
+}
+
+/// Итог проверки `journal.backend` (APP-82): S3 с Object Lock — OK (режим и срок конфигурации пишутся
+/// в каждый объект при записи, BLOB-18); локальный диск (профиль SMB) — предупреждение (риск 23):
+/// блокировка только сервером, от администратора ОС защиты нет.
+pub fn journal_backend_status(section: &JournalSection) -> (Status, String, String) {
+    let (mode, retention) = section.lock();
+    match section.location() {
+        Ok(JournalLocation::Local(dir)) => (
+            Status::Warn,
+            dir.display().to_string(),
+            "хранилище записей журнала на локальном диске: блокировка только сервером (записи лишь \
+             добавляются), от администратора ОС защиты нет (риск 23); для требований неизменяемости — \
+             S3 с Object Lock (journal.s3); перезапись записи ловит journal.chain"
+                .to_owned(),
+        ),
+        Ok(JournalLocation::S3 { bucket }) => (
+            Status::Ok,
+            format!("s3 {bucket}"),
+            format!(
+                "хранилище записей журнала — S3 с Object Lock: режим {}, срок при записи {}",
+                mode.as_str(),
+                tp_contracts::config::duration::format(retention)
+            ),
+        ),
+        Err(e) => (Status::Fail, String::new(), message(&e)),
+    }
+}
+
+/// Проверки `journal.chain` и `journal.index` (APP-82): хеш-цепочка индекса организаций
+/// (`JournalStore::verify_chain`; разрыв — с номером записи) и хранилища записей (`storage`,
+/// `tp_blob::JournalRecords::verify`, BLOB-18: подмена конверта или письма, развилка, потеря записи),
+/// сверка числа записей индекса с объектами хранилища (`records` — порт со `scan`; `None` без сверки).
+/// `index_counts` — записи индекса по организациям (СУБД), `tenants` — организации каталога (у
+/// организации без записей индекса цепочка проверяется как пустая).
+pub async fn journal_chain(
+    index: &dyn JournalStore,
+    records: Option<&dyn JournalRecords>,
+    storage: Option<&tp_blob::JournalRecords>,
+    tenants: &[TenantId],
+    index_counts: &[(TenantId, u64)],
+    report: &mut Report,
+) {
+    let cap = JournalAudit::grant();
+    let mut total = 0u64;
+    let mut broken: Option<String> = None;
+    let mut ok = true;
+    let mut error = None;
+    for tenant in tenants {
+        match index.verify_chain(&cap, *tenant).await {
+            Ok(chain) => {
+                total += chain.records;
+                if !chain.ok {
+                    ok = false;
+                    if broken.is_none() {
+                        broken = Some(match chain.broken_at {
+                            Some(id) => format!("запись {id} организации {tenant}"),
+                            None => format!("организация {tenant}"),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                error = Some(message(&e));
+                break;
+            }
+        }
+        // Цепочка хранилища записей (BLOB-18): пересчёт хешей объектов от генезиса — подмена конверта
+        // или письма, развилка, потерянная запись; источник нарушения отличается от индекса.
+        if let Some(storage) = storage {
+            match storage.verify(*tenant).await {
+                Ok(chain) => {
+                    if !chain.ok {
+                        ok = false;
+                        if broken.is_none() {
+                            broken = Some(match chain.broken_at {
+                                Some(id) => {
+                                    format!("запись {id} организации {tenant} (хранилище записей)")
+                                }
+                                None => format!("организация {tenant} (хранилище записей)"),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    error = Some(format!("хранилище записей: {}", message(&e)));
+                    break;
+                }
+            }
+        }
+    }
+    let value = format!("{total} записей, {} организаций", tenants.len());
+    if let Some(e) = error {
+        report.push("journal.chain", Status::Fail, value, e);
+        report.push("journal.index", Status::Skipped, "", "цепочка не проверена");
+        return;
+    }
+    let (status, msg) = if ok {
+        (
+            Status::Ok,
+            if storage.is_some() {
+                "хеш-цепочка индекса и хранилища записей целостна".to_owned()
+            } else {
+                "хеш-цепочка индекса целостна".to_owned()
+            },
+        )
+    } else {
+        (
+            Status::Fail,
+            format!(
+                "разрыв хеш-цепочки индекса: {} — запись изменена или потеряна; индекс восстанавливается \
+                 из хранилища записей (restore_index)",
+                broken.unwrap_or_else(|| "запись не найдена".to_owned())
+            ),
+        )
+    };
+    report.push("journal.chain", status, value, msg);
+
+    let Some(records) = records else {
+        return;
+    };
+    let mut stored_total = 0u64;
+    let mut mismatch: Option<String> = None;
+    for (tenant, indexed) in index_counts {
+        match records.scan(*tenant).await {
+            Ok(stored) => {
+                stored_total += stored.len() as u64;
+                if (stored.len() as u64) != *indexed && mismatch.is_none() {
+                    mismatch = Some(format!(
+                        "организация {tenant}: в индексе {indexed}, в хранилище записей {} — обрыв \
+                         между фазами записи",
+                        stored.len()
+                    ));
+                }
+            }
+            Err(e) => {
+                if mismatch.is_none() {
+                    mismatch = Some(format!("хранилище записей не прочитано: {}", message(&e)));
+                }
+            }
+        }
+    }
+    match mismatch {
+        None => report.push(
+            "journal.index",
+            Status::Ok,
+            format!("{stored_total} записей"),
+            "число записей индекса и объектов хранилища совпадает",
+        ),
+        Some(m) => report.push(
+            "journal.index",
+            Status::Fail,
+            format!("{stored_total} записей"),
+            format!("{m}; восстановите индекс из хранилища записей (restore_index)"),
+        ),
+    }
+}
+
+/// Замеры журнала для прогноза объёма (APP-82): записи, средний размер записи (по выборке),
+/// записей в сутки (по размаху дат записей), включённые правила (охват журналирования).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct JournalVolume {
+    /// Записей в хранилище (все организации).
+    pub records: u64,
+    /// Включённых правил журналирования (данные организации, Admin API); `None` — СУБД недоступна.
+    pub enabled_rules: Option<u64>,
+    /// Средний размер записи по выборке, байт; `None` — записей нет.
+    pub avg_record_bytes: Option<u64>,
+    /// Записей в сутки по размаху дат записей; `None` — записей нет.
+    pub records_per_day: Option<f64>,
+}
+
+/// Замеры по хранилищу записей и СУБД (APP-82): записи всех организаций из `tenants` (цепочка каждой),
+/// средний размер письма записи — по выборке до 32 записей (равномерно по порядку), записей в сутки —
+/// по размаху дат записей (не меньше суток), включённые правила — из `journal.rules` (без СУБД не
+/// подсчитаны).
+pub async fn journal_volume(
+    records: &tp_blob::JournalRecords,
+    tenants: &[TenantId],
+    pool: Option<&DbPool>,
+) -> JournalVolume {
+    /// Записей выборки для среднего размера письма.
+    const SAMPLE: usize = 32;
+    let mut entries: Vec<(TenantId, JournalId, i64)> = Vec::new();
+    for tenant in tenants {
+        if let Ok(chain) = records.chain(*tenant).await {
+            entries.extend(
+                chain
+                    .into_iter()
+                    .map(|s| (*tenant, s.id, s.record.at.unix_timestamp())),
+            );
+        }
+    }
+    let total = entries.len() as u64;
+    let per_day = (!entries.is_empty()).then(|| {
+        let mut min = entries[0].2;
+        let mut max = min;
+        for (_, _, at) in &entries {
+            min = min.min(*at);
+            max = max.max(*at);
+        }
+        let span_days = ((max - min).max(0) as f64 / 86_400.0).max(1.0);
+        entries.len() as f64 / span_days
+    });
+    let avg_record_bytes = if entries.is_empty() {
+        None
+    } else {
+        let n = entries.len().clamp(1, SAMPLE);
+        let mut sizes: Vec<u64> = Vec::with_capacity(n);
+        for i in 0..n {
+            let (tenant, id, _) = entries[i * entries.len() / n];
+            if let Ok(message) = records.message(tenant, id).await {
+                sizes.push(message.len() as u64);
+            }
+        }
+        (!sizes.is_empty()).then(|| sizes.iter().sum::<u64>() / sizes.len() as u64)
+    };
+    let enabled_rules = match pool {
+        Some(pool) => journal_enabled_rules(pool).await.ok(),
+        None => None,
+    };
+    JournalVolume {
+        records: total,
+        enabled_rules,
+        avg_record_bytes,
+        records_per_day: per_day,
+    }
+}
+
+/// Порт хранилища записей журнала (CTR-97) над реализацией tp-blob (BLOB-18) для проверок doctor
+/// (APP-82): `scan` — конверты по цепочке хранилища (сверка числа записей с индексом), ссылка — путь
+/// объекта записи. Запись и чтение по порту doctor не нужны (записывает этап конвейера журналирования,
+/// письма doctor читает напрямую, с известной организацией) и не реализуются — полная проводка порта
+/// для конвейера и выгрузки отдельной волной; здесь порт нужен конструкции `PgJournal` (проверка
+/// `verify_chain` индекса в хранилище не заглядывает).
+struct StorageRecords(Arc<tp_blob::JournalRecords>);
+
+#[async_trait::async_trait]
+impl JournalRecords for StorageRecords {
+    async fn put(
+        &self,
+        _id: JournalId,
+        _record: &JournalRecord,
+        _message: Bytes,
+    ) -> Result<String> {
+        Err(Error::internal(
+            "journal: запись журнала — этап конвейера, в doctor недоступна",
+        ))
+    }
+
+    async fn read(&self, _id: JournalId) -> Result<(JournalRecord, Bytes)> {
+        Err(Error::internal(
+            "journal: doctor читает записи напрямую из хранилища (организация известна)",
+        ))
+    }
+
+    async fn scan(&self, tenant: TenantId) -> Result<Vec<(JournalId, JournalRecord, String)>> {
+        let prefix = self.0.config().prefix.clone();
+        Ok(self
+            .0
+            .chain(tenant)
+            .await?
+            .into_iter()
+            .map(|s| {
+                let at = s.record.at;
+                let storage = format!(
+                    "{prefix}/t/{}/{:02}{:02}{:02}/{}",
+                    tenant,
+                    at.year().rem_euclid(100),
+                    u8::from(at.month()),
+                    at.day(),
+                    s.id
+                );
+                (s.id, s.record, storage)
+            })
+            .collect())
+    }
+}
+
+/// Включённые правила журналирования всех организаций (`journal.rules`, системная транзакция; APP-82):
+/// охват журналирования — без правил новых записей нет, прогноз объёма беспредметен.
+async fn journal_enabled_rules(pool: &DbPool) -> Result<u64> {
+    let count: i64 = tp_meta::pool::with_system(pool, |tx| {
+        Box::pin(async move {
+            sqlx::query_scalar("SELECT count(*) FROM journal.rules WHERE enabled")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| Error::internal(format!("journal.rules: {e}")))
+        })
+    })
+    .await?;
+    Ok(count.max(0) as u64)
+}
+
+/// Организации каталога и их счётчики записей индекса (сверка цепочки и прогноза объёма, APP-82).
+type JournalTenants = (Vec<TenantId>, Vec<(TenantId, u64)>);
+
+/// Организации каталога и число записей индекса каждой (APP-82): системная транзакция
+/// (`app.all_tenants`, RLS), счётчики — `journal.entries` (схема journal, META-88). У организации без
+/// записей цепочка проверяется как пустая.
+async fn journal_tenants_and_counts(pool: &DbPool) -> Result<JournalTenants> {
+    let rows: Vec<(String, i64)> = tp_meta::pool::with_system(pool, |tx| {
+        Box::pin(async move {
+            sqlx::query_as(
+                "SELECT t.tenant_id::text, \
+                 (SELECT count(*) FROM journal.entries e WHERE e.tenant_id = t.tenant_id)::int8 \
+                 FROM tenants t ORDER BY 1",
+            )
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| Error::internal(format!("journal.entries: {e}")))
+        })
+    })
+    .await?;
+    let mut tenants = Vec::with_capacity(rows.len());
+    let mut counts = Vec::with_capacity(rows.len());
+    for (id, count) in rows {
+        let tenant: TenantId = id
+            .parse()
+            .map_err(|e| Error::internal(format!("tenants: {e}")))?;
+        tenants.push(tenant);
+        counts.push((tenant, count.max(0) as u64));
+    }
+    Ok((tenants, counts))
+}
+
+/// Итог проверки `journal.retention` (APP-82, риск 21): прогноз объёма хранилища записей на срок
+/// блокировки (записей в сутки × средний размер письма × срок — объём к концу срока, записи не
+/// удаляются весь срок). Предупреждения: срок дольше [`JOURNAL_RETENTION_WARN`] (ошибка в сроке
+/// compliance не освобождает бакет) и нет включённых правил (новых записей не будет).
+pub fn journal_retention_status(
+    retention: Duration,
+    volume: &JournalVolume,
+) -> (Status, String, String) {
+    let days = retention.as_secs() / 86_400;
+    let mut warnings: Vec<String> = Vec::new();
+    if retention > JOURNAL_RETENTION_WARN {
+        warnings.push(format!(
+            "срок блокировки {days} сут. — дольше {} сут.: записи не удаляются весь срок, ошибка \
+             compliance не освобождает хранилище (риск 21)",
+            JOURNAL_RETENTION_WARN.as_secs() / 86_400
+        ));
+    }
+    if volume.enabled_rules == Some(0) {
+        warnings.push(
+            "нет включённых правил журналирования — новые записи не появляются; правила — данные \
+             организации (Admin API)"
+                .to_owned(),
+        );
+    }
+    let (value, msg) = match (volume.records_per_day, volume.avg_record_bytes) {
+        (Some(per_day), Some(avg)) => {
+            let forecast = per_day * avg as f64 * days as f64;
+            (
+                format!("≈ {} на {days} сут.", human_bytes(forecast)),
+                format!(
+                    "{per_day:.1} записей/сутки × {} × {days} сут. — ожидаемый объём хранилища \
+                     срока блокировки (сейчас {} записей)",
+                    human_bytes(avg as f64),
+                    volume.records
+                ),
+            )
+        }
+        _ => (
+            format!("на {days} сут."),
+            format!(
+                "прогноз появится с первыми записями (сейчас {}); срок блокировки продлевается только",
+                volume.records
+            ),
+        ),
+    };
+    let status = if warnings.is_empty() {
+        Status::Ok
+    } else {
+        Status::Warn
+    };
+    let msg = if warnings.is_empty() {
+        msg
+    } else if volume.records_per_day.is_some() {
+        format!("{msg}; {}", warnings.join("; "))
+    } else {
+        warnings.join("; ")
+    };
+    (status, value, msg)
+}
+
+/// Размер в человекочитаемом виде (`1.5 GiB`) — прогноз и средний размер записи в doctor.
+fn human_bytes(bytes: f64) -> String {
+    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    let mut value = bytes.max(0.0);
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
 }
 
 /// Путь адреса автонастройки `target` (`jmap.autoconfig.caldav`, `carddav`): путь на этом сервере или полный URL.
@@ -569,6 +1211,7 @@ fn blob_kind(cfg: &Config) -> String {
 /// причина отказавшего хранилища секретов, `slow_store` — хранилище отвечает медленнее транспортного
 /// таймаута (FIX-10): подключение не получает пароль и не успевает в `meta.doctor.timeout` — это не
 /// самостоятельный отказ проверки БД, а `warn` с исходной причиной.
+/// Возвращает пул (индекс журнала — `journal.*`, APP-82); закрывает вызывающий.
 async fn database(
     cfg: &Config,
     store: &dyn SecretStore,
@@ -576,7 +1219,7 @@ async fn database(
     cause: Option<&str>,
     slow_store: bool,
     report: &mut Report,
-) {
+) -> Option<DbPool> {
     let meta = cfg
         .section::<MetaConfig>(MetaConfig::SECTION)
         .map(|m| m.doctor.clone())
@@ -586,7 +1229,7 @@ async fn database(
         Ok(Err(e)) => {
             let (status, msg) = dependent(cause, &e, "подключение к СУБД");
             report.push("database.connect", status, "", msg);
-            return;
+            return None;
         }
         Err(_) => {
             let no_answer = format!(
@@ -608,7 +1251,7 @@ async fn database(
                 _ => (Status::Fail, no_answer),
             };
             report.push("database.connect", status, "", msg);
-            return;
+            return None;
         }
     };
     report.push("database.connect", Status::Ok, "", "соединение установлено");
@@ -628,7 +1271,7 @@ async fn database(
     locale(&pool, meta.timeout, report).await;
     extensions(&pool, meta.timeout, report).await;
     clock_skew(&pool, meta.timeout, doctor, report).await;
-    pool.close().await;
+    Some(pool)
 }
 
 /// Кодировка и `LC_CTYPE` базы узла (решение 2026-11-11 №23): `lower(login)` переводит кириллицу только в UTF8 с
@@ -1623,6 +2266,282 @@ mod tests {
         assert_eq!(
             extensions_status(&["pg_stat_statements".to_owned()]).0,
             Status::Warn
+        );
+    }
+
+    // ---------- журнал переписки (APP-82) ----------
+
+    /// Секция `journal` из config.yaml (проверки backend и прогноза).
+    fn journal_section(yaml: &str) -> JournalSection {
+        sections::registry()
+            .expect("registry")
+            .parse(
+                &format!(
+                    "domain: example.org\nprofile: dev\ndatabase:\n  url: postgres://x@y/z?sslmode=disable\n  \
+                     tls: {{ allow_plaintext: true }}\nblob:\n  url: file:///tmp/b\n{yaml}"
+                ),
+                Vec::new(),
+            )
+            .expect("config")
+            .section::<JournalSection>(sections::JOURNAL)
+            .expect("journal")
+            .as_ref()
+            .clone()
+    }
+
+    /// APP-82: профиль SMB — предупреждение о локальном диске (риск 23) только для `journal.local`;
+    /// S3 с Object Lock — OK с режимом и сроком.
+    #[test]
+    fn journal_backend_warns_local_only() {
+        let local = journal_section(
+            "journal:\n  enabled: true\n  local:\n    dir: /var/lib/thepost/journal\n",
+        );
+        let (status, value, msg) = journal_backend_status(&local);
+        assert_eq!(status, Status::Warn);
+        assert_eq!(value, "/var/lib/thepost/journal");
+        assert!(msg.contains("риск 23"), "{msg}");
+        assert!(msg.contains("Object Lock"), "{msg}");
+
+        let s3 = journal_section(
+            "journal:\n  enabled: true\n  s3:\n    bucket: thepost-journal\n    retention: 2555d\n",
+        );
+        let (status, value, msg) = journal_backend_status(&s3);
+        assert_eq!(status, Status::Ok);
+        assert_eq!(value, "s3 thepost-journal");
+        assert!(msg.contains("governance"), "{msg}");
+        assert!(msg.contains("2555d"), "{msg}");
+    }
+
+    /// APP-82: цепочка цела — `journal.chain` и `journal.index` OK (JSON стабилен); разрыв цепочки
+    /// индекса — FAIL с записью; расхождение числа записей индекса и хранилища — FAIL `journal.index`.
+    #[tokio::test]
+    async fn journal_chain_ok_broken_and_index_mismatch() {
+        use tp_contracts::journal::{JournalDirection, JournalRule, JournalScope};
+        use tp_testkit::journal::{MemJournal, MemJournalRecords};
+
+        let tenant = TenantId::DEFAULT;
+        let rule = JournalRule {
+            id: "r-0042".to_owned(),
+            tenant,
+            scope: JournalScope::Org,
+            direction: JournalDirection::Both,
+            enabled: true,
+        };
+        // Запись — из JSON (крейт thepost не зависит от time; `at` — строкой RFC 3339, сутки между
+        // записями — для размаха дат прогноза).
+        let record = |i: i64| {
+            serde_json::from_value::<JournalRecord>(serde_json::json!({
+                "tenant": tenant.to_string(),
+                "sender": format!("s{i}@external.example"),
+                "recipients": ["anna@internal.example"],
+                "message_id": format!("m{i}@external.example"),
+                "at": (["2026-12-14T00:00:00Z", "2026-12-15T00:00:00Z", "2026-12-16T00:00:00Z"]
+                    [i as usize]),
+                "rule": "r-0042",
+            }))
+            .expect("record")
+        };
+
+        let journal = MemJournal::new();
+        let records = MemJournalRecords::new();
+        let mut ids = Vec::new();
+        for i in 0..3i64 {
+            let id = journal
+                .append(&rule, &record(i), Bytes::from_static(b"message"))
+                .await
+                .expect("append");
+            records
+                .put(id, &record(i), Bytes::from_static(b"message"))
+                .await
+                .expect("put");
+            ids.push(id);
+        }
+        let tenants = [tenant];
+        let counts = [(tenant, 3)];
+        let mut report = Report::default();
+        journal_chain(
+            &journal,
+            Some(&records),
+            None,
+            &tenants,
+            &counts,
+            &mut report,
+        )
+        .await;
+        assert_eq!(
+            report.get("journal.chain").map(|c| c.status),
+            Some(Status::Ok),
+            "{report:?}"
+        );
+        assert_eq!(
+            report.get("journal.index").map(|c| c.status),
+            Some(Status::Ok),
+            "{report:?}"
+        );
+        let json = report.to_json(Theme::PLAIN).expect("json");
+        assert!(json.contains("\"id\": \"journal.chain\""), "{json}");
+        assert!(json.contains("\"status\": \"ok\""), "{json}");
+
+        // Разрыв цепочки индекса: подмена записи без пересчёта хеша — FAIL с номером записи.
+        journal.tamper(ids[1]);
+        let mut report = Report::default();
+        journal_chain(
+            &journal,
+            Some(&records),
+            None,
+            &tenants,
+            &counts,
+            &mut report,
+        )
+        .await;
+        let chain = report.get("journal.chain").expect("chain");
+        assert_eq!(chain.status, Status::Fail, "{report:?}");
+        assert!(chain.message.contains("разрыв"), "{}", chain.message);
+        assert!(
+            chain.message.contains(&ids[1].to_string()),
+            "{}",
+            chain.message
+        );
+        assert_eq!(
+            report.get("journal.index").map(|c| c.status),
+            Some(Status::Ok),
+            "число записей сходится и при разрыве цепочки"
+        );
+
+        // Обрыв между фазами записи: в индексе больше записей, чем в хранилище — FAIL journal.index.
+        let counts = [(tenant, 4)];
+        let mut report = Report::default();
+        journal_chain(
+            &journal,
+            Some(&records),
+            None,
+            &tenants,
+            &counts,
+            &mut report,
+        )
+        .await;
+        let index = report.get("journal.index").expect("index");
+        assert_eq!(index.status, Status::Fail, "{report:?}");
+        assert!(index.message.contains("в индексе 4"), "{}", index.message);
+        assert!(index.message.contains("restore_index"), "{}", index.message);
+    }
+
+    /// APP-82: замеры объёма по хранилищу записей — записи, средний размер письма (выборка) и записей
+    /// в сутки по размаху дат.
+    #[tokio::test]
+    async fn journal_volume_measures() {
+        use tp_blob::system_now;
+        use tp_contracts::journal::GENESIS_HASH;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let local = tp_blob::LocalStore::open(tp_blob::LocalConfig {
+            root: dir.path().join("journal"),
+            ..tp_blob::LocalConfig::default()
+        })
+        .await
+        .expect("local");
+        let records = tp_blob::JournalRecords::new(
+            Arc::new(local),
+            tp_blob::JournalConfig::default(),
+            system_now(),
+        )
+        .expect("records");
+        let tenant = TenantId::DEFAULT;
+        let mut prev = GENESIS_HASH;
+        for i in 0..3i64 {
+            let record = serde_json::from_value::<JournalRecord>(serde_json::json!({
+                "tenant": tenant.to_string(),
+                "sender": format!("s{i}@external.example"),
+                "recipients": ["anna@internal.example"],
+                "message_id": format!("m{i}@external.example"),
+                "at": (["2026-12-14T00:00:00Z", "2026-12-15T00:00:00Z", "2026-12-16T00:00:00Z"]
+                    [i as usize]),
+                "rule": "r-0042",
+            }))
+            .expect("record");
+            prev = records
+                .put(
+                    JournalId::new(),
+                    prev,
+                    &record,
+                    Bytes::from(vec![0u8; 4096]),
+                )
+                .await
+                .expect("put");
+        }
+        let volume = journal_volume(&records, &[tenant], None).await;
+        assert_eq!(volume.records, 3);
+        assert_eq!(volume.avg_record_bytes, Some(4096));
+        assert_eq!(volume.enabled_rules, None, "без СУБД правила не считаны");
+        // Размах дат — двое суток: 3 записи / 2 суток.
+        let rate = volume.records_per_day.expect("rate");
+        assert!((rate - 1.5).abs() < 1e-9);
+    }
+
+    /// APP-82: прогноз объёма на срок блокировки — от правил и средних размеров; предупреждения —
+    /// срок дольше 10 лет (риск 21) и нет включённых правил.
+    #[test]
+    fn journal_retention_forecast_and_warnings() {
+        let day = Duration::from_secs(86_400);
+        let volume = JournalVolume {
+            records: 500,
+            enabled_rules: Some(3),
+            avg_record_bytes: Some(10_240),
+            records_per_day: Some(100.0),
+        };
+        let (status, value, msg) = journal_retention_status(730 * day, &volume);
+        assert_eq!(status, Status::Ok);
+        assert!(value.contains("730 сут."), "{value}");
+        assert!(value.contains("MiB"), "{value}");
+        assert!(msg.contains("100.0 записей/сутки"), "{msg}");
+        assert!(msg.contains("10.0 KiB"), "{msg}");
+
+        // Срок дольше 10 лет — предупреждение (риск 21): compliance не освобождает бакет.
+        let (status, _, msg) = journal_retention_status(11 * 365 * day, &volume);
+        assert_eq!(status, Status::Warn);
+        assert!(msg.contains("compliance"), "{msg}");
+
+        // Нет включённых правил — новых записей не будет (правила — Admin API).
+        let empty = JournalVolume {
+            records: 0,
+            enabled_rules: Some(0),
+            avg_record_bytes: None,
+            records_per_day: None,
+        };
+        let (status, _, msg) = journal_retention_status(730 * day, &empty);
+        assert_eq!(status, Status::Warn);
+        assert!(msg.contains("Admin API"), "{msg}");
+
+        // Без СУБД (правила не считаны) и без записей — не предупреждение.
+        let unknown = JournalVolume {
+            enabled_rules: None,
+            ..empty
+        };
+        let (status, _, _) = journal_retention_status(730 * day, &unknown);
+        assert_eq!(status, Status::Ok);
+    }
+
+    /// APP-82: прицельный прогон `thepost doctor journal` — только проверки журнала: без секции
+    /// `journal` объяснение, общие проверки окружения не выполняются.
+    #[tokio::test]
+    async fn doctor_journal_targeted_without_section() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            "domain: example.org\nprofile: dev\ndatabase:\n  url: postgres://thepost@127.0.0.1:1/thepost?sslmode=disable\n  acquire_timeout: 1s\n  tls: { allow_plaintext: true }\nblob:\n  url: file:///nonexistent/blob\n",
+        );
+        let report = run_journal(&path, None).await;
+        let backend = report.get("journal.backend").expect("journal.backend");
+        assert_eq!(backend.status, Status::Skipped, "{report:?}");
+        // Секции нет — она разбирается как выключенная: оба объяснения говорят о журналировании.
+        assert!(
+            backend.message.contains("журналирован"),
+            "{}",
+            backend.message
+        );
+        assert!(
+            report.get("database.connect").is_none(),
+            "прицельный прогон не выполняет общие проверки: {report:?}"
         );
     }
 

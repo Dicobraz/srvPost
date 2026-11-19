@@ -21,6 +21,7 @@ import { Delegates } from "../components/delegates";
 import { bytes, when } from "../components/format";
 import { PolicyForm } from "../components/policy-form";
 import { StatusTag } from "../components/status";
+import { EffectiveMatrix } from "../components/trust";
 import { useReadOnly } from "../providers/access";
 
 type Account = Schemas["AccountInfo"];
@@ -330,9 +331,17 @@ function AccountAuditPolicy({ account }: { account: string }) {
   );
 }
 
+/** Действующая политика доверия учётной записи (UI-23): матрица с источником по клетке. */
+function AccountTrust({ account }: { account: string }) {
+  const url = `/api/v1/orgs/{org}/accounts/${encodeURIComponent(account)}/trust`;
+  const { result, query } = useCustom<Schemas["TrustView"]>({ url, method: "get", errorNotification: false, queryOptions: { retry: false } });
+  if (query.isLoading || query.isError) return null;
+  return <EffectiveMatrix view={result.data} />;
+}
+
 /**
  * Учётная запись: сведения, имя, блокировка и адреса, политика ящика, отправители, аудит ящика, представители, общий доступ к
- * календарям и адресным книгам, пароли приложений.
+ * календарям и адресным книгам, доверие, пароли приложений.
  */
 export function AccountShow() {
   const { result: account, query } = useShow<Account>();
@@ -395,6 +404,8 @@ export function AccountShow() {
       {account && <Delegates account={account.id} />}
       <Divider orientation="left">Общий доступ к календарям и адресным книгам</Divider>
       {account && <CollectionsAcl account={account.id} />}
+      <Divider orientation="left">Доверие</Divider>
+      {account && <AccountTrust account={account.id} />}
       <Divider orientation="left">Пароли приложений</Divider>
       {account && <AppPasswords account={account.id} />}
     </Show>

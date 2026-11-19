@@ -170,7 +170,15 @@ function AccountScripts({ base, readOnly }: { base: string; readOnly: boolean })
   );
 }
 
-type VacationForm = { enabled: boolean; period?: [Dayjs | null, Dayjs | null] | null; subject?: string | null; text_body?: string | null; html_body?: string | null };
+type VacationForm = {
+  enabled: boolean;
+  period?: [Dayjs | null, Dayjs | null] | null;
+  subject?: string | null;
+  text_body?: string | null;
+  html_body?: string | null;
+  external_subject?: string | null;
+  external_text_body?: string | null;
+};
 
 /** Автоответ за пользователя (модель JMAP VacationResponse); выполняется до активного скрипта. */
 function Vacation({ base, readOnly }: { base: string; readOnly: boolean }) {
@@ -196,6 +204,10 @@ function Vacation({ base, readOnly }: { base: string; readOnly: boolean }) {
               subject: f.subject?.trim() || null,
               text_body: f.text_body || null,
               html_body: f.html_body || null,
+              // Внешние тема и текст — чужим отправителям (CTR-93); HTML внешнего текста здесь не ведётся.
+              external_subject: f.external_subject?.trim() || null,
+              external_text_body: f.external_text_body || null,
+              external_html_body: v.external_html_body ?? null,
             },
             successNotification: { type: "success", message: "Автоответ сохранён" },
           },
@@ -217,6 +229,12 @@ function Vacation({ base, readOnly }: { base: string; readOnly: boolean }) {
       </Form.Item>
       <Form.Item name="html_body" label="Текст ответа HTML">
         <Input.TextArea rows={6} style={{ fontFamily: "monospace" }} />
+      </Form.Item>
+      <Form.Item name="external_subject" label="Внешняя тема" extra="Тема ответа чужим отправителям. Пока пусто — внешним ответа нет.">
+        <Input />
+      </Form.Item>
+      <Form.Item name="external_text_body" label="Внешний текст ответа" extra="Ответ чужим отправителям уходит только этим текстом. Пока пусто — внешним ответа нет.">
+        <Input.TextArea rows={6} />
       </Form.Item>
       {!readOnly && (
         <Button type="primary" htmlType="submit" loading={mutation.isPending}>

@@ -425,7 +425,6 @@ mod tests {
 
     /// Хук запрещает удаление письма удержанной беседы, беседу разрешает по письму (`thread: None`).
     struct MemThreadsStub {
-        thread: ThreadId,
         held: std::sync::Mutex<std::collections::HashSet<ThreadId>>,
     }
 
@@ -434,7 +433,6 @@ mod tests {
             let mut held = std::collections::HashSet::new();
             held.insert(thread);
             Arc::new(MemThreadsStub {
-                thread,
                 held: std::sync::Mutex::new(held),
             })
         }
@@ -447,7 +445,12 @@ mod tests {
         }
 
         async fn thread_of(&self, _: AccountScope, _: MessageId) -> Result<Option<ThreadId>> {
-            Ok(Some(self.thread))
+            // Заглушка отвечает одной (удержанной) беседой.
+            Ok(self
+                .held
+                .lock()
+                .map(|h| h.iter().next().copied())
+                .unwrap_or(None))
         }
 
         async fn messages(&self, _: AccountScope, _: ThreadId, _: usize) -> Result<Vec<MessageId>> {
