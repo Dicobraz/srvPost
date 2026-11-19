@@ -894,13 +894,10 @@ async fn outside_follows_trust_matrix() {
         ItipOutcome::Applied
     );
     let body = env.body(PETR, "m-43").await;
-    assert!(
-        !body.contains("ATTACH"),
-        "вредные свойства не вносятся: {body}"
-    );
+    assert!(!body.contains("ATTACH"), "вредные свойства не вносятся");
     assert!(
         body.contains("BEGIN:VALARM"),
-        "напоминание без ссылки остаётся: {body}"
+        "напоминание без ссылки остаётся"
     );
     assert_eq!(
         env.by_uid(PETR, "m-43")
@@ -967,10 +964,13 @@ async fn outside_follows_trust_matrix() {
         assert_eq!(out, ItipOutcome::Applied, "{kind:?}: {out:?}");
     }
     let body = env.body(PETR, "m-44").await;
-    assert!(body.contains("PARTSTAT=ACCEPTED"), "{}", body);
+    assert!(
+        body.contains("PARTSTAT=ACCEPTED"),
+        "статус участника обновлён"
+    );
     assert!(
         body.contains("SUMMARY:Планёрка") && !body.contains("Подмена"),
-        "{body}"
+        "прочие свойства из письма не берутся"
     );
     let outsider = itip_msg(
         "REPLY",

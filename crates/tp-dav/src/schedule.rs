@@ -844,17 +844,25 @@ async fn post(cx: &Cx<'_>, body: Body) -> Result<Response> {
     // Занятость — только принципалам своей организации (адрес ищется в ней; соседней организации и внешнему —
     // `3.7` без данных) и не ниже клетки `freebusy` своей организации (DAV-44, решение 124): политика закрыла —
     // `3.7` без данных. Матрица — участника, чья занятость запрошена.
+    // `allowed` выравнивается с `accounts` (чужому адресу — `false`): `zip` ниже обрезает по короткому списку,
+    // и без выравнивания чужие получатели исчезали бы из ответа вместо `3.7`.
     let mut allowed: Vec<bool> = Vec::with_capacity(accounts.len());
-    for id in accounts.iter().flatten() {
-        let matrix = cx
-            .dav
-            .trust_effective(AccountScope {
-                tenant: cx.scope.tenant,
-                account: *id,
-            })
-            .await
-            .matrix;
-        allowed.push(matrix.freebusy.own >= Detail::FreeBusy);
+    for id in &accounts {
+        let ok = match id {
+            Some(id) => {
+                let matrix = cx
+                    .dav
+                    .trust_effective(AccountScope {
+                        tenant: cx.scope.tenant,
+                        account: *id,
+                    })
+                    .await
+                    .matrix;
+                matrix.freebusy.own >= Detail::FreeBusy
+            }
+            None => false,
+        };
+        allowed.push(ok);
     }
     let ids: Vec<AccountId> = accounts
         .iter()

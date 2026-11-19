@@ -582,7 +582,8 @@ async fn gal_isolated_between_organizations() {
         .body(Body::from(ETAGS.to_owned()))
         .expect("запрос");
     let r = env.raw(req).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    // PROPFIND с телом-ответом — `207 Multistatus` (как своей книги выше).
+    assert_eq!(r.status, StatusCode::MULTI_STATUS, "{}", r.body);
     assert!(r.body.contains("u-bob.vcf"), "{}", r.body);
     assert!(
         !r.body.contains("u-ivan"),

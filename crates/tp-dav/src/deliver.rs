@@ -390,6 +390,7 @@ impl ItipInbox {
 
     /// `forced` — свой `PARTSTAT` вместо прежнего или `NEEDS-ACTION` (решение ресурса); `foreign` — отправитель не
     /// своей организации: свойства, способные навредить клиенту, из письма не вносятся ([`strip_harmful`]).
+    #[allow(clippy::too_many_arguments)] // DAV-44: `foreign` — признак чужой организации; конвенция репо (как apply_rules)
     async fn request(
         &self,
         scope: AccountScope,
