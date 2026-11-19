@@ -445,7 +445,12 @@ mod tests {
         }
 
         async fn thread_of(&self, _: AccountScope, _: MessageId) -> Result<Option<ThreadId>> {
-            Ok(Some(ThreadId::new()))
+            // Заглушка отвечает одной (удержанной) беседой.
+            Ok(self
+                .held
+                .lock()
+                .map(|h| h.iter().next().copied())
+                .unwrap_or(None))
         }
 
         async fn messages(&self, _: AccountScope, _: ThreadId, _: usize) -> Result<Vec<MessageId>> {

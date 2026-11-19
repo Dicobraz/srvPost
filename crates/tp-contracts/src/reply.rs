@@ -46,8 +46,8 @@ pub fn canonical_message_id(raw: &str) -> String {
     s.trim().to_ascii_lowercase()
 }
 
-/// Каноническая форма адресата: домен — нижний регистр, A-label IDN ([`normalize_domain`]); local-part —
-/// как задан. Некорректный адрес — `Invalid`.
+/// Каноническая форма адресата: домен — нижний регистр, A-label IDN ([`normalize_domain`]; U-label —
+/// [`idna::domain_to_ascii`]); local-part — как задан. Некорректный адрес — `Invalid`.
 pub fn normalize_recipient(addr: &str) -> Result<String> {
     let Some((local, domain)) = addr.rsplit_once('@') else {
         return Err(Error::invalid(format!("адрес без домена: {addr:?}")));
@@ -55,7 +55,14 @@ pub fn normalize_recipient(addr: &str) -> Result<String> {
     if local.is_empty() || domain.is_empty() {
         return Err(Error::invalid(format!("неполный адрес: {addr:?}")));
     }
-    Ok(format!("{local}@{}", normalize_domain(domain)?))
+    let domain = if domain.is_ascii() {
+        normalize_domain(domain)?
+    } else {
+        let a_label = idna::domain_to_ascii(domain)
+            .map_err(|_| Error::invalid(format!("недопустимый домен IDN: {domain:?}")))?;
+        normalize_domain(&a_label)?
+    };
+    Ok(format!("{local}@{domain}"))
 }
 
 /// SHA-256 канонической формы Message-ID клиента ([`canonical_message_id`]): ключ записи об отправленном
@@ -186,12 +193,18 @@ pub struct ReplyEvidence {
 
 impl ReplyEvidence {
     /// Отправитель `sender` (канонизируется) — среди адресатов записи и письмо не старше `max_age`
-    /// (`smtp.reply.max_age`). DMARC проверяет вызывающий; все три условия сразу — признак ответа.
+    /// (`smtp.reply.max_age`). Сравнение — без учёта регистра ASCII (практика Gmail и Rspamd: local-part
+    /// регистр не различает). DMARC проверяет вызывающий; все три условия сразу — признак ответа.
     pub fn confirms(&self, sender: &str, max_age: Duration) -> bool {
         let Ok(sender) = normalize_recipient(sender) else {
             return false;
         };
-        self.age <= max_age && self.sent.recipients.contains(&sender)
+        self.age <= max_age
+            && self
+                .sent
+                .recipients
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(&sender))
     }
 }
 
@@ -441,7 +454,7 @@ mod tests {
             "письмо старше max_age"
         );
         assert!(
-            !ev.confirms("bob@partner.example", Duration::from_secs(3600)),
+            ev.confirms("bob@partner.example", Duration::from_secs(3600)),
             "возраст ровно max_age — ещё подтверждает"
         );
         assert!(!ev.confirms("не адрес", Duration::from_secs(3600)));
