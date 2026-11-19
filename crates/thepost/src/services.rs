@@ -504,7 +504,8 @@ impl Services {
     /// извне — iMIP с DMARC (SMTP-33), из submission, JMAP и DAV — если `From` принадлежит отправителю: свой адрес,
     /// псевдоним или право Send As / Send on Behalf из ACL узла (`Delivery::with_authz`, SMTP-36, APP-62);
     /// приглашение представителя (`SENT-BY`) — по записи представителя организатора с `schedule_on_behalf` из
-    /// `PgMeta` (`Delivery::with_delegates`, APP-69).
+    /// `PgMeta` (`Delivery::with_delegates`, APP-69). Письма учётных записей — `PgMeta`
+    /// (`Delivery::with_messages`, SMTP-55): ручной iTIP-ответ на приглашение из папки «Спам» отклоняется.
     fn base_delivery(&self, smtp: &SmtpConfig) -> Result<Delivery> {
         let resolver = system_resolver()?;
         let milter = (!smtp.milter.filters.is_empty())
@@ -537,7 +538,8 @@ impl Services {
             .with_send_limits(self.send_limits.clone())
             .with_itip(self.itip.clone())
             .with_delegates(Arc::new(self.meta.clone()))
-            .with_authz(self.authz.clone()))
+            .with_authz(self.authz.clone())
+            .with_messages(Arc::new(self.meta.clone())))
     }
 
     /// Планирование встреч (APP-28) для CalDAV (`tp_dav::router_shared`) и JMAP (`Jmap::with_schedule`): учётным
