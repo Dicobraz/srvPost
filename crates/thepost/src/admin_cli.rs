@@ -5277,15 +5277,15 @@ mod tests {
         };
         // Уровень организации: --org явный (как у брендинга, без него — уровень установки).
         let org = |as_json: bool, action: TrustAction| {
-            execute(
-                &c,
-                &ApiArgs {
+            let c = c.clone();
+            async move {
+                let args = ApiArgs {
                     org: Some(TenantId::DEFAULT.to_string()),
                     json: as_json,
                     ..ApiArgs::default()
-                },
-                trust(action),
-            )
+                };
+                execute(&c, &args, trust(action)).await
+            }
         };
 
         // Уровень установки: show — умолчания и закреплённые клетки.
