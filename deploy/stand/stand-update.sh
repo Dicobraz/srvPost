@@ -13,6 +13,7 @@
 #   (без аргументов)  обновить до последней версии, если есть; занято — пропустить
 #   --check           только сообщить (exit 2 — есть новая версия, 0 — актуален)
 #   --tag <тег>       установить указанный тег, не сверяясь с releases API
+#   --install-cron    взвести cron стенда из UPDATE_EVERY_DAYS (раз в N дней, утром) — один раз
 #
 # Конфиг — update.conf рядом (пример: update.conf.example): каталоги inbox/rel, имена
 # контейнеров узла/генератора, образы, аргументы запуска узла (сеть, --ip, hostname),
@@ -51,14 +52,32 @@ BUSY_PATTERNS=${BUSY_PATTERNS:-'[a]nsible-playbook|[r]un-perf|[r]un-only|[r]un-d
 # требует sudo — в прежних узлах он был установлен вручную в слой контейнера и терялся
 # при пересоздании. Пустая строка — пропустить шаг.
 PRE_INSTALL_CMD=${PRE_INSTALL_CMD:-'command -v sudo >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo >/dev/null; }'}
+# Политика автообновления (решение владельца 19.11): не чаще UPDATE_EVERY_DAYS дней, только безопасно
+# (простой стенда, sha256, чистая установка, приёмка md5+служб, откат на предыдущую версию при провале).
+# По умолчанию ВЫКЛЮЧЕНО (AUTO_UPDATE=no) — в проде не включать; на тестовых/перф-стендах включают явно
+# в update.conf (AUTO_UPDATE=yes). Ручные --check/--tag работают всегда.
+AUTO_UPDATE=${AUTO_UPDATE:-no}
+UPDATE_EVERY_DAYS=${UPDATE_EVERY_DAYS:-3}
+LOG=${LOG:-$DIR/update.log}
 
 mode=update
 if [ "$#" -ge 1 ]; then
   case "$1" in
     --check) mode=check ;;
     --tag) mode=force; tag_force=${2:?--tag требует тег} ;;
+    --install-cron) mode=cron ;;
     *) echo "неизвестный аргумент: $1 (см. шапку)" >&2; exit 64 ;;
   esac
+fi
+
+say() { echo "$(date '+%F %T') $*"; }
+
+if [ "$mode" = cron ]; then
+  # Крон стенда из UPDATE_EVERY_DAYS: раз в N дней утром. Единственный источник интервала — update.conf.
+  line="17 4 */$UPDATE_EVERY_DAYS * * $DIR/stand-update.sh >> $LOG 2>&1"
+  (crontab -l 2>/dev/null | grep -v 'stand-update.sh'; echo "$line") | crontab -
+  say "cron взведён из UPDATE_EVERY_DAYS=$UPDATE_EVERY_DAYS: $(crontab -l | grep stand-update.sh)"
+  exit 0
 fi
 
 # Lock: повторный вызов поверх идущего обновления — не входить (mkdir атомарен).
@@ -66,7 +85,6 @@ LOCK="$DIR/.update.lock"
 mkdir "$LOCK" 2>/dev/null || { echo "$(date '+%F %T') обновление уже выполняется — пропуск"; exit 0; }
 trap 'rmdir "$LOCK"' EXIT INT TERM
 
-say() { echo "$(date '+%F %T') $*"; }
 
 # Стенд занят (установка/прогон/наполнение) — обновление отложим до следующего вызова.
 busy=$(pgrep -f "$BUSY_PATTERNS" 2>/dev/null || true)
@@ -74,6 +92,10 @@ for p in $busy; do
   [ "$p" != "$$" ] || continue
   say "стенд занят (pid $p) — пропуск"; exit 0
 done
+
+if [ "$mode" = update ]; then
+  [ "$AUTO_UPDATE" = yes ] || { say "автообновление выключено (AUTO_UPDATE=no) — пропуск"; exit 0; }
+fi
 
 if [ "$mode" != force ]; then
   # Первая запись tag_name в выдаче /releases — самая свежая (включая pre-release).
@@ -138,25 +160,35 @@ if [ -n "$GEN" ]; then
   docker exec "$GEN" sh -c 'rm -f /var/lib/thepost-stand/fill-state.json /var/lib/thepost-stand/fill-dav-state.json' || true
 fi
 
-say "установка: ansible --tags $INSTALL_TAGS"
-docker run --rm -v "$DIR":/work -v /var/run/docker.sock:/var/run/docker.sock \
-  "$ANSIBLE_IMAGE" \
-  sh -c "cd /work && ansible-playbook -i inventory.yml repo/deploy/stand/stand.yml --tags $INSTALL_TAGS" \
-  > "$DIR/install-last.log" 2>&1 || {
-  say "ОШИБКА: установка не прошла (install-last.log) — маркер не обновлён, повтор при следующем вызове"
-  exit 1
+# Установка версии из rel/<pkg> в пересозданный узел + приёмка (md5 бинарника = тарболлу, службы живы).
+install_and_verify() { # $1 = каталог в rel/
+  sed -i "s#thepost_binary_src: .*#thepost_binary_src: /work/rel/$1/thepost#" "$INVENTORY"
+  docker run --rm -v "$DIR":/work -v /var/run/docker.sock:/var/run/docker.sock     "$ANSIBLE_IMAGE"     sh -c "cd /work && ansible-playbook -i inventory.yml repo/deploy/stand/stand.yml --tags $INSTALL_TAGS"     > "$DIR/install-last.log" 2>&1 || return 1
+  want=$(md5sum "$REL/$1/thepost" | cut -d' ' -f1)
+  got=$(docker exec "$NODE" md5sum /usr/local/bin/thepost | cut -d' ' -f1) || return 1
+  [ "$want" = "$got" ] || return 1
+  for u in $HEALTH_UNITS; do
+    docker exec "$NODE" systemctl is-active --quiet "$u" || return 1
+  done
+  return 0
 }
 
-# Приёмка: бинарник узла = тарболлу; службы живы.
-want=$(md5sum "$REL/$pkg/thepost" | cut -d' ' -f1)
-got=$(docker exec "$NODE" md5sum /usr/local/bin/thepost | cut -d' ' -f1)
-[ "$want" = "$got" ] || { say "ОШИБКА: md5 бинарника узла ($got) != тарболла ($want)"; exit 1; }
-for u in $HEALTH_UNITS; do
-  docker exec "$NODE" systemctl is-active --quiet "$u" || { say "ОШИБКА: служба $u не активна"; exit 1; }
-done
-
-echo "$latest" > "$DIR/installed-version"
-say "готово: $latest установлена и проверена"
+say "установка: ansible --tags $INSTALL_TAGS"
+if install_and_verify "$pkg"; then
+  echo "$latest" > "$DIR/installed-version"
+  say "готово: $latest установлена и проверена"
+else
+  say "ОШИБКА: установка/приёмка $latest не прошла (install-last.log)"
+  if [ -n "$installed" ] && [ "$installed" != "$latest" ]      && [ -x "$REL/thepost-$installed-$ASSET_ARCH/thepost" ]; then
+    say "безопасный откат на $installed"
+    if install_and_verify "thepost-$installed-$ASSET_ARCH"; then
+      say "откат выполнен: узел на $installed (маркер не менялся)"
+    else
+      say "ОШИБКА: откат не прошёл — узел требует ручного вмешательства (install-last.log)"
+    fi
+  fi
+  exit 1
+fi
 
 # Подчистка: последние KEEP версий в rel/ и inbox.
 ls -1dt "$REL"/thepost-* 2>/dev/null | tail -n +"$((KEEP + 1))" | while IFS= read -r d; do rm -rf "$d"; done

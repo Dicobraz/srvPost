@@ -56,6 +56,26 @@ const COMMANDS: &[(&str, &str)] = &[
     ("remove_org_script", "sieve org delete"),
     ("vacation", "vacation get {account}"),
     ("set_vacation", "vacation set {account}"),
+    // Политика доверия (ADM-49): без `--org` команды выбирают уровень установки.
+    ("get_installation_trust", "trust show"),
+    ("put_installation_trust", "trust set --file <ПУТЬ>"),
+    ("reset_installation_trust", "trust reset"),
+    ("get_org_trust", "trust show --org {org}"),
+    ("put_org_trust", "trust set --org {org} --file <ПУТЬ>"),
+    ("reset_org_trust", "trust reset --org {org}"),
+    ("get_group_trust", "trust show --org {org} --group {group}"),
+    (
+        "put_group_trust",
+        "trust set --org {org} --group {group} --file <ПУТЬ>",
+    ),
+    (
+        "reset_group_trust",
+        "trust reset --org {org} --group {group}",
+    ),
+    (
+        "get_account_trust",
+        "trust show --org {org} --account {account}",
+    ),
 ];
 
 /// Шаблон команды CLI операции `id`.
@@ -96,6 +116,8 @@ pub fn command(req: &Request, home_org: Option<&str>) -> String {
     }
     if let Some(org) = req.param("org")
         && home_org.is_some_and(|h| h != org)
+        // Шаблоны операций доверия несут `--org` сами: без ключа CLI выбирает уровень установки (ADM-49).
+        && !out.contains(&format!("--org {org}"))
     {
         out.push_str(&format!(" --org {org}"));
     }
@@ -167,6 +189,35 @@ mod tests {
         assert_eq!(
             command(&units, Some("o1")),
             "нет в CLI: GET /api/v1/orgs/{org}/units"
+        );
+        // Уровень организации — всегда с `--org` (без ключа CLI показывает установку), ключ не дублируется.
+        let org_trust = Request::new(
+            c.get("get_org_trust").expect("get_org_trust"),
+            &ctx,
+            Vec::new(),
+        )
+        .expect("запрос");
+        assert_eq!(
+            command(&org_trust, Some("o1")),
+            "thepost admin trust show --org o1"
+        );
+        assert_eq!(
+            command(&org_trust, Some("o2")),
+            "thepost admin trust show --org o1",
+            "без повтора ключа"
+        );
+        let group_trust = Request::new(
+            c.get("get_group_trust").expect("get_group_trust"),
+            &Context::from([
+                ("org".to_owned(), "o1".to_owned()),
+                ("group".to_owned(), "g1".to_owned()),
+            ]),
+            Vec::new(),
+        )
+        .expect("запрос");
+        assert_eq!(
+            command(&group_trust, Some("o1")),
+            "thepost admin trust show --org o1 --group g1"
         );
     }
 }

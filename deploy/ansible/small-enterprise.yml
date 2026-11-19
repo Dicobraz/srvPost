@@ -163,7 +163,12 @@
           - name: thepost
             access_key: "{{ hostvars[small_bao_init].small_s3_keys.access_key_id }}"
             secret_key: "{{ hostvars[small_bao_init].small_s3_keys.secret_access_key }}"
-            actions: "{{ ['Read', 'Write', 'List', 'Tagging'] | map('regex_replace', '$', ':' ~ small_bucket) | list }}"
+            # Журнал (DEP-58): узел пишет записи и в бакет журнала — те же ключи thepost/s3, отдельный бакет.
+            actions: "{{ ((['Read', 'Write', 'List', 'Tagging']
+                           | map('regex_replace', '$', ':' ~ small_bucket) | list)
+                          + ((['Read', 'Write', 'List', 'Tagging']
+                              | map('regex_replace', '$', ':' ~ small_journal_bucket) | list)
+                             if small_journal_bucket | default('') | length > 0 else [])) }}"
       no_log: true
 
 - name: PostgreSQL with pg_auto_failover
@@ -226,6 +231,9 @@
         tasks_from: buckets
       vars:
         seaweedfs_buckets: ["{{ small_bucket }}"]
+        # Бакет журнала (DEP-58, SRS 4.9) — с Object Lock: записи неизменяемы до конца срока, включение
+        # необратимо. Не задан (small_journal_bucket пуст) — журналирование выключено, бакета нет.
+        seaweedfs_lock_buckets: "{{ [small_journal_bucket] if small_journal_bucket | default('') | length > 0 else [] }}"
       run_once: true
 
 - name: The Post mailbox nodes
@@ -244,6 +252,21 @@
     thepost_secrets_url: "{{ small_openbao_url }}"
     # Ключ TLS (секрет thepost/tls) записывается через узел инициализации OpenBao.
     thepost_openbao_from: "{{ small_bao_init }}"
+    # Журнал переписки (DEP-58, SRS 4.9): бакет small_journal_bucket создаётся с Object Lock; режим
+    # governance — по умолчанию, compliance — явно (small_journal_lock_mode) и только с явным сроком
+    # (риск 21). Записи — через шлюз S3 этого узла, ключи — те же thepost/s3. Не задан бакет — журнал
+    # выключен (умолчание пресета). Правила журналирования — данные организации (Admin API).
+    thepost_journal_enabled: "{{ small_journal_bucket | default('') | length > 0 }}"
+    thepost_journal: >-
+      {{ {'s3': {'bucket': small_journal_bucket,
+                 'lock_mode': small_journal_lock_mode | default('governance'),
+                 'retention': small_journal_retention | default('2555d'),
+                 'endpoint': 'https://localhost:8333',
+                 'path_style': true,
+                 'credentials': {'access_key_id': {'secret': 'thepost/s3#access_key_id'},
+                                  'secret_access_key': {'secret': 'thepost/s3#secret_access_key'}},
+                 'tls': {'ca_file': small_ca_file}}}
+         if small_journal_bucket | default('') | length > 0 else {} }}
     thepost_config_extra_small:
       roles: [mailbox]
       blob:

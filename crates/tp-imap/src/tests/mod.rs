@@ -18,8 +18,8 @@ use tp_mailstore::Store;
 use tp_testkit::SearchDoc;
 use tp_testkit::{
     Clock, FakeAuthenticator, FakeSasl, FakeSearch, MemBlobIndex, MemBlobStore, MemEventBus,
-    MemMailboxAudit, MemMetadata, MemPolicies, MemQuota, MemTrash, RecordingDecisionHook,
-    SystemClock,
+    MemMailboxAudit, MemMetadata, MemPolicies, MemQuota, MemThreads, MemTrash,
+    RecordingDecisionHook, SystemClock,
 };
 
 use crate::config::ImapConfig;
@@ -116,6 +116,7 @@ impl Env {
             trash: Arc::new(trash.clone()),
             quota: Arc::new(MemQuota::new(&meta)),
             bus: Arc::new(bus.clone()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks: DecisionHooks::new(vec![Arc::new(hook.clone())]),
         });
         let tenant = TenantId::DEFAULT;

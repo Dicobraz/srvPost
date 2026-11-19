@@ -173,6 +173,7 @@ Compose и Ansible его не копируют, а подставляют зн�
 | `maintenance` | очистка по сроку, книга GAL, проверка BLOB `verify` (03:00 UTC, раз в сутки) | — | `thepost_maintenance` |
 | `cli.oidc` | вход с устройства выключен (`client_id` не задан) | — | `thepost_cli_oidc` |
 | `dav`, `http.dav` | лимиты DAV | — | `thepost_dav`, `thepost_dav_listen` |
+| `journal` | выключен; профиль SMB — `journal.local` (каталог `/var/lib/thepost/journal`) | — | `thepost_journal_enabled`, `thepost_journal_local_dir`, `thepost_journal` (поля секции поверх пресета: `s3` — Object Lock, `export` — выгрузка; см. «Журнал переписки») |
 
 Остальное (слушатели 25, 465, 587, 143, 993, 443, ManageSieve 4190, роли, BLOB) — из пресета без изменений; новый параметр эталона
 добавляется в пресет, а не в compose или шаблон роли. Проверка пресета — `thepost config check --config
@@ -231,6 +232,33 @@ blob:
 - В Kubernetes локальный диск не годится: том данных пода — `emptyDir`, письма пропадут вместе с подом.
 - Каталог вне `/var/lib/thepost` под systemd — drop-in с `ReadWritePaths=` («Установка под systemd»).
 - Резервная копия: локальный каталог — роль `pgbackrest` (restic или rsync, эталон SMB); для S3 роли в поставке нет.
+
+## Журнал переписки (SRS 4.9)
+Журналирование — базовая поставка (модель journaling Exchange): письмо целиком с конвертом копируется в отдельное
+от BLOB хранилище по правилу организации (направление: входящие, исходящие, оба); доступ — только роль «аудитор
+журнала». По умолчанию выключено (`journal.enabled: false`) — включается явно; правила журналирования — данные
+организации (Admin API), в `config.yaml` только параметры узла. Секция — `journal` (`thepost config schema`).
+
+| Хранилище записей | Где | Чем задано | Защита от удаления |
+|---|---|---|---|
+| SMB: локальный каталог (З.1) | `/var/lib/thepost/journal` | пресет `config/all.yaml`; Ansible — `thepost_journal_enabled: true` (каталог — `thepost_journal_local_dir`, вне `/var/lib/thepost` — drop-in `ReadWritePaths=`) | только сервер (записи лишь добавляются); от администратора ОС защиты нет — `thepost doctor` предупреждает (`journal.backend`, риск 23) |
+| Малый Enterprise (З.2) | S3: SeaweedFS на ВМ данных, бакет журнала с Object Lock | `small-enterprise.yml`, бакет — `small_journal_bucket` (не задан — журнал выключен), режим/срок — `small_journal_lock_mode` (governance по умолчанию), `small_journal_retention` | S3 Object Lock: governance — удаление только ролью с правом обхода, compliance — не удаляет никто |
+| Enterprise-ВМ (З.3) | S3, `s3://thepost-journal` | пресет `config/mailbox.yaml` + `thepost_journal`/`thepost_config_extra` | то же |
+| Enterprise-K8s (З.4) | S3 (локальный диск не годится) | `config.journal` в `helm/thepost/values.yaml` | то же |
+
+- Бакет журнала — **отдельный** от бакета BLOB ящиков (проверяет `thepost config check`): блокировка общих BLOB
+  сделала бы неудаляемыми письма ящиков и связала бы GC со сроками журнала. Дедупликация частей — внутри журнала.
+- Бакет с Object Lock заводит администратор хранилища — включение **необратимо** (SeaweedFS ≥ 4.x):
+  `echo 's3.bucket.create -name thepost-journal -withLock' | weed shell -master=… -filer=…`; существующий бакет —
+  `s3.bucket.lock -name thepost-journal -enable` (роль `seaweedfs`: `seaweedfs_lock_buckets`, `small-enterprise.yml`
+  делает это сам). Режим и срок узел пишет в каждый объект при записи (`retention` — не задан: 730 суток; режим
+  `compliance` — явно и только с явным сроком, риск 21: объект не удаляет никто до конца срока, ошибка в сроке не
+  освобождает бакет; срок продлевается только). Прогноз объёма на срок — `thepost doctor journal retention` (APP-82).
+- Ключи S3 — те же, что у BLOB (`thepost/s3`), права действий — на оба бакета.
+- Compose (dev/tls): бакет `thepost-journal-test` создаёт `seaweedfs-start.sh` (`TP_S3_JOURNAL_BUCKET`); образ 3.80 —
+  без Object Lock (бакет обычный), ≥ 4.x — с `-withLock`.
+- Стендовая проверка (правило Both, выгрузка `.eml`, восстановление индекса, порча записи, замер задержки с
+  журналированием — риск 22) — `docs/manual-tests/DEP-58.md`; шаг приёмки беты — `deploy/stand/check10.py`.
 
 ## Эталон SMB одной командой (Ansible)
 Чистая ВМ → chrony, PostgreSQL 16 (PGDG), OpenBao, Rspamd (clamav-milter — `thepost_clamav: true`), `thepost` (все

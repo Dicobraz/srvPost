@@ -219,6 +219,26 @@ config:
     #     access_key_id: { secret: "thepost/s3#access_key_id" }
     #     secret_access_key: { secret: "thepost/s3#secret_access_key" }
     #   tls: { ca_file: /etc/thepost/tls/ca.crt }   # свой CA — ca.crt секрета tls.secretName; не задан — системные корни
+  # Журналирование переписки (SRS 4.9, DEP-58): по умолчанию выключено — включается явно. Записи — отдельный
+  # от blob бакет S3 с Object Lock (локальный диск в Kubernetes не годится — том пода ephemeral): бакет создаёт
+  # администратор хранилища с Object Lock (SeaweedFS ≥ 4.x: s3.bucket.create -name thepost-journal -withLock —
+  # необратимо; существующий — s3.bucket.lock -enable). Режим и срок узел пишет в каждый объект при записи;
+  # governance — по умолчанию, compliance — явно и только с явным сроком (риск 21: объект compliance не удаляет
+  # никто до конца срока). Правила журналирования — данные организации (Admin API), не файл узла.
+  # journal:
+  #   enabled: true
+  #   s3:
+  #     bucket: thepost-journal                     # отдельный от config.blob.url (проверяет thepost config check)
+  #     lock_mode: governance
+  #     retention: 2555d                            # 7 лет; не задан — 730d; продлевается только
+  #     endpoint: https://s3.example.ru:8333
+  #     path_style: true
+  #     credentials:
+  #       access_key_id: { secret: "thepost/s3#access_key_id" }
+  #       secret_access_key: { secret: "thepost/s3#secret_access_key" }
+  #     tls: { ca_file: /etc/thepost/tls/ca.crt }
+  #   export:                                       # выгрузка .eml с конвертом во внешний архив заказчика
+  #     address: archive.example.ru:25
   tls:
     cert_file: /etc/thepost/tls/tls.crt
     # Ключ — только из OpenBao (решение 100); новая версия секрета подхватывается без перезапуска.
