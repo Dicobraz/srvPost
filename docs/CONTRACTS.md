@@ -1517,3 +1517,15 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   `suite::hold_rules`. Несовместимо: `RulesInput::peer` (вызывающие — `tp-smtp`, `tp-sieve`, `tp-testkit` —
   переведены), `FinalDelete` (конструкторы — `tp-mailstore`, `tp-meta`, `tp-testkit`). PostgreSQL — META-86,
   метка/BATV/признак ответа — SMTP-51.
+- 2026-11-19 — MS-21 (волна mailstore-15): приём `MailStore::ingest` привязывает письмо к беседе и применяет
+  политики беседы тем же шагом, что вставка (решение 125 е): `ThreadStore::bind` по ключам `Message-ID`/
+  `In-Reply-To`/`References` (разбор — `tp-mailstore` `meta::analyze`, один разбор с метаданными), память
+  беседы для аномалий (`ThreadFacts`: типы вложений по disposition, домены ссылок из текстовых частей,
+  `Reply-To`) — `remember_facts`, действие по беседе — `AlwaysMove` (`MessageStore::move_to`: папка вместо
+  выбранной правилами; удалённая папка — правило пропускается, письмо доходит), `Ignore` (`to_trash`),
+  `AlwaysKeyword` (`set_flags`); удержание беседы накрывает новое письмо привязкой (запрет окончательного
+  удаления — `ThreadHoldHook`). Сбой беседы или политики откатывает приём целиком: вставленные письма
+  удаляются компенсацией `to_trash` + `expunge_final` (счётчики объектов снимает удаление); в PostgreSQL
+  «письмо + беседа + политики» — одна транзакция приёма (META-86). `MailStore::Deps` — `threads:
+  Option<Arc<dyn ThreadStore>>` (`None` — приём без бесед до META-86); `thread_key` — только ключ
+  присоединения и фоновой привязки старых писем; `append` (IMAP APPEND, JMAP `Email/import`) не привязывается.

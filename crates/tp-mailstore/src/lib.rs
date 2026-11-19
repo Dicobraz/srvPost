@@ -28,6 +28,7 @@ use tp_contracts::meta::{
     AccountScope, ChangeLog, FlagOp, Flags, FlagsUpdate, Inserted, MailboxStore, MessageStore,
 };
 use tp_contracts::retention::{Quota, TrashStore};
+use tp_contracts::thread::ThreadStore;
 use tp_contracts::{MailboxId, MessageId, ModSeq, Result};
 
 pub mod disabled;
@@ -42,6 +43,7 @@ pub mod meta;
 mod ops;
 pub mod quota;
 pub mod split;
+mod threads;
 pub mod trash;
 mod worker;
 
@@ -110,6 +112,10 @@ pub struct Deps {
     pub quota: Arc<dyn Quota>,
     /// Шина уведомлений.
     pub bus: Arc<dyn EventBus>,
+    /// Беседы учётных записей (CTR-94): приём привязывает письмо к беседе, пополняет память для
+    /// аномалий и применяет политики беседы в том же шаге, что вставка (MS-21). `None` — приём без
+    /// бесед: реализация в PostgreSQL появляется волной META-86.
+    pub threads: Option<Arc<dyn ThreadStore>>,
     /// Точки принятия решений модулей.
     pub hooks: DecisionHooks,
 }
@@ -285,8 +291,8 @@ impl MailStore for Store {
 pub(crate) mod testenv {
     use super::*;
     use tp_testkit::{
-        Clock, MemBlobIndex, MemBlobStore, MemEventBus, MemMetadata, MemQuota, MemTrash,
-        SystemClock,
+        Clock, MemBlobIndex, MemBlobStore, MemEventBus, MemMetadata, MemQuota, MemThreads,
+        MemTrash, SystemClock,
     };
 
     pub struct Env {
@@ -296,6 +302,7 @@ pub(crate) mod testenv {
         pub bus: MemEventBus,
         pub trash: MemTrash,
         pub quota: MemQuota,
+        pub threads: MemThreads,
         pub store: Store,
     }
 
@@ -353,6 +360,7 @@ pub(crate) mod testenv {
                 .with_bus(Arc::new(bus.clone()));
             let trash = MemTrash::new(&meta);
             let quota = MemQuota::new(&meta);
+            let threads = MemThreads::new();
             let mut store = Store::with_writer(
                 Deps {
                     blobs: Arc::new(blobs.clone()),
@@ -362,6 +370,7 @@ pub(crate) mod testenv {
                     trash: Arc::new(trash.clone()),
                     quota: Arc::new(quota.clone()),
                     bus: Arc::new(bus.clone()),
+                    threads: Some(Arc::new(threads.clone())),
                     hooks,
                 },
                 cfg,
@@ -377,6 +386,7 @@ pub(crate) mod testenv {
                 bus,
                 trash,
                 quota,
+                threads,
                 store,
             }
         }

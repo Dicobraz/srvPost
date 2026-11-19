@@ -286,6 +286,8 @@ impl Services {
                 trash: Arc::new(meta.clone()),
                 quota: Arc::new(meta.clone()),
                 bus: bus.clone(),
+                // Беседы в PostgreSQL — META-86 (`PgMeta`); до неё приём без привязки к беседам.
+                threads: None,
                 hooks: hooks.clone(),
             },
             mail_cfg.clone(),

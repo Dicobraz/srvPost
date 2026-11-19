@@ -16,7 +16,7 @@ use tp_contracts::{Result, TenantId};
 use tp_testkit::MemTrust;
 use tp_testkit::{
     BlobOp, Clock, FakeDirectory, MemBlobIndex, MemBlobStore, MemEventBus, MemGroups, MemMetadata,
-    MemQuota, MemTransport, MemTrash, RecordingDecisionHook, SystemClock,
+    MemQuota, MemThreads, MemTransport, MemTrash, RecordingDecisionHook, SystemClock,
 };
 
 use super::*;
@@ -112,6 +112,7 @@ impl Env {
             trash: Arc::new(MemTrash::new(&meta)),
             quota: Arc::new(quota.clone()),
             bus: Arc::new(MemEventBus::default()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks,
         });
         for login in ["alice@example.org", "bob@example.org", "carol@example.org"] {

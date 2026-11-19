@@ -112,7 +112,7 @@ mod tests {
     use tp_testkit::{
         Clock, FakeAuthenticator, FakeSearch, MemAcl, MemBlobIndex, MemBlobStore, MemDeliveryLog,
         MemEventBus, MemMailboxAudit, MemMetadata, MemPolicies, MemQuota, MemSecretStore,
-        MemSubmissions, MemTrash, SystemClock,
+        MemSubmissions, MemThreads, MemTrash, SystemClock,
     };
     use x509_parser::asn1_rs::{Any, FromDer};
 
@@ -168,6 +168,7 @@ mod tests {
             trash: Arc::new(trash.clone()),
             quota: Arc::new(MemQuota::new(&meta)),
             bus: Arc::new(bus.clone()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks: DecisionHooks::default(),
         });
         let scope = meta.account("user@example.org").await.expect("account");

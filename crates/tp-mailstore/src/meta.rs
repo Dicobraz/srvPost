@@ -23,11 +23,18 @@ use std::borrow::Cow;
 use mail_parser::{Encoding, HeaderValue, Message, MessageParser, MimeHeaders, PartType};
 use time::{OffsetDateTime, UtcOffset};
 use tp_contracts::meta::{Address, BodyPart, Envelope, MessageMeta};
+use tp_contracts::reply::normalize_recipient;
+use tp_contracts::thread::ThreadFacts;
+use tp_contracts::transport::normalize_domain;
 
 pub use crate::split::MimeLimits;
 
 /// Предел превью, символов (JMAP `preview`, RFC 8621 4.1.4; CONTRACTS.md `MessageMeta::preview`).
 pub const PREVIEW_CHARS: usize = 256;
+
+/// Наибольшее число доменов ссылок, извлекаемых из одного письма (MS-21): сверх — сканирование
+/// останавливается (хранилище беседы ограничивает список своими пределами, CTR-94 `ThreadLimits`).
+pub const MAX_LINKS_FOUND: usize = 256;
 
 /// Метаданные письма с пределами разбора по умолчанию.
 pub fn message_meta(raw: &[u8]) -> MessageMeta {
@@ -37,18 +44,163 @@ pub fn message_meta(raw: &[u8]) -> MessageMeta {
 /// Метаданные письма. Не падает на битом MIME: что не разобралось, остаётся пустым; части глубже
 /// и сверх `limits` в `body` не описываются.
 pub fn message_meta_with(raw: &[u8], limits: MimeLimits) -> MessageMeta {
+    analyze(raw, limits).meta
+}
+
+/// Разбор письма для приёма: метаданные для протоколов и вход беседы (MS-21, CTR-94) — один разбор.
+pub fn analyze(raw: &[u8], limits: MimeLimits) -> Analyzed {
     let Some(msg) = MessageParser::default().parse(raw) else {
-        return MessageMeta {
-            body: leaf_default(String::new()),
-            ..MessageMeta::default()
+        return Analyzed {
+            meta: MessageMeta {
+                body: leaf_default(String::new()),
+                ..MessageMeta::default()
+            },
+            thread: ThreadInput::default(),
         };
     };
-    MessageMeta {
+    let meta = MessageMeta {
         envelope: envelope(&msg),
         body: message_body(&msg, "", 0, &mut Budget { limits, parts: 0 }),
         preview: preview(&msg),
         thread_key: thread_key(&msg),
         has_attachment: msg.attachment_count() > 0,
+    };
+    let thread = thread_input(&msg, &meta);
+    Analyzed { meta, thread }
+}
+
+/// Итог разбора письма: метаданные и вход беседы.
+#[derive(Debug, Clone)]
+pub struct Analyzed {
+    /// Метаданные письма.
+    pub meta: MessageMeta,
+    /// Ключи присоединения и память беседы для аномалий.
+    pub thread: ThreadInput,
+}
+
+/// Вход беседы при приёме (MS-21): ключи присоединения — значения `Message-ID`, `In-Reply-To`,
+/// `References` (канонизирует их `ThreadStore::bind`, CTR-94 `join_key`), и память для аномалий
+/// (решение 125 д): типы вложений, домены ссылок, `Reply-To`.
+#[derive(Debug, Default, Clone)]
+pub struct ThreadInput {
+    /// Ключи присоединения к беседе (сырые значения заголовков).
+    pub keys: Vec<String>,
+    /// Память беседы для аномалий.
+    pub facts: ThreadFacts,
+}
+
+/// Вход беседы из разобранного письма: ключи присоединения и память для аномалий.
+fn thread_input(msg: &Message<'_>, meta: &MessageMeta) -> ThreadInput {
+    let mut keys = Vec::new();
+    if let Some(id) = msg.message_id() {
+        keys.push(id.to_owned());
+    }
+    keys.extend(ids(msg.in_reply_to()).into_iter().map(str::to_owned));
+    keys.extend(ids(msg.references()).into_iter().map(str::to_owned));
+    let mut attachments = Vec::new();
+    attachment_types(&meta.body, &mut attachments);
+    ThreadInput {
+        keys,
+        facts: ThreadFacts {
+            attachments,
+            link_domains: link_domains(msg),
+            reply_to: meta
+                .envelope
+                .reply_to
+                .iter()
+                .filter_map(|a| normalize_recipient(&a.email).ok())
+                .collect(),
+        },
+    }
+}
+
+/// Типы вложений письма (`media/subtype`, disposition `attachment`), без повторов.
+fn attachment_types(part: &BodyPart, out: &mut Vec<String>) {
+    if part
+        .disposition
+        .as_ref()
+        .is_some_and(|(kind, _)| kind == "attachment")
+    {
+        let t = format!("{}/{}", part.media_type, part.subtype);
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    for child in &part.children {
+        attachment_types(child, out);
+    }
+}
+
+/// Домены ссылок письма (`http`/`https` из текстовых частей), канонические, без повторов.
+fn link_domains(msg: &Message<'_>) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in &msg.parts {
+        let text = match &part.body {
+            PartType::Text(t) => t.as_ref(),
+            PartType::Html(h) => h.as_ref(),
+            _ => continue,
+        };
+        scan_links(text, &mut out);
+        if out.len() >= MAX_LINKS_FOUND {
+            break;
+        }
+    }
+    out
+}
+
+/// Байт authority-части URL: имя узла с портом и учётными данными (отделяются в [`host_of`]).
+fn is_host_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'-' | b'.' | b'_' | b'~' | b'%' | b'@' | b':' | b'[' | b']'
+        )
+}
+
+/// `http://`/`https://` в позиции `i` (без учёта регистра) — длина схемы со слэшами.
+fn scheme_at(b: &[u8], i: usize) -> Option<usize> {
+    let found = |s: &[u8]| b.len() >= i + s.len() && b[i..i + s.len()].eq_ignore_ascii_case(s);
+    if found(b"https://") {
+        Some(8)
+    } else if found(b"http://") {
+        Some(7)
+    } else {
+        None
+    }
+}
+
+/// Имя узла из authority-части URL: без учётных данных (`user@`) и порта (`:8080`); IPv6 в скобках
+/// и прочие не-домены отбрасывает нормализация домена.
+fn host_of(authority: &str) -> &str {
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    match host.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => host,
+    }
+}
+
+/// Домены ссылок `http`/`https` из текста (декодированного; quoted-printable и base64 уже сняты):
+/// имя узла — до первого символа вне authority, в канонической форме, без повторов.
+fn scan_links(text: &str, out: &mut Vec<String>) {
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let Some(scheme) = scheme_at(b, i) else {
+            i += 1;
+            continue;
+        };
+        let start = i + scheme;
+        let end = start
+            + b[start..]
+                .iter()
+                .position(|&c| !is_host_byte(c))
+                .unwrap_or(b.len() - start);
+        if let Ok(domain) = normalize_domain(host_of(&text[start..end])) {
+            if !out.contains(&domain) {
+                out.push(domain);
+            }
+        }
+        i = end.max(start);
     }
 }
 
@@ -417,8 +569,71 @@ two
             "Subject: x\r\n\r\n  one\r\n\r\n\ttwo   {}\r\n",
             "щ".repeat(400)
         );
-        let meta = message_meta(body.as_bytes());
+        let meta = message_meta(&body.as_bytes());
         assert!(meta.preview.starts_with("one two щщ"));
         assert_eq!(meta.preview.chars().count(), PREVIEW_CHARS);
+    }
+
+    #[test]
+    fn thread_input_keys_and_reply_to() {
+        // Ключи присоединения: собственный Message-ID, In-Reply-To, References — все значения.
+        let raw = b"Message-ID: <c@x>\r\nIn-Reply-To: <b@x>\r\nReferences: <a@x> <b@x>\r\n\
+                    Reply-To: Sales <SALES@Example.COM>\r\nSubject: Re: Plan\r\n\r\nok\r\n";
+        let input = analyze(raw, MimeLimits::default()).thread;
+        assert_eq!(input.keys, ["c@x", "b@x", "a@x", "b@x"]);
+        assert_eq!(
+            input.facts.reply_to,
+            ["SALES@example.com"],
+            "домен — нижний регистр, local-part — как задан"
+        );
+        assert!(input.facts.attachments.is_empty());
+        assert!(input.facts.link_domains.is_empty());
+        let bare = analyze(b"Subject: x\r\n\r\nbody\r\n", MimeLimits::default()).thread;
+        assert!(bare.keys.is_empty());
+    }
+
+    #[test]
+    fn thread_input_attachment_types() {
+        let raw = format!(
+            "Subject: docs\r\nMIME-Version: 1.0\r\n\
+             Content-Type: multipart/mixed; boundary=b\r\n\r\n\
+             --b\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n\
+             --b\r\nContent-Type: application/pdf; name=plan.pdf\r\n\
+             Content-Disposition: attachment; filename=plan.pdf\r\n\r\n%PDF\r\n\
+             --b\r\nContent-Type: application/pdf\r\n\
+             Content-Disposition: ATTACHMENT\r\n\r\n%PDF again\r\n\
+             --b--\r\n"
+        );
+        let input = analyze(raw.as_bytes(), MimeLimits::default()).thread;
+        assert_eq!(
+            input.facts.attachments,
+            ["application/pdf"],
+            "типы вложений без повторов, без учёта регистра disposition"
+        );
+    }
+
+    #[test]
+    fn link_scan_finds_canonical_domains() {
+        let mut out = Vec::new();
+        scan_links(
+            "Пишите на HTTPS://Vendor.Example/pricing, http://shop.example.net:8080/x и \
+             https://user@portal.example.org — но не ftp://old.example, не http:// и не www.bare.example.",
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            ["vendor.example", "shop.example.net", "portal.example.org"],
+            "схема без учёта регистра, порт и учётные данные сняты, прочие схемы мимо"
+        );
+        let mut empty = Vec::new();
+        scan_links(
+            "http://\r\nhttp:///path http://[::1]/x http://xn--e1afmkfd.xn--p1ai/",
+            &mut empty,
+        );
+        assert_eq!(
+            empty,
+            ["xn--e1afmkfd.xn--p1ai"],
+            "пустые и IPv6 — мимо, A-label принят"
+        );
     }
 }

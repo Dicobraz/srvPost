@@ -721,7 +721,7 @@ mod tests {
     use tp_contracts::role::{CancellationToken, ReadyHandle, fixed_config};
     use tp_testkit::{
         Clock, FakeAuthenticator, FakeSasl, FakeSearch, MemAcl, MemBlobIndex, MemBlobStore,
-        MemEventBus, MemMailboxAudit, MemMetadata, MemQuota, MemTrash, SystemClock,
+        MemEventBus, MemMailboxAudit, MemMetadata, MemQuota, MemThreads, MemTrash, SystemClock,
     };
 
     /// Хранилища testkit роли imap, общие с тестом: учётные записи, шина, вход.
@@ -768,6 +768,7 @@ mod tests {
             trash: Arc::new(trash.clone()),
             quota: Arc::new(MemQuota::new(&meta)),
             bus: Arc::new(bus.clone()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks: DecisionHooks::default(),
         });
         let auth = Arc::new(auth.clone());

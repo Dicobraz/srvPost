@@ -5,21 +5,30 @@
 //!    отправитель для них — с конверта (`IngestRequest::mail_from`), внешние копии возвращаются в `forward`.
 //!    Затем квота всех доставок, включая копии ([`crate::quota`]).
 //! 2. Разбор на скелет и части ([`Split`]) и метаданные для протоколов ([`meta`]); заголовки получателя —
-//!    в его скелете, части общие.
+//!    в его скелете, части общие. Тем же разбором — вход беседы ([`meta::ThreadInput`]: ключи присоединения,
+//!    память для аномалий).
 //! 3. Каждый объект учитывается одним `BlobIndex::acquire` на всех получателей (`refs` = число ссылок)
 //!    и загружается, только если его ещё нет; всё — вне транзакций БД (протокол SRS 3.4).
 //! 4. Метаданные всех доставок, включая копии, — одной транзакцией `MessageStore::insert_batch` (события доставки
-//!    пишет хранилище метаданных в ней же; решение 2026-10-31-atomic-delivery); затем `MailboxChanged` в шину.
+//!    пишет хранилище метаданных в ней же; решение 2026-10-31-atomic-delivery).
+//! 5. Беседа и политики беседы (MS-21, решение 125 е; [`crate::threads`]): привязка письма
+//!    (`ThreadStore::bind`), память для аномалий и действия по беседе — `AlwaysMove` (папка вместо
+//!    выбранной правилами), `Ignore` (в корзину), `AlwaysKeyword`; удержание беседы накрывает новое
+//!    письмо привязкой. Затем `MailboxChanged` в шину.
 //!
 //! До шага 4 ничего не раскладывается. Сбой загрузки или транзакции снимает добавленные ссылки и не оставляет
-//! метаданных: запрос выполняется целиком или не выполняется (вызывающий может повторить).
+//! метаданных: запрос выполняется целиком или не выполняется (вызывающий может повторить). Сбой беседы
+//! или её политик (шаг 5) откатывает приём целиком — вставленные письма удаляются компенсацией
+//! ([`crate::threads::rollback`]); в PostgreSQL «письмо + беседа + политики» — одна транзакция приёма
+//! (META-86), там откатывает её.
 //!
 //! После вставки — предупреждения о заполнении квоты ([`crate::quota`]); служебное письмо-предупреждение
 //! принимается без проверки квоты.
 //!
 //! Письмо клиента (`MailStore::append`: IMAP APPEND, JMAP `Email/import`; решение 2026-11-01-trash-purge) — не доставка:
 //! шаги 2–3 общие с приёмом, но без точек принятия решений и копий (шаг 1 — только квота), метаданные —
-//! `MessageStore::insert`.
+//! `MessageStore::insert`; к беседе не привязывается (существующие письма привязывает фоновая задача
+//! по `thread_key`, META-86).
 
 use std::collections::HashMap;
 
@@ -53,6 +62,8 @@ struct Staged {
     held: Vec<(BlobKey, u32)>,
     /// Проверенные добавления квоты — для предупреждений после вставки.
     pending: Vec<Pending>,
+    /// Вход беседы (ключи присоединения, память для аномалий) — привязка после вставки (MS-21).
+    thread: meta::ThreadInput,
 }
 
 impl Store {
@@ -105,6 +116,7 @@ impl Store {
             items,
             held,
             pending,
+            thread,
         } = self
             .stage(tenant, raw, &deliveries, &common, received_at, service)
             .await?;
@@ -116,18 +128,62 @@ impl Store {
             }
         };
 
+        // Беседа и политики беседы (MS-21, решение 125 е): привязка каждого письма, память для
+        // аномалий и действия по беседе. Сбой — приём откатывается целиком (письма удаляются
+        // компенсацией, счётчики объектов снимает удаление).
+        let outcomes = match self.d.threads.as_ref() {
+            Some(threads) => {
+                match crate::threads::bind_and_apply(
+                    threads.as_ref(),
+                    self.d.messages.as_ref(),
+                    tenant,
+                    &deliveries,
+                    &inserted,
+                    &thread,
+                )
+                .await
+                {
+                    Ok(outcomes) => outcomes,
+                    Err(e) => {
+                        crate::threads::rollback(
+                            self.d.messages.as_ref(),
+                            tenant,
+                            &deliveries,
+                            &inserted,
+                        )
+                        .await;
+                        return Err(e);
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
+
         let mut done: Vec<Delivered> = Vec::with_capacity(deliveries.len());
-        for (d, ins) in deliveries.iter().zip(inserted) {
+        for (i, (d, ins)) in deliveries.iter().zip(&inserted).enumerate() {
             let scope = AccountScope {
                 tenant,
                 account: d.account,
             };
-            self.notify(scope, [d.mailbox], ins.modseq).await;
+            let mut mailbox = d.mailbox;
+            let mut uid = ins.uid;
+            let outcome = outcomes.get(i);
+            // Перенос политикой беседы: конечная папка — с `ModSeq` переноса, исходная уведомляется
+            // наравне с ней (как `move_to`); иначе уведомление вставки.
+            if let Some((to, uid_after, modseq)) = outcome.and_then(|o| o.placed) {
+                mailbox = to;
+                uid = uid_after;
+                let from = outcome.and_then(|o| o.moved_from);
+                self.notify(scope, from.into_iter().chain([to]), modseq)
+                    .await;
+            } else {
+                self.notify(scope, [d.mailbox], ins.modseq).await;
+            }
             done.push(Delivered {
                 account: d.account,
-                mailbox: d.mailbox,
+                mailbox,
                 message: ins.id,
-                uid: ins.uid,
+                uid,
             });
         }
         // Доставки сверх запроса (копии точек принятия решений) вызывающему не возвращаются.
@@ -160,6 +216,7 @@ impl Store {
             mut items,
             held,
             pending,
+            ..
         } = self
             .stage(scope.tenant, raw, &[delivery], &[], received_at, false)
             .await?;
@@ -222,12 +279,13 @@ impl Store {
 
         // Разбор — работа процессора на всё письмо: вне потоков асинхронного рантайма.
         let limits = self.cfg.mime;
-        let (split, meta) = tokio::task::spawn_blocking(move || {
-            let meta = meta::message_meta_with(&raw, limits);
-            (Split::with_limits(raw, limits), meta)
+        let (split, analyzed) = tokio::task::spawn_blocking(move || {
+            let analyzed = meta::analyze(&raw, limits);
+            (Split::with_limits(raw, limits), analyzed)
         })
         .await
         .map_err(|e| Error::internal(format!("ingest: разбор письма: {e}")))?;
+        let meta::Analyzed { meta, thread } = analyzed;
 
         let mut groups: Vec<SkeletonGroup> = Vec::new();
         for (i, d) in deliveries.iter().enumerate() {
@@ -325,6 +383,7 @@ impl Store {
                 items,
                 held,
                 pending,
+                thread,
             }),
             Err(e) => {
                 self.release(&held).await;
