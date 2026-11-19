@@ -769,7 +769,7 @@ mod tests {
     use tp_contracts::{BlobKey, Gen};
 
     use crate::{LocalConfig, LocalStore, OrphanConfig, OrphanSweeper, S3Config, S3Store};
-    use tp_testkit::{Clock, ManualClock, MemBlobIndex, suite};
+    use tp_testkit::{ManualClock, MemBlobIndex, suite};
 
     /// Часы под управлением теста как [`Now`].
     fn test_clock(at: OffsetDateTime) -> (ManualClock, Now) {
