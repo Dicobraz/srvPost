@@ -47,7 +47,11 @@
 //! - `invitation` — Invitation/respond: принятие встречи из письма веб-почтой (JMAP-50, решение #134 — вариант 3):
 //!   сервер читает письмо, из «Спама»/со спам-вердиктом — структурированный отказ (календарь не меняется, аудит),
 //!   после переноса — применяет приглашение приёмом iTIP и отвечает организатору рассылкой JMAP-31, capability
-//!   `urn:thepost:params:jmap:itip` ([`Jmap::with_schedule`] и [`Jmap::with_dav`]).
+//!   `urn:thepost:params:jmap:itip` ([`Jmap::with_schedule`] и [`Jmap::with_dav`]);
+//! - `thread_rule` — действия по беседе (JMAP-48, решение 125 е): `ThreadRule/get|set|changes` — правило
+//!   `alwaysMove`/`ignore`/`alwaysKeyword` на будущие письма беседы (применяет приём, MS-21) и по запросу
+//!   (`applyToExisting`) на прежние, capability `urn:thepost:params:jmap:thread`; `Email.threadId` и
+//!   `Thread/get|changes` — по привязке беседы ([`Jmap::with_threads`]), `threadId` письма не меняется никогда.
 //!
 //! Протокол — JSON поверх HTTP: типы запросов и ответов — `serde_json`, HTTP — `axum`.
 
@@ -81,6 +85,7 @@ pub mod submission;
 mod tasks;
 #[cfg(test)]
 mod testenv;
+mod thread_rule;
 mod vacation;
 
 use serde_json::{Map, Value};
@@ -91,8 +96,8 @@ pub use crate::sharing::SharingDeps;
 
 use crate::core::error::MethodResult;
 use crate::core::{
-    AVAILABILITY, CALENDARS, CONTACTS, CORE, Ctx, MAIL, ORG_CHART, PRINCIPALS, SENDER_LISTS,
-    SETTINGS, SIEVE, SUBMISSION, TASKS, THEPOST_ITIP, VACATION,
+    AVAILABILITY, CALENDARS, CONTACTS, CORE, MAIL, ORG_CHART, PRINCIPALS, SENDER_LISTS, SETTINGS,
+    SIEVE, SUBMISSION, TASKS, THEPOST_ITIP, THEPOST_THREAD, VACATION,
 };
 
 /// Встроенные методы и их capability.
@@ -124,6 +129,9 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
     ("UserSettings/get", SETTINGS),
     ("UserSettings/set", SETTINGS),
     ("Invitation/respond", THEPOST_ITIP),
+    ("ThreadRule/get", THEPOST_THREAD),
+    ("ThreadRule/set", THEPOST_THREAD),
+    ("ThreadRule/changes", THEPOST_THREAD),
     ("SenderList/get", SENDER_LISTS),
     ("SenderList/set", SENDER_LISTS),
     ("OrgUnit/get", ORG_CHART),
@@ -211,6 +219,9 @@ pub(crate) async fn call_builtin(
         "UserSettings/get" => settings::get(ctx, args).await,
         "UserSettings/set" => settings::set(ctx, args).await,
         "Invitation/respond" => invitation::respond(ctx, args).await,
+        "ThreadRule/get" => thread_rule::get(ctx, args).await,
+        "ThreadRule/set" => thread_rule::set(ctx, args).await,
+        "ThreadRule/changes" => thread_rule::changes(ctx, args).await,
         "SenderList/get" => sender_lists::get(ctx, args).await,
         "SenderList/set" => sender_lists::set(ctx, args).await,
         "OrgUnit/get" => orgchart::get(ctx, args).await,

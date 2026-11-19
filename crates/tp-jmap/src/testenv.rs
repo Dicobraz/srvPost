@@ -158,6 +158,9 @@ pub struct Env {
     pub trust: MemTrust,
     /// ACL папок почты (`Jmap::with_acl`, JMAP-49): тест задаёт записи `set_acl`.
     pub acl: MemAcl,
+    /// Беседы (CTR-94): приём привязывает письма (MS-21), сервер выдаёт `threadId` и применяет действия
+    /// по беседе (JMAP-48) — одно хранилище на оба.
+    pub threads: MemThreads,
     pub jmap: Arc<Jmap>,
 }
 
@@ -266,6 +269,8 @@ impl Env {
         let trash = MemTrash::new(&meta).with_policies(policies.clone());
         let hook = RecordingDecisionHook::new("test");
         let hooks = DecisionHooks::new(vec![Arc::new(hook.clone())]);
+        // Одни беседы на приём (MS-21) и сервер (JMAP-48): привязка приёма видна в `Email.threadId`.
+        let threads = MemThreads::new();
         let store = tp_mailstore::Store::new(tp_mailstore::Deps {
             blobs: Arc::new(blobs.clone()),
             index: Arc::new(index.clone()),
@@ -274,7 +279,7 @@ impl Env {
             trash: Arc::new(trash.clone()),
             quota: Arc::new(MemQuota::new(&meta)),
             bus: Arc::new(bus.clone()),
-            threads: Some(Arc::new(MemThreads::new())),
+            threads: Some(Arc::new(threads.clone())),
             hooks: hooks.clone(),
         });
         let scope = meta.account("user@example.org").await.expect("account");
@@ -361,7 +366,9 @@ impl Env {
         .with_trust(Some(
             Arc::new(trust.clone()) as Arc<dyn tp_contracts::trust::TrustStore>
         ))
-        .with_acl(Some(Arc::new(acl.clone()) as Arc<dyn AclStore>));
+        .with_acl(Some(Arc::new(acl.clone()) as Arc<dyn AclStore>))
+        // Беседы приёма и сервера — одни (MS-21, JMAP-48).
+        .with_threads(Some(Arc::new(threads.clone())));
         Self {
             meta,
             search,
@@ -387,6 +394,7 @@ impl Env {
             collections: FakeSharingAuthorizer::default(),
             trust,
             acl,
+            threads,
             jmap: Arc::new(jmap),
         }
     }
