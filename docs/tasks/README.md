@@ -995,7 +995,7 @@
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
-| [META-89](META-89.md) | # META-89 — обновление узла между релизами после свёртывания миграций (META-71) |  |  | — |
+| [META-89](META-89.md) | история миграций не хранится |  |  | — |
 | [PERF-06](PERF-06.md) | IMAP и JMAP |  |  | — |
 | [PLT-35](PLT-35.md) | YAML ↔ JSON для правки config.yaml вне загрузчика | platform | A | — |
 | [PLT-36](PLT-36.md) | переменные THEPOST_* вне схемы не ломают проверку конфигурации | platform | A | — |
