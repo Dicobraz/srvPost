@@ -314,7 +314,7 @@ impl Rules {
             envelope_from: &input.mail_from,
             envelope_to: &input.recipient,
             mailboxes: &paths,
-            peer: input.peer,
+            peer: input.peer.kind,
         };
         let headers = parse_headers(&input.message);
         let mut merge = Merge::new(&input.mailboxes);
@@ -350,7 +350,8 @@ impl Rules {
         // приглашение вносится, лишь если клетка invite_new для типа отправителя — Auto (сегодня её открывают
         // партнёрам; для остальных — письмо с кнопкой). Иначе итог действия — no_action, причина — «политика
         // доверия»: в журнал доставки; сам календарь не вносится.
-        if outcome.calendar.is_some() && input.matrix.invite_new.get(input.peer) != InviteMode::Auto
+        if outcome.calendar.is_some()
+            && input.matrix.invite_new.get(input.peer.kind) != InviteMode::Auto
         {
             outcome.calendar = None;
             outcome

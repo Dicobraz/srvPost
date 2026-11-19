@@ -368,7 +368,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use tp_contracts::sieve::{KeepTo, MailboxRef};
-    use tp_contracts::trust::{PeerKind, TrustMatrix};
+    use tp_contracts::trust::{PeerContext, PeerKind, TrustMatrix};
     use tp_contracts::{AccountId, MailboxId};
 
     use crate::{ManualClock, suite};
@@ -410,7 +410,7 @@ mod tests {
             mail_from: "x@example.net".into(),
             message: Bytes::from_static(b"Subject: x\r\n\r\nbody"),
             mailboxes: Vec::new(),
-            peer: PeerKind::External,
+            peer: PeerContext::new(PeerKind::External),
             matrix: TrustMatrix::default(),
         };
         let folder = RulesOutcome {

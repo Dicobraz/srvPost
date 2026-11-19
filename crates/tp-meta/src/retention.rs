@@ -778,6 +778,7 @@ impl TrashStore for PgMeta {
                         mailbox: MailboxId::from_uuid(origin),
                         message: MessageId::from_uuid(r.message_id),
                         received_at: r.received_at,
+                        thread: None,
                     };
                     // Запрет (Legal Hold) и ошибка точки принятия решений — скрыть: стирание необратимо.
                     matches!(hooks.before_final_delete(&op).await, Ok(Decision::Allow))

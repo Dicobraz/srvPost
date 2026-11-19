@@ -374,6 +374,7 @@ impl DisabledMailboxes {
                         mailbox: *mailbox,
                         message: m.id,
                         received_at: m.received_at,
+                        thread: None,
                     };
                     if !self.ask(&op).await {
                         return Ok(false);
@@ -405,6 +406,7 @@ impl DisabledMailboxes {
                         mailbox: item.origin,
                         message,
                         received_at: item.received_at,
+                        thread: None,
                     };
                     if !self.ask(&op).await {
                         return Ok(false);

@@ -5,7 +5,7 @@
 Асинхронные трейты, используемые как `dyn`, — через `async-trait`; все трейты `Send + Sync + 'static`.
 
 ## Ids
-- `TenantId`, `DomainId`, `AccountId`, `MailboxId`, `MessageId`, `QueueId`, `GroupId`, `HeldId`, `JournalId` — newtype над `Uuid` (v7), `Copy`, `Serialize`; `TenantId::DEFAULT` = `00000000-0000-0000-0000-000000000001` — организация по умолчанию.
+- `TenantId`, `DomainId`, `AccountId`, `MailboxId`, `MessageId`, `QueueId`, `GroupId`, `HeldId`, `JournalId`, `ThreadId` — newtype над `Uuid` (v7), `Copy`, `Serialize`; `TenantId::DEFAULT` = `00000000-0000-0000-0000-000000000001` — организация по умолчанию.
 - `Uid(u32)` — IMAP UID в ящике, монотонный; `UidValidity(u32)`.
 - `ShardId(i32)` — шард метаданных (кластер PostgreSQL, SRS 3.6); `ShardId::MAIN` = 0 — основная БД с каталогом (CTR-34); `tp_meta::shards::ShardId` переходит на него (волна meta).
 - `ModSeq(u64)` — монотонный на ящик (IMAP CONDSTORE, состояние JMAP).
@@ -975,11 +975,12 @@ text_body, html_body, external_subject, external_text_body, external_html_body }
 каждом изменении скриптов и автоответа (JMAP `state`, версия для кэша программ). Изменяющие методы возвращают новое состояние.
 `VacationLog::seen(scope, sender, handle, period) -> bool` — атомарно «уже отвечали за период» или отметка (RFC 5230 `:days`).
 Точка правил доставки `DeliveryRules::evaluate(&RulesInput { scope, recipient (с подадресом), mail_from, message: Bytes, mailboxes,
-peer: PeerKind, matrix: TrustMatrix }) -> RulesOutcome { keep: Vec<KeepTo { mailbox: MailboxRef::{Inbox, Id, Name { name, create }},
+peer: PeerContext, matrix: TrustMatrix }) -> RulesOutcome { keep: Vec<KeepTo { mailbox: MailboxRef::{Inbox, Id, Name { name, create }},
 flags }>, redirect, discard, vacation: Option<AutoReply { to, from, subject, body: ReplyBody::{Text, Html, Mime}, in_reply_to,
-references }>, calendar: Option<ProcessCalendar>, errors }`; `peer` и `matrix` (CTR-93, решение 124) вычисляет вызывающий (`tp-smtp`):
-тип абонента — от пути письма, заголовкам не доверяем; матрица ограничивает `processcalendar`, автоответ и `redirect` чужим (шире
-матрицы действия не выполняются). `ProcessCalendar { allow_public, addresses, updates_only, calendar_id, delete_cancelled }` — действие
+references }>, calendar: Option<ProcessCalendar>, errors }`; `peer` и `matrix` (CTR-93, решение 124; CTR-94, решение 125 а) вычисляет
+вызывающий (`tp-smtp`): тип абонента и признак «ответ на наше письмо» — от пути письма и записи об отправленном, заголовкам не
+доверяем; матрица ограничивает `processcalendar`, автоответ и `redirect` чужим (шире матрицы действия не выполняются; клетки
+`ReplyOnly` решает `TrustMatrix::effective` по признаку). `ProcessCalendar { allow_public, addresses, updates_only, calendar_id, delete_cancelled }` — действие
 `processcalendar` (RFC 9671 §3): вносит только новое приглашение типа абонента с `invite_new = auto` (расширить матрицу нельзя); до
 подключения хранилища политик — `TrustMatrix::default()`;
 порядок — скрипт организации, автоответ, активный скрипт; ошибка скрипта — implicit keep (`RulesOutcome::failed`) и `errors` для журнала;
@@ -987,6 +988,77 @@ references }>, calendar: Option<ProcessCalendar>, errors }`; `peer` и `matrix` 
 `tp-smtp` (RFC 3834). Сигнал `SieveChanged` (`sieve_changed`, учётная запись) — после изменения скриптов и автоответа. In-memory — `MemSieve`
 (`with_limits`, `with_bus`), `MemVacationLog`, фейк `FakeRules` (итог по получателю, `fail_next`, `calls`); наборы `suite::sieve`
 (лимиты `suite::sieve::LIMITS`, `SieveFixture`), `suite::sieve::{vacation_log, signals}`. PostgreSQL — `tp-meta` (META-49, META-50).
+
+## Reply
+Решение 125 а, в (исследование `docs/research/2026-11-14-replies-threads.md`); CTR-94; код — `reply.rs`. Ответ на
+наше письмо — признак доверия, а не исключение из проверок: антивирус, проверка URL и DMARC выполняются всегда;
+признак уменьшает спам-балл и служит условием матрицы доверия (клетки `auto_reply` и `mdn` со значением
+[`Toggle::ReplyOnly`](#trust)). Ставится, только если выполнены все три условия (проверяет `tp-smtp`, SMTP-51):
+DMARC pass с выравниванием (RFC 9989); отправитель — один из адресатов исходного письма по записи об отправленном;
+исходному письму не больше `smtp.reply.max_age` (30 суток). Признак снимают аномалии беседы (SMTP-52). Практика:
+Rspamd `replies` (символ `REPLY`, −4, хэши Message-ID исходящих) и `known_senders`; auto-allow Mimecast, Safe
+Senders Outlook, mailbox intelligence Defender — ответы всё равно проходят спам- и антивирусную проверку.
+`canonical_message_id(raw)` — каноническая форма Message-ID (без угловых скобок, обрезка, нижний регистр ASCII);
+`MessageIdHash` — SHA-256 этой формы (считает вызывающий), `Display`/`FromStr`/serde — 64 hex. `normalize_recipient(addr)`
+— каноническая форма адресата: домен — нижний регистр, A-label, local-part — как задан; некорректный — `Invalid`.
+`SentRecord { tenant, account, tag, message_id_hash, recipients, thread: Option<ThreadId>, sent_at }`, `validate()`
+(адресаты непусты и каноничны, метка 1–`MAX_TAG_LEN` = 128 байт) — запись об отправленном письме внешним и
+партнёрским адресатам. `tag` — случайное значение расшифрованной метки Message-ID (шифрует `tp-smtp`: AEAD от
+случайного значения, времени и id ключа; контракт формата шифра не знает), у записи уникальна; Message-ID клиента
+не заменяется (замена сломала бы копию в «Отправленных» и цепочку у самого пользователя) — такой ответ ищется по
+хэшу, как в Rspamd `replies`. `SentLog` (только добавление и поиск, содержимого писем нет):
+`record` (повтор той же метки с тем же содержимым — не ошибка, идемпотентность постановки в очередь; с другим —
+`Conflict`; некорректная запись — `Invalid`), `by_tag(tenant, tag)` — расшифровал метку ответа и нашёл исходное
+письмо, `by_message_id_hash(tenant, hash)` — по `sent_at` по убыванию; чужая организация не видит;
+`purge_before(before) -> usize` — записи всех организаций (maintenance); срок хранения — не меньше
+`smtp.reply.max_age`. `ReplyEvidence { sent, age }` — итог проверки, `confirms(sender, max_age)` — отправитель
+(канонизируется) среди адресатов и возраст в пределах; `age_since(sent_at, now)` (момент в будущем — нулевой
+возраст); DMARC проверяет вызывающий. Ключи меток — `ReplyKey { id, secret: SecretRef, active }`, набор
+`ReplyKeys` (секция `smtp.reply.keys`): идентификатор — открытый префикс метки (`tp1.<id>.…`, BATV `K`;
+`valid_key_id` — 1–16 байт `[a-z0-9.-]`, на границах — буква или цифра), значение — в хранилище секретов; активный
+подписывает новые метки, все проверяют (`for_id`), при непустом наборе активный ровно один (`validate()`); ротация —
+замена набора конфигурации (hot reload), прежние проверяют до конца срока метки, без перезапуска. Реализация —
+`tp-meta` (META-86), пишет `tp-smtp` при постановке в очередь письма с внешними или партнёрскими адресатами
+(SMTP-51); in-memory — `MemSentLog` (`records()`); набор `suite::reply`.
+
+## Thread
+RFC 8621 §3, RFC 5256 (раздел безопасности); решение 125 е–ж; CTR-94; код — `thread.rs`. Беседа — объект JMAP
+Thread с неизменяемым `threadId` и единица политик: удержание на беседу целиком, включая будущие письма (как
+Google Vault), действия по беседе (как EWS `ApplyConversationAction`), выгрузка; журналирование, DLP и решения
+конвейера — по отдельным письмам: принадлежность к беседе вычисляется по полям, которые задаёт клиент
+(`In-Reply-To`, `References`), и подделывается — беседа не основа решений безопасности. Беседы задним числом не
+сливаются (RFC 8621 допускает слияние с новыми id писем): письмо, ссылающееся на две, — в более раннюю,
+`threadId` письма не меняется. Ключ присоединения — `join_key(raw)`: каноническая форма Message-ID
+(`reply::canonical_message_id`), пустая — ключа нет.
+`ThreadStore` (по `AccountScope`; беседы и ключи не пересекают учётные записи):
+- `bind(scope, message, keys) -> ThreadId` — письмо присоединяется к беседе по ключам (`In-Reply-To`,
+  `References`, собственный Message-ID; `join_key` канонизирует, пустые пропускаются) среди писем учётной
+  записи — в самую раннюю из найденных, иначе новая беседа; повторная привязка письма возвращает прежнюю
+  беседу и ничего не меняет;
+- `thread_of(scope, message) -> Option<ThreadId>`, `messages(scope, thread, limit)` (порядок привязки;
+  `limit` = 0 — `Invalid`; нет беседы или чужая учётная запись — пусто);
+- `remember_facts(scope, thread, &ThreadFacts)`, `facts(scope, thread)` — память беседы для аномалий
+  (решение 125 д): типы вложений (`media/subtype`), домены ссылок (канонические), `Reply-To` (канонические);
+  списки без повторов, сверх пределов `ThreadLimits` (секция конфигурации реализации; `limits()`, по умолчанию
+  `DEFAULT_MAX_ATTACHMENTS`/`DEFAULT_MAX_LINK_DOMAINS` = 64, `DEFAULT_MAX_REPLY_TO` = 8) вытесняются самые
+  старые; заполняют приём и `tp-smtp` (MS-21, SMTP-51), детекторы аномалий читают (решение 126, SMTP-52);
+  нет беседы — `NotFound`.
+- Удержание `ThreadHold { by, at, reason }` (`validate()`: `by` — 1–255 байт без управляющих, `reason` —
+  1–1000): `hold(scope, thread)`, `set_hold(scope, thread, Option<_>)` (некорректное — `Invalid`, нет беседы —
+  `NotFound`, повторная установка заменяет). Действует на все письма беседы, включая привязанные после
+  установки. Окончательное удаление письма удержанной беседы — `Deny` в базовой поставке: хук
+  `ThreadHoldHook` (приложение регистрирует через `Registry::add_decision_hook`, имя `thread_hold`) берёт
+  беседу из `FinalDelete::thread`, а если вызывающий её не знает — разрешает по письму (`thread_of`); модуль
+  «Соответствие требованиям» видит `thread` в `FinalDelete` для своих правил (Legal Hold — его хук).
+- Действие по беседе `ThreadRule::{AlwaysMove(MailboxId), Ignore, AlwaysKeyword(String)}` (EWS
+  `ApplyConversationAction`): `rule(scope, thread)`, `set_rule(scope, thread, Option<_>)` (замена целиком;
+  ключевое слово — 1–255 байт без пробелов и управляющих — `Invalid`).
+Транзакция приёма (MS-21): `bind`, `remember_facts` и применённые политики беседы (`ThreadRule`, удержание) —
+в той же транзакции, что вставка писем `MailStore::ingest` («письмо + беседа + применённые политики» — одна
+транзакция): сбой привязки откатывает письмо, привязка без письма и письмо без беседы не остаются; `tp-meta` —
+методы над транзакцией `ingest`, без отдельного соединения (META-86). Существующие письма привязывает фоновой
+задачей по `thread_key` `MessageMeta` (META-86). Выдача `threadId` письма — JMAP-48, Admin API удержаний и
+действий — ADM-50. In-memory — `MemThreads` (`with_limits`); наборы `suite::thread` и `suite::hold_rules`.
 
 ## Trust
 SRS 4; CTR-93; решение 124 (исследование `docs/research/2026-11-14-trust-matrix.md`; таблица «Матрица по умолчанию» —
@@ -998,12 +1070,17 @@ SRS 4; CTR-93; решение 124 (исследование `docs/research/2026-
   как интернет, пока его домен не заведён партнёром. Заменил `schedule::SenderKind` CTR-92 (поле `ItipMessage::sender`).
 - Значения функций (serde `snake_case`, от узкого к широкому, `Ord`; `Default` — узкое): `invite_new` —
   `InviteMode::{Button, Auto}`; `itip_updates` (`REPLY`, `CANCEL`, обновление `REQUEST` к существующим событиям), `auto_reply`,
-  `mdn`, `auto_forward` — `Toggle::{Off, On}`; `freebusy`, `sharing` — `Detail::{None, FreeBusy, Limited, Details, All}`;
+  `mdn`, `auto_forward` — `Toggle::{Off, ReplyOnly, On}` (`ReplyOnly` — только у клеток `auto_reply` и `mdn`,
+  решение 125 а: действие разрешено, лишь если письмо — ответ на наше; решает `TrustMatrix::effective` по
+  `PeerContext::reply`); `freebusy`, `sharing` — `Detail::{None, FreeBusy, Limited, Details, All}`;
   `group_post` — `GroupPost::{Closed, Moderated, Open}`. `TrustFunction` — восемь функций (`ALL`, `as_str`), `CellValue` — значение
   клетки для ошибок и адресации, `PerPeer<T> { own, partner, neighbor, external }` — колонки матрицы (`get(peer)`, `set`, `narrow_with`).
 - `TrustMatrix` — по клетке на функцию и тип (`get(function, peer)`, `narrow`): `default()` — таблица «Матрица по умолчанию»
   ADMIN-GUIDE (чужим — только почта, `REPLY`/`CANCEL` к существующим событиям и автоответ внешним текстом; `All` — только своим);
-  `closed()` — ошибка чтения политики: все клетки чужих в самом узком значении, почта доставляется. Приём iTIP —
+  `closed()` — ошибка чтения политики: все клетки чужих в самом узком значении, почта доставляется. Точка решения
+  (smtp-in, submission, правила Sieve) — `PeerContext { kind: PeerKind, reply: bool }` (решение 125 а: `reply` —
+  признак «ответ на наше письмо», ставит `tp-smtp` по всем трём условиям, раздел Reply): `effective(function, ctx)`
+  — как `get` по `kind`, клетки `ReplyOnly` — `On` при `reply`, иначе `Off`. Приём iTIP —
   `inbound(peer, InboundAction) -> InboundDecision::{Apply, ApplyIfExisting, MailOnly}` (решение 123 → 124): своя организация — всё,
   `Invite` чужих — по клетке `invite_new`, `Update`/`Reply`/`Cancel` — по `itip_updates` (только к существующему событию),
   бронирование и прочие методы чужих — только письмо при любой политике. Заменяет `schedule::inbound_allowed`; единственный
@@ -1042,6 +1119,8 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
 (`Null` — тела нет; ответ — `application/json`).
 `DecisionHook { name, before_final_delete(&FinalDelete), on_delivery(&DeliveryInfo), on_submission(&SubmissionInfo) }`, методы по умолчанию — `Allow`;
 → `Decision::{ Allow, Deny(reason), Augment { headers, copies: Vec<CopyTo::{ Mailbox(Delivery), Address }> } }`.
+`FinalDelete` несёт беседу письма (`thread: Option<ThreadId>`, CTR-94: удержание беседы — `Deny` базовой поставки,
+`ThreadHoldHook`; модуль «Соответствие требованиям» видит беседу).
 `DecisionHooks` вызывает хуки по порядку регистрации: первый `Deny` прерывает, дополнения объединяются, без хуков — `Allow`;
 для удаления `Augment` = `Allow`. Ошибка хука — ошибка операции. `on_delivery` вызывает `MailStore::ingest` до загрузки,
 `on_submission` — submission и JMAP EmailSubmission до очереди. Данные модуля — только в схеме `mod_<имя>` с собственными миграциями.
@@ -1423,3 +1502,21 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   (`#[serde(default)]`) — итог действия `processcalendar` правил Sieve (RFC 9671) приём передаёт вместе с сообщением:
   SMTP-50 (PR #104) пишет, DAV-44 читает. Совместимо: absent/null — `None`; вызывающие (`tp-smtp`, `tp-dav`, `tp-testkit`)
   переведены в этом же PR.
+- 2026-11-19 — CTR-94 (волна contracts-65, решение 125 «Ответ на наше письмо и беседа»): модуль
+  `reply::{SentLog, SentRecord, ReplyEvidence, MessageIdHash, ReplyKey, ReplyKeys, canonical_message_id,
+  normalize_recipient, valid_key_id, age_since, MAX_TAG_LEN}` — запись об отправленном письме внешним и
+  партнёрским адресатам (метка Message-ID и хэш Message-ID клиента, поиск по метке и хэшу, чужая организация не
+  видит, `purge_before`), итог проверки ответа (`ReplyEvidence::confirms`) и ключи меток в хранилище секретов
+  (активный подписывает, прежние проверяют, ротация без перезапуска) — раздел «Reply»; модуль
+  `thread::{ThreadStore, ThreadHold, ThreadRule, ThreadFacts, ThreadLimits, ThreadHoldHook, join_key,
+  DEFAULT_MAX_ATTACHMENTS, DEFAULT_MAX_LINK_DOMAINS, DEFAULT_MAX_REPLY_TO}` — беседы учётной записи (JMAP
+  Thread, `ThreadId` неизменяем: ответ — в беседу исходного письма, без ссылок — новая, ссылка на две — в
+  более раннюю, беседы не сливаются и не пересекают учётные записи; память для аномалий; удержание беседы
+  целиком — `Deny` базовой поставки; действия по беседе, как EWS `ApplyConversationAction`; транзакция приёма
+  «письмо + беседа + политики» — MS-21) — раздел «Thread». `trust`: `Toggle::ReplyOnly` между `Off` и `On`
+  (клетки `auto_reply` и `mdn`, значения по умолчанию не меняются), `PeerContext { kind, reply }` и
+  `TrustMatrix::effective(function, ctx)`; `sieve::RulesInput::peer` — `PeerContext`; `ext::FinalDelete::thread`;
+  id `ThreadId`. In-memory — `MemSentLog`, `MemThreads`; наборы `suite::reply`, `suite::thread`,
+  `suite::hold_rules`. Несовместимо: `RulesInput::peer` (вызывающие — `tp-smtp`, `tp-sieve`, `tp-testkit` —
+  переведены), `FinalDelete` (конструкторы — `tp-mailstore`, `tp-meta`, `tp-testkit`). PostgreSQL — META-86,
+  метка/BATV/признак ответа — SMTP-51.

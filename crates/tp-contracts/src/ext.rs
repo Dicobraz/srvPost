@@ -235,6 +235,11 @@ pub struct FinalDelete {
     pub message: MessageId,
     /// Момент приёма (политики хранения).
     pub received_at: OffsetDateTime,
+    /// Беседа письма (CTR-94, решение 125 е): удержание беседы ([`crate::thread::ThreadHold`]) — `Deny`
+    /// в базовой поставке ([`crate::thread::ThreadHoldHook`]), модуль «Соответствие требованиям» видит
+    /// беседу для своих правил. `None` — вызывающий привязки не знает; хук может разрешить беседу
+    /// по письму ([`crate::thread::ThreadStore::thread_of`]).
+    pub thread: Option<crate::ThreadId>,
 }
 
 /// Доставка письма получателям организации (`MailStore::ingest`, до загрузки).
@@ -635,6 +640,7 @@ mod tests {
             mailbox: MailboxId::new(),
             message: MessageId::new(),
             received_at: OffsetDateTime::UNIX_EPOCH,
+            thread: None,
         };
         assert_eq!(
             block_on(merged.before_final_delete(&del)),
