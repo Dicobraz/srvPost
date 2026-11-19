@@ -1422,7 +1422,7 @@ impl HitsQuery {
     /// Запись удовлетворяет условиям запроса.
     pub fn matches(&self, r: &HitRecord) -> bool {
         self.signal.as_ref().is_none_or(|s| s == &r.signal)
-            && self.message.is_none_or(|m| m == &r.message)
+            && self.message.is_none_or(|m| m == r.message)
             && self.since.is_none_or(|s| r.at >= s)
             && self.until.is_none_or(|u| r.at < u)
     }
@@ -2283,15 +2283,17 @@ mod tests {
             .validate(),
             Err(Error::Invalid(_))
         ));
-        assert!(matches!(
-            PackageManifest {
-                signals: vec![admin_signal("org.x", 1)],
-                ..manifest.clone()
-            }
-            .validate(),
-            Err(Error::Invalid(_)),
+        assert!(
+            matches!(
+                PackageManifest {
+                    signals: vec![admin_signal("org.x", 1)],
+                    ..manifest.clone()
+                }
+                .validate(),
+                Err(Error::Invalid(_))
+            ),
             "в пакете — признаки поставщика"
-        ));
+        );
         assert!(matches!(
             PackageManifest {
                 samples: vec![SampleFile {
