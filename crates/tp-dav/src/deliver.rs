@@ -16,15 +16,22 @@
 //! получателю из `ATTENDEE` сообщения (DAV-41), `REPLY` — только от адреса участника события и только организатору;
 //! меньший `SEQUENCE` — устаревшее сообщение. Отказ — `Ok(Ignored)` с причиной без содержимого.
 //!
-//! Снаружи — только почта (решение 123 → 124, DAV-43/CTR-93): что применять, бронировать и на что отвечать, решает
-//! одно место — матрица доверия [`TrustMatrix::inbound`] от типа отправителя ([`PeerKind`], определяет вызывающий)
-//! и действия ([`InboundAction::of`]: метод и получатель-ресурс). Не разрешено — `Ignored`: ни события, ни брони,
-//! ни ответа. По умолчанию (`TrustMatrix::default()`, до DAV-44 — без чтения политики) своей организации — всё;
-//! извне — только письмо: `ApplyIfExisting` (обновление, `REPLY` и `CANCEL` к существующему событию, RFC 5546 §6.1,
-//! RFC 6638 §11.2) исполняется как «только письмо» до DAV-44, новое приглашение, прочие методы и любое сообщение
-//! ресурсу — письмом. `REFRESH` — только от участника события, организатор которого — получатель (RFC 5546 §6.1.6).
-//! Повторная доставка ничего не меняет. Запись — с условием по ETag: одновременное изменение — повтор
-//! (`dav.schedule_write_attempts`), затем `Unavailable`.
+//! Снаружи — только почта (решение 123 → 124, DAV-43/CTR-93/DAV-44): что применять, бронировать и на что отвечать,
+//! решает одно место — действующая матрица доверия получателя ([`ItipInbox::with_trust`], без политик —
+//! [`TrustMatrix::default`]) от типа отправителя ([`PeerKind`], определяет вызывающий) и действия
+//! ([`InboundAction::of`]: метод и получатель-ресурс). Не разрешено — `Ignored`: ни события, ни брони, ни ответа.
+//! Своей организации — всё. Извне (партнёр, сосед по установке, интернет): новое приглашение (`REQUEST`) — по клетке
+//! `invite_new` — письмом с кнопкой, для партнёра администратор может включить автодобавление (`Auto` — вносится как
+//! от своего, но без бронирования); `REPLY`, `CANCEL` и обновление `REQUEST` к существующему событию
+//! (`ApplyIfExisting`, клетка `itip_updates`) — только к событию с тем же UID в календаре получателя: `REPLY` —
+//! получатель организатор, отправитель участник события, меняется только его `PARTSTAT` и `DELEGATED-*`, прочие
+//! свойства из письма не берутся (RFC 5546 §3.2.3, §6.1.1); `CANCEL` — отправитель организатор события, получатель —
+//! его участник (RFC 5546 §6.1.2, RFC 6638 §11.2); иначе — только письмо. `REFRESH`, `COUNTER`, `DECLINECOUNTER`,
+//! `ADD`, `PUBLISH` чужих — только письмо (RFC 5546 §6.1.6); бронирование ресурсов чужим — нет при любой политике
+//! (закреплено в матрице, DAV-43). Свойства, способные навредить клиенту (внешние `ATTACH`, `VALARM` со звуком по
+//! ссылке), из письма чужого не вносятся (CVE-2023-23397, [`strip_harmful`]). `REFRESH` — только от участника
+//! события, организатор которого — получатель (RFC 5546 §6.1.6). Повторная доставка ничего не меняет. Запись — с
+//! условием по ETag: одновременное изменение — повтор (`dav.schedule_write_attempts`), затем `Unavailable`.
 //!
 //! Приглашение ресурсу (переговорной) при [`ItipInbox::with_booking`] — решение по правилам бронирования и ответ
 //! организатору ([`crate::booking`], DAV-19).
@@ -47,7 +54,7 @@ use tp_contracts::schedule::{
     InboundAction, InboxMessage, ItipDelivery, ItipMessage, ItipMethod, ItipOutcome,
 };
 use tp_contracts::sharing::BookingDecision;
-use tp_contracts::trust::{InboundDecision, PeerKind, TrustMatrix};
+use tp_contracts::trust::{InboundDecision, PeerKind, TrustMatrix, TrustStore};
 
 use tp_contracts::{Error, Result};
 
@@ -64,6 +71,8 @@ pub struct ItipInbox {
     cfg: DavConfig,
     /// Бронирование ресурсов; `None` — приглашения ресурсам принимаются как обычные.
     booking: Option<Arc<BookingDeps>>,
+    /// Политики доверия (CTR-93, DAV-44); `None` — умолчания [`TrustMatrix::default`].
+    trust: Option<Arc<dyn TrustStore>>,
 }
 
 impl std::fmt::Debug for ItipInbox {
@@ -79,6 +88,7 @@ impl ItipInbox {
             store,
             cfg,
             booking: None,
+            trust: None,
         }
     }
 
@@ -86,6 +96,16 @@ impl ItipInbox {
     /// отклоняется или остаётся под вопросом, организатору уходит ответ.
     pub fn with_booking(mut self, deps: BookingDeps) -> Self {
         self.booking = Some(Arc::new(deps));
+        self
+    }
+
+    /// Подключает политики доверия (CTR-93, DAV-44, решение 124): приём решает действующая матрица получателя —
+    /// `invite_new` (автодобавление приглашений партнёров), `itip_updates` (`REPLY`, `CANCEL` и обновление `REQUEST`
+    /// к существующим событиям). `None` — умолчания [`TrustMatrix::default`] (реализация — `tp-meta` (META-85),
+    /// in-memory — `tp-testkit::MemTrust`).
+    #[must_use]
+    pub fn with_trust(mut self, trust: Option<Arc<dyn TrustStore>>) -> Self {
+        self.trust = trust;
         self
     }
 
@@ -202,6 +222,15 @@ enum Step {
 
 fn ignored(reason: &str) -> Result<Step> {
     Ok(Step::Done(ItipOutcome::Ignored(reason.to_owned())))
+}
+
+/// Убирает из вносимого объекта свойства, способные навредить клиенту получателя (DAV-44, CVE-2023-23397):
+/// `ATTACH` из письма чужого — внешние ссылки в компонентах планирования и звук напоминаний `VALARM` по ссылке.
+/// Письмо в ящике остаётся как получено; у события своей организации вложения сохраняются.
+fn strip_harmful(ical: &mut ICalendar) {
+    for c in &mut ical.components {
+        c.entries.retain(|e| e.name != ICalendarProperty::Attach);
+    }
 }
 
 const APPLIED: Result<Step> = Ok(Step::Done(ItipOutcome::Applied));
@@ -359,7 +388,9 @@ impl ItipInbox {
         }
     }
 
-    /// `forced` — свой `PARTSTAT` вместо прежнего или `NEEDS-ACTION` (решение ресурса).
+    /// `forced` — свой `PARTSTAT` вместо прежнего или `NEEDS-ACTION` (решение ресурса); `foreign` — отправитель не
+    /// своей организации: свойства, способные навредить клиенту, из письма не вносятся ([`strip_harmful`]).
+    #[allow(clippy::too_many_arguments)] // DAV-44: `foreign` — признак чужой организации; конвенция репо (как apply_rules)
     async fn request(
         &self,
         scope: AccountScope,
@@ -368,6 +399,7 @@ impl ItipInbox {
         existing: Option<&DavObject>,
         attempt: usize,
         forced: Option<&ICalendarParticipationStatus>,
+        foreign: bool,
     ) -> Result<Step> {
         let old = match existing.map(|o| replaceable(o, it)).transpose() {
             Ok(old) => old,
@@ -416,6 +448,9 @@ impl ItipInbox {
                     .unwrap_or_else(needs_action);
                 itip::replace_param(e, &ICalendarParameterName::Partstat, Some(value));
             }
+        }
+        if foreign {
+            strip_harmful(&mut new);
         }
         self.write(scope, existing, &new, attempt).await
     }
@@ -475,6 +510,13 @@ impl ItipInbox {
             let value = itip::param_of(answer, &ICalendarParameterName::Partstat)
                 .unwrap_or_else(needs_action);
             itip::replace_param(e, &ICalendarParameterName::Partstat, Some(value));
+            // Ответ меняет только участие адресата (RFC 5546 §3.2.3): его `PARTSTAT` и делегирование.
+            for name in [
+                ICalendarParameterName::DelegatedFrom,
+                ICalendarParameterName::DelegatedTo,
+            ] {
+                itip::replace_param(e, &name, itip::param_of(answer, &name));
+            }
             itip::replace_param(e, &ICalendarParameterName::Rsvp, None);
             itip::replace_param(
                 e,
@@ -628,9 +670,10 @@ impl ItipInbox {
             return self.to_inbox(msg, it, from, false).await;
         }
         let existing = find_uid(self.store.as_ref(), scope, &it.meeting.uid).await?;
+        let foreign = msg.sender != PeerKind::Own;
         let step = match it.method {
             ItipMethod::Request => {
-                self.request(scope, it, to, existing.as_ref(), attempt, forced)
+                self.request(scope, it, to, existing.as_ref(), attempt, forced, foreign)
                     .await?
             }
             ItipMethod::Reply => self.reply(msg, it, from, to, existing.as_ref()).await?,
@@ -701,15 +744,29 @@ impl ItipDelivery for ItipInbox {
             None => false,
         };
         let update = it.method == ItipMethod::Request && self.update_of(msg.recipient, &it).await?;
-        // Решение 123 → 124: «кто — что» — только здесь, по матрице доверия. До DAV-44 — умолчания контракта;
-        // `ApplyIfExisting` (обновление, `REPLY`, `CANCEL` к существующему событию) исполняется как «только
-        // письмо».
-        let decision = TrustMatrix::default()
+        // Решение 123 → 124: «кто — что» — только здесь, по действующей матрице доверия получателя (CTR-93:
+        // установка → организация → группы; без политик — умолчания контракта). Своей организации — всё; новое
+        // приглашение чужого — по клетке `invite_new` (`Button` — письмом с кнопкой, `Auto` — вносится как от
+        // своего, но без бронирования: бронь для чужих закреплена выключенной в самой матрице, действие `Booking`);
+        // `REPLY`, `CANCEL` и обновление чужих (`ApplyIfExisting`, `itip_updates` включён) — только к событию с
+        // тем же UID в календаре получателя; прочие методы чужим — только письмо (RFC 5546 §6.1.6).
+        let decision = self
+            .effective_of(msg.recipient)
+            .await
             .inbound(msg.sender, InboundAction::of(it.method, resource, update));
         match decision {
             InboundDecision::Apply => {}
             InboundDecision::ApplyIfExisting => {
-                return refuse("только к существующему событию (до DAV-44)");
+                // Роли проверяет приём: `REPLY` — получатель организатор события и отправитель его участник,
+                // обновление — тот же `ORGANIZER` и больший `SEQUENCE`, `CANCEL` — отправитель организатор события
+                // (RFC 5546 §6.1.1–6.1.2, §3.2.3); отмена чужого — ещё и только участнику события (RFC 6638 §11.2).
+                if it.method == ItipMethod::Cancel
+                    && !self
+                        .cancel_to_attendee(msg.recipient, &it, &from, &to)
+                        .await?
+                {
+                    return refuse("получатель не участник события");
+                }
             }
             InboundDecision::MailOnly => {
                 return refuse("отправителю не разрешено (решение 124)");
@@ -756,6 +813,41 @@ impl ItipDelivery for ItipInbox {
 }
 
 impl ItipInbox {
+    /// Действующая матрица доверия получателя `scope` (CTR-93, решение 124): установка → организация → группы
+    /// учётной записи. Без хранилища — умолчания контракта ([`TrustMatrix::default`]); ошибка чтения политики —
+    /// закрытая матрица ([`TrustMatrix::closed`]): все функции чужих в самом узком значении, письмо доставляется
+    /// как письмо (клетки своих — как в умолчаниях).
+    async fn effective_of(&self, scope: AccountScope) -> TrustMatrix {
+        let Some(trust) = &self.trust else {
+            return TrustMatrix::default();
+        };
+        match trust.effective_for(scope.tenant, scope.account).await {
+            Ok(e) => e.matrix,
+            Err(e) => {
+                tracing::warn!(error = %e, "iTIP: политика доверия не прочитана — закрытая матрица");
+                TrustMatrix::closed()
+            }
+        }
+    }
+
+    /// Событие с UID сообщения `it` в календаре получателя `scope`: его организатор — `from`, а `to` — участник
+    /// (отмена чужого — только участнику события, RFC 6638 §11.2).
+    async fn cancel_to_attendee(
+        &self,
+        scope: AccountScope,
+        it: &Itip,
+        from: &str,
+        to: &str,
+    ) -> Result<bool> {
+        let Some(o) = find_uid(self.store.as_ref(), scope, &it.meeting.uid).await? else {
+            return Ok(false);
+        };
+        Ok(ICalendar::parse(&o.body)
+            .ok()
+            .and_then(|i| itip::meeting(&i))
+            .is_some_and(|m| m.organizer.as_deref() == Some(from) && m.attendee(to).is_some()))
+    }
+
     /// У получателя `scope` с адресом `to` есть событие с UID сообщения `it`, его организатор — `to`, а `from` — его
     /// участник.
     async fn attendee_of_own(

@@ -13,10 +13,11 @@
 //! - Общие коллекции — в доме получателя (`calendar-home-set`, `addressbook-home-set`) ссылками на коллекцию владельца
 //!   (`resourcetype` с `cs:shared`, `owner` — принципал владельца, имя — «имя (владелец)»; [`shared`]).
 //! - Выдача и отзыв прав — `POST` на коллекцию (CalendarServer sharing: `cs:share` с `cs:set` и `cs:remove` — Календарь
-//!   macOS и iOS; WebDAV `share-resource` с `share-access`): получатель — `mailto:` адрес учётной записи или ссылка на
-//!   её принципал; проверка — [`SharingAuthorizer::check_grant`], запись — [`CollectionAcl::set_collection_acl`].
-//!   Выданные права — свойство `cs:invite` коллекции владельца. Другие клиенты выдают права через JMAP `shareWith` и
-//!   Admin API.
+//!   macOS и iOS; WebDAV `share-resource` с `share-access`): получатель — только учётная запись своей организации
+//!   (адрес соседней организации и внешний — 403 с пояснением; DAV-44, решение 124), уровень — не выше клетки
+//!   `sharing` своей организации ([`rights_detail`], [`crate::router_with_trust`]); проверка —
+//!   [`SharingAuthorizer::check_grant`], запись — [`CollectionAcl::set_collection_acl`]. Выданные права — свойство
+//!   `cs:invite` коллекции владельца. Другие клиенты выдают права через JMAP `shareWith` и Admin API.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -31,6 +32,7 @@ use tp_contracts::meta::{Account, AccountScope, AccountStore, AddressTarget};
 use tp_contracts::sharing::{
     ANYONE, CollectionAcl, CollectionAclEntry, CollectionRights, DelegateStore, SharingAuthorizer,
 };
+use tp_contracts::trust::Detail;
 use tp_contracts::{AccountId, Error, Result};
 
 use crate::path::{self, Target};
@@ -427,8 +429,36 @@ pub(crate) async fn login_of(
     accounts.by_login(tenant, &login).await
 }
 
-/// `POST` на коллекцию: выдача и отзыв прав. Все получатели проверяются до записи: неизвестный — 409, нет права
-/// выдавать или политика не допускает — 403; ничего не записано.
+/// Уровень выдачи прав по клетке «Общий доступ и публикация» ([`Detail`], DAV-44, решение 124): запись, управление
+/// коллекцией и планирование от имени владельца — «всё», чтение — «подробности», только занятость —
+/// «свободен/занят», без прав — «нет».
+pub(crate) fn rights_detail(r: CollectionRights) -> Detail {
+    let e = r.effective();
+    if e.write || e.admin || e.schedule {
+        Detail::All
+    } else if e.read {
+        Detail::Details
+    } else if e.free_busy {
+        Detail::FreeBusy
+    } else {
+        Detail::None
+    }
+}
+
+/// 403 с пояснением (DAV-44): получатель или уровень прав — вне политики доверия организации.
+fn trust_refused(why: &str) -> Response {
+    precondition(
+        StatusCode::FORBIDDEN,
+        &format!(
+            "<s:share-refused xmlns:s=\"urn:thepost:dav\">{}</s:share-refused>",
+            text(why)
+        ),
+    )
+}
+
+/// `POST` на коллекцию: выдача и отзыв прав. Все получатели проверяются до записи: получатель не учётная запись
+/// своей организации (соседней организации, внешний, неизвестный адрес) или уровень выше клетки `sharing` — 403 с
+/// пояснением, сам себе — 409, нет права выдавать — 403; ничего не записано.
 pub(crate) async fn post(cx: &Cx<'_>, target: &Target, body: Body) -> Result<Response> {
     let Some(sharing) = cx.dav.sharing() else {
         return Ok(crate::server::not_allowed());
@@ -454,12 +484,31 @@ pub(crate) async fn post(cx: &Cx<'_>, target: &Target, body: Body) -> Result<Res
         return Ok(need_privileges(target, cx.login(), "<d:write-acl/>"));
     }
     let mut grants = Vec::with_capacity(list.len());
+    // Потолок выдачи — клетка `sharing` своей организации (DAV-44, решение 124): без политик — умолчание («всё»),
+    // ошибка чтения — закрытая матрица (клетка своих — как в умолчаниях).
+    let ceiling = cx.dav.trust_effective(cx.scope).await;
     for s in list {
         let Some(account) = login_of(sharing.accounts, cx.scope.tenant, &s.href).await? else {
-            return Ok(status(StatusCode::CONFLICT));
+            // Только учётные записи своей организации: адрес соседней организации узла и внешний сюда не
+            // разрешаются — получатель вне каталога организации.
+            return Ok(trust_refused(
+                "получатель доступа — только учётная запись своей организации",
+            ));
         };
         if account.id == cx.scope.account {
             return Ok(status(StatusCode::CONFLICT));
+        }
+        if rights_detail(s.rights) > ceiling.matrix.sharing.own {
+            let level = ceiling
+                .source
+                .sharing
+                .own
+                .map_or(String::new(), |l| format!("; уровень {l}"));
+            return Ok(trust_refused(&format!(
+                "права {} выше потолка общего доступа своей организации ({}){level}",
+                rights_detail(s.rights),
+                ceiling.matrix.sharing.own
+            )));
         }
         match sharing
             .authz

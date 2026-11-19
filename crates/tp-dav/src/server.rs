@@ -26,6 +26,7 @@ use tp_contracts::auth::{Authenticator, Credentials, Principal};
 use tp_contracts::dav::DavStore;
 use tp_contracts::meta::{Account, AccountScope, AccountStore};
 use tp_contracts::sharing::{CollectionRights, SharingAuthorizer};
+use tp_contracts::trust::{Effective, TrustMatrix, TrustStore, effective};
 
 use crate::config::DavConfig;
 use crate::path::Target;
@@ -72,7 +73,6 @@ impl fmt::Debug for Deps {
 }
 
 /// Состояние маршрутов.
-#[derive(Debug)]
 pub(crate) struct Dav {
     pub d: Deps,
     pub cfg: DavConfig,
@@ -80,6 +80,21 @@ pub(crate) struct Dav {
     pub schedule: Option<ScheduleDeps>,
     /// Хранилища общего доступа: выдача прав и представители; `None` — только чтение прав.
     pub stores: Option<SharingStores>,
+    /// Политики доверия (CTR-93, DAV-44); `None` — умолчания [`TrustMatrix::default`] (точки решения сервера:
+    /// занятость `schedule-outbox` и уровень выдачи прав `POST` sharing).
+    pub(crate) trust: Option<Arc<dyn TrustStore>>,
+}
+
+impl fmt::Debug for Dav {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Dav")
+            .field("d", &self.d)
+            .field("cfg", &self.cfg)
+            .field("schedule", &self.schedule.is_some())
+            .field("stores", &self.stores.is_some())
+            .field("trust", &self.trust.is_some())
+            .finish()
+    }
 }
 
 impl Dav {
@@ -106,31 +121,67 @@ impl Dav {
             .max_object_size
             .min(self.d.store.limits().max_object_size)
     }
+
+    /// Действующая матрица доверия учётной записи `scope` (DAV-44, решение 124): установка → организация → группы.
+    /// Без хранилища — умолчания ([`effective`] без политик); ошибка чтения политики — закрытая матрица
+    /// ([`TrustMatrix::closed`]; клетки своих — как в умолчаниях, клиенты DAV — своя организация). Источники клеток
+    /// ([`Effective::source`]) — для пояснения потолка в отказах.
+    pub(crate) async fn trust_effective(&self, scope: AccountScope) -> Effective {
+        let Some(trust) = &self.trust else {
+            return effective(None, None, &[]);
+        };
+        match trust.effective_for(scope.tenant, scope.account).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "dav: политика доверия не прочитана — закрытая матрица");
+                Effective {
+                    matrix: TrustMatrix::closed(),
+                    ..effective(None, None, &[])
+                }
+            }
+        }
+    }
 }
 
 /// Маршруты DAV под `/dav/`; TLS, PROXY и слушатель — у вызывающего (`tp-platform`).
 pub fn router(d: Deps, cfg: DavConfig) -> Router {
-    build(d, None, None, cfg)
+    build(d, None, None, None, cfg)
 }
 
 /// Маршруты DAV с необязательным планированием встреч `schedule` (RFC 6638: рассылка iTIP после `PUT` и `DELETE`,
 /// запрос занятости) и хранилищами общего доступа `stores` (DAV-17, DAV-18, [`crate::share`]): права на чужие
 /// коллекции — по [`Deps::sharing`], а `stores` добавляют выдачу прав `POST` (`cs:invite`) и состав групп
 /// представителей `calendar-proxy` ([`crate::proxy`]). Книгу GAL маршруты читают из хранилища, заполняет её
-/// [`crate::gal::sync`].
+/// [`crate::gal::sync`]. Политики доверия не подключены — действуют умолчания [`TrustMatrix::default`]
+/// (подключение узла — `router_with_trust`).
 pub fn router_shared(
     d: Deps,
     schedule: Option<ScheduleDeps>,
     stores: Option<SharingStores>,
     cfg: DavConfig,
 ) -> Router {
-    build(d, schedule, stores, cfg)
+    build(d, schedule, stores, None, cfg)
+}
+
+/// Маршруты DAV с политиками доверия `trust` (DAV-44, решение 124): занятость `schedule-outbox` и уровень выдачи
+/// прав `POST` sharing — по действующей матрице учётной записи ([`Dav::trust_effective`]); без хранилища —
+/// умолчания контракта. Реализация — `tp-meta` (META-85), in-memory — `tp-testkit::MemTrust`; подключает узел
+/// (APP-76).
+pub fn router_with_trust(
+    d: Deps,
+    schedule: Option<ScheduleDeps>,
+    stores: Option<SharingStores>,
+    trust: Option<Arc<dyn TrustStore>>,
+    cfg: DavConfig,
+) -> Router {
+    build(d, schedule, stores, trust, cfg)
 }
 
 fn build(
     d: Deps,
     schedule: Option<ScheduleDeps>,
     stores: Option<SharingStores>,
+    trust: Option<Arc<dyn TrustStore>>,
     cfg: DavConfig,
 ) -> Router {
     let dav = Arc::new(Dav {
@@ -138,6 +189,7 @@ fn build(
         cfg,
         schedule,
         stores,
+        trust,
     });
     Router::new()
         .route("/dav", any(handle))

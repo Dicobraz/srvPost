@@ -4,14 +4,17 @@
 //! каталога, скрытые из GAL — нет.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use tp_contracts::TenantId;
 use tp_contracts::addressbook::{ContactStore, MailContact};
 use tp_contracts::auth::{DirAccount, DirContact, DirGroup, DirOrg};
 use tp_contracts::dav::{CollectionKind, DavStore};
 use tp_contracts::groups::{DistributionGroup, GroupStore, SenderRestriction};
 use tp_contracts::ids::{ContactId, GroupId};
+use tp_testkit::principal;
 
 use super::{BOOKS, Env, basic, vcard};
 use crate::DavConfig;
@@ -536,4 +539,71 @@ async fn contacts() {
         .send("GET", &format!("{}c-partner.vcf", gal()), &[], "")
         .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
+}
+
+/// GAL — только своя организация (DAV-44, решение 124): две организации одного узла, книга каждой — только её
+/// записи; пользователь одной организации не попадает в дом другой.
+#[tokio::test]
+async fn gal_isolated_between_organizations() {
+    let env = env().await;
+    let neighbor = TenantId::new();
+    env.dir.upsert_account(
+        neighbor,
+        account("u-bob", "Борис Сосед", &["bob@neighbor.example"], true),
+    );
+    env.auth.add_password(
+        "bob@neighbor.example",
+        "secret",
+        principal(neighbor, "bob@neighbor.example"),
+    );
+    let source = crate::GalDeps {
+        directory: Arc::new(env.dir.clone()),
+        groups: Some(Arc::new(env.groups.clone())),
+        contacts: Some(Arc::new(env.contacts.clone())),
+    };
+    crate::gal::sync(&source, &env.store, neighbor, &env.cfg)
+        .await
+        .expect("gal::sync соседа");
+
+    // Книга первой организации — только её записи.
+    let r = env.propfind(&gal(), "1", ETAGS).await;
+    assert!(r.body.contains("u-ivan.vcf"), "{}", r.body);
+    assert!(!r.body.contains("u-bob"), "сосед не виден: {}", r.body);
+
+    // Пользователь второй организации видит свою книгу, а записи первой ему не видны.
+    let req = Request::builder()
+        .method("PROPFIND")
+        .uri("/dav/addressbooks/bob@neighbor.example/gal/")
+        .header(
+            "authorization",
+            super::basic("bob@neighbor.example", "secret"),
+        )
+        .header("depth", "1")
+        .body(Body::from(ETAGS.to_owned()))
+        .expect("запрос");
+    let r = env.raw(req).await;
+    // PROPFIND с телом-ответом — `207 Multistatus` (как своей книги выше).
+    assert_eq!(r.status, StatusCode::MULTI_STATUS, "{}", r.body);
+    assert!(r.body.contains("u-bob.vcf"), "{}", r.body);
+    assert!(
+        !r.body.contains("u-ivan"),
+        "первая организация не видна: {}",
+        r.body
+    );
+
+    // Пользователь первой организации в дом соседа не попадает (логина нет в его организации).
+    let req = Request::builder()
+        .method("PROPFIND")
+        .uri("/dav/addressbooks/bob@neighbor.example/")
+        .header("authorization", super::basic(super::LOGIN, "secret"))
+        .header("depth", "0")
+        .body(Body::empty())
+        .expect("запрос");
+    let r = env.raw(req).await;
+    assert_eq!(
+        r.status,
+        StatusCode::FORBIDDEN,
+        "чужая организация недоступна: {}",
+        r.body
+    );
 }

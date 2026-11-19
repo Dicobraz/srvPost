@@ -18,16 +18,16 @@ use tp_contracts::sharing::{
     Bookers, BookingPolicy, CollectionAcl, CollectionRights, DayOfWeek, DelegateLevel,
     DelegateStore, Delegation, ResourceStore, WorkingHours,
 };
-use tp_contracts::trust::PeerKind;
+use tp_contracts::trust::{Detail, PeerKind, TrustLevel, TrustPolicy, TrustStore};
 use tp_contracts::{DomainId, TenantId};
 use tp_testkit::{
     FakeAuthenticator, FakeSharingAuthorizer, ManualClock, MemDav, MemGroups, MemItipSender,
-    MemMetadata,
+    MemMetadata, MemTrust,
 };
 
 use super::{Resp, basic, event};
 use crate::{
-    BookingDeps, DavConfig, Deps, ItipInbox, ScheduleDeps, SharingStores, itip, router_shared,
+    BookingDeps, DavConfig, Deps, ItipInbox, ScheduleDeps, SharingStores, itip, router_with_trust,
 };
 
 const ALICE: &str = "alice@example.org";
@@ -48,6 +48,8 @@ struct Share {
     sender: MemItipSender,
     inbox: ItipInbox,
     accounts: Vec<(String, AccountScope)>,
+    /// Политики доверия (DAV-44): тест задаёт их уровнями; без политик — умолчания.
+    trust: MemTrust,
 }
 
 impl Share {
@@ -105,19 +107,21 @@ impl Share {
         }
         let store = MemDav::new();
         let sender = MemItipSender::new();
+        let trust = MemTrust::new().with_groups(Arc::new(groups.clone()));
         let cfg = DavConfig {
             schedule_keep_processed: false,
             ..DavConfig::default()
         };
-        let inbox =
-            ItipInbox::new(Arc::new(store.clone()), cfg.clone()).with_booking(BookingDeps {
+        let inbox = ItipInbox::new(Arc::new(store.clone()), cfg.clone())
+            .with_booking(BookingDeps {
                 accounts: Arc::new(meta.clone()),
                 resources: Arc::new(meta.clone()),
                 freebusy: Arc::new(store.clone()),
                 group_store: Arc::new(groups.clone()),
-            });
+            })
+            .with_trust(Some(Arc::new(trust.clone()) as Arc<dyn TrustStore>));
         let authz = FakeSharingAuthorizer::default();
-        let app = router_shared(
+        let app = router_with_trust(
             Deps {
                 auth: Arc::new(auth),
                 store: Arc::new(store.clone()),
@@ -134,6 +138,7 @@ impl Share {
                 acl: Arc::new(store.clone()),
                 delegates: Arc::new(meta.clone()),
             }),
+            Some(Arc::new(trust.clone()) as Arc<dyn TrustStore>),
             cfg,
         );
         let env = Self {
@@ -144,6 +149,7 @@ impl Share {
             sender,
             inbox,
             accounts,
+            trust,
         };
         env.store
             .create_collection(
@@ -458,14 +464,93 @@ async fn post_share_grants_and_removes() {
         .expect("права");
     assert_eq!(acl.len(), 1);
     assert_eq!(acl[0].identifier, PETR);
-    // Неизвестный получатель — 409, ничего не записано.
+    // Получатель не учётная запись своей организации — 403 с пояснением, ничего не записано (DAV-44).
     let bad = r#"<cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><cs:set><d:href>mailto:nobody@example.org</d:href><cs:read/></cs:set></cs:share>"#;
     let r = env.send(ALICE, "POST", WORK, &[], bad).await;
-    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.body);
+    assert!(
+        r.body.contains("только учётная запись своей организации"),
+        "{}",
+        r.body
+    );
+    let acl = env
+        .store
+        .collection_acl(env.scope(ALICE), work.id)
+        .await
+        .expect("права");
+    assert_eq!(acl.len(), 1, "записей не прибавилось");
     // Получатель без права admin выдавать права не может.
     env.grant(BOB, CollectionRights::WRITE).await;
     let r = env.send(BOB, "POST", WORK, &[], share).await;
     assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.body);
+}
+
+/// Выдача прав — только своей организации и не выше клетки `sharing` (DAV-44, решение 124): внешний адрес и адрес
+/// соседней организации узла — 403 с пояснением; право шире клетки — 403, в пределах — выдаётся.
+#[tokio::test]
+async fn post_share_trust_ceiling_and_recipients() {
+    let env = Share::new().await;
+    let work = env.work().await;
+    // Учётная запись второй организации узла: получателем доступа быть не может.
+    env.meta
+        .upsert(
+            TenantId::new(),
+            AccountUpsert {
+                domain: DomainId::new(),
+                login: "bob@neighbor.example".into(),
+                display_name: "Сосед".into(),
+                external_id: None,
+                enabled: true,
+                aliases: Vec::new(),
+                kind: AccountKind::User,
+                hidden_from_gal: false,
+                resource_type: None,
+            },
+        )
+        .await
+        .expect("учётная запись соседа");
+    let neighbor = r#"<cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><cs:set><d:href>mailto:bob@neighbor.example</d:href><cs:read/></cs:set></cs:share>"#;
+    let outside = r#"<cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><cs:set><d:href>mailto:carol@example.net</d:href><cs:read/></cs:set></cs:share>"#;
+    for body in [neighbor, outside] {
+        let r = env.send(ALICE, "POST", WORK, &[], body).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.body);
+        assert!(
+            r.body.contains("только учётная запись своей организации"),
+            "{}",
+            r.body
+        );
+    }
+    assert!(
+        env.store
+            .collection_acl(env.scope(ALICE), work.id)
+            .await
+            .expect("права")
+            .is_empty(),
+        "ничего не записано"
+    );
+
+    // Организация ограничила общий доступ своих до «подробностей» (чтение): запись — выше клетки.
+    let mut policy = TrustPolicy::default();
+    policy.sharing.own = Some(Detail::Details);
+    env.trust
+        .set_policy(TrustLevel::Org(env.scope(ALICE).tenant), &policy)
+        .await
+        .expect("policy");
+    let write = r#"<cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><cs:set><d:href>mailto:bob@example.org</d:href><cs:read-write/></cs:set></cs:share>"#;
+    let r = env.send(ALICE, "POST", WORK, &[], write).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.body);
+    assert!(r.body.contains("выше потолка общего доступа"), "{}", r.body);
+    // Чтение — в пределах клетки, выдаётся.
+    let read = r#"<cs:share xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><cs:set><d:href>mailto:bob@example.org</d:href><cs:read/></cs:set></cs:share>"#;
+    let r = env.send(ALICE, "POST", WORK, &[], read).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let acl = env
+        .store
+        .collection_acl(env.scope(ALICE), work.id)
+        .await
+        .expect("права");
+    assert_eq!(acl.len(), 1);
+    assert_eq!(acl[0].rights.effective(), CollectionRights::READ);
 }
 
 #[tokio::test]

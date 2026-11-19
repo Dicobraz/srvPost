@@ -16,7 +16,8 @@
 //! сообщения, `REPORT` `calendar-query` и `sync-collection` по сообщениям (DAV-31). Сообщения, применённые сервером
 //! и сохранённые для ленты уведомлений JMAP (`dav.schedule_keep_processed`, имя с [`deliver::PROCESSED_PREFIX`]), в
 //! CalDAV не видны (решение 92). `outbox/`: `POST` с `METHOD:REQUEST` и VFREEBUSY (§5) — `schedule-response` с
-//! занятостью ([`FreeBusy`]) участников организации; остальным — `3.7`.
+//! занятостью ([`FreeBusy`]) принципалов своей организации (DAV-44, решение 124): адрес соседней организации и
+//! внешний — `3.7` без данных, своим занятость отдаётся не ниже клетки `freebusy` своей организации.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -40,7 +41,7 @@ use tp_contracts::schedule::{
     BusyKind, BusyPeriod, FreeBusy, Inbox, ItipDelivery, ItipMessage, ItipMethod, ItipOutcome,
     ItipOutgoing, ItipSender, Period, valid_address,
 };
-use tp_contracts::trust::PeerKind;
+use tp_contracts::trust::{Detail, PeerKind};
 use tp_contracts::{AccountId, Error, ModSeq, Result, TenantId};
 
 use crate::itip::{self, Message};
@@ -840,21 +841,49 @@ async fn post(cx: &Cx<'_>, body: Body) -> Result<Response> {
     for (_, addr) in &attendees {
         accounts.push(deps.account(cx.scope, addr).await?.flatten());
     }
-    let ids: Vec<AccountId> = accounts.iter().flatten().copied().collect();
+    // Занятость — только принципалам своей организации (адрес ищется в ней; соседней организации и внешнему —
+    // `3.7` без данных) и не ниже клетки `freebusy` своей организации (DAV-44, решение 124): политика закрыла —
+    // `3.7` без данных. Матрица — участника, чья занятость запрошена.
+    // `allowed` выравнивается с `accounts` (чужому адресу — `false`): `zip` ниже обрезает по короткому списку,
+    // и без выравнивания чужие получатели исчезали бы из ответа вместо `3.7`.
+    let mut allowed: Vec<bool> = Vec::with_capacity(accounts.len());
+    for id in &accounts {
+        let ok = match id {
+            Some(id) => {
+                let matrix = cx
+                    .dav
+                    .trust_effective(AccountScope {
+                        tenant: cx.scope.tenant,
+                        account: *id,
+                    })
+                    .await
+                    .matrix;
+                matrix.freebusy.own >= Detail::FreeBusy
+            }
+            None => false,
+        };
+        allowed.push(ok);
+    }
+    let ids: Vec<AccountId> = accounts
+        .iter()
+        .zip(&allowed)
+        .filter(|(_, ok)| **ok)
+        .filter_map(|(a, _)| *a)
+        .collect();
     let busy = if ids.is_empty() {
         Vec::new()
     } else {
         deps.freebusy.query(cx.scope.tenant, &ids, range).await?
     };
     let mut out = format!("{HEADER}<c:schedule-response{XMLNS}>");
-    for ((entry, addr), account) in attendees.iter().zip(&accounts) {
+    for (((entry, addr), account), ok) in attendees.iter().zip(&accounts).zip(&allowed) {
         let _ = write!(
             out,
             "<c:response><c:recipient>{}</c:recipient>",
             xml::href(&format!("mailto:{addr}"))
         );
         match account {
-            Some(id) => {
+            Some(id) if *ok => {
                 let periods = busy
                     .iter()
                     .find(|(a, _)| a == id)
@@ -865,6 +894,9 @@ async fn post(cx: &Cx<'_>, body: Body) -> Result<Response> {
                     "<c:request-status>2.0;Success</c:request-status><c:calendar-data>{}</c:calendar-data>",
                     xml::text(&data)
                 );
+            }
+            Some(_) => {
+                out.push_str("<c:request-status>3.7;Free/busy not available</c:request-status>");
             }
             None => out.push_str("<c:request-status>3.7;Invalid calendar user</c:request-status>"),
         }
