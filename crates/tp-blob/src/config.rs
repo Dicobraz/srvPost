@@ -1,4 +1,5 @@
-//! Разбор секций tp-blob из config.yaml (`LocalConfig`, `S3Config`, `CacheConfig`, `GcConfig`, `OrphanConfig`).
+//! Разбор секций tp-blob из config.yaml (`LocalConfig`, `S3Config`, `CacheConfig`, `GcConfig`,
+//! `OrphanConfig`, `JournalConfig`).
 //!
 //! Длительность — строка humantime без единицы в имени поля (`stale_tmp: 24h`, решение #43, CTR-13);
 //! число без единицы и прежние имена с единицей (`stale_tmp_secs`) — ошибка разбора.
@@ -11,7 +12,10 @@ mod tests {
     use serde::de::DeserializeOwned;
     use tp_contracts::secrets::SecretRef;
 
-    use crate::{CacheConfig, GcConfig, LocalConfig, OrphanConfig, S3Config, S3Credentials};
+    use crate::{
+        CacheConfig, GcConfig, JournalConfig, LocalConfig, LockMode, OrphanConfig, S3Config,
+        S3Credentials,
+    };
 
     fn parse<T: DeserializeOwned>(yaml: &str) -> Result<T, String> {
         serde_yaml_ng::from_str(yaml).map_err(|e| e.to_string())
@@ -97,6 +101,83 @@ mod tests {
                 ..S3Config::default()
             }
         );
+
+        // Секция журнала (BLOB-18): режим блокировки задаёт заказчик, срок и части записи.
+        let journal: JournalConfig = parse(
+            "prefix: arc\n\
+             lock_mode: compliance\n\
+             retention: 2555d\n\
+             chunk_min_bytes: 1024\n\
+             chunk_avg_bytes: 4096\n\
+             chunk_max_bytes: 16384\n",
+        )
+        .expect("journal");
+        assert_eq!(
+            journal,
+            JournalConfig {
+                prefix: "arc".into(),
+                lock_mode: LockMode::Compliance,
+                retention: Duration::from_secs(2555 * 24 * 3600),
+                chunk_min_bytes: 1024,
+                chunk_avg_bytes: 4096,
+                chunk_max_bytes: 16384,
+            }
+        );
+        assert!(journal.validate().is_ok());
+    }
+
+    #[test]
+    fn journal_section_defaults_and_errors() {
+        // Пустая секция — умолчания: governance, 730 суток, префикс journal (SRS 4.9).
+        let journal: JournalConfig = parse("{}").expect("journal");
+        assert_eq!(
+            journal,
+            JournalConfig {
+                prefix: "journal".into(),
+                lock_mode: LockMode::Governance,
+                retention: Duration::from_secs(730 * 24 * 3600),
+                chunk_min_bytes: 64 << 10,
+                chunk_avg_bytes: 512 << 10,
+                chunk_max_bytes: 2 << 20,
+            }
+        );
+        assert!(journal.validate().is_ok());
+
+        // Длительность — строка humantime; число без единицы и неизвестный режим — ошибка разбора.
+        assert!(parse::<JournalConfig>("retention: 3600").is_err());
+        assert!(parse::<JournalConfig>("retention_secs: 3600").is_err());
+        assert!(parse::<JournalConfig>("lock_mode: hardened").is_err());
+        // Неизвестное поле — ошибка (как у прочих секций).
+        assert!(parse::<JournalConfig>("bucket: mail").is_err());
+        // Проверка значений (validate): compliance без срока не бывает — срок обязателен всегда,
+        // нулевой срок и пустой префикс отвергаются.
+        assert!(
+            JournalConfig {
+                retention: Duration::ZERO,
+                ..JournalConfig::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            JournalConfig {
+                prefix: String::new(),
+                ..JournalConfig::default()
+            }
+            .validate()
+            .is_err()
+        );
+
+        // Схема: длительность — строка, режим — перечисление governance/compliance.
+        let schema = serde_json::to_value(schemars::schema_for!(JournalConfig)).expect("schema");
+        let props = &schema["properties"];
+        assert_eq!(props["retention"]["type"], "string");
+        let modes = serde_json::to_string(&props["lock_mode"]).expect("режим в схеме");
+        assert!(
+            modes.contains("governance") && modes.contains("compliance"),
+            "{modes}"
+        );
+        assert!(props.get("retention_secs").is_none());
     }
 
     #[test]

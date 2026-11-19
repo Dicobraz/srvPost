@@ -181,6 +181,19 @@ impl LocalStore {
         remove_if_exists(&self.cfg.root.join(path)).await
     }
 
+    /// Записывает объект по произвольному пути; `attributes` игнорируются — локальный бэкенд
+    /// метаданные объектов не хранит (срок блокировки записей журнала живёт в объекте записи,
+    /// BLOB-18).
+    pub(crate) async fn put_raw_with_attributes(
+        &self,
+        path: &str,
+        data: Bytes,
+        _attributes: object_store::Attributes,
+    ) -> Result<()> {
+        check_raw_path(path)?;
+        self.write(path, once(data)).await
+    }
+
     /// Листинг файлов с путём на `prefix`, изменённых раньше `older_than`.
     /// Обходятся только каталоги, совместимые с префиксом.
     fn walk(&self, prefix: &str, older_than: SystemTime) -> ObjectStream {
