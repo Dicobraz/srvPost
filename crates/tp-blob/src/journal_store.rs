@@ -1340,7 +1340,7 @@ mod tests {
         // Локальный бэкенд (SMB): метаданных объектов нет, срок — в объекте записи.
         let dir = tempfile::tempdir().expect("tempdir");
         let local = backend_local(dir.path()).await;
-        let journal_local = JournalRecords::new(local.clone(), cfg, now).expect("journal");
+        let journal_local = JournalRecords::new(local.clone(), cfg.clone(), now).expect("journal");
         let id_local = journal_local
             .append(&rule(tenant), &record(tenant, 0, "m2@x"), message)
             .await
