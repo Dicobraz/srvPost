@@ -175,7 +175,9 @@ export function TrustMatrix(p: {
         const label = ROWS.find((r) => r.key === key)?.label ?? key;
         if (cell.fixed) return <FixedCell label={valueLabel(key, cell.value)} />;
         const values = VALUES[key];
-        const at = values.findIndex((v) => v.value === cell.ceiling);
+        // Потолок клетки не пришёл — доступны все значения: узел проверит при записи (422 у клетки).
+        const found = values.findIndex((v) => v.value === cell.ceiling);
+        const at = found >= 0 ? found : values.length - 1;
         const current = String(
           (p.value as unknown as Record<string, Record<string, string | null>>)[key]?.[peer] ?? cell.value ?? values[0].value,
         );

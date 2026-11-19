@@ -91,6 +91,8 @@ test("значения выше потолка недоступны с подс�
   // Потолок организации по партнёру — «письмо с кнопкой» с уровня установки; для остальных — «авто».
   v.effective.ceiling.matrix.invite_new = { ...cells("auto"), partner: "button" };
   v.effective.ceiling.sources.invite_new = { own: "installation", partner: "installation", neighbor: null, external: null };
+  // Потолок занятости — «ограниченные подробности»: доступное, но не действующее значение.
+  v.effective.ceiling.matrix.freebusy = cells("limited");
   const calls = open("/trust", {
     [`GET ${BASE}/trust`]: { body: v },
     [`PUT ${BASE}/trust`]: (c) => ({ body: c.body }),
@@ -161,7 +163,7 @@ test("переключение уровня перечитывает матри�
   await waitFor(() => expect(sent(calls, "GET", "/api/v1/trust")).toHaveLength(1));
 
   fireEvent.click(screen.getByRole("radio", { name: "Группа" }));
-  fireEvent.mouseDown(await screen.findByLabelText("Группа уровня"));
+  fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Группа уровня" }));
   fireEvent.click(await screen.findByTitle("Руководство"));
   await waitFor(() => expect(sent(calls, "GET", `${BASE}/groups/g1/trust`)).toHaveLength(1));
   expect(await screen.findByRole("combobox", { name: "Новое приглашение — Свои" })).toBeTruthy();
@@ -177,7 +179,7 @@ test("партнёры и домены автопересылки — в тел�
   });
   fireEvent.click(await screen.findByRole("tab", { name: "Партнёры" }));
   expect(screen.getByText("Домены-партнёры")).toBeTruthy();
-  fireEvent.change(await screen.findByLabelText("Домены-партнёры"), { target: { value: "other.example," } });
+  fireEvent.change(await screen.findByRole("combobox", { name: "Домены-партнёры" }), { target: { value: "other.example," } });
   fireEvent.click(screen.getByRole("button", { name: "Сохранить политику" }));
   await waitFor(() =>
     expect(sent(calls, "PUT", `${BASE}/trust`)[0]?.body).toEqual({

@@ -110,7 +110,14 @@ function LevelEditor(p: { url: string; view: Schemas["TrustView"]; editable: boo
   });
   const save = () =>
     mutate(
-      { url: p.url, method: "put", values: values(), successNotification: { type: "success", message: "Политика доверия сохранена" } },
+      {
+        url: p.url,
+        method: "put",
+        values: values(),
+        // Текст отказа — у клетки или общим сообщением, без повторного уведомления.
+        errorNotification: false,
+        successNotification: { type: "success", message: "Политика доверия сохранена" },
+      },
       {
         onSuccess: p.onChanged,
         onError: (e) => {
