@@ -43,7 +43,11 @@
 //!   `urn:thepost:senderlists`, [`Jmap::with_sender_lists`];
 //! - `orgchart` — OrgUnit/get: дерево подразделений с членами по старшинству, capability `urn:thepost:orgchart`,
 //!   [`Jmap::with_org`];
-//! - `settings` — UserSettings/get, set: настройки пользователя (`trash.purge`), capability `urn:thepost:params:jmap:settings`.
+//! - `settings` — UserSettings/get, set: настройки пользователя (`trash.purge`), capability `urn:thepost:params:jmap:settings`;
+//! - `invitation` — Invitation/respond: принятие встречи из письма веб-почтой (JMAP-50, решение #134 — вариант 3):
+//!   сервер читает письмо, из «Спама»/со спам-вердиктом — структурированный отказ (календарь не меняется, аудит),
+//!   после переноса — применяет приглашение приёмом iTIP и отвечает организатору рассылкой JMAP-31, capability
+//!   `urn:thepost:params:jmap:itip` ([`Jmap::with_schedule`] и [`Jmap::with_dav`]).
 //!
 //! Протокол — JSON поверх HTTP: типы запросов и ответов — `serde_json`, HTTP — `axum`.
 
@@ -63,6 +67,7 @@ mod email_query;
 mod email_set;
 #[doc(hidden)]
 pub mod fuzz;
+mod invitation;
 mod mailbox;
 mod orgchart;
 mod principal;
@@ -86,8 +91,8 @@ pub use crate::sharing::SharingDeps;
 
 use crate::core::error::MethodResult;
 use crate::core::{
-    AVAILABILITY, CALENDARS, CONTACTS, CORE, Ctx, MAIL, ORG_CHART, PRINCIPALS, SENDER_LISTS,
-    SETTINGS, SIEVE, SUBMISSION, TASKS, VACATION,
+    AVAILABILITY, CALENDARS, CONTACTS, CORE, MAIL, ORG_CHART, PRINCIPALS, SENDER_LISTS, SETTINGS,
+    SIEVE, SUBMISSION, TASKS, THEPOST_ITIP, VACATION,
 };
 
 /// Встроенные методы и их capability.
@@ -118,6 +123,7 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
     ("EmailSubmission/queryChanges", SUBMISSION),
     ("UserSettings/get", SETTINGS),
     ("UserSettings/set", SETTINGS),
+    ("Invitation/respond", THEPOST_ITIP),
     ("SenderList/get", SENDER_LISTS),
     ("SenderList/set", SENDER_LISTS),
     ("OrgUnit/get", ORG_CHART),
@@ -204,6 +210,7 @@ pub(crate) async fn call_builtin(
         "EmailSubmission/queryChanges" => submission::submission_query_changes(ctx, args).await,
         "UserSettings/get" => settings::get(ctx, args).await,
         "UserSettings/set" => settings::set(ctx, args).await,
+        "Invitation/respond" => invitation::respond(ctx, args).await,
         "SenderList/get" => sender_lists::get(ctx, args).await,
         "SenderList/set" => sender_lists::set(ctx, args).await,
         "OrgUnit/get" => orgchart::get(ctx, args).await,
