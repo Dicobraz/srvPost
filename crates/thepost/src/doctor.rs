@@ -1035,9 +1035,8 @@ pub fn journal_retention_status(
     let mut warnings: Vec<String> = Vec::new();
     if retention > JOURNAL_RETENTION_WARN {
         warnings.push(format!(
-            "срок блокировки {} сут. — дольше {} сут.: записи не удаляются весь срок, ошибка в сроке \
+            "срок блокировки {days} сут. — дольше {} сут.: записи не удаляются весь срок, ошибка \
              compliance не освобождает хранилище (риск 21)",
-            days,
             JOURNAL_RETENTION_WARN.as_secs() / 86_400
         ));
     }
@@ -1052,19 +1051,17 @@ pub fn journal_retention_status(
         (Some(per_day), Some(avg)) => {
             let forecast = per_day * avg as f64 * days as f64;
             (
-                format!("≈ {} на {} сут.", human_bytes(forecast), days),
+                format!("≈ {} на {days} сут.", human_bytes(forecast)),
                 format!(
-                    "{:.1} записей/сутки × {} × {} сут. — ожидаемый объём хранилища записей к концу \
+                    "{per_day:.1} записей/сутки × {} × {days} сут. — ожидаемый объём хранилища \
                      срока блокировки (сейчас {} записей)",
-                    per_day,
                     human_bytes(avg as f64),
-                    days,
                     volume.records
                 ),
             )
         }
         _ => (
-            format!("на {} сут.", days),
+            format!("на {days} сут."),
             format!(
                 "прогноз появится с первыми записями (сейчас {}); срок блокировки продлевается только",
                 volume.records
@@ -2477,7 +2474,8 @@ mod tests {
         assert_eq!(volume.avg_record_bytes, Some(4096));
         assert_eq!(volume.enabled_rules, None, "без СУБД правила не считаны");
         // Размах дат — двое суток: 3 записи / 2 суток.
-        assert!((volume.records_per_day.unwrap() - 1.5).abs() < 1e-9);
+        let rate = volume.records_per_day.expect("rate");
+        assert!((rate - 1.5).abs() < 1e-9);
     }
 
     /// APP-82: прогноз объёма на срок блокировки — от правил и средних размеров; предупреждения —
