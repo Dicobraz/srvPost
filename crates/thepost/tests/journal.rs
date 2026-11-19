@@ -368,7 +368,7 @@ impl Node {
                     tenant,
                     AccountUpsert {
                         domain: id,
-                        login: login.to_owned(),
+                        login: (*login).to_owned(),
                         display_name: login.split('@').next().unwrap_or("user").to_owned(),
                         external_id: None,
                         enabled: true,
