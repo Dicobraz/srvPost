@@ -247,7 +247,7 @@ pub(crate) async fn set(
     args: Map<String, Value>,
 ) -> MethodResult<Map<String, Value>> {
     let a: RuleSetArgs = parse_args(args)?;
-    ctx.check_account(&a.account_id)?;
+    ctx.check_account(&a.set.account_id)?;
     a.set.check_limit(ctx.jmap.cfg.max_objects_in_set)?;
     let store = ctx.jmap.threads_store()?;
     let old = state(ctx).await?;
