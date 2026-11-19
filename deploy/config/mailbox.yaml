@@ -29,6 +29,19 @@ database:
 blob:
   url: s3://thepost-blob
 
+# Журналирование переписки (SRS 4.9): по умолчанию выключено — включается явно (journal.enabled).
+# Записи — отдельный бакет (не thepost-blob!) с Object Lock: режим и срок tp-blob пишет в каждый объект
+# при записи; governance — по умолчанию, compliance — явно и только с явным сроком (риск 21: объект
+# compliance не удаляет никто до конца срока, ошибка в сроке не освобождает бакет). Прогноз объёма на
+# срок — thepost doctor journal retention (APP-82). Правила — данные организации (Admin API), не файл узла.
+journal:
+  enabled: false
+  s3:
+    bucket: thepost-journal
+    lock_mode: governance
+    retention: 2555d   # 7 лет; продлевается только
+    # endpoint: https://seaweedfs:8333   # если кластер S3 не AWS — как у blob.s3
+
 roles: [mailbox]
 
 # Календари и контакты (роль dav: /dav/, /.well-known/caldav, /.well-known/carddav) — на слушателе jmap, один порт

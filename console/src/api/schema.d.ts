@@ -1565,7 +1565,7 @@ export interface components {
          * @description Роль администратора.
          * @enum {string}
          */
-        AdminRole: "installation_admin" | "organization_admin" | "operator" | "auditor";
+        AdminRole: "installation_admin" | "organization_admin" | "operator" | "auditor" | "journal_auditor";
         /** @description Сессия Admin API: значение показывается один раз. */
         AdminSession: {
             /** @description Учётная запись. */
@@ -1668,7 +1668,7 @@ export interface components {
             path: string;
             /**
              * @description Роли администратора на момент операции (`installation_admin`, `organization_admin`, `operator`,
-             *     `auditor`); пусто — ролей нет (отказ).
+             *     `auditor`, `journal_auditor`); пусто — ролей нет (отказ).
              */
             roles: string[];
             /** @description Шаблон маршрута (`/api/v1/orgs/{org}/transport/domains`); неизвестный маршрут — путь. */

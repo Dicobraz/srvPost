@@ -53,6 +53,9 @@ pub enum Command {
     },
     /// Проверка окружения: СУБД, BLOB, время, секреты.
     Doctor {
+        /// Прицельные проверки журнала переписки (APP-82): без подкоманды — все проверки журнала.
+        #[command(subcommand)]
+        topic: Option<DoctorTopic>,
         /// Вывод в JSON.
         #[arg(long)]
         json: bool,
@@ -81,6 +84,26 @@ pub enum Command {
         #[command(subcommand)]
         action: AdminAction,
     },
+}
+
+/// Прицельные проверки `thepost doctor <тема>` (APP-82).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+pub enum DoctorTopic {
+    /// Проверки журнала переписки: без подкоманды — все (цепочка, сверка, прогноз объёма).
+    Journal {
+        /// Подмножество проверок журнала.
+        #[command(subcommand)]
+        topic: Option<JournalTopicArg>,
+    },
+}
+
+/// Проверки `thepost doctor journal` (APP-82); общий прогон doctor выполняет их все.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+pub enum JournalTopicArg {
+    /// Целостность хеш-цепочки индекса журнала и сверка с хранилищем записей.
+    Chain,
+    /// Прогноз объёма хранилища записей на срок блокировки и предупреждения о сроке.
+    Retention,
 }
 
 /// Действия администрирования.
@@ -203,9 +226,13 @@ impl Cli {
 
 /// Результат `thepost config check`: код возврата и текст — при успехе для stdout в оформлении `out`
 /// («✓ конфигурация верна»), при ошибке для stderr в оформлении `err` (× и путь к полю на каждую ошибку).
+/// После разбора — проверки по всей конфигурации: бакет журнала отдельен от бакета BLOB ящиков (APP-83).
 pub fn config_check(path: &Path, out: Theme, err: Theme) -> (i32, String) {
     let shown = path.display().to_string();
-    match sections::registry().and_then(|r| r.check(path)) {
+    let checked = sections::registry()
+        .and_then(|r| r.check(path))
+        .and_then(|cfg| sections::journal_bucket_separate(&cfg).map(|_| cfg));
+    match checked {
         Ok(cfg) => {
             let mut text = format!(
                 "{}: {}\n",
@@ -275,9 +302,21 @@ pub async fn run(cli: Cli) -> i32 {
             }
             code
         }
-        Command::Doctor { json, color } => {
+        Command::Doctor { topic, json, color } => {
             let theme = color.theme();
-            let report = doctor::run(&path, None).await;
+            let report = match topic {
+                None => doctor::run(&path, None).await,
+                Some(DoctorTopic::Journal { topic }) => {
+                    doctor::run_journal(
+                        &path,
+                        topic.map(|t| match t {
+                            JournalTopicArg::Chain => doctor::JournalTopic::Chain,
+                            JournalTopicArg::Retention => doctor::JournalTopic::Retention,
+                        }),
+                    )
+                    .await
+                }
+            };
             if json {
                 match report.to_json(theme) {
                     Ok(j) => style::print(theme, &format!("{j}\n")),
@@ -486,6 +525,25 @@ mod tests {
             try_parse_from(["thepost", "--config", "/x.yaml", "doctor", "--json"]).expect("doctor");
         assert!(matches!(cli.command, Command::Doctor { json: true, .. }));
         assert_eq!(cli.config_path(), PathBuf::from("/x.yaml"));
+        // Прицельные проверки журнала (APP-82): тема, подмножество и все проверки журнала.
+        let cli = try_parse_from(["thepost", "doctor", "journal", "chain"]).expect("journal");
+        assert!(matches!(
+            cli.command,
+            Command::Doctor {
+                topic: Some(DoctorTopic::Journal {
+                    topic: Some(JournalTopicArg::Chain)
+                }),
+                ..
+            }
+        ));
+        let cli = try_parse_from(["thepost", "doctor", "journal"]).expect("journal all");
+        assert!(matches!(
+            cli.command,
+            Command::Doctor {
+                topic: Some(DoctorTopic::Journal { topic: None }),
+                ..
+            }
+        ));
         let cli = try_parse_from(["thepost", "verify", "--fix"]).expect("verify");
         assert!(matches!(
             cli.command,
@@ -673,6 +731,29 @@ mod tests {
             .load(&path)
             .expect("lenient");
         assert_eq!(cfg.warnings().len(), 1);
+    }
+
+    /// APP-83: `thepost config check` принимает пресет журнала (S3, governance) и отвергает бакет
+    /// записей журнала, совпадающий с бакетом BLOB ящиков (проверка по всей конфигурации).
+    #[test]
+    fn config_check_journal_bucket() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.yaml");
+        let base = "domain: example.org\nprofile: dev\ndatabase:\n  url: postgres://thepost@db/thepost?sslmode=disable\n  tls: { allow_plaintext: true }\nblob:\n  url: s3://thepost-blob\n";
+        let journal = |bucket: &str| {
+            format!(
+                "journal:\n  enabled: true\n  s3:\n    bucket: {bucket}\n    retention: 2555d\n"
+            )
+        };
+        std::fs::write(&path, format!("{base}{}", journal("thepost-journal"))).expect("write");
+        let (code, out) = config_check(&path, Theme::PLAIN, Theme::PLAIN);
+        assert_eq!(code, 0, "{out}");
+
+        std::fs::write(&path, format!("{base}{}", journal("thepost-blob"))).expect("write");
+        let (code, out) = config_check(&path, Theme::PLAIN, Theme::PLAIN);
+        assert_eq!(code, 1);
+        assert!(out.contains("journal"), "{out}");
+        assert!(out.contains("отдельный бакет"), "{out}");
     }
 
     /// ESC — `^[`, как в снимках `tp_admin_client::style`.

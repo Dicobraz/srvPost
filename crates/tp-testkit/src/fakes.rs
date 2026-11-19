@@ -1463,6 +1463,7 @@ impl TrashStore for MemTrash {
                             mailbox: r.origin,
                             message: *id,
                             received_at: r.message.received_at,
+                            thread: None,
                         })
                         .await,
                     Ok(Decision::Allow)
@@ -2572,6 +2573,7 @@ mod tests {
             mailbox: MailboxId::new(),
             message: MessageId::new(),
             received_at: OffsetDateTime::UNIX_EPOCH,
+            thread: None,
         };
         assert_eq!(hooks.before_final_delete(&op).await, Ok(Decision::Allow));
         hook.set_final_delete(Decision::Deny("legal hold".into()));

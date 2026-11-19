@@ -66,7 +66,7 @@ impl DeliveryRules for RecordingRules {
         let mut st = self.state.lock().expect("lock");
         st.calls.push(RuleCall {
             recipient: input.recipient.clone(),
-            peer: input.peer,
+            peer: input.peer.kind,
             matrix: input.matrix,
         });
         Ok(st

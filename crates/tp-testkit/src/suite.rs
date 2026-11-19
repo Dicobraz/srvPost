@@ -2,6 +2,7 @@
 //! (`tp-meta` — `Membership`, `AbuseBlocks`, сигналы `EventBus`, `AclStore`, `AppPasswordStore`, `DeliveryLog`, `GroupStore`, сжатие и GC по шардам `BlobIndex`,
 //! «очистить корзину» `TrashStore::purge` с настройкой `trash.purge`, `TransportStore` и его таблица переписывания,
 //! перенос получателей `QueueStore::postpone`, статусы `Outbound::submit` (`tp-smtp` — `Queue`, `Delivery`),
+//! запись об отправленном `SentLog` и беседы `ThreadStore` (META-86),
 //! `tp-platform` — `SecretStore`, `tp-cluster` — `Rpc`, `tp-auth` — `SharingAuthorizer`) проходят одни и те же проверки.
 //!
 //! Время в наборах идёт через [`Wait`]: для testkit — [`ManualClock`] (сдвиг без ожидания), для PostgreSQL
@@ -302,9 +303,11 @@ pub mod itip;
 pub mod journal;
 pub mod lifecycle;
 pub mod pipeline;
+pub mod reply;
 pub mod sharing;
 pub mod sharing_authorizer;
 pub mod sieve;
+pub mod thread;
 pub mod trust;
 
 pub use branding::branding;
@@ -314,8 +317,10 @@ pub use freebusy::recurring as freebusy_recurring;
 pub use itip::itip;
 pub use journal::journal;
 pub use pipeline::pipeline;
+pub use reply::reply;
 pub use sharing_authorizer::{SharingAuthorizerFixture, sharing_authorizer};
 pub use sieve::sieve;
+pub use thread::{hold_rules, thread};
 pub use trust::{member_group, trust};
 
 // ---------- EventBus: сигналы ----------
@@ -3372,6 +3377,7 @@ pub async fn trash_purge(
             mailbox: inbox,
             message: b,
             received_at: purge_received_at(),
+            thread: None,
         })]
     );
     messages.to_trash(s, &[c]).await.expect("to trash");

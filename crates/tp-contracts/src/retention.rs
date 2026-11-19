@@ -8,7 +8,9 @@
 //! Истечение (роль maintenance, `tp-mailstore`): [`TrashStore::expired`] → точка принятия решений
 //! `DecisionHooks::before_final_delete` → `MessageStore::expunge_final`; отказ хука — [`TrashStore::defer`].
 //! `expunge_final` удаляет только письма, которые всё ещё в корзине: восстановленное после `expired` остаётся.
-//! Политики хранения и Legal Hold — модуль «Соответствие требованиям» через этот хук (SRS 1.3).
+//! Политики хранения и Legal Hold — модуль «Соответствие требованиям» через этот хук (SRS 1.3);
+//! удержание беседы целиком — базовая поставка ([`crate::thread::ThreadHoldHook`], CTR-94), в
+//! [`FinalDelete`](crate::ext::FinalDelete) хук получает беседу письма.
 //!
 //! «Очистить корзину» в клиенте (IMAP EXPUNGE в корзине, JMAP `Email/set destroy`; решение 2026-11-01-trash-purge) —
 //! [`TrashStore::purge`] по настройке `trash.purge` ([`TrashPurge`], [`TrashPurgeRule`],

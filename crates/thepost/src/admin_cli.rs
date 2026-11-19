@@ -4084,7 +4084,16 @@ mod tests {
             limit: None,
             after: None,
         };
-        let page = json(exec(&ja, true, by_rcpt).await);
+        let page = json(
+            exec(
+                &ja,
+                true,
+                ApiAction::Journal {
+                    action: Box::new(by_rcpt),
+                },
+            )
+            .await,
+        );
         assert_eq!(page["entries"].as_array().expect("entries").len(), 1);
 
         // Запись: конверт и хеш цепочки.
@@ -4110,7 +4119,7 @@ mod tests {
         )
         .await
         .expect("entry text");
-        assert!(text.contains("Получатели: anna@res.test"), "{text}");
+        assert!(text.contains("Получатели:  anna@res.test"), "{text}");
 
         // Выгрузка: .eml с конвертом — в файл; администратору инсталляции — 403.
         let dir = tempfile::tempdir().expect("tempdir");

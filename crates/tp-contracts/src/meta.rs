@@ -623,6 +623,8 @@ pub struct MessageMeta {
     /// Начало текста для списка писем (JMAP `preview`, ≤ 256 символов).
     pub preview: String,
     /// Ключ цепочки (по `References`/`In-Reply-To`/теме), одинаков у писем одной цепочки в учётной записи.
+    /// Привязку к беседе хранит [`crate::thread::ThreadStore`] (CTR-94); `thread_key` остаётся ключом
+    /// присоединения и фоновой привязки старых писем (META-86).
     pub thread_key: String,
     /// Есть вложения.
     pub has_attachment: bool,

@@ -74,8 +74,18 @@ test("новый скрипт — PUT по введённому имени", asy
   await waitFor(() => expect(sent(calls, "PUT", `${A}/sieve/scripts/vacation%20rules`)[0]?.body).toEqual({ text: "discard;" }));
 });
 
-test("автоответ за пользователя — PUT vacation", async () => {
-  const vacation = { enabled: false, from: null, to: "2027-01-11T00:00:00Z", subject: null, text_body: "В отпуске.", html_body: null };
+test("автоответ за пользователя — PUT vacation, внешние тема и текст", async () => {
+  const vacation = {
+    enabled: false,
+    from: null,
+    to: "2027-01-11T00:00:00Z",
+    subject: null,
+    text_body: "В отпуске.",
+    html_body: null,
+    external_subject: null,
+    external_text_body: null,
+    external_html_body: null,
+  };
   const calls = open("/accounts/a1/sieve", {
     ...account,
     [`GET ${A}/sieve/scripts`]: { body: [] },
@@ -85,6 +95,8 @@ test("автоответ за пользователя — PUT vacation", async 
   fireEvent.click(await screen.findByRole("tab", { name: "Автоответ" }));
   fireEvent.click(await screen.findByLabelText("Автоответ включён"));
   fireEvent.change(screen.getByLabelText("Тема"), { target: { value: " Отпуск " } });
+  fireEvent.change(screen.getByLabelText("Внешняя тема"), { target: { value: " Out of office " } });
+  fireEvent.change(screen.getByLabelText("Внешний текст ответа"), { target: { value: "Я в отпуске до 11.01." } });
   fireEvent.click(screen.getByRole("button", { name: "Сохранить автоответ" }));
   await waitFor(() =>
     expect(sent(calls, "PUT", `${A}/vacation`)[0]?.body).toEqual({
@@ -92,6 +104,8 @@ test("автоответ за пользователя — PUT vacation", async 
       enabled: true,
       to: "2027-01-11T00:00:00.000Z",
       subject: "Отпуск",
+      external_subject: "Out of office",
+      external_text_body: "Я в отпуске до 11.01.",
     }),
   );
   expect(await screen.findByText("Автоответ сохранён")).toBeTruthy();

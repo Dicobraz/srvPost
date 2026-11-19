@@ -3,7 +3,9 @@
 //! - [`server`] — сессия SMTP (RFC 5321) на `smtp-proto`, роли smtp-in и submission, STARTTLS, `AUTH`;
 //! - [`address`] — адресация: подадреса `user+tag`, переписывание адресов конверта;
 //! - [`authcheck`] — SPF, DKIM, DMARC, ARC входящей почты на `mail-auth`;
-//! - [`deliver`] — локальная доставка: разрешение получателей, `Received`, `MailStore::ingest`;
+//! - [`deliver`] — локальная доставка: разрешение получателей, `Received`, `MailStore::ingest`; конвейер
+//!   обработки (SRS 4.9): реестр этапов (CTR-96), журналирование переписки до Sieve ящика (SMTP-53),
+//!   итоговый контроль действий по политике организации (SMTP-54);
 //! - [`dkim_sign`] — DKIM-подпись исходящей почты;
 //! - [`dsn`] — уведомления о доставке (RFC 3464);
 //! - `fuzz` — проверки разборщиков для целей cargo-fuzz `crates/tp-smtp/fuzz` (SMTP-19; не API);

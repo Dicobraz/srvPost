@@ -70,6 +70,31 @@ impl fmt::Display for PeerKind {
     }
 }
 
+/// Контекст точки решения (smtp-in, submission, правила Sieve): тип абонента и признак «ответ на наше письмо»
+/// (решение 125 а). Признак ставит вызывающий по всем трём условиям: DMARC pass с выравниванием (RFC 9989),
+/// отправитель — среди адресатов исходного письма (запись об отправленном — `crate::reply::SentLog`),
+/// письму не больше `smtp.reply.max_age`. По нему [`TrustMatrix::effective`] решает клетки
+/// [`Toggle::ReplyOnly`] — значения «только ответ на наше письмо» у клеток автоответа и MDN наружу.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PeerContext {
+    /// Тип абонента относительно организации.
+    pub kind: PeerKind,
+    /// Письмо — ответ на наше письмо ([`Toggle::ReplyOnly`] решается как [`Toggle::On`]).
+    pub reply: bool,
+}
+
+impl PeerContext {
+    /// Контекст без признака ответа.
+    pub const fn new(kind: PeerKind) -> Self {
+        PeerContext { kind, reply: false }
+    }
+
+    /// Контекст с признаком ответа.
+    pub const fn reply(kind: PeerKind) -> Self {
+        PeerContext { kind, reply: true }
+    }
+}
+
 /// Новое приглашение (`REQUEST` события, которого у получателя нет): письмо с кнопкой или автодобавление.
 /// От узкого к широкому; [`Default`] — узкое значение (отсутствующий ключ JSON — безопасное умолчание клетки).
 #[derive(
@@ -102,7 +127,9 @@ impl fmt::Display for InviteMode {
 }
 
 /// Выключено или включено ([`TrustFunction::ItipUpdates`], [`TrustFunction::AutoReply`], [`TrustFunction::Mdn`],
-/// [`TrustFunction::AutoForward`]). От узкого к широкому.
+/// [`TrustFunction::AutoForward`]). От узкого к широкому. [`Toggle::ReplyOnly`] — только для клеток
+/// [`TrustFunction::AutoReply`] и [`TrustFunction::Mdn`] (решение 125 а): действие разрешено, лишь если письмо —
+/// ответ на наше; решает [`TrustMatrix::effective`] по [`PeerContext`].
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
@@ -111,6 +138,8 @@ pub enum Toggle {
     /// Выключено: письмо остаётся письмом, наружу ничего не уходит.
     #[default]
     Off,
+    /// Только ответ на наше письмо (запись об отправленном — `crate::reply::SentLog`); иначе — как [`Toggle::Off`].
+    ReplyOnly,
     /// Включено.
     On,
 }
@@ -120,6 +149,7 @@ impl Toggle {
     pub const fn as_str(self) -> &'static str {
         match self {
             Toggle::Off => "off",
+            Toggle::ReplyOnly => "reply_only",
             Toggle::On => "on",
         }
     }
@@ -394,9 +424,11 @@ pub struct TrustMatrix {
     pub invite_new: PerPeer<InviteMode>,
     /// `REPLY`, `CANCEL` и обновление `REQUEST` к существующим событиям: включено всем (выключается).
     pub itip_updates: PerPeer<Toggle>,
-    /// Автоответ: включено всем, чужим — только внешним текстом.
+    /// Автоответ: включено всем, чужим — только внешним текстом; клетка может быть [`Toggle::ReplyOnly`]
+    /// (решение 125 а) — автоответ чужому только на ответ на наше письмо.
     pub auto_reply: PerPeer<Toggle>,
-    /// MDN наружу: своим — уходит, чужим — нет.
+    /// MDN наружу: своим — уходит, чужим — нет; клетка может быть [`Toggle::ReplyOnly`] (решение 125 а) —
+    /// уведомление уходит только на ответ на наше письмо.
     pub mdn: PerPeer<Toggle>,
     /// Автопересылка наружу: своим — можно, чужим — нет (главный путь утечки данных).
     pub auto_forward: PerPeer<Toggle>,
@@ -513,6 +545,18 @@ impl TrustMatrix {
         }
     }
 
+    /// Действующее значение клетки в точке решения (решение 125 а): как [`TrustMatrix::get`] по
+    /// [`PeerContext::kind`], клетки [`Toggle::ReplyOnly`] — по [`PeerContext::reply`]: ответ на наше письмо —
+    /// [`Toggle::On`], иначе — [`Toggle::Off`]. Остальные значения проходят как есть.
+    pub fn effective(&self, function: TrustFunction, ctx: &PeerContext) -> CellValue {
+        match self.get(function, ctx.kind) {
+            CellValue::Toggle(Toggle::ReplyOnly) => {
+                CellValue::Toggle(if ctx.reply { Toggle::On } else { Toggle::Off })
+            }
+            value => value,
+        }
+    }
+
     /// Матрица приёма iTIP (решение 123, уточнено решением 124 в): своей организации — всё; чужим новое
     /// приглашение — по клетке [`TrustMatrix::invite_new`], `REPLY`, `CANCEL` и обновление `REQUEST` — по
     /// [`TrustMatrix::itip_updates`], только к существующему событию (тот же UID, отправитель — участник или
@@ -530,7 +574,9 @@ impl TrustMatrix {
             },
             (_, Update | Reply | Cancel) => match self.itip_updates.get(kind) {
                 Toggle::On => InboundDecision::ApplyIfExisting,
-                Toggle::Off => InboundDecision::MailOnly,
+                // ReplyOnly задуман для клеток auto_reply и mdn (решение 125 а); на прочих клетках —
+                // как Off: приём iTIP не привязан к признаку ответа.
+                Toggle::Off | Toggle::ReplyOnly => InboundDecision::MailOnly,
             },
         }
     }
@@ -1271,6 +1317,59 @@ mod tests {
             assert_eq!(gal_allowed(peer), peer == PeerKind::Own);
             assert_eq!(delegation_allowed(peer), peer == PeerKind::Own);
             assert_eq!(dsn_diagnostics(peer), peer == PeerKind::Own);
+        }
+    }
+
+    #[test]
+    fn reply_only_toggle() {
+        // Порядок от узкого к широкому: Off < ReplyOnly < On (запрет побеждает).
+        assert!(Toggle::Off < Toggle::ReplyOnly);
+        assert!(Toggle::ReplyOnly < Toggle::On);
+        let mut m = TrustMatrix::default();
+        m.mdn.partner = Toggle::ReplyOnly;
+        assert_eq!(
+            serde_json::to_string(&Toggle::ReplyOnly).expect("json"),
+            "\"reply_only\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CellValue::Toggle(Toggle::ReplyOnly)).expect("json"),
+            "{\"toggle\":\"reply_only\"}"
+        );
+        // Ответ на наше письмо — как On, прочие письма — как Off; клетки без ReplyOnly — как есть.
+        let reply = PeerContext::reply(PeerKind::Partner);
+        let plain = PeerContext::new(PeerKind::Partner);
+        assert_eq!(
+            m.effective(TrustFunction::Mdn, &reply),
+            CellValue::Toggle(Toggle::On)
+        );
+        assert_eq!(
+            m.effective(TrustFunction::Mdn, &plain),
+            CellValue::Toggle(Toggle::Off)
+        );
+        assert_eq!(
+            m.effective(TrustFunction::AutoReply, &plain),
+            CellValue::Toggle(Toggle::On)
+        );
+        assert_eq!(
+            m.effective(TrustFunction::FreeBusy, &reply),
+            CellValue::Detail(Detail::None)
+        );
+        // Сужение берёт узкое: ReplyOnly не шире On, но уже Off.
+        let mut wide = TrustMatrix::default();
+        wide.mdn.partner = Toggle::On;
+        assert_eq!(wide.mdn.narrow_with(&m.mdn).partner, Toggle::ReplyOnly);
+        let mut off = TrustMatrix::default();
+        off.mdn.partner = Toggle::Off;
+        assert_eq!(m.mdn.narrow_with(&off.mdn).partner, Toggle::Off);
+        // Умолчания и закрытая матрица клеток ReplyOnly не содержат (значения по умолчанию не меняются).
+        for f in [TrustFunction::AutoReply, TrustFunction::Mdn] {
+            for peer in PeerKind::ALL {
+                let has_reply_only = |matrix: &TrustMatrix| {
+                    matches!(matrix.get(f, peer), CellValue::Toggle(Toggle::ReplyOnly))
+                };
+                assert!(!has_reply_only(&TrustMatrix::default()));
+                assert!(!has_reply_only(&TrustMatrix::closed()));
+            }
         }
     }
 

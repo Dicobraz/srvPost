@@ -6175,6 +6175,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "idna",
  "schemars",
  "serde",
  "serde_json",

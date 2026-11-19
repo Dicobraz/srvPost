@@ -7,8 +7,10 @@
 //! [`VacationLog::seen`]; письмо собирает `tp-smtp`.
 //!
 //! Чужим отправителям ([`PeerKind`] не `Own`, SIEVE-14, решение 124 г) — только внешний текст настройки
-//! (`Vacation::external_*`, как `ExternalMessage` в Exchange): его нет или у получателя `auto_reply = Off` —
-//! наружу ничего. Действие `vacation` скрипта внешнего текста не имеет — чужим по нему ответа нет.
+//! (`Vacation::external_*`, как `ExternalMessage` в Exchange): его нет или действующая клетка `auto_reply`
+//! не `On` (клетка `ReplyOnly` решается по признаку ответа на наше письмо — [`PeerContext::reply`], CTR-94,
+//! решение 125 а) — наружу ничего. Действие `vacation` скрипта внешнего текста не имеет — чужим по нему
+//! ответа нет.
 
 use std::time::Duration;
 
@@ -17,7 +19,7 @@ use tp_contracts::Result;
 use tp_contracts::sieve::{
     AutoReply, MAX_VACATION_SUBJECT_LEN, ReplyBody, RulesInput, Vacation, VacationLog,
 };
-use tp_contracts::trust::{PeerKind, Toggle};
+use tp_contracts::trust::{CellValue, PeerKind, Toggle, TrustFunction};
 
 use crate::compile::Part;
 use crate::config::VacationConfig;
@@ -70,9 +72,14 @@ pub(crate) fn suppressed(
     {
         return Some("автоответ выключен или вне срока действия");
     }
-    if input.peer != PeerKind::Own {
-        // Чужим — только внешним текстом и только при auto_reply = On (решение 124 г, RFC 3834).
-        if input.matrix.auto_reply.get(input.peer) == Toggle::Off {
+    if input.peer.kind != PeerKind::Own {
+        // Чужим — только внешним текстом и только при auto_reply = On (решение 124 г, RFC 3834);
+        // клетка ReplyOnly решается по признаку ответа на наше письмо (CTR-94, решение 125 а).
+        if input
+            .matrix
+            .effective(TrustFunction::AutoReply, &input.peer)
+            != CellValue::Toggle(Toggle::On)
+        {
             return Some("автоответ чужим выключен политикой доверия");
         }
         match source {
@@ -157,7 +164,7 @@ pub(crate) async fn reply(
     }
 
     let recipient = strip_angle(&input.recipient).to_owned();
-    let external = input.peer != PeerKind::Own;
+    let external = input.peer.kind != PeerKind::Own;
     let (from, subject, body) = match source {
         Source::Script(v) => (
             v.from.as_deref().and_then(|f| own_from(f, &recipient)),
