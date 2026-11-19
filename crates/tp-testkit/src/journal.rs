@@ -291,7 +291,7 @@ mod tests {
         let journal = MemJournal::new();
         let tamper = {
             let journal = journal.clone();
-            move |id: JournalId| journal.tamper(id)
+            move |_tenant: TenantId, id: JournalId| journal.tamper(id)
         };
         let drop_index = {
             let journal = journal.clone();

@@ -14,12 +14,13 @@ use tp_contracts::journal::{
 /// неизменяемы); поиск по всем полям запроса со страницами; `export` — .eml с конвертом; `verify_chain`
 /// ловит подмену записи; `restore_index` восстанавливает индекс из хранилища записей.
 ///
-/// `corrupt(id)` — подменяет запись `id` в хранилище без пересчёта цепочки (для in-memory —
-/// [`crate::MemJournal::tamper`], для PostgreSQL — SQL теста полосы); `drop_index()` — теряет индекс,
-/// не трогая хранилище записей. Организация набора — новая: чужие записи не мешают.
+/// `corrupt(tenant, id)` — подменяет запись `id` организации `tenant` в хранилище без пересчёта
+/// цепочки (для in-memory — [`crate::MemJournal::tamper`], для PostgreSQL — SQL теста полосы);
+/// `drop_index()` — теряет индекс, не трогая хранилище записей. Организация набора — новая: чужие
+/// записи не мешают.
 pub async fn journal(
     store: &dyn JournalStore,
-    corrupt: &(dyn Fn(JournalId) + Send + Sync),
+    corrupt: &(dyn Fn(TenantId, JournalId) + Send + Sync),
     drop_index: &(dyn Fn() + Send + Sync),
 ) {
     let tenant = TenantId::new();
@@ -189,7 +190,7 @@ pub async fn journal(
     assert!(report.ok && report.broken_at.is_none());
 
     // Подмена записи обнаруживается.
-    corrupt(id1);
+    corrupt(tenant, id1);
     let report = store.verify_chain(&cap, tenant).await.expect("verify");
     assert!(!report.ok, "подмена поймана");
     assert_eq!(report.broken_at, Some(id1));

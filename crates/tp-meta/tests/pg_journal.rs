@@ -64,9 +64,10 @@ async fn journal_passes_contract_suite() {
     let tenant = common::tenant(&pool).await;
     let journal = PgJournal::new(meta, Arc::new(MemJournalRecords::new()));
     // Подмена записи без пересчёта цепочки: только владелец схемы, отключив триггер только на
-    // добавление (роль приложения и узел так не могут).
+    // добавление (роль приложения и узел так не могут). Организацию передаёт набор: записи — в её
+    // собственной организации.
     let tamper_pool = pool.clone();
-    let corrupt = move |id: JournalId| {
+    let corrupt = move |tenant: TenantId, id: JournalId| {
         tokio::task::block_in_place(|| {
             let pool = &tamper_pool;
             tokio::runtime::Handle::current().block_on(async move {
@@ -299,8 +300,9 @@ async fn entries_and_rules_rls() {
     assert_eq!(rules, 0, "чужая организация правил не видит");
     tx.commit().await.expect("commit");
 
-    // Вставка чужой организации отклоняется (WITH CHECK); после ошибки RLS транзакция прервана —
-    // каждая проверка в своей транзакции.
+    // Вставка строки чужой организации из транзакции foreign отклоняется (WITH CHECK); после ошибки
+    // RLS транзакция прервана — каждая проверка в своей транзакции. seq = 2: запись организации
+    // `tenant` уже под номером 1 (уникальность пары организация-номер проверяется раньше политики).
     let err = {
         let mut tx = schema::begin(&pool, foreign).await.expect("begin");
         sqlx::query("SET LOCAL ROLE thepost_app")
@@ -310,12 +312,12 @@ async fn entries_and_rules_rls() {
         let err = sqlx::query(
             "INSERT INTO journal.entries (tenant_id, seq, id, sender, sender_key, recipients, rcpt_keys,
                                           at, rule, storage, canonical, prev_hash, hash)
-             VALUES ($1, 1, gen_random_uuid(), 's@x.example', 's@x.example', ARRAY['r@x.example'],
+             VALUES ($1, 2, gen_random_uuid(), 's@x.example', 's@x.example', ARRAY['r@x.example'],
                      ARRAY['r@x.example'], now(), 'r', 'mem/x', '{}',
                      '\\x0000000000000000000000000000000000000000000000000000000000000000'::bytea,
                      '\\x0100000000000000000000000000000000000000000000000000000000000000'::bytea)",
         )
-        .bind(*foreign.as_uuid())
+        .bind(*tenant.as_uuid())
         .execute(&mut *tx)
         .await
         .expect_err("вставка чужой организации");
@@ -333,7 +335,7 @@ async fn entries_and_rules_rls() {
             "INSERT INTO journal.rules (tenant_id, id, scope_kind, direction, enabled)
              VALUES ($1, 'x', 'org', 'both', true)",
         )
-        .bind(*foreign.as_uuid())
+        .bind(*tenant.as_uuid())
         .execute(&mut *tx)
         .await
         .expect_err("вставка правила чужой организации");
