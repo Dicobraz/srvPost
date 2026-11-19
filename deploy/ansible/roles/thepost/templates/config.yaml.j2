@@ -45,6 +45,18 @@
 {%- if thepost_blob_gc_window | length > 0 -%}
 {%-   set node = node | combine({'blob': {'gc': {'window': thepost_blob_gc_window}}}, recursive=true) -%}
 {%- endif -%}
+{#- Журнал переписки (DEP-58, SRS 4.9): включение — thepost_journal_enabled, поля поверх пресета —
+    thepost_journal. Пресет SMB несёт journal.local (каталог); S3-хранилище заменяет его — одновременно
+    local и s3 в config.yaml запрещены (thepost config check), поэтому при s3 ключ local убираем из
+    пресета (local, заданный оператором рядом с s3, остаётся — это ошибка конфигурации, её видит config check). -#}
+{%- if thepost_journal_enabled | bool or thepost_journal | length > 0 -%}
+{%-   set journal_fields = {'enabled': thepost_journal_enabled | bool} | combine(thepost_journal, recursive=true) -%}
+{%-   if journal_fields.s3 is defined -%}
+{%-     set preset = preset | combine({'journal': preset.journal | default({}) | dict2items
+                                       | rejectattr('key', 'equalto', 'local') | items2dict}, recursive=true) -%}
+{%-   endif -%}
+{%-   set node = node | combine({'journal': journal_fields}, recursive=true) -%}
+{%- endif -%}
 {%- if thepost_db_failover | length > 0 -%}
 {%-   set node = node | combine({'database': {'failover': thepost_db_failover}}, recursive=true) -%}
 {%- endif -%}

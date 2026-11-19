@@ -34,3 +34,22 @@ all:
         # токена здесь нет). Восстановить на новой ВМ — restore.yml -e thepost_restore_openbao=true: нужны
         # openbao-init.json и /etc/openbao/unseal.key прежнего сервера — храните их вне сервера.
         thepost_backup_openbao: true
+        # Журналирование переписки (SRS 4.9, DEP-58) — по умолчанию выключено. Профиль SMB — локальный каталог
+        # (/var/lib/thepost/journal): записи только добавляет сервер, от администратора ОС защиты нет —
+        # thepost doctor предупреждает; неизменяемость по требованиям регуляторов — S3 с Object Lock
+        # (thepost_journal.s3, бакет отдельный от BLOB). Правила журналирования — Admin API, не файл узла.
+        thepost_journal_enabled: false
+        # thepost_journal_local_dir: /var/lib/thepost/journal
+        # S3 с Object Lock вместо локального каталога (режим governance по умолчанию, compliance — явно
+        # и только с retention, риск 21; бакет с Object Lock создаёт администратор хранилища):
+        # thepost_journal:
+        #   s3:
+        #     bucket: thepost-journal
+        #     lock_mode: governance
+        #     retention: 2555d
+        #     endpoint: https://s3.example.ru:8333
+        #     path_style: true
+        #     credentials:
+        #       access_key_id: { secret: "thepost/s3#access_key_id" }
+        #       secret_access_key: { secret: "thepost/s3#secret_access_key" }
+        #     tls: { ca_file: /etc/thepost/pki/ca.pem }
