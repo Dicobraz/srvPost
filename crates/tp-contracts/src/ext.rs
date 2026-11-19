@@ -3,7 +3,8 @@
 //! Модуль — набор крейтов под cargo feature, активируется `modules.<имя>.enabled` в config.yaml.
 //! Ядро не меняется: модуль при запуске регистрирует в [`Registry`] свои роли, capability JMAP,
 //! маршруты Admin API, подписчиков журнала событий ([`EventSink`]), точки принятия решений
-//! ([`DecisionHook`]), правила потока почты ([`MailFlow`]) и реализации интерфейсов ядра ([`BlobStore`], [`Directory`], [`SearchIndex`], [`SecretStore`]).
+//! ([`DecisionHook`]), этапы конвейера обработки ([`Stage`]), правила потока почты ([`MailFlow`]) и
+//! реализации интерфейсов ядра ([`BlobStore`], [`Directory`], [`SearchIndex`], [`SecretStore`]).
 //! Данные модуля — только в схеме PostgreSQL `mod_<имя>` с собственной последовательностью миграций.
 //!
 //! # Точки принятия решений
@@ -47,6 +48,7 @@ use crate::events::EventSink;
 use crate::ids::{MailboxId, MessageId, TenantId};
 use crate::mailstore::Delivery;
 use crate::meta::AccountScope;
+use crate::pipeline::{PipelinePoint, Stage};
 use crate::role::{RoleService, watch};
 use crate::search::SearchIndex;
 use crate::secrets::SecretStore;
@@ -355,6 +357,7 @@ pub struct Registry {
     admin: Vec<Arc<dyn AdminRoutes>>,
     sinks: Vec<Arc<dyn EventSink>>,
     hooks: Vec<Arc<dyn DecisionHook>>,
+    stages: Vec<(PipelinePoint, Arc<dyn Stage>)>,
     blob_store: Option<Arc<dyn BlobStore>>,
     directory: Option<Arc<dyn Directory>>,
     search_index: Option<Arc<dyn SearchIndex>>,
@@ -414,6 +417,16 @@ impl Registry {
         Ok(())
     }
 
+    /// Этап конвейера обработки письма (SRS 2.5, 4.9; раздел Pipeline). Приложение переносит этапы в
+    /// [`crate::pipeline::StageRegistry`] при сборке ([`StageRegistry::register`]).
+    pub fn add_stage(&mut self, point: PipelinePoint, stage: Arc<dyn Stage>) -> Result<()> {
+        if self.stages.iter().any(|(_, s)| s.id() == stage.id()) {
+            return Err(Error::Conflict);
+        }
+        self.stages.push((point, stage));
+        Ok(())
+    }
+
     /// Реализация хранилища BLOB вместо встроенной.
     pub fn set_blob_store(&mut self, store: Arc<dyn BlobStore>) -> Result<()> {
         set_once(&mut self.blob_store, store)
@@ -464,6 +477,11 @@ impl Registry {
         DecisionHooks::new(self.hooks.clone())
     }
 
+    /// Этапы конвейера обработки, зарегистрированные модулями, с их точками.
+    pub fn stages(&self) -> &[(PipelinePoint, Arc<dyn Stage>)] {
+        &self.stages
+    }
+
     /// Хранилище BLOB модуля, если зарегистрировано.
     pub fn blob_store(&self) -> Option<Arc<dyn BlobStore>> {
         self.blob_store.clone()
@@ -510,6 +528,14 @@ impl fmt::Debug for Registry {
                 &self.sinks.iter().map(|s| s.name()).collect::<Vec<_>>(),
             )
             .field("hooks", &self.decision_hooks())
+            .field(
+                "stages",
+                &self
+                    .stages
+                    .iter()
+                    .map(|(p, s)| format!("{}@{p:?}", s.id()))
+                    .collect::<Vec<_>>(),
+            )
             .field("blob_store", &self.blob_store.is_some())
             .field("directory", &self.directory.is_some())
             .field("search_index", &self.search_index.is_some())

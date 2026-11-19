@@ -5,7 +5,7 @@
 Асинхронные трейты, используемые как `dyn`, — через `async-trait`; все трейты `Send + Sync + 'static`.
 
 ## Ids
-- `TenantId`, `DomainId`, `AccountId`, `MailboxId`, `MessageId`, `QueueId`, `GroupId`, `HeldId` — newtype над `Uuid` (v7), `Copy`, `Serialize`; `TenantId::DEFAULT` = `00000000-0000-0000-0000-000000000001` — организация по умолчанию.
+- `TenantId`, `DomainId`, `AccountId`, `MailboxId`, `MessageId`, `QueueId`, `GroupId`, `HeldId`, `JournalId` — newtype над `Uuid` (v7), `Copy`, `Serialize`; `TenantId::DEFAULT` = `00000000-0000-0000-0000-000000000001` — организация по умолчанию.
 - `Uid(u32)` — IMAP UID в ящике, монотонный; `UidValidity(u32)`.
 - `ShardId(i32)` — шард метаданных (кластер PostgreSQL, SRS 3.6); `ShardId::MAIN` = 0 — основная БД с каталогом (CTR-34); `tp_meta::shards::ShardId` переходит на него (волна meta).
 - `ModSeq(u64)` — монотонный на ящик (IMAP CONDSTORE, состояние JMAP).
@@ -287,6 +287,63 @@ Message-ID — точно, интервал `[since, until)`; `validate()` (`lim
 порядок — по `at`, равные — в порядке записи; некорректный запрос или позиция — `Invalid`. Срок хранения (по умолчанию 30 суток) —
 секция конфигурации реализации. Пишет `tp-smtp` (SMTP-17); реализация — `tp-meta` (META-22: секции по суткам, роль приложения —
 только INSERT и SELECT), in-memory — `MemDeliveryLog` (`events()`); набор — `suite::delivery_log`.
+
+## Pipeline
+SRS 4.9, 2.5, 2.6 (CTR-96; код — `pipeline.rs`). Конвейер обработки — упорядоченные этапы, общие для приёма извне (smtp-in),
+отправки клиентом (submission, JMAP EmailSubmission) и доставки в ящик; выполняется ролью transport, узел edge передаёт сессию
+насквозь — отказ возвращается отправителю синхронно в той же SMTP-сессии. Входящая почта проходит конвейер до доставки в ящик,
+исходящая — до постановки в очередь.
+- `PipelinePoint::{MailFrom, RcptTo, Data, BeforeMailboxSieve, AfterMailboxSieve, FinalActionCheck}` — точки конвейера,
+  порядок вариантов — порядок выполнения. На `MailFrom`/`RcptTo` — условия по конверту (отказ на `RcptTo` — отдельному
+  получателю), на `Data` — условия по содержимому (отказ — всему письму). Скрипт ящика (Sieve) — этап ядра между
+  `BeforeMailboxSieve` (его последний этап, `ORDER_LAST`) и `AfterMailboxSieve`.
+- `Stage { id, point, order, kind }` — этап; идентификатор — `valid_stage_id` (`[a-z0-9._-]`, ≤ 64, уникален), порядок в
+  точке — `(order, порядок регистрации)`. `StageKind::{Check, Rules}`: этапы правил для служебных писем пропускаются.
+  `StageRegistry`: `register_core` — этапы ядра (проверки сессии, Milter, журналирование, Sieve ящика, итоговый контроль;
+  идентификаторы — `core_stage::*`; журналирование — `ORDER_FIRST` точки `BeforeMailboxSieve` — до Sieve и этапов модулей);
+  `register(point, stage)` — модульные этапы (через `Registry::add_stage`; `stage.point() ≠ point` — `Invalid`); этап ядра
+  нельзя удалить (`remove` — `Invalid`, нет — `NotFound`) или переставить (`set_order` — `Invalid`). `run(point, &StageInput)
+  -> StageVerdict` выполняет этапы точки по порядку: первый отказ — итог (`Reject` — всему письму, `RejectRecipient` — только
+  на `RcptTo`, в прочих точках — `Invalid`), ошибка этапа — ошибка операции.
+- `StageInput { tenant, flow: FlowDirection, mail_from, rcpt? (на `RcptTo` и точках доставки), message? (с `Data`),
+  actions? (с `AfterMailboxSieve`), system? }` — что известно этапу в точке.
+- `ActionSet { redirect, copies, recipients }` — итоговый набор действий по письму и получателю: перенаправления (`redirect`
+  из Sieve и правил), копии по адресам, итоговые адресаты (включая раскрытых из групп). `FinalActionCheck` — этап после всех
+  остальных: проверяет `ActionSet` по `OrgPolicy` (`check(actions, org_domains)` — адреса перенаправлений и копий вне доменов
+  организации); в базовой поставке — `forbid_external_forward` (по умолчанию выключен; перехватывает `redirect` из скрипта
+  ящика) — задел под модуль «Правила потока почты» (SRS 4.10, `block_external_forward`).
+- Служебные письма продукта (DSN, отбивки, уведомления) и копии журнала — `SystemMessage::{Dsn, Notification, JournalCopy}`:
+  этапы правил (`StageKind::Rules`) для них пропускаются — петли исключены, копия журнала повторно не журналируется.
+  Набор `suite::pipeline`.
+
+## Journal
+SRS 4.9, 5.2 (CTR-97; код — `journal.rs`). Журналирование переписки по модели Exchange Journaling — базовая
+поставка. Правило `JournalRule { id (valid_rule_id), tenant, scope: JournalScope::{Org, Group(GroupId), Mailbox(AccountId)},
+direction: JournalDirection::{In, Out, Both}, enabled }` задаётся на организацию, группу или ящик; выполняется этапом ядра
+конвейера (точка `BeforeMailboxSieve`, до Sieve ящика и этапов модулей) — скрипт ящика (`discard`, `stop`) и правила модулей
+запись не отменяют; `covers(direction, sender?, rcpts, members)` — область покрывает отправителя или получателя
+(раскрытие группы — вызывающий). Хранение правил и Admin API — волны полос.
+`JournalRecord { tenant, sender, recipients (все, включая скрытых и раскрытых из групп), message_id?, at, rule }` — конверт
+записи, `validate()`; одна запись на письмо (на правило). Копия в журнал — `SystemMessage` (CTR-96): без этапов правил.
+Хранилище записей — отдельное от BLOB ящиков (SRS 4.9: дедупликация внутри журнала, блокировка объектов не затрагивает
+хранилище ящиков); контракт бэкенда не знает — реализация в полосе blob (BLOB-18), индекс — META-88. Записи неизменяемы:
+методов изменения и удаления нет, срок хранения продлевается только.
+`JournalStore`:
+- `append(rule, record, message) -> JournalId` — письмо целиком с конвертом; `record.rule` = `rule.id`, `record.tenant` =
+  `rule.tenant`, пустое письмо — `Invalid`.
+- `search(&JournalAudit, &JournalQuery { tenant, sender, recipient, message_id, rule, since, until, limit, after })` —
+  отправитель, один из получателей (включая скрытых), Message-ID, правило, интервал `[since, until)`; `validate`/`matches` —
+  в контракте, порядок — по (`at`, `id`), страница `JournalPage { entries: Vec<JournalEntry { id, record, hash }>, next }`
+  с курсором; некорректный запрос или позиция — `Invalid`.
+- `export(&JournalAudit, tenant, id)` — .eml с конвертом: `journal_eml` добавляет заголовки `X-ThePost-Journal-*`
+  (отправитель, каждый получатель, Message-ID, правило, unix-время) перед исходным письмом; нет записи — `NotFound`.
+- `verify_chain(&JournalAudit, tenant) -> ChainReport { records, ok, broken_at }` — записи индекса связаны цепочкой хешей
+  `hash = SHA-256(prev_hash ‖ canonical(record))` (`chain_input` фиксирует образ, у первой записи `prev` — `GENESIS_HASH`);
+  целостность проверяют thepost doctor и Admin API.
+- `restore_index(tenant) -> u64` — индекс восстанавливается из хранилища записей (maintenance).
+Доступ — только роль «аудитор журнала» (SRS 5.2): токен `JournalAudit` (выдаёт авторизация Admin API) — параметр `search`,
+`export`, `verify_chain`; пользователи и администраторы правил журнал не видят, через IMAP и JMAP не доступен.
+In-memory — `MemJournal`; набор `suite::journal` (подмена записи и потеря индекса — колбэки теста).
 
 ## Groups
 SRS 4.5, решение 2026-11-01-borrowings-security (CTR-21; код — `groups.rs`). `DistributionGroup { id: GroupId, tenant, name, address:
@@ -962,7 +1019,8 @@ register(&mut Registry, &ModuleCtx) -> Result<()> }`; имя — `validate_modul
 `ModuleCtx { config: watch::Receiver<serde_json::Value> }` (`#[non_exhaustive]`, `ModuleCtx::new`) — секция `modules.<имя>`;
 типизированно — `ModuleCtx::config::<T: DeserializeOwned>() -> Result<T>` (ошибка полей — `Invalid`).
 `Registry`: `add_role(RoleService)`, `add_jmap_capability(JmapCapability { uri, session_object, methods, call })`,
-`add_admin_routes(AdminRoutes { prefix, handle(AdminRequest) -> AdminResponse })`, `add_event_sink`, `add_decision_hook`;
+`add_admin_routes(AdminRoutes { prefix, handle(AdminRequest) -> AdminResponse })`, `add_event_sink`, `add_decision_hook`,
+`add_stage(point, Stage)` — этап конвейера обработки (раздел Pipeline, SRS 2.5);
 `set_blob_store` / `set_directory` / `set_search_index` / `set_secret_store` — замена встроенной реализации; `set_mail_flow` — правила потока
 почты (`transport::MailFlow`, раздел Transport). Повтор имени, URI, префикса, реализации — `Conflict`.
 JSON в JMAP (`session_object`, аргументы и результат `call`) и тела Admin API модулей — `serde_json::Value`
@@ -1320,3 +1378,19 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   `MemOutbound::Queued` запоминает `user`. По сравнению с карточкой: трейт живёт в `queue.rs` (не `delivery.rs` — это журнал
   доставки); тест приёмки (право Send on Behalf группе → приглашение через JMAP-путь в календарь) — `tp-smtp` `deliver::tests::invite`
   на заглушке прав с группами и `FakeItip`.
+- 2026-11-18 — CTR-96 (волна contracts-67): модуль `pipeline::{PipelinePoint, StageKind, SystemMessage, StageInput,
+  StageVerdict, Stage, valid_stage_id, MAX_STAGE_ID_LEN, core_stage, ORDER_FIRST, ORDER_LAST, StageRegistry, ActionSet, OrgPolicy}`
+  — конвейер обработки письма (SRS 4.9): точки конвейера, этапы ядра и модулей (этап ядра нельзя удалить или переставить),
+  итоговый набор действий с итоговым контролем `forbid_external_forward`, служебные письма
+  без этапов правил; `Registry::add_stage` — точка расширения (SRS 2.5). Раздел «Pipeline»; набор `suite::pipeline`.
+  Реализация конвейера в `tp-smtp` — волна полосы.
+- 2026-11-18 — CTR-97 (волна contracts-67): модуль `journal::{JournalRule, JournalScope, JournalDirection, JournalRecord,
+  JournalStore, JournalAudit, JournalQuery, JournalPage, JournalCursor, JournalEntry, ChainReport, valid_rule_id,
+  MAX_RULE_ID_LEN, MAX_MESSAGE_ID_LEN, chain_input, GENESIS_HASH, journal_eml}` и id `JournalId` — журналирование переписки
+  (SRS 4.9): правила на организацию/группу/ящик с направлением, запись — письмо целиком с конвертом (все получатели,
+  включая скрытых и раскрытых из групп), хранилище отдельно от BLOB ящиков, индекс с хеш-цепочкой
+  `SHA-256(prev ‖ canonical(record))` и восстановлением из хранилища записей, доступ — токен роли «аудитор журнала».
+  По сравнению с карточкой: `scope` несёт цель (Org | Group(GroupId) | Mailbox(AccountId)), организация правила — отдельное
+  поле `tenant`; `covers` — проверка области правила (членство группы передаёт вызывающий). Раздел «Journal»; in-memory —
+  `MemJournal` (хеш — тестовый SipHash, SHA-256 считают реализации); набор `suite::journal`. Реализация — BLOB-18, индекс —
+  META-88.

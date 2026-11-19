@@ -21,6 +21,7 @@ pub mod fakes;
 pub mod groups;
 pub mod identity;
 pub mod infra;
+pub mod journal;
 pub mod load;
 pub mod membership;
 pub mod meta;
@@ -59,6 +60,7 @@ pub use infra::{
     Clock, ManualClock, MemEventBus, MemEventLog, MemLease, MemPartitionAssigner,
     MemShardedEventLog, SystemClock,
 };
+pub use journal::MemJournal;
 pub use load::MemLoadMonitor;
 pub use membership::MemMembership;
 pub use meta::MemMetadata;
