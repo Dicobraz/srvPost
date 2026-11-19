@@ -2317,7 +2317,7 @@ mod tests {
     /// индекса — FAIL с записью; расхождение числа записей индекса и хранилища — FAIL `journal.index`.
     #[tokio::test]
     async fn journal_chain_ok_broken_and_index_mismatch() {
-        use tp_contracts::journal::{GENESIS_HASH, JournalDirection, JournalRule, JournalScope};
+        use tp_contracts::journal::{JournalDirection, JournalRule, JournalScope};
         use tp_testkit::journal::{MemJournal, MemJournalRecords};
 
         let tenant = TenantId::DEFAULT;
