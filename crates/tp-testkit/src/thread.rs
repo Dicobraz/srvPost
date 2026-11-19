@@ -104,9 +104,7 @@ impl Account {
 #[async_trait]
 impl ThreadStore for MemThreads {
     fn limits(&self) -> ThreadLimits {
-        lock(&self.state)
-            .limits
-            .unwrap_or_else(ThreadLimits::default)
+        lock(&self.state).limits.unwrap_or_default()
     }
 
     async fn bind(

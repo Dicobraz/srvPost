@@ -138,7 +138,7 @@ pub async fn reply(log: &dyn SentLog, tenant: TenantId, foreign: TenantId) {
     );
     // До конца: свежие записи тоже удаляются по сроку, повторная очистка — ничего.
     assert_eq!(log.purge_before(sent_at(200)).await, Ok(1));
-    assert_eq!(log.by_tag(tenant, &vec![2u8; 8]).await, Ok(None));
+    assert_eq!(log.by_tag(tenant, &[2u8; 8]).await, Ok(None));
     assert_eq!(log.purge_before(sent_at(200)).await, Ok(0));
 }
 
