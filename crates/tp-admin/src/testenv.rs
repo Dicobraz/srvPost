@@ -26,7 +26,8 @@ use tp_contracts::{AccountId, DomainId, GroupId, MessageId, Result, TenantId};
 use tp_testkit::{
     Clock, FakeAuthenticator, MemAppPasswords, MemAuditLog, MemBlobIndex, MemBlobStore,
     MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemJournal, MemLocalAdminTokens,
-    MemMetadata, MemPolicies, MemQueue, MemQuota, MemSieve, MemTransport, MemTrash, SystemClock,
+    MemMetadata, MemPolicies, MemQueue, MemQuota, MemSieve, MemThreads, MemTransport, MemTrash,
+    SystemClock,
 };
 use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate, MemTrust};
 
@@ -230,6 +231,7 @@ impl Stores {
             trash: Arc::new(trash.clone()),
             quota: Arc::new(quota.clone()),
             bus: Arc::new(MemEventBus::default()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks: DecisionHooks::default(),
         });
         let passwords = MemAppPasswords::new(&meta);

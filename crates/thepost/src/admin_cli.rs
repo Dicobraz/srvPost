@@ -3148,7 +3148,7 @@ mod tests {
         Clock, FakeAuthenticator, MemAbuseBlocks, MemAppPasswords, MemAuditLog, MemBlobIndex,
         MemBlobStore, MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemJournal,
         MemLocalAdminTokens, MemMetadata, MemModeration, MemPolicies, MemQuota, MemSieve,
-        MemTransport, MemTrash, MemTrust, SystemClock,
+        MemThreads, MemTransport, MemTrash, MemTrust, SystemClock,
     };
     use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate};
 
@@ -3711,6 +3711,7 @@ mod tests {
             trash: Arc::new(trash.clone()),
             quota: Arc::new(quota.clone()),
             bus: Arc::new(MemEventBus::default()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks: DecisionHooks::default(),
         });
         let app_passwords = tp_auth::AppPasswords::new(

@@ -26,7 +26,7 @@ use tp_testkit::{
     Clock, FakeAuthenticator, FakeSearch, FakeSharingAuthorizer, MemAcl, MemAddressBook,
     MemBlobIndex, MemBlobStore, MemDav, MemDeliveryLog, MemEventBus, MemGroups, MemItipSender,
     MemMailboxAudit, MemMetadata, MemOutbound, MemPolicies, MemQuota, MemSenderLists, MemSieve,
-    MemSubmissions, MemTrash, MemTrust, RecordingDecisionHook, SearchDoc, SystemClock,
+    MemSubmissions, MemThreads, MemTrash, MemTrust, RecordingDecisionHook, SearchDoc, SystemClock,
 };
 
 use crate::{Deps, Jmap, JmapConfig, SharingDeps};
@@ -274,6 +274,7 @@ impl Env {
             trash: Arc::new(trash.clone()),
             quota: Arc::new(MemQuota::new(&meta)),
             bus: Arc::new(bus.clone()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks: hooks.clone(),
         });
         let scope = meta.account("user@example.org").await.expect("account");
