@@ -119,6 +119,10 @@ uuid_id!(
     /// Запись журнала переписки (`journal::JournalStore::append`, CTR-97).
     JournalId
 );
+uuid_id!(
+    /// Беседа учётной записи (JMAP Thread, RFC 8621 §3): неизменяем, письмо — в одной беседе (CTR-94).
+    ThreadId
+);
 
 impl TenantId {
     /// Организация по умолчанию — единственная в базовой поставке (SRS 3.8).

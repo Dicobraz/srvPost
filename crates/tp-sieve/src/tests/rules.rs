@@ -9,7 +9,7 @@ use tp_contracts::meta::{AccountScope, Flag};
 use tp_contracts::sieve::{
     DeliveryRules, MailboxRef, ReplyBody, RulesInput, RulesOutcome, SieveStore, Vacation,
 };
-use tp_contracts::trust::{InviteMode, PeerKind, TrustMatrix};
+use tp_contracts::trust::{InviteMode, PeerContext, PeerKind, TrustMatrix};
 use tp_contracts::{AccountId, TenantId};
 use tp_testkit::{ManualClock, MemSieve, MemVacationLog};
 
@@ -51,7 +51,7 @@ impl Fixture {
             mail_from: "alice@example.com".into(),
             message: MAIL.as_bytes().to_vec().into(),
             mailboxes: mailboxes(),
-            peer: PeerKind::Own,
+            peer: PeerContext::new(PeerKind::Own),
             matrix: TrustMatrix::default(),
         };
         Self {
@@ -468,7 +468,7 @@ async fn processcalendar_within_matrix() {
     .into();
 
     // Партнёр при открытой клетке (Auto): итог — calendar с параметрами действия; implicit keep остаётся.
-    f.input.peer = PeerKind::Partner;
+    f.input.peer = PeerContext::new(PeerKind::Partner);
     f.input.matrix.invite_new.partner = InviteMode::Auto;
     let o = f.eval().await;
     let cal = o.calendar.as_ref().expect("calendar");
@@ -491,7 +491,7 @@ async fn processcalendar_within_matrix() {
     );
 
     // Внешнему автодобавление не открывается (потолок установки — кнопка): no_action.
-    f.input.peer = PeerKind::External;
+    f.input.peer = PeerContext::new(PeerKind::External);
     let o = f.eval().await;
     assert!(o.calendar.is_none(), "{o:?}");
 
@@ -502,7 +502,7 @@ async fn processcalendar_within_matrix() {
         .expect("org");
     f.user("require \"processcalendar\"; processcalendar :updatesonly :deletecancelled;")
         .await;
-    f.input.peer = PeerKind::Own;
+    f.input.peer = PeerContext::new(PeerKind::Own);
     let o = f.eval().await;
     let cal = o.calendar.expect("своему — Auto по умолчанию");
     assert!(cal.updates_only && cal.delete_cancelled && !cal.allow_public);
@@ -532,12 +532,12 @@ async fn peer_test_ignores_headers() {
             if peer \"external\" { fileinto \"Архив\"; }",
     )
     .await;
-    f.input.peer = PeerKind::Partner;
+    f.input.peer = PeerContext::new(PeerKind::Partner);
     assert_eq!(f.folders().await, ["Work"]);
-    f.input.peer = PeerKind::External;
+    f.input.peer = PeerContext::new(PeerKind::External);
     assert_eq!(f.folders().await, ["Архив"]);
     // Заголовок X-Peer не меняет тип: partner при заголовке «external» остаётся partner.
-    f.input.peer = PeerKind::Partner;
+    f.input.peer = PeerContext::new(PeerKind::Partner);
     assert_eq!(f.folders().await, ["Work"]);
 }
 
