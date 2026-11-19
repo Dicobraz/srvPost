@@ -629,6 +629,7 @@ mod tests {
             route: route.into(),
             path: "/api/v1/orgs/x/transport/domains".into(),
             status: 201,
+            details: None,
             content_messages: None,
         }
     }

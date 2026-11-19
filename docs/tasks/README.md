@@ -913,15 +913,16 @@
 | [DOC-11](DOC-11.md) | INSTALL — брендинг заказчика | docs | A | docs-11 | done | ADM-48 |
 | [CTR-93](CTR-93.md) | контракт политики доверия — типы абонентов, функции, уровни, потолок, безопасные умолчания | contracts | B | contracts-64 | done | CTR-92 |
 | [META-85](META-85.md) | политика доверия в PostgreSQL — `TrustStore` в `PgMeta`, внешний текст автоответа | meta | A | meta-58 | done | CTR-93 |
-| [ADM-49](ADM-49.md) | политика доверия в Admin API — маршруты уровней, проверка потолка, партнёры, CLI | admin | B | admin-35 | ready | CTR-93,ADM-44 |
-| [UI-23](UI-23.md) | консоль — экран «Доверие»: матрица типов абонентов и функций, уровни, партнёры | console | A | console-14 | todo | ADM-49 |
-| [TUI-09](TUI-09.md) | текстовый интерфейс — раздел «Доверие»: матрица, уровни, партнёры | tui | A | tui-06 | todo | TUI-03,ADM-49 |
+| [ADM-49](ADM-49.md) | политика доверия в Admin API — маршруты уровней, проверка потолка, партнёры, CLI | admin | B | admin-35 | done | CTR-93,ADM-44 |
+| [UI-23](UI-23.md) | консоль — экран «Доверие»: матрица типов абонентов и функций, уровни, партнёры | console | A | console-14 | ready | ADM-49 |
+| [TUI-09](TUI-09.md) | текстовый интерфейс — раздел «Доверие»: матрица, уровни, партнёры | tui | A | tui-06 | ready | TUI-03,ADM-49 |
 | [SMTP-50](SMTP-50.md) | матрица доверия в SMTP — тип абонента, автоответ, MDN, DSN, группы, автопересылка | smtp | A | smtp-30 | done | CTR-93,SMTP-49 |
-| [SMTP-55](SMTP-55.md) | спам — максимально рано мимо всех автоматических механизмов и без ручного iTIP | smtp | A | smtp-35 | ready | SMTP-50 |
+| [SMTP-55](SMTP-55.md) | спам — максимально рано мимо всех автоматических механизмов и без ручного iTIP | smtp | A | smtp-35 | done | SMTP-50 |
+| [JMAP-50](JMAP-50.md) | # JMAP-50. Принятие встречи из письма — API веб-почты (решение #134, вариант 3) |  |  | jmap-35 | todo | — |
 | [DAV-44](DAV-44.md) | матрица доверия в CalDAV и CardDAV — iTIP извне, занятость, общий доступ, публикация, GAL | dav | A | dav-21 | done | CTR-93,DAV-43 |
 | [JMAP-47](JMAP-47.md) | матрица доверия в JMAP — принципалы и занятость своей организации, общий доступ, публикация, внешний автоответ | jmap | A | jmap-30 | done | CTR-93 |
 | [SIEVE-14](SIEVE-14.md) | `processcalendar` (RFC 9671), расширение `vnd.thepost.peer`, админский скрипт — только сужение | sieve | A | sieve-07 | done | CTR-93 |
-| [APP-76](APP-76.md) | узел — политика доверия в точках решения (SMTP, DAV, JMAP, Sieve, Admin API) | app | A | app-73 | todo | META-85,ADM-49,SMTP-50,DAV-44,JMAP-47,SIEVE-14 |
+| [APP-76](APP-76.md) | узел — политика доверия в точках решения (SMTP, DAV, JMAP, Sieve, Admin API) | app | A | app-73 | ready | META-85,ADM-49,SMTP-50,DAV-44,JMAP-47,SIEVE-14 |
 | [DOC-12](DOC-12.md) | ADMIN-GUIDE — сверка раздела «Кто с кем и что может» с кодом | docs | A | docs-12 | todo | APP-76 |
 | [DEPS-18](DEPS-18.md) | зависимости метки ответа и BATV — `chacha20poly1305`, `hmac`, `sha1` в tp-smtp | deps | B | deps-18 | done | — |
 | [CTR-94](CTR-94.md) | контракты ответа и беседы — запись об отправленном, ключи меток, беседа, удержание и действия по беседе | contracts | B | contracts-65 | done | CTR-93 |
@@ -991,6 +992,7 @@
 | [DAV-41](DAV-41.md) | приглашение — только получателю из `ATTENDEE` | dav | A | — |
 | [DAV-42](DAV-42.md) | организатор письма извне с адресом организации — внешний для бронирования | dav | A | — |
 | [DAV-43](DAV-43.md) | приём iTIP по матрице решения 123, бронирование — только внутри организации | dav | B | CTR-92,DAV-19,DAV-41,DAV-42 |
+| [DEP-59](DEP-59.md) | # DEP-59 — автообновление стенда из релизов GitHub (stand-update.sh) |  |  | — |
 | [DEPS-21](DEPS-21.md) | фича `time` у `instant-acme` — подсказка окна продления (ARI) | deps | B | PLT-39 |
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |

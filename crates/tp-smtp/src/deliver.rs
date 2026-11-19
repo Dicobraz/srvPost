@@ -58,6 +58,11 @@
 //!   заблокированного отправителя — в «Спам», надёжного — во «Входящие» поверх карантина фильтра Milter; сверяется
 //!   `From` письма, затем отправитель конверта. Письмо с проваленным DMARC остаётся в «Спаме» и от «надёжного»:
 //!   его адрес мог быть подделан;
+//! - спам — максимально рано мимо всех автоматических механизмов (SMTP-55, решение #112): письмо с вердиктом
+//!   спама попадает в папку «Спам», и больше с ним ничего не происходит — правила получателя не выполняются
+//!   (автоответ, перенаправление и приём iTIP гасились вердиктом и раньше — SMTP-50, DSN тоже), а ручная
+//!   iTIP-обработка (accept/tentative/decline/counter) письма из «Спама» отклоняется сервером в точке приёма
+//!   запроса клиента ([`Delivery::junk_itip_refusal`], [`Delivery::with_messages`]);
 //! - решения модератора (`tp_contracts::groups::Moderation`, CTR-31, CTR-43; FIX-01, `moderation`): одобренное письмо
 //!   очереди модерации — участникам группы или исходным получателям правила потока без повторной модерации, отказ —
 //!   уведомление отправителю (RFC 3464) с причиной модератора.
@@ -96,11 +101,12 @@ use tp_contracts::ext::{CopyTo, Decision, DecisionHooks, SubmissionInfo};
 use tp_contracts::groups::{DistributionGroup, MAX_RULE_NAME_LEN};
 use tp_contracts::mailstore::{Delivery as MailDelivery, IngestRequest, Ingested, MailStore};
 use tp_contracts::meta::{
-    Account, AccountScope, AccountStore, Mailbox, MailboxStore, Policy, PolicyResolver, SpecialUse,
+    Account, AccountScope, AccountStore, Mailbox, MailboxStore, MessageQuery, MessageStore, Policy,
+    PolicyResolver, SpecialUse,
 };
 use tp_contracts::queue::{DsnRet, Outbound, SubmitStatus, Submitted};
 use tp_contracts::retention::Quota;
-use tp_contracts::schedule::{ItipDelivery, ItipMessage};
+use tp_contracts::schedule::{ItipDelivery, ItipMessage, ItipMethod};
 use tp_contracts::senders::{SenderLists, SenderVerdict};
 use tp_contracts::sharing::DelegateStore;
 use tp_contracts::sieve::{AutoReply, DeliveryRules, MailboxRef, RulesInput, RulesOutcome};
@@ -192,6 +198,13 @@ struct Snapshot {
 /// Наибольшая глубина вложенности групп каталога.
 const MAX_GROUP_DEPTH: usize = 8;
 
+/// Тип части письма iTIP (быстрая проверка до разбора, SMTP-55).
+const TEXT_CALENDAR: &[u8] = b"text/calendar";
+
+/// Предел просмотра папки «Спам» при проверке ручного iTIP-ответа (SMTP-55): приглашение старше последних
+/// [`JUNK_SCAN`] писем не находится — ответ проходит; «Спам» обычно невелик и чистится пользователем.
+const JUNK_SCAN: usize = 1000;
+
 /// Получатель после переписывания и разрешения.
 struct Target {
     /// Адрес после переписывания (`TenantTransport::rewrite`).
@@ -267,6 +280,9 @@ pub struct Delivery {
     senders: Option<Arc<dyn SenderLists>>,
     /// Политики организации (SMTP-40): профиль Milter, лимиты сеанса submission ([`Handler::policy`]).
     policies: Option<Arc<dyn PolicyResolver>>,
+    /// Письма учётных записей ([`MessageStore`]): проверка ручного iTIP-ответа на письмо в «Спаме» (SMTP-55).
+    /// Без хранилища проверка не выполняется.
+    messages: Option<Arc<dyn MessageStore>>,
     vacation_rate: VacationRate,
     /// `delivery.redirect_hops`.
     redirect_hops: u32,
@@ -391,6 +407,7 @@ impl Delivery {
             delegates: None,
             senders: None,
             policies: None,
+            messages: None,
             vacation_rate: VacationRate::new(cfg.delivery.vacation_rate),
             redirect_hops: cfg.delivery.redirect_hops,
             redirect_total: cfg.delivery.redirect_total,
@@ -411,6 +428,16 @@ impl Delivery {
     /// заблокированного отправителя — в «Спам», надёжного — во «Входящие» поверх вердикта фильтров.
     pub fn with_sender_lists(mut self, senders: Arc<dyn SenderLists>) -> Self {
         self.senders = Some(senders);
+        self
+    }
+
+    /// Письма учётных записей ([`MessageStore`]) для отказа ручной iTIP-обработки спам-письма (SMTP-55, решение
+    /// #112): accept/tentative/decline/counter (REPLY или `COUNTER` письма клиента) в ответ на письмо в папке
+    /// «Спам» отправителя отклоняется — встречу из спам-письма руками не принять; после переноса письма из
+    /// «Спама» — работает. Реализация — `tp-meta` (`PgMeta`), in-memory — `MemMetadata`; роли папок —
+    /// [`Deps::mailboxes`]. Без хранилища проверка не выполняется.
+    pub fn with_messages(mut self, messages: Arc<dyn MessageStore>) -> Self {
+        self.messages = Some(messages);
         self
     }
 
@@ -942,6 +969,82 @@ impl Delivery {
             .await?
             .into_iter()
             .any(|d| d.delegate == sender && d.schedule_on_behalf))
+    }
+
+    /// Отказ ручной iTIP-обработки спам-письма (SMTP-55, решение #112; RFC 9671 §5 — календарные данные спама
+    /// не обрабатываются): `Some(reply)` — письмо отклоняется, приглашение не вносится в календарь, клиент
+    /// получает отказ. Ручной запрос клиента — письмо с `text/calendar; method=REPLY` (accept, tentative,
+    /// decline) или `COUNTER`, отправленное вошедшим пользователем (submission, [`Delivery::submit`]):
+    /// приглашение, на которое он отвечает (`In-Reply-To`/`References` → `Message-ID`, RFC 5322 §3.6.4), лежит в
+    /// папке «Спам» его ящика. После переноса приглашения из «Спама» — обрабатывается. Вердикт входящего письма
+    /// проверяется раньше — приём iTIP получателям из «Спама» не вызывается ([`itip_targets`]); без хранилища
+    /// писем ([`Delivery::with_messages`]) или при его сбое проверка пропускается (сбой — не отказ).
+    async fn junk_itip_refusal(
+        &self,
+        principal: Option<&Principal>,
+        raw: &[u8],
+    ) -> Result<Option<Reply>> {
+        let Some(messages) = &self.messages else {
+            return Ok(None);
+        };
+        let Some(p) = principal.filter(|p| p.tenant == self.deps.tenant) else {
+            return Ok(None);
+        };
+        // Быстрая проверка до разбора: часть `text/calendar` в письме.
+        if !raw
+            .windows(TEXT_CALENDAR.len())
+            .any(|w| w.eq_ignore_ascii_case(TEXT_CALENDAR))
+        {
+            return Ok(None);
+        }
+        // Ответ клиента на приглашение (не приглашение и не отмена — внутреннее планирование, решение 78).
+        let Some(Ok(msg)) = itip::extract(raw) else {
+            return Ok(None);
+        };
+        if !matches!(msg.method, ItipMethod::Reply | ItipMethod::Counter) {
+            return Ok(None);
+        }
+        let referenced = referenced_ids(raw);
+        if referenced.is_empty() {
+            return Ok(None);
+        }
+        let scope = AccountScope {
+            tenant: p.tenant,
+            account: p.account,
+        };
+        let Ok(list) = self.deps.mailboxes.list(scope).await else {
+            tracing::warn!(account = %p.account, "smtp: папки не прочитаны — проверка ручного iTIP пропущена");
+            return Ok(None);
+        };
+        let Some(junk) = list
+            .iter()
+            .find(|m| m.role == Some(SpecialUse::Junk))
+            .map(|m| m.id)
+        else {
+            return Ok(None);
+        };
+        let Ok(letters) = messages
+            .list(scope, junk, MessageQuery::All, JUNK_SCAN)
+            .await
+        else {
+            tracing::warn!(account = %p.account, "smtp: «Спам» не прочитан — проверка ручного iTIP пропущена");
+            return Ok(None);
+        };
+        if !letters.iter().any(|m| {
+            m.meta
+                .envelope
+                .message_id
+                .as_deref()
+                .is_some_and(|id| referenced.iter().any(|r| r == id))
+        }) {
+            return Ok(None);
+        }
+        tracing::info!(account = %p.account, method = %msg.method, "smtp: ручной iTIP-ответ на письмо в «Спаме» отклонён");
+        Ok(Some(reply(
+            550,
+            [5, 7, 1],
+            "Scheduling response refused: invitation is in the Junk folder",
+        )))
     }
 
     /// Отправитель конверта сеанса submission (SMTP-45, аналог `reject_sender_login_mismatch`): пустой (`<>`), свой
@@ -1951,6 +2054,11 @@ impl Delivery {
             Ok(s) => s,
             Err(r) => return Ok(Some(r)),
         };
+        // Ручная iTIP-обработка спам-письма (SMTP-55): accept/tentative/decline/counter клиента в ответ на
+        // письмо в «Спаме» отправителя отклоняется — встречу из спам-письма руками не принять.
+        if let Some(r) = self.junk_itip_refusal(submitter(env), &raw).await? {
+            return Ok(Some(r));
+        }
         let app = sources::application(env.source.as_deref()).is_some();
         let check = match (&self.deps.authcheck, env.mode) {
             // Приложение организации: проверки отправителя не нужны.
@@ -2392,6 +2500,15 @@ impl Delivery {
         rcpts: &[String],
         mut raw: Bytes,
     ) -> Result<Pre> {
+        // Ручная iTIP-обработка спам-письма (SMTP-55): отправка вне сессии (JMAP) — тот же отказ, что и
+        // submission; письмо в «Спаме» — ответ на него не отправляется.
+        if let Some(r) = self.junk_itip_refusal(user, &raw).await? {
+            let step = Step::new(Ek::Reject, tracking::decision(&r), rcpts.to_vec())
+                .reason(tracking::reason(&r));
+            self.track(mail_from, tracking::message_id(&raw).as_deref(), vec![step])
+                .await;
+            return Ok(Pre::Done(SubmitStatus::Failed(tracking::reason(&r))));
+        }
         let outbound = MilterDirection::Outbound;
         if let Some(m) = self.deps.milter.as_ref().filter(|m| m.applies(outbound)) {
             let profile = match &self.policies {
@@ -2831,8 +2948,9 @@ impl Delivery {
     /// Правила Sieve получателей письма `raw` (SMTP-31): доставка с адресом получателя заменяется доставками в папки
     /// правил (несколько папок — несколько доставок одного `ingest`; `discard` и `redirect` без копии — ни одной);
     /// копии модулей (без адреса) — без правил. Сбой правил — доставка в папку по умолчанию («Входящие», при
-    /// `junk` — «Спам»). Возвращает перенаправления, автоответы (не для писем в «Спам» и по матрице доверия)
-    /// и события журнала.
+    /// `junk` — «Спам»). Письмо со спам-вердиктом получателя — мимо всех автоматических механизмов (SMTP-55):
+    /// правила не выполняются, письмо — в «Спаме», и только. Возвращает перенаправления, автоответы (не для писем
+    /// в «Спам» и по матрице доверия) и события журнала.
     ///
     /// Матрица доверия (SMTP-50): правила получают тип абонента `ctx.peer` и действующую матрицу получателя
     /// ([`TrustStore::effective_for`]); автоответ чужим — только при включённой клетке `auto_reply`, письмо в
@@ -2864,6 +2982,19 @@ impl Delivery {
         let mut result = Vec::with_capacity(deliveries.len());
         for (rcpt, d) in std::mem::take(deliveries) {
             if rcpt.is_empty() {
+                result.push((rcpt, d));
+                continue;
+            }
+            if ctx.junk.contains(&d.account) {
+                // Спам — максимально рано мимо всех автоматических механизмов (SMTP-55, решение #112):
+                // письмо лежит в «Спаме», и никакие действия правил к нему не применяются — ни папки и флаги,
+                // ни отброс, ни перенаправление, ни автоответ, ни `processcalendar` (автоответ, перенаправление
+                // и приём iTIP уже гасились вердиктом в SMTP-50); будущие действия гасятся здесь же.
+                tracing::info!(%id, account = %d.account, "smtp: письмо в «Спаме» — правила получателя не применяются");
+                out.steps.push(
+                    Step::new(Ek::Deliver, Dd::Accept, vec![rcpt.clone()])
+                        .reason("sieve: rules skipped, junk; junk folder"),
+                );
                 result.push((rcpt, d));
                 continue;
             }
@@ -3813,6 +3944,33 @@ fn from_address(raw: &[u8]) -> Option<String> {
         .into_iter()
         .find(|(name, _)| *name == "From")
         .and_then(|(_, addrs)| addrs.into_iter().next())
+}
+
+/// `Message-ID` (`<…>`) писем, на которые ссылается ответ: `In-Reply-To`, затем `References`
+/// (RFC 5322 §3.6.4) — по ним ручной iTIP-ответ находят исходное приглашение (SMTP-55).
+fn referenced_ids(raw: &[u8]) -> Vec<String> {
+    use mail_parser::{HeaderName, HeaderValue};
+    let Some(msg) = mail_parser::MessageParser::default().parse_headers(raw) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for name in [HeaderName::InReplyTo, HeaderName::References] {
+        for value in msg.header_values(name) {
+            // `Message-Id`-заголовок — строка или список строк (скобки снимаются).
+            let list = match value {
+                HeaderValue::Text(id) => vec![id.as_ref()],
+                HeaderValue::TextList(list) => list.iter().map(|id| id.as_ref()).collect(),
+                _ => Vec::new(),
+            };
+            for id in list {
+                let id = id.trim_matches(|c| c == '<' || c == '>');
+                if !id.is_empty() {
+                    ids.push(format!("<{id}>"));
+                }
+            }
+        }
+    }
+    ids
 }
 
 /// Временная ошибка (`451 4.3.0`): хранилище или каталог недоступны.

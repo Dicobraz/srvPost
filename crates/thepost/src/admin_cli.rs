@@ -40,6 +40,7 @@ use tp_admin::transport::{
     DomainBody, DomainList, DomainWritten, RouteBody, RouteList, SourceBody, SourceList,
     VersionQuery, Written,
 };
+use tp_admin::trust::{TrustBody, TrustView};
 use tp_admin_client::oidc::{DeviceLogin, DeviceSettings, prompt_text};
 use tp_admin_client::ops::*;
 use tp_admin_client::style::{self, ColorChoice, Theme, value_text};
@@ -52,6 +53,7 @@ use tp_contracts::transport::{
     AcceptedDomain, DestinationPolicy, DomainKind, SourceKind, SourceMatch, TlsRequirement,
     TrustedSource,
 };
+use tp_contracts::trust::{PeerKind, TrustFunction};
 use tp_contracts::{AccountId, DomainId, GroupId};
 
 use crate::sections::{self, AUTH, AuthSection, CLI, CliOidc, CliSection, HTTP, HttpSection};
@@ -237,6 +239,63 @@ pub enum ApiAction {
         /// Действие.
         #[command(subcommand)]
         action: Box<BrandingAction>,
+    },
+    /// Политика доверия «кто — кому — что»: уровни установка → организация → группа, домены-партнёры
+    /// (уровень установки — без ключей, организации — --org, группы — --group).
+    Trust {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<TrustAction>,
+    },
+}
+
+/// Действия с политикой доверия.
+#[derive(Debug, Clone, Subcommand)]
+pub enum TrustAction {
+    /// Политика уровня и действующая матрица; --account — действующая для учётной записи (с её группами).
+    Show {
+        /// Группа: идентификатор (UUID), имя или адрес (уровень группы в организации).
+        #[arg(long)]
+        group: Option<String>,
+        /// Учётная запись: идентификатор (UUID) или имя входа (действующая политика).
+        #[arg(long, conflicts_with = "group")]
+        account: Option<String>,
+    },
+    /// Замена политики уровня целиком. Файл — JSON с клетками политики (`invite_new`, `itip_updates`,
+    /// `auto_reply`, `mdn`, `auto_forward`, `freebusy`, `sharing`, `group_post`, у организации — `partners` и
+    /// `auto_forward_domains`); клетки нет или null — наследуется уровнем выше.
+    Set {
+        /// Группа: идентификатор (UUID), имя или адрес.
+        #[arg(long)]
+        group: Option<String>,
+        /// Файл с политикой (JSON, UTF-8); `-` — stdin.
+        #[arg(long, value_name = "ПУТЬ")]
+        file: PathBuf,
+    },
+    /// Сброс политики уровня — действуют уровень выше и умолчания.
+    Reset {
+        /// Группа: идентификатор (UUID), имя или адрес.
+        #[arg(long)]
+        group: Option<String>,
+    },
+    /// Домены-партнёры организации (уровень организации).
+    Partners {
+        /// Действие.
+        #[command(subcommand)]
+        action: PartnersAction,
+    },
+}
+
+/// Действия с доменами-партнёрами.
+#[derive(Debug, Clone, Subcommand)]
+pub enum PartnersAction {
+    /// Домены-партнёры организации.
+    List,
+    /// Замена списка доменов-партнёров перечисленными (без доменов — пусто). Свой принятый домен — 422.
+    Set {
+        /// Домены-партнёры (нижний регистр, A-label IDN).
+        #[arg(value_name = "ДОМЕН")]
+        domains: Vec<String>,
     },
 }
 
@@ -821,6 +880,12 @@ pub enum VacationAction {
         /// Файл с текстом ответа HTML (UTF-8).
         #[arg(long, value_name = "ПУТЬ")]
         html_file: Option<PathBuf>,
+        /// Тема ответа чужим отправителям; `-` — по умолчанию. Пока не задана — наружу ответа нет (RFC 3834).
+        #[arg(long)]
+        external_subject: Option<String>,
+        /// Текст ответа чужим отправителям (вместе с --external-subject).
+        #[arg(long)]
+        external_text: Option<String>,
     },
 }
 
@@ -1228,6 +1293,7 @@ pub async fn execute(client: &Client, args: &ApiArgs, action: ApiAction) -> CliR
         ApiAction::Group { action } => group_command(client, args, *action).await,
         ApiAction::Resources { action } => resource_command(client, args, *action).await,
         ApiAction::Branding { action } => branding_command(client, args, *action).await,
+        ApiAction::Trust { action } => trust_command(client, args, *action).await,
         ApiAction::Trash { action } => trash_command(client, args, action).await,
         ApiAction::Audit { action } => audit_command(client, args, *action).await,
         ApiAction::Delivery { action } => delivery_command(client, args, *action).await,
@@ -1374,6 +1440,8 @@ pub async fn execute(client: &Client, args: &ApiArgs, action: ApiAction) -> CliR
                     text,
                     text_file,
                     html_file,
+                    external_subject,
+                    external_text,
                 } => {
                     let text = match text_file {
                         Some(file) => Some(input_text(file).await?),
@@ -1394,6 +1462,8 @@ pub async fn execute(client: &Client, args: &ApiArgs, action: ApiAction) -> CliR
                         subject,
                         text,
                         html,
+                        external_subject,
+                        external_text,
                     };
                     let body = change.apply(&current)?;
                     let v: VacationBody =
@@ -1953,6 +2023,217 @@ fn branding_record(v: &BrandingView) -> String {
     ])
 }
 
+/// Уровень политики доверия для команд `trust`: установка без `--org`, организация с ним (или `--group`,
+/// `--account` — организация по умолчанию администратора).
+enum TrustTarget {
+    /// Уровень установки.
+    Installation,
+    /// Уровень организации.
+    Org(String),
+    /// Уровень группы (организация, группа).
+    Group(String, String),
+    /// Действующая для учётной записи (организация, учётная запись).
+    Account(String, String),
+}
+
+impl TrustTarget {
+    /// Операции уровня (`GET`, `PUT`, `DELETE`) и параметры пути.
+    fn ops(&self) -> (Op, Op, Op, Vec<String>) {
+        match self {
+            TrustTarget::Installation => (TRUST_GET, TRUST_PUT, TRUST_RESET, Vec::new()),
+            TrustTarget::Org(org) => (
+                ORG_TRUST_GET,
+                ORG_TRUST_PUT,
+                ORG_TRUST_RESET,
+                vec![org.clone()],
+            ),
+            TrustTarget::Group(org, group) => (
+                GROUP_TRUST_GET,
+                GROUP_TRUST_PUT,
+                GROUP_TRUST_RESET,
+                vec![org.clone(), group.clone()],
+            ),
+            TrustTarget::Account(org, account) => (
+                ACCOUNT_TRUST_GET,
+                ACCOUNT_TRUST_GET,
+                ACCOUNT_TRUST_GET,
+                vec![org.clone(), account.clone()],
+            ),
+        }
+    }
+}
+
+/// Уровень `trust …`: `--group` и `--account` — в организации из `--org` (иначе организации администратора);
+/// без них уровень установки выбирает `--org`/`THEPOST_ADMIN_ORG` (нет — установка, как у брендинга).
+async fn trust_target(
+    client: &Client,
+    args: &ApiArgs,
+    group: Option<String>,
+    account: Option<String>,
+) -> CliResult<TrustTarget> {
+    if let Some(account) = account {
+        let org = client.org(args.org.clone()).await?;
+        let id = account_id(client, &org, &account).await?;
+        return Ok(TrustTarget::Account(org, id));
+    }
+    if let Some(group) = group {
+        let org = client.org(args.org.clone()).await?;
+        let id = group_id(client, &org, &group).await?;
+        return Ok(TrustTarget::Group(org, id));
+    }
+    Ok(match setting(args.org.clone(), ENV_ORG) {
+        None => TrustTarget::Installation,
+        Some(o) => {
+            o.parse::<tp_contracts::TenantId>()
+                .map_err(|e| format!("организация {o:?}: {e}"))?;
+            TrustTarget::Org(o)
+        }
+    })
+}
+
+/// `thepost admin trust …`.
+async fn trust_command(client: &Client, args: &ApiArgs, action: TrustAction) -> CliResult<String> {
+    match action {
+        TrustAction::Show { group, account } => {
+            let target = trust_target(client, args, group, account).await?;
+            let (get, _, _, params) = target.ops();
+            let p = params.iter().map(String::as_str).collect::<Vec<_>>();
+            let v: TrustView = client.call(get, &p, &[], NO_BODY).await?;
+            out(args, &v, trust_text(args.theme(), &v))
+        }
+        TrustAction::Set { group, file } => {
+            let text = input_text(file).await?;
+            let body: TrustBody =
+                serde_json::from_str(&text).map_err(|e| format!("политика доверия (JSON): {e}"))?;
+            let target = trust_target(client, args, group, None).await?;
+            let (get, put, _, params) = target.ops();
+            let p = params.iter().map(String::as_str).collect::<Vec<_>>();
+            let before: TrustView = client.call(get, &p, &[], NO_BODY).await?;
+            let after: TrustView = client
+                .call(put, &p, &[], Some(&body))
+                .await
+                .map_err(|e| e.hint(422, "значения не выше потолка уровня выше (trust show)"))?;
+            out(
+                args,
+                &after,
+                style::changes(args.theme(), put, &before.own, &after.own),
+            )
+        }
+        TrustAction::Reset { group } => {
+            let target = trust_target(client, args, group, None).await?;
+            let (_, _, reset, params) = target.ops();
+            let p = params.iter().map(String::as_str).collect::<Vec<_>>();
+            let v: TrustView = client.call(reset, &p, &[], NO_BODY).await?;
+            out(args, &v, trust_text(args.theme(), &v))
+        }
+        TrustAction::Partners { action } => {
+            let org = client.org(args.org.clone()).await?;
+            let params = [org.as_str()];
+            match action {
+                PartnersAction::List => {
+                    let v: TrustView = client.call(ORG_TRUST_GET, &params, &[], NO_BODY).await?;
+                    let domains = v
+                        .own
+                        .as_ref()
+                        .map(|o| o.partners.clone())
+                        .unwrap_or_default();
+                    let rows: Vec<Vec<String>> = domains.iter().map(|d| vec![d.clone()]).collect();
+                    out(
+                        args,
+                        &domains,
+                        style::table(args.theme(), &["ДОМЕН"], &rows),
+                    )
+                }
+                PartnersAction::Set { domains } => {
+                    let before: TrustView =
+                        client.call(ORG_TRUST_GET, &params, &[], NO_BODY).await?;
+                    let mut body = match &before.own {
+                        Some(own) => TrustBody::from(own),
+                        None => TrustBody::default(),
+                    };
+                    body.partners = domains;
+                    let after: TrustView = client
+                        .call(ORG_TRUST_PUT, &params, &[], Some(&body))
+                        .await
+                        .map_err(|e| {
+                            e.hint(422, "домены — канонические (нижний регистр), свой принятый домен нельзя")
+                        })?;
+                    out(
+                        args,
+                        &after,
+                        style::changes(args.theme(), ORG_TRUST_PUT, &before.own, &after.own),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/// Политика доверия — действующая матрица (значения по клеткам, «выше потолка» и «закреплено») и домены уровня.
+fn trust_text(t: Theme, v: &TrustView) -> String {
+    let m = &v.effective.matrix;
+    let cell = |f: TrustFunction, peer: PeerKind| {
+        let mut s = m.get(f, peer).to_string();
+        if v.effective
+            .over_ceiling
+            .iter()
+            .any(|o| o.function == f && o.peer == peer)
+        {
+            s.push_str(" (выше потолка)");
+        }
+        if v.fixed.get(f, peer) {
+            s.push_str(" (закреплено)");
+        }
+        s
+    };
+    let rows: Vec<Vec<String>> = TrustFunction::ALL
+        .into_iter()
+        .map(|f| {
+            vec![
+                trust_function_ru(f).to_owned(),
+                cell(f, PeerKind::Own),
+                cell(f, PeerKind::Partner),
+                cell(f, PeerKind::Neighbor),
+                cell(f, PeerKind::External),
+            ]
+        })
+        .collect();
+    let mut text = style::table(
+        t,
+        &["ФУНКЦИЯ", "СВОИ", "ПАРТНЁР", "СОСЕД", "ИНТЕРНЕТ"],
+        &rows,
+    );
+    if let Some(own) = &v.own {
+        let list = |domains: &[String]| {
+            if domains.is_empty() {
+                "—".to_owned()
+            } else {
+                domains.join(", ")
+            }
+        };
+        text.push_str(&format!(
+            "Домены-партнёры: {}\nДомены автопересылки: {}\n",
+            list(&own.partners),
+            list(&own.auto_forward_domains)
+        ));
+    }
+    text
+}
+
+/// Функция матрицы по-русски (как в `docs/ADMIN-GUIDE.md`).
+fn trust_function_ru(f: TrustFunction) -> &'static str {
+    match f {
+        TrustFunction::InviteNew => "Новое приглашение",
+        TrustFunction::ItipUpdates => "Ответ и отмена",
+        TrustFunction::AutoReply => "Автоответ",
+        TrustFunction::Mdn => "Уведомление о прочтении",
+        TrustFunction::AutoForward => "Автопересылка",
+        TrustFunction::FreeBusy => "Занятость",
+        TrustFunction::Sharing => "Общий доступ",
+        TrustFunction::GroupPost => "Письма в группы",
+    }
+}
+
 /// `thepost admin trash …`.
 async fn trash_command(client: &Client, args: &ApiArgs, action: TrashAction) -> CliResult<String> {
     let org = client.org(args.org.clone()).await?;
@@ -2442,7 +2723,8 @@ fn route_row(r: &DestinationPolicy) -> Vec<String> {
     ]
 }
 
-/// Параметры `vacation set`: `None` — поле без изменений, `-` — сброс (`from`, `to`, `subject`).
+/// Параметры `vacation set`: `None` — поле без изменений, `-` — сброс (`from`, `to`, `subject`,
+/// `external_subject`).
 struct VacationChange {
     enabled: bool,
     from: Option<String>,
@@ -2450,6 +2732,8 @@ struct VacationChange {
     subject: Option<String>,
     text: Option<String>,
     html: Option<String>,
+    external_subject: Option<String>,
+    external_text: Option<String>,
 }
 
 impl VacationChange {
@@ -2470,6 +2754,8 @@ impl VacationChange {
             ("subject", self.subject.map(reset)),
             ("text_body", self.text.map(Into::into)),
             ("html_body", self.html.map(Into::into)),
+            ("external_subject", self.external_subject.map(reset)),
+            ("external_text_body", self.external_text.map(Into::into)),
         ] {
             if let Some(value) = value {
                 v[field] = value;
@@ -2484,6 +2770,15 @@ impl VacationChange {
 /// Автоответ — строки «подпись: значение».
 fn vacation_record(v: &VacationBody) -> String {
     let field = |name: &str| or_dash(&json_field(v, name));
+    let external = if v.external_subject.is_none() && v.external_text_body.is_none() {
+        "нет — чужим ответа не уходит".to_owned()
+    } else {
+        format!(
+            "{} / {}",
+            or_dash(&json_field(v, "external_subject")),
+            or_dash(&json_field(v, "external_text_body"))
+        )
+    };
     record(&[
         ("Включён", if v.enabled { "да" } else { "нет" }.to_owned()),
         ("С", field("from")),
@@ -2491,6 +2786,8 @@ fn vacation_record(v: &VacationBody) -> String {
         ("Тема", field("subject")),
         ("Текст", field("text_body")),
         ("Текст HTML", field("html_body")),
+        ("Внешний ответ", external),
+        ("Внешний текст HTML", field("external_html_body")),
     ])
 }
 
@@ -2670,7 +2967,7 @@ mod tests {
         Clock, FakeAuthenticator, MemAbuseBlocks, MemAppPasswords, MemAuditLog, MemBlobIndex,
         MemBlobStore, MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemLocalAdminTokens,
         MemMetadata, MemModeration, MemPolicies, MemQuota, MemSieve, MemThreads, MemTransport,
-        MemTrash, SystemClock,
+        MemTrash, MemTrust, SystemClock,
     };
     use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate};
 
@@ -2736,6 +3033,30 @@ mod tests {
                 }),
                 ..
             }
+        ));
+        let cli = Cli::try_parse_from([
+            "thepost",
+            "admin",
+            "--org",
+            "00000000-0000-0000-0000-000000000001",
+            "trust",
+            "set",
+            "--file",
+            "-",
+        ])
+        .expect("trust set");
+        let Command::Admin { action, .. } = cli.command else {
+            panic!("{:?}", cli.command)
+        };
+        let AdminAction::Api(ApiAction::Trust { action }) = action else {
+            panic!("{action:?}")
+        };
+        assert!(matches!(
+            *action,
+            TrustAction::Set {
+                group: None,
+                file: ref f,
+            } if f.as_os_str() == "-"
         ));
         // Пароль — не аргумент: только --user и --password-stdin; без --user (и без --oidc) — ошибка разбора.
         let cli = Cli::try_parse_from([
@@ -3239,11 +3560,12 @@ mod tests {
             Arc::new(meta.clone()),
             TenantId::DEFAULT,
         );
+        let groups = MemGroups::new();
         let deps = Deps {
             auth: Arc::new(auth),
             audit_log: Arc::new(MemAuditLog::new()),
             delivery: Arc::new(MemDeliveryLog::new()),
-            groups: Arc::new(MemGroups::new()),
+            groups: Arc::new(groups.clone()),
             moderation: Arc::new(MemModeration::default()),
             modules: Vec::new(),
             accounts: Arc::new(meta.clone()),
@@ -3275,7 +3597,11 @@ mod tests {
             tp_admin::Admin::new(deps, cfg)
                 .expect("admin")
                 .with_transport(Arc::new(MemTransport::new()))
+                .with_trust(Arc::new(
+                    MemTrust::new().with_groups(Arc::new(groups.clone())),
+                ))
                 .with_sieve(Arc::new(MemSieve::new()), check_script)
+                .with_org_script_check(check_org_script)
                 .with_local_tokens(Arc::new(MemLocalAdminTokens::new()))
                 .with_sharing(SharingStores {
                     acl: Arc::new(MemDav::new()),
@@ -3350,6 +3676,48 @@ mod tests {
                 message: d.message,
             })
             .collect()
+    }
+
+    /// Профиль «админский» тестов (вместо профиля SIEVE-14 узла): `vacation` запрещён; `redirect` на адрес,
+    /// чей домен не принятый домен организации и не домен автопересылки, — ошибка.
+    fn check_org_script(
+        text: &str,
+        internal: &[String],
+        forward: &[String],
+    ) -> Vec<tp_admin::ScriptError> {
+        let mut errors = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            let column_of = |needle: &str| {
+                line.find(needle)
+                    .map(|at| line[..at].chars().count() as u32 + 1)
+            };
+            if let Some(column) = column_of("vacation") {
+                errors.push(tp_admin::ScriptError {
+                    line: i as u32 + 1,
+                    column,
+                    message: "vacation в скрипте организации запрещён".into(),
+                });
+            }
+            if let Some(column) = column_of("redirect") {
+                let domain = line
+                    .split('"')
+                    .nth(1)
+                    .unwrap_or_default()
+                    .rsplit_once('@')
+                    .map(|(_, d)| d.to_owned())
+                    .unwrap_or_default();
+                if !internal.contains(&domain) && !forward.contains(&domain) {
+                    errors.push(tp_admin::ScriptError {
+                        line: i as u32 + 1,
+                        column,
+                        message: format!(
+                            "redirect на внешний адрес {domain:?}: автопересылка туда не открыта"
+                        ),
+                    });
+                }
+            }
+        }
+        errors
     }
 
     /// `account …`.
@@ -3789,6 +4157,8 @@ mod tests {
             subject: None,
             text: None,
             html: None,
+            external_subject: None,
+            external_text: None,
         };
         let apply = |off: bool, ch: VacationChange| {
             vacation(VacationAction::Set {
@@ -3800,6 +4170,8 @@ mod tests {
                 text: ch.text,
                 text_file: None,
                 html_file: None,
+                external_subject: ch.external_subject,
+                external_text: ch.external_text,
             })
         };
         let shown = exec(&c, false, get()).await.expect("vacation get");
@@ -3867,10 +4239,42 @@ mod tests {
             text: None,
             text_file: Some(reply),
             html_file: None,
+            external_subject: None,
+            external_text: None,
         });
         let v: Value =
             serde_json::from_str(&exec(&c, true, from_file).await.expect("file")).expect("json");
         assert_eq!(v["text_body"], "Из файла.\n");
+
+        // Внешний текст (CTR-93): чужим — только он, пока не задан — наружу ничего.
+        let external = apply(
+            false,
+            VacationChange {
+                external_subject: Some("В отпуске".into()),
+                external_text: Some("Вернусь в январе.".into()),
+                ..set()
+            },
+        );
+        let v: Value =
+            serde_json::from_str(&exec(&c, true, external).await.expect("external")).expect("json");
+        assert_eq!(v["external_subject"], "В отпуске");
+        assert_eq!(v["external_text_body"], "Вернусь в январе.");
+        let shown = exec(&c, false, get()).await.expect("vacation get");
+        assert!(shown.contains("Вернусь в январе."), "{shown}");
+        let external_reset = apply(
+            false,
+            VacationChange {
+                external_subject: Some("-".into()),
+                ..set()
+            },
+        );
+        let v: Value = serde_json::from_str(
+            &exec(&c, true, external_reset)
+                .await
+                .expect("external reset"),
+        )
+        .expect("json");
+        assert_eq!(v["external_subject"], json!(null));
 
         // Скрипт организации: не задан — 404; запись, чтение, 422 с позицией, удаление (повторное — не ошибка).
         let org = |action| sieve(SieveAction::Org { action });
@@ -3894,6 +4298,23 @@ mod tests {
         );
         let err = exec(&c, false, put(&bad_file)).await.expect_err("422");
         assert!(err.contains("422") && err.contains("строка 2"), "{err}");
+        assert_eq!(
+            exec(&c, false, org(OrgSieveAction::Get)).await.as_deref(),
+            Ok(org_text)
+        );
+        // Профиль «админский» (ADM-49): vacation запрещён; redirect на внешний адрес при закрытой
+        // автопересылке — 422 со строкой и столбцом.
+        let vacation = dir.path().join("org-vacation.sieve");
+        std::fs::write(&vacation, "vacation :days 3 \"Уехал\";\n").expect("write");
+        let err = exec(&c, false, put(&vacation)).await.expect_err("vacation");
+        assert!(err.contains("422") && err.contains("строка 1"), "{err}");
+        let redirect = dir.path().join("org-redirect.sieve");
+        std::fs::write(&redirect, "redirect \"x@gmail.com\";\n").expect("write");
+        let err = exec(&c, false, put(&redirect)).await.expect_err("redirect");
+        assert!(
+            err.contains("422") && err.contains("gmail.com") && err.contains("строка 1"),
+            "{err}"
+        );
         assert_eq!(
             exec(&c, false, org(OrgSieveAction::Get)).await.as_deref(),
             Ok(org_text)
@@ -4841,6 +5262,300 @@ mod tests {
         assert!(public.logo.is_none());
         let public = anon.public_branding(None).await.expect("public");
         assert_eq!(public.product_name.as_deref(), Some("Ромашка"));
+    }
+
+    /// ADM-49: политика доверия в CLI — show/set/reset уровней, партнёры, действующая для учётной записи;
+    /// клетки выше потолка — 422 с подсказкой; изменения — в журнале аудита.
+    #[tokio::test]
+    async fn trust_commands_against_admin_api() {
+        let (_admin, url) = admin_api().await;
+        let c = client(&url, "oidc");
+        let trust = |action: TrustAction| ApiAction::Trust {
+            action: Box::new(action),
+        };
+        let json = |out: CliResult<String>| -> Value {
+            serde_json::from_str(&out.expect("ответ")).expect("json")
+        };
+        // Уровень организации: --org явный (как у брендинга, без него — уровень установки).
+        let org = |as_json: bool, action: TrustAction| {
+            let c = c.clone();
+            async move {
+                let args = ApiArgs {
+                    org: Some(TenantId::DEFAULT.to_string()),
+                    json: as_json,
+                    ..ApiArgs::default()
+                };
+                execute(&c, &args, trust(action)).await
+            }
+        };
+
+        // Уровень установки: show — умолчания и закреплённые клетки.
+        let show = json(
+            exec(
+                &c,
+                true,
+                trust(TrustAction::Show {
+                    group: None,
+                    account: None,
+                }),
+            )
+            .await,
+        );
+        assert_eq!(show["own"], Value::Null);
+        assert_eq!(
+            show["effective"]["matrix"]["invite_new"]["partner"],
+            "button"
+        );
+        assert_eq!(show["fixed"]["freebusy"]["neighbor"], true);
+        let shown = exec(
+            &c,
+            false,
+            trust(TrustAction::Show {
+                group: None,
+                account: None,
+            }),
+        )
+        .await
+        .expect("trust show");
+        for part in ["ФУНКЦИЯ", "Новое приглашение", "закреплено"]
+        {
+            assert!(shown.contains(part), "{part}: {shown}");
+        }
+
+        // Организация: set из файла — различие было/стало (клетка и партнёры).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("trust.json");
+        std::fs::write(
+            &file,
+            "{\"invite_new\": {\"partner\": \"auto\"}, \"partners\": [\"partner.example\"]}",
+        )
+        .expect("write");
+        let set = org(false, TrustAction::Set { group: None, file })
+            .await
+            .expect("trust set");
+        assert!(
+            set.contains("+ invite_new") && set.contains("+ partners") && set.contains("Сохранено"),
+            "{set}"
+        );
+        let show = json(
+            org(
+                true,
+                TrustAction::Show {
+                    group: None,
+                    account: None,
+                },
+            )
+            .await,
+        );
+        assert_eq!(show["own"]["invite_new"]["partner"], "auto");
+        assert_eq!(show["own"]["partners"], json!(["partner.example"]));
+        assert_eq!(show["effective"]["matrix"]["invite_new"]["partner"], "auto");
+        let shown = org(
+            false,
+            TrustAction::Show {
+                group: None,
+                account: None,
+            },
+        )
+        .await
+        .expect("trust show org");
+        assert!(
+            shown.contains("Домены-партнёры: partner.example"),
+            "{shown}"
+        );
+
+        // Выше потолка контракта — 422 с подсказкой.
+        let wide = dir.path().join("wide.json");
+        std::fs::write(&wide, "{\"invite_new\": {\"external\": \"auto\"}}").expect("write");
+        let err = org(
+            false,
+            TrustAction::Set {
+                group: None,
+                file: wide,
+            },
+        )
+        .await
+        .expect_err("выше потолка");
+        assert!(err.contains("422") && err.contains("потолка"), "{err}");
+
+        // Партнёры: список и замена; неканоническая запись — 422. Замена — до снижения потолка
+        // установки: она переотправляет сохранённую политику целиком, и клетка «авто» организации
+        // выше сниженного потолка дала бы законные 422.
+        let listed = org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::List,
+            },
+        )
+        .await
+        .expect("partners list");
+        assert!(listed.contains("partner.example"), "{listed}");
+        let err = org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::Set {
+                    domains: vec!["P.EXAMPLE".into()],
+                },
+            },
+        )
+        .await
+        .expect_err("неканонический");
+        assert!(err.contains("422"), "{err}");
+        org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::Set {
+                    domains: vec!["p.example".into()],
+                },
+            },
+        )
+        .await
+        .expect("partners set");
+        let listed = json(
+            org(
+                true,
+                TrustAction::Partners {
+                    action: PartnersAction::List,
+                },
+            )
+            .await,
+        );
+        assert_eq!(listed, json!(["p.example"]));
+
+        // Снижение потолка установки: организация шире — «выше потолка» в show организации.
+        let cap = dir.path().join("cap.json");
+        std::fs::write(&cap, "{\"invite_new\": {\"partner\": \"button\"}}").expect("write");
+        exec(
+            &c,
+            false,
+            trust(TrustAction::Set {
+                group: None,
+                file: cap,
+            }),
+        )
+        .await
+        .expect("installation cap");
+        let show = json(
+            org(
+                true,
+                TrustAction::Show {
+                    group: None,
+                    account: None,
+                },
+            )
+            .await,
+        );
+        assert_eq!(
+            show["effective"]["over_ceiling"][0]["peer"], "partner",
+            "{show}"
+        );
+
+        // Действующая для учётной записи (по имени входа): своей политики нет.
+        exec(
+            &c,
+            false,
+            domain_action(DomainAction::Create {
+                name: "trust.test".into(),
+                relay: None,
+            }),
+        )
+        .await
+        .expect("domain");
+        let account = account_action(AccountAction::Create {
+            login: "user@trust.test".into(),
+            name: None,
+        });
+        exec(&c, false, account).await.expect("account");
+        let show = json(
+            org(
+                true,
+                TrustAction::Show {
+                    group: None,
+                    account: Some("user@trust.test".into()),
+                },
+            )
+            .await,
+        );
+        assert_eq!(show["own"], Value::Null);
+        assert_eq!(
+            show["effective"]["matrix"]["invite_new"]["partner"], "button",
+            "клетка организации обрезана потолком установки"
+        );
+
+        // Сброс организации — умолчания; повтор — не ошибка. Аудит: изменения с маршрутом доверия.
+        for _ in 0..2 {
+            org(false, TrustAction::Reset { group: None })
+                .await
+                .expect("trust reset");
+        }
+        let show = json(
+            org(
+                true,
+                TrustAction::Show {
+                    group: None,
+                    account: None,
+                },
+            )
+            .await,
+        );
+        assert_eq!(show["own"], Value::Null);
+        // Аудит: изменения с маршрутом доверия; страница списков в тесте — 2 записи, идём по `next`.
+        let mut trust_ops: Vec<String> = Vec::new();
+        let mut trust_entries: Vec<Value> = Vec::new();
+        let mut after = None;
+        for _ in 0..10 {
+            let audit = ApiAction::Audit {
+                action: Box::new(AuditAction::Search {
+                    since: None,
+                    until: None,
+                    actor: None,
+                    method: None,
+                    route: Some("/api/v1".into()),
+                    limit: None,
+                    after,
+                }),
+            };
+            let page = json(exec(&c, true, audit).await);
+            for e in page["entries"].as_array().expect("entries") {
+                if e["route"].as_str().is_some_and(|r| r.contains("/trust")) {
+                    trust_ops.push(e["route"].as_str().expect("route").to_owned());
+                    trust_entries.push(e.clone());
+                }
+            }
+            after = page["next"].as_u64();
+            if after.is_none() {
+                break;
+            }
+        }
+        assert!(
+            trust_ops.len() >= 4,
+            "изменения политики — в журнале аудита: {trust_ops:?}"
+        );
+        // Решение владельца 19.11 (issue #108): журнал аудита несёт пару «старое → новое».
+        let first = trust_entries
+            .iter()
+            .find(|e| e["method"] == "PUT" && e["status"] == 200)
+            .expect("первое изменение");
+        assert_eq!(first["details"]["what"], "trust");
+        assert_eq!(first["details"]["to"]["invite_new"]["partner"], "auto");
+        let resets: Vec<&Value> = trust_entries
+            .iter()
+            .filter(|e| e["method"] == "DELETE")
+            .collect();
+        assert_eq!(
+            resets.len(),
+            2,
+            "сброс организации — дважды: {trust_entries:?}"
+        );
+        assert_eq!(resets[0]["details"]["what"], "trust");
+        assert_eq!(resets[0]["details"]["to"], Value::Null);
+        assert_eq!(
+            resets[0]["details"]["from"]["partners"],
+            json!(["p.example"])
+        );
+        // Повторный сброс — прежней политики уже нет.
+        assert_eq!(resets[1]["details"]["from"], Value::Null);
+        assert_eq!(resets[1]["details"]["to"], Value::Null);
     }
 
     /// PNG 12×6 (сплошной #177CAA) для знака в тестах.
