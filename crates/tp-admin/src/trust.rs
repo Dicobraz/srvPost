@@ -781,12 +781,17 @@ async fn write_ceiling(
     let (ceiling, accepted) = match tenant {
         None => (Ceiling::hard(), Vec::new()),
         Some(t) => {
-            let org = policy(a, TrustLevel::Org(t)).await?;
-            let org = org.as_ref().map(|p| (TrustLevel::Org(t), p));
-            (
-                effective(inst.as_ref(), org, &[]).ceiling,
-                accepted_domains(a, t).await?,
-            )
+            // Потолок уровня: организация пишет в пределах значений установки (без своей политики — она и
+            // есть записываемое), группа — в пределах действующих значений организации.
+            let ceiling = match level {
+                TrustLevel::Group(..) => {
+                    let org = policy(a, TrustLevel::Org(t)).await?;
+                    let org = org.as_ref().map(|p| (TrustLevel::Org(t), p));
+                    effective(inst.as_ref(), org, &[]).ceiling
+                }
+                _ => effective(inst.as_ref(), None, &[]).ceiling,
+            };
+            (ceiling, accepted_domains(a, t).await?)
         }
     };
     Ok((ceiling, accepted))
@@ -1284,8 +1289,8 @@ mod tests {
         let other = format!("/api/v1/orgs/{}/trust", env.other_tenant);
         let (s, _, _) = env.call("GET", &other, Some("org"), None).await;
         assert_eq!(s, StatusCode::FORBIDDEN);
-        let (s, _, _) = env.call("GET", &other, Some("other"), None).await;
-        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _, b) = env.call("GET", &other, Some("other"), None).await;
+        assert_eq!(s, StatusCode::OK, "{b}: свой уровень — читает");
 
         // Оператор читает, но не меняет.
         let (s, _, _) = env.call("GET", &path, Some("operator"), None).await;
@@ -1349,7 +1354,7 @@ mod tests {
         let wide = json!({"mdn": {"partner": "on"}, "freebusy": {"partner": "limited"}});
         let (s, _, b) = env.call("PUT", &path1, Some("org"), Some(wide)).await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
-        assert_eq!(b["errors"][0]["function"], json!("freebusy"));
+        assert_eq!(b["errors"][0]["function"], json!("free_busy"));
         assert_eq!(
             b["errors"][0]["level"],
             json!({"org": TenantId::DEFAULT.to_string()})
@@ -1469,14 +1474,8 @@ mod tests {
             TrustPolicy::from(body).invite_new.partner,
             Some(InviteMode::Auto)
         );
-        assert_eq!(
-            TrustFixed::contract().get(TrustFunction::InviteNew, PeerKind::Neighbor),
-            true
-        );
-        assert_eq!(
-            TrustFixed::contract().get(TrustFunction::Mdn, PeerKind::External),
-            false
-        );
+        assert!(TrustFixed::contract().get(TrustFunction::InviteNew, PeerKind::Neighbor));
+        assert!(!TrustFixed::contract().get(TrustFunction::Mdn, PeerKind::External));
         roundtrip(TrustView {
             own: None,
             effective: effective(None, None, &[]),

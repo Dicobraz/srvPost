@@ -5275,12 +5275,18 @@ mod tests {
         let json = |out: CliResult<String>| -> Value {
             serde_json::from_str(&out.expect("ответ")).expect("json")
         };
-        // Уровень организации: --org явный; без него (как у брендинга) — уровень установки.
-        let args = ApiArgs {
-            org: Some(TenantId::DEFAULT.to_string()),
-            ..ApiArgs::default()
+        // Уровень организации: --org явный (как у брендинга, без него — уровень установки).
+        let org = |as_json: bool, action: TrustAction| {
+            execute(
+                &c,
+                &ApiArgs {
+                    org: Some(TenantId::DEFAULT.to_string()),
+                    json: as_json,
+                    ..ApiArgs::default()
+                },
+                trust(action),
+            )
         };
-        let org = |action: TrustAction| execute(&c, &args, trust(action));
 
         // Уровень установки: show — умолчания и закреплённые клетки.
         let show = json(
@@ -5323,7 +5329,7 @@ mod tests {
             "{\"invite_new\": {\"partner\": \"auto\"}, \"partners\": [\"partner.example\"]}",
         )
         .expect("write");
-        let set = org(TrustAction::Set { group: None, file })
+        let set = org(false, TrustAction::Set { group: None, file })
             .await
             .expect("trust set");
         assert!(
@@ -5331,19 +5337,25 @@ mod tests {
             "{set}"
         );
         let show = json(
-            org(TrustAction::Show {
-                group: None,
-                account: None,
-            })
+            org(
+                true,
+                TrustAction::Show {
+                    group: None,
+                    account: None,
+                },
+            )
             .await,
         );
         assert_eq!(show["own"]["invite_new"]["partner"], "auto");
         assert_eq!(show["own"]["partners"], json!(["partner.example"]));
         assert_eq!(show["effective"]["matrix"]["invite_new"]["partner"], "auto");
-        let shown = org(TrustAction::Show {
-            group: None,
-            account: None,
-        })
+        let shown = org(
+            false,
+            TrustAction::Show {
+                group: None,
+                account: None,
+            },
+        )
         .await
         .expect("trust show org");
         assert!(
@@ -5354,10 +5366,13 @@ mod tests {
         // Выше потолка контракта — 422 с подсказкой.
         let wide = dir.path().join("wide.json");
         std::fs::write(&wide, "{\"invite_new\": {\"external\": \"auto\"}}").expect("write");
-        let err = org(TrustAction::Set {
-            group: None,
-            file: wide,
-        })
+        let err = org(
+            false,
+            TrustAction::Set {
+                group: None,
+                file: wide,
+            },
+        )
         .await
         .expect_err("выше потолка");
         assert!(err.contains("422") && err.contains("потолка"), "{err}");
@@ -5376,10 +5391,13 @@ mod tests {
         .await
         .expect("installation cap");
         let show = json(
-            org(TrustAction::Show {
-                group: None,
-                account: None,
-            })
+            org(
+                true,
+                TrustAction::Show {
+                    group: None,
+                    account: None,
+                },
+            )
             .await,
         );
         assert_eq!(
@@ -5404,10 +5422,13 @@ mod tests {
         });
         exec(&c, false, account).await.expect("account");
         let show = json(
-            org(TrustAction::Show {
-                group: None,
-                account: Some("user@trust.test".into()),
-            })
+            org(
+                true,
+                TrustAction::Show {
+                    group: None,
+                    account: Some("user@trust.test".into()),
+                },
+            )
             .await,
         );
         assert_eq!(show["own"], Value::Null);
@@ -5417,46 +5438,61 @@ mod tests {
         );
 
         // Партнёры: список и замена; неканоническая запись — 422.
-        let listed = org(TrustAction::Partners {
-            action: PartnersAction::List,
-        })
+        let listed = org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::List,
+            },
+        )
         .await
         .expect("partners list");
         assert!(listed.contains("partner.example"), "{listed}");
-        let err = org(TrustAction::Partners {
-            action: PartnersAction::Set {
-                domains: vec!["P.EXAMPLE".into()],
+        let err = org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::Set {
+                    domains: vec!["P.EXAMPLE".into()],
+                },
             },
-        })
+        )
         .await
         .expect_err("неканонический");
         assert!(err.contains("422"), "{err}");
-        org(TrustAction::Partners {
-            action: PartnersAction::Set {
-                domains: vec!["p.example".into()],
+        org(
+            false,
+            TrustAction::Partners {
+                action: PartnersAction::Set {
+                    domains: vec!["p.example".into()],
+                },
             },
-        })
+        )
         .await
         .expect("partners set");
         let listed = json(
-            org(TrustAction::Partners {
-                action: PartnersAction::List,
-            })
+            org(
+                true,
+                TrustAction::Partners {
+                    action: PartnersAction::List,
+                },
+            )
             .await,
         );
         assert_eq!(listed, json!(["p.example"]));
 
         // Сброс организации — умолчания; повтор — не ошибка. Аудит: изменения с маршрутом доверия.
         for _ in 0..2 {
-            org(TrustAction::Reset { group: None })
+            org(false, TrustAction::Reset { group: None })
                 .await
                 .expect("trust reset");
         }
         let show = json(
-            org(TrustAction::Show {
-                group: None,
-                account: None,
-            })
+            org(
+                true,
+                TrustAction::Show {
+                    group: None,
+                    account: None,
+                },
+            )
             .await,
         );
         assert_eq!(show["own"], Value::Null);
