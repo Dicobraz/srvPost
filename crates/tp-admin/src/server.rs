@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use tp_contracts::addressbook::{ContactStore, DynamicGroupStore, OrgStore};
-use tp_contracts::admin_audit::{AdminAuditRecord, AuditLog};
+use tp_contracts::admin_audit::{AdminAuditRecord, AuditDetails, AuditLog};
 use tp_contracts::audit::MailboxAudit;
 use tp_contracts::auth::{Authenticator, Credentials, Principal, SyncGate};
 use tp_contracts::blob::BlobStore;
@@ -635,6 +635,9 @@ async fn guard(
         next.run(req).await
     };
     if method != Method::GET && method != Method::HEAD {
+        // Детали изменения — обработчик кладёт в расширения ответа (журнал аудита пишет и старое, и
+        // новое значение — решение владельца 19.11, issue #108, ADM-49).
+        let details = resp.extensions().get::<AuditDetails>().cloned();
         let record = AdminAuditRecord {
             at: OffsetDateTime::now_utc(),
             tenant,
@@ -647,6 +650,7 @@ async fn guard(
             path,
             status: resp.status().as_u16(),
             content_messages: None,
+            details,
         };
         if let Err(e) = crate::audit::record(&a.d, &record).await {
             tracing::error!(error = %e, route = %record.route, "admin: запись аудита не сохранена");

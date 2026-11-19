@@ -414,6 +414,7 @@ impl Admin {
             path: path.into(),
             status,
             content_messages: None,
+            details: None,
         };
         if let Err(e) = crate::audit::record(&self.d, &record).await {
             tracing::error!(error = %e, route = INIT_ROUTE, "admin: запись аудита не сохранена");
@@ -751,6 +752,7 @@ async fn create_session(State(a): State<Arc<Admin>>, req: Request) -> Response {
         path: SESSION_ROUTE.into(),
         status: status.as_u16(),
         content_messages: None,
+        details: None,
     };
     if let Err(e) = crate::audit::record(&a.d, &record).await {
         tracing::error!(error = %e, route = SESSION_ROUTE, "admin: запись аудита не сохранена");

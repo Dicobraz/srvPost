@@ -5,9 +5,9 @@
 //!   под `/api/v1/orgs/{org}/trust`; группа — под `/api/v1/orgs/{org}/groups/{group}/trust` (администратор
 //!   организации и установки; `GET` — и оператор); действующая для учётной записи — `GET
 //!   /api/v1/orgs/{org}/accounts/{account}/trust`. Права и журнал аудита — общий слой доступа ([`crate::server`]):
-//!   каждая запись несёт уровень (шаблон маршрута и `{org}`/`{group}`); состав изменения (клетки старые и новые,
-//!   партнёры добавленные и удалённые) CLI показывает различием до/после (`trust set`) — детали записи журнала —
-//!   вопрос #108.
+//!   каждая запись несёт уровень (шаблон маршрута и `{org}`/`{group}`), а `PUT`/`DELETE` — ещё и детали: прежняя и
+//!   новая политика целиком ([`AuditDetails::Trust`], решение владельца 19.11 — журнал аудита пишет и старое, и
+//!   новое значение, issue #108); CLI показывает то же различие до/после (`trust set`).
 //! - `GET` уровня — [`TrustView`]: своя политика (`own`), действующая матрица ([`Effective`]: значения, потолок,
 //!   источник по клеткам, клетки выше потолка) и закреплённые клетки контракта ([`TrustFixed`]).
 //! - `PUT` — замена политики уровня целиком ([`TrustBody`]; незаданные клетки наследуют уровень выше, у организации
@@ -22,9 +22,10 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
+use tp_contracts::admin_audit::AuditDetails;
 use tp_contracts::trust::{
     Ceiling, CellValue, Detail, Effective, GroupPost, HARD_CEILING, InviteMode, OverCeiling,
     PeerKind, PerPeer, Toggle, TrustFunction, TrustLevel, TrustPolicy, TrustStore, effective,
@@ -937,12 +938,13 @@ fn refused_detail(detail: String) -> RefusedResponse {
 }
 
 /// Записывает политику уровня: проверка потолка и доменов — 422, ошибка хранилища (включая `partners` не на
-/// уровне организации) — как есть; ответ — вид уровня после записи.
+/// уровне организации) — как есть; ответ — вид уровня после записи с деталями «старое → новое» в расширениях
+/// (слой доступа переносит их в запись журнала аудита, [`AuditDetails`]).
 async fn put(
     a: &Admin,
     level: TrustLevel,
     body: TrustBody,
-) -> std::result::Result<Json<TrustView>, RefusedResponse> {
+) -> std::result::Result<Response, RefusedResponse> {
     let err = |e: Error| RefusedResponse::from(ApiError(e).into_response());
     let policy: TrustPolicy = body.into();
     let (ceiling, accepted) = match write_ceiling(a, level).await {
@@ -972,6 +974,10 @@ async fn put(
         Ok(s) => s,
         Err(e) => return Err(err(e)),
     };
+    let old = match policy(a, level).await {
+        Ok(p) => p,
+        Err(e) => return Err(err(e)),
+    };
     if let Err(e) = store.set_policy(level, &policy).await {
         // Хранилище проверяет то же (`partners` не на уровне организации и пр.) — тоже 422.
         if let Error::Invalid(detail) = &e {
@@ -979,10 +985,22 @@ async fn put(
         }
         return Err(err(e));
     }
+    let details = AuditDetails::Trust {
+        from: old,
+        to: Some(policy),
+    };
     match view(a, level).await {
-        Ok(v) => Ok(Json(v)),
+        Ok(v) => Ok(with_details(v, details)),
         Err(e) => Err(err(e)),
     }
+}
+
+/// Ответ с деталями изменения в расширениях: слой доступа ([`crate::server`]) переносит их в запись
+/// журнала аудита.
+fn with_details(v: TrustView, details: AuditDetails) -> Response {
+    let mut resp = Json(v).into_response();
+    resp.extensions_mut().insert(details);
+    resp
 }
 
 /// Группа организации существует; нет — 404.
@@ -1019,7 +1037,7 @@ async fn get_installation_trust(
 async fn put_installation_trust(
     State(a): State<Arc<Admin>>,
     Json(body): Json<TrustBody>,
-) -> std::result::Result<Json<TrustView>, RefusedResponse> {
+) -> std::result::Result<Response, RefusedResponse> {
     put(&a, TrustLevel::Installation, body).await
 }
 
@@ -1030,9 +1048,18 @@ async fn put_installation_trust(
         (status = 403, description = "не администратор установки", body = Problem), (status = 503, body = Problem)))]
 async fn reset_installation_trust(
     State(a): State<Arc<Admin>>,
-) -> std::result::Result<Json<TrustView>, Refused> {
-    store(&a)?.reset_policy(TrustLevel::Installation).await?;
-    Ok(Json(view(&a, TrustLevel::Installation).await?))
+) -> std::result::Result<Response, Refused> {
+    let level = TrustLevel::Installation;
+    let old = policy(&a, level).await?;
+    store(&a)?.reset_policy(level).await?;
+    let v = view(&a, level).await?;
+    Ok(with_details(
+        v,
+        AuditDetails::Trust {
+            from: old,
+            to: None,
+        },
+    ))
 }
 
 /// Политика доверия организации: своя, действующая (организация поверх установки) и закреплённые клетки.
@@ -1060,7 +1087,7 @@ async fn put_org_trust(
     State(a): State<Arc<Admin>>,
     Path(org): Path<TenantId>,
     Json(body): Json<TrustBody>,
-) -> std::result::Result<Json<TrustView>, RefusedResponse> {
+) -> std::result::Result<Response, RefusedResponse> {
     put(&a, TrustLevel::Org(org), body).await
 }
 
@@ -1072,9 +1099,18 @@ async fn put_org_trust(
 async fn reset_org_trust(
     State(a): State<Arc<Admin>>,
     Path(org): Path<TenantId>,
-) -> std::result::Result<Json<TrustView>, Refused> {
-    store(&a)?.reset_policy(TrustLevel::Org(org)).await?;
-    Ok(Json(view(&a, TrustLevel::Org(org)).await?))
+) -> std::result::Result<Response, Refused> {
+    let level = TrustLevel::Org(org);
+    let old = policy(&a, level).await?;
+    store(&a)?.reset_policy(level).await?;
+    let v = view(&a, level).await?;
+    Ok(with_details(
+        v,
+        AuditDetails::Trust {
+            from: old,
+            to: None,
+        },
+    ))
 }
 
 /// Политика доверия группы: своя, действующая (группа поверх организации) и закреплённые клетки. Группа
@@ -1106,7 +1142,7 @@ async fn put_group_trust(
     State(a): State<Arc<Admin>>,
     Path((org, group)): Path<(TenantId, GroupId)>,
     Json(body): Json<TrustBody>,
-) -> std::result::Result<Json<TrustView>, RefusedResponse> {
+) -> std::result::Result<Response, RefusedResponse> {
     if let Err(e) = group_exists(&a, org, group).await {
         return Err(RefusedResponse::from(ApiError(e).into_response()));
     }
@@ -1122,12 +1158,19 @@ async fn put_group_trust(
 async fn reset_group_trust(
     State(a): State<Arc<Admin>>,
     Path((org, group)): Path<(TenantId, GroupId)>,
-) -> std::result::Result<Json<TrustView>, Refused> {
+) -> std::result::Result<Response, Refused> {
     group_exists(&a, org, group).await?;
-    store(&a)?
-        .reset_policy(TrustLevel::Group(org, group))
-        .await?;
-    Ok(Json(view(&a, TrustLevel::Group(org, group)).await?))
+    let level = TrustLevel::Group(org, group);
+    let old = policy(&a, level).await?;
+    store(&a)?.reset_policy(level).await?;
+    let v = view(&a, level).await?;
+    Ok(with_details(
+        v,
+        AuditDetails::Trust {
+            from: old,
+            to: None,
+        },
+    ))
 }
 
 /// Действующая политика учётной записи: установка → организация → группы учётной записи (из нескольких —
@@ -1207,7 +1250,16 @@ mod tests {
         written.partners = vec!["partner.example".into()];
         assert_eq!(
             env.trust.policy(TrustLevel::Org(TenantId::DEFAULT)).await,
-            Ok(Some(written))
+            Ok(Some(written.clone()))
+        );
+        // Детали журнала аудита — пара «старое → новое» (решение владельца 19.11, issue #108):
+        // политики уровня не было — старое `None`.
+        assert_eq!(
+            log[0].details,
+            Some(AuditDetails::Trust {
+                from: None,
+                to: Some(written),
+            })
         );
 
         // Выше потолка контракта: новое приглашение интернету — кнопка, закреплено.
@@ -1264,6 +1316,9 @@ mod tests {
         // Аудит: пишется каждый запрос — PUT организации (200, 422, 400), PUT установки, её 422; GET не пишется.
         let log = env.audit.records();
         assert_eq!(log.len(), 5, "{log:?}");
+        // Детали — только у записавшихся изменений: отказы (422, 400) без деталей.
+        let details_count = log.iter().filter(|r| r.details.is_some()).count();
+        assert_eq!(details_count, 2, "{log:?}");
     }
 
     /// Приёмка ADM-49: права — администратор организации не меняет уровень установки и чужую организацию;

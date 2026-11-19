@@ -5500,6 +5500,7 @@ mod tests {
         assert_eq!(show["own"], Value::Null);
         // Аудит: изменения с маршрутом доверия; страница списков в тесте — 2 записи, идём по `next`.
         let mut trust_ops: Vec<String> = Vec::new();
+        let mut trust_entries: Vec<Value> = Vec::new();
         let mut after = None;
         for _ in 0..10 {
             let audit = ApiAction::Audit {
@@ -5514,15 +5515,12 @@ mod tests {
                 }),
             };
             let page = json(exec(&c, true, audit).await);
-            trust_ops.extend(
-                page["entries"]
-                    .as_array()
-                    .expect("entries")
-                    .iter()
-                    .filter_map(|e| e["route"].as_str())
-                    .filter(|r| r.contains("/trust"))
-                    .map(str::to_owned),
-            );
+            for e in page["entries"].as_array().expect("entries") {
+                if e["route"].as_str().is_some_and(|r| r.contains("/trust")) {
+                    trust_ops.push(e["route"].as_str().expect("route").to_owned());
+                    trust_entries.push(e.clone());
+                }
+            }
             after = page["next"].as_u64();
             if after.is_none() {
                 break;
@@ -5532,6 +5530,31 @@ mod tests {
             trust_ops.len() >= 4,
             "изменения политики — в журнале аудита: {trust_ops:?}"
         );
+        // Решение владельца 19.11 (issue #108): журнал аудита несёт пару «старое → новое».
+        let first = trust_entries
+            .iter()
+            .find(|e| e["method"] == "PUT" && e["status"] == 200)
+            .expect("первое изменение");
+        assert_eq!(first["details"]["what"], "trust");
+        assert_eq!(first["details"]["to"]["invite_new"]["partner"], "auto");
+        let resets: Vec<&Value> = trust_entries
+            .iter()
+            .filter(|e| e["method"] == "DELETE")
+            .collect();
+        assert_eq!(
+            resets.len(),
+            2,
+            "сброс организации — дважды: {trust_entries:?}"
+        );
+        assert_eq!(resets[0]["details"]["what"], "trust");
+        assert_eq!(resets[0]["details"]["to"], Value::Null);
+        assert_eq!(
+            resets[0]["details"]["from"]["partners"],
+            json!(["p.example"])
+        );
+        // Повторный сброс — прежней политики уже нет.
+        assert_eq!(resets[1]["details"]["from"], Value::Null);
+        assert_eq!(resets[1]["details"]["to"], Value::Null);
     }
 
     /// PNG 12×6 (сплошной #177CAA) для знака в тестах.

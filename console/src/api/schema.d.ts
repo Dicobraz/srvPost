@@ -481,6 +481,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{org}/accounts/{account}/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Действующая политика учётной записи: установка → организация → группы учётной записи (из нескольких —
+         *     самое узкое), по клетке — источник и признак «выше потолка».
+         */
+        get: operations["get_account_trust"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{org}/accounts/{account}/vacation": {
         parameters: {
             query?: never;
@@ -762,6 +782,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{org}/groups/{group}/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Политика доверия группы: своя, действующая (группа поверх организации) и закреплённые клетки. Группа
+         *     организации; несуществующая — 404.
+         */
+        get: operations["get_group_trust"];
+        /**
+         * Заменяет политику группы целиком (клетки не выше действующих значений организации; списки доменов — только
+         *     у организации, здесь — 422). Клетки выше потолка — 422 problem+json с `errors`.
+         */
+        put: operations["put_group_trust"];
+        post?: never;
+        /** Сбрасывает политику группы — действуют организация и умолчания. Сброс незаданного уровня — не ошибка. */
+        delete: operations["reset_group_trust"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{org}/mailbox-audit": {
         parameters: {
             query?: never;
@@ -989,7 +1034,11 @@ export interface paths {
         };
         /** Скрипт организации; не задан — 404. */
         get: operations["org_script"];
-        /** Задаёт скрипт организации; текст проверяется до записи. */
+        /**
+         * Задаёт скрипт организации; текст проверяется до записи: синтаксис с пределами секции `sieve` и профиль
+         *     «админский» (SIEVE-14): `vacation` запрещён, `redirect` на внешний адрес — только на домен, куда открыта
+         *     автопересылка организации; ошибки — 422 со строкой и столбцом.
+         */
         put: operations["set_org_script"];
         post?: never;
         /** Удаляет скрипт организации; повторное удаление — не ошибка. */
@@ -1157,6 +1206,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{org}/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Политика доверия организации: своя, действующая (организация поверх установки) и закреплённые клетки. */
+        get: operations["get_org_trust"];
+        /**
+         * Заменяет политику организации целиком: клетки (не выше действующих значений установки) и списки
+         *     `partners`, `auto_forward_domains`. Клетки выше потолка — 422 problem+json с `errors` и уровнем, откуда
+         *     потолок; домен-партнёр из принятых доменов организации — 422; чужая организация — 403, неизвестная — 404.
+         */
+        put: operations["put_org_trust"];
+        post?: never;
+        /** Сбрасывает политику организации — действуют установка и умолчания. Сброс незаданного уровня — не ошибка. */
+        delete: operations["reset_org_trust"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{org}/units": {
         parameters: {
             query?: never;
@@ -1309,6 +1381,35 @@ export interface paths {
         post?: never;
         /** Удаляет источник кластера. Нет — 404. */
         delete: operations["delete_cluster_source"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Политика доверия установки: своя, действующая и закреплённые клетки. Уровень установки читает и меняет
+         *     только администратор установки.
+         */
+        get: operations["get_installation_trust"];
+        /**
+         * Заменяет политику установки целиком (потолки для всех организаций). Клетки выше потолка контракта —
+         *     422 problem+json с `errors`; закреплённых клеток в теле нет (`booking` и пр. — 400); хранилище не
+         *     подключено — 503.
+         */
+        put: operations["put_installation_trust"];
+        post?: never;
+        /**
+         * Сбрасывает политику установки к потолку контракта (`HARD_CEILING`); организации и группы продолжают
+         *     действовать со своими политиками. Сброс незаданного уровня — не ошибка.
+         */
+        delete: operations["reset_installation_trust"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1654,6 +1755,27 @@ export interface components {
             effective: components["schemas"]["EffectiveBranding"];
             own?: components["schemas"]["Branding"] | null;
         };
+        /** @description Действующий потолок уровня: значения уровня выше и по клетке уровень, давшее его. */
+        Ceiling: {
+            /** @description Значения потолка по клеткам. */
+            matrix: components["schemas"]["TrustMatrix"];
+            /** @description По клетке — уровень, давший потолок; `null` — умолчание контракта. */
+            sources: components["schemas"]["TrustSources"];
+        };
+        /** @description Значение по клетке (адресация клеток в ошибках). */
+        CellValue: {
+            /** @description Клетка «новое приглашение». */
+            invite: components["schemas"]["InviteMode"];
+        } | {
+            /** @description Клетки обновлений, автоответа, MDN, автопересылки. */
+            toggle: components["schemas"]["Toggle"];
+        } | {
+            /** @description Клетки занятости и общего доступа. */
+            detail: components["schemas"]["Detail"];
+        } | {
+            /** @description Клетка «письма в группы». */
+            post: components["schemas"]["GroupPost"];
+        };
         /** @description Снимок уровня кластера. */
         ClusterView: {
             /** @description Принятые домены всех организаций. */
@@ -1783,6 +1905,11 @@ export interface components {
             /** @description Требование к TLS. */
             tls: components["schemas"]["TlsRequirement"];
         };
+        /**
+         * @description Уровень детализации занятости и общего доступа.
+         * @enum {string}
+         */
+        Detail: "none" | "free_busy" | "limited" | "details" | "all";
         /** @description Отключённый ящик. */
         DisabledInfo: {
             /** @description Отображаемое имя. */
@@ -1848,6 +1975,17 @@ export interface components {
             accounts: string[];
             /** @description Почтовые контакты. */
             contacts: string[];
+        };
+        /** @description Действующая матрица с потолком и источниками. */
+        Effective: {
+            /** @description Действующий потолок. */
+            ceiling: components["schemas"]["Ceiling"];
+            /** @description Действующие значения. */
+            matrix: components["schemas"]["TrustMatrix"];
+            /** @description Клетки, обрезанные потолком («выше потолка»). */
+            over_ceiling: components["schemas"]["OverCeiling"][];
+            /** @description По клетке — уровень, давший значение. */
+            source: components["schemas"]["TrustSources"];
         };
         /** @description Действующий брендинг ([`BrandingLevels::effective`]): название и знак с ближайшего уровня, все цвета ролей. */
         EffectiveBranding: {
@@ -1920,6 +2058,11 @@ export interface components {
             name?: string | null;
             senders?: components["schemas"]["SenderRestriction"] | null;
         };
+        /**
+         * @description Письма в группы рассылки от типа абонента.
+         * @enum {string}
+         */
+        GroupPost: "closed" | "moderated" | "open";
         /** @description Письмо в очереди модерации. */
         HeldInfo: {
             /** @description Группа-адресат; `null` — письмо задержано правилом потока (CTR-43). */
@@ -1970,6 +2113,11 @@ export interface components {
             /** @description Краткое описание кода. */
             title: string;
         };
+        /**
+         * @description Новое приглашение: письмо с кнопкой или автодобавление.
+         * @enum {string}
+         */
+        InviteMode: "button" | "auto";
         /** @description Выпущенный пароль: значение показывается один раз. */
         IssuedAppPassword: components["schemas"]["AppPasswordInfo"] & {
             /** @description Значение пароля. */
@@ -2084,6 +2232,18 @@ export interface components {
             /** @description Идентификатор. */
             id: string;
         };
+        /** @description Клетка выше потолка. */
+        OverCeiling: {
+            /** @description Потолок. */
+            ceiling: components["schemas"]["CellValue"];
+            /** @description Функция клетки. */
+            function: components["schemas"]["TrustFunction"];
+            level?: components["schemas"]["TrustLevel"] | null;
+            /** @description Тип абонента клетки. */
+            peer: components["schemas"]["PeerKind"];
+            /** @description Заданное значение. */
+            value: components["schemas"]["CellValue"];
+        };
         /** @description Цвета всех ролей — заданные и выведенные (ключи — имена ролей из `design/tokens.toml`). */
         Palette: {
             /** @description Подсветка вывода CLI. */
@@ -2108,6 +2268,101 @@ export interface components {
              * @description Пароль: каталога (`auth.ldap`) или приложения, в том числе выданный `thepost admin init`.
              */
             password: string;
+        };
+        /**
+         * @description Тип абонента матрицы.
+         * @enum {string}
+         */
+        PeerKind: "own" | "partner" | "neighbor" | "external";
+        /** @description Закреплённые клетки контракта: по клетке — ничем не меняется. */
+        PerPeerBool: {
+            /** @description Интернет. */
+            external: boolean;
+            /** @description Сосед по установке. */
+            neighbor: boolean;
+            /** @description Своя организация. */
+            own: boolean;
+            /** @description Домен-партнёр. */
+            partner: boolean;
+        };
+        /** @description [`PerPeerInviteSchema`] для детализации. */
+        PerPeerDetail: {
+            /** @description Интернет. */
+            external: components["schemas"]["Detail"];
+            /** @description Сосед по установке. */
+            neighbor: components["schemas"]["Detail"];
+            /** @description Своя организация. */
+            own: components["schemas"]["Detail"];
+            /** @description Домен-партнёр. */
+            partner: components["schemas"]["Detail"];
+        };
+        /** @description [`PerPeerInviteOptionSchema`] для детализации. */
+        PerPeerDetailOption: {
+            external?: components["schemas"]["Detail"] | null;
+            neighbor?: components["schemas"]["Detail"] | null;
+            own?: components["schemas"]["Detail"] | null;
+            partner?: components["schemas"]["Detail"] | null;
+        };
+        /** @description [`PerPeerInviteSchema`] для писем в группы. */
+        PerPeerGroupPost: {
+            /** @description Интернет. */
+            external: components["schemas"]["GroupPost"];
+            /** @description Сосед по установке. */
+            neighbor: components["schemas"]["GroupPost"];
+            /** @description Своя организация. */
+            own: components["schemas"]["GroupPost"];
+            /** @description Домен-партнёр. */
+            partner: components["schemas"]["GroupPost"];
+        };
+        /** @description [`PerPeerInviteOptionSchema`] для писем в группы. */
+        PerPeerGroupPostOption: {
+            external?: components["schemas"]["GroupPost"] | null;
+            neighbor?: components["schemas"]["GroupPost"] | null;
+            own?: components["schemas"]["GroupPost"] | null;
+            partner?: components["schemas"]["GroupPost"] | null;
+        };
+        /** @description Колонки матрицы со значениями (действующая матрица). */
+        PerPeerInvite: {
+            /** @description Интернет. */
+            external: components["schemas"]["InviteMode"];
+            /** @description Сосед по установке. */
+            neighbor: components["schemas"]["InviteMode"];
+            /** @description Своя организация. */
+            own: components["schemas"]["InviteMode"];
+            /** @description Домен-партнёр. */
+            partner: components["schemas"]["InviteMode"];
+        };
+        /** @description Значения по типам абонентов — колонки матрицы (клетки политики; `null` — наследуется уровнем выше). */
+        PerPeerInviteOption: {
+            external?: components["schemas"]["InviteMode"] | null;
+            neighbor?: components["schemas"]["InviteMode"] | null;
+            own?: components["schemas"]["InviteMode"] | null;
+            partner?: components["schemas"]["InviteMode"] | null;
+        };
+        /** @description [`PerPeerInviteSchema`] для выключено/включено. */
+        PerPeerToggle: {
+            /** @description Интернет. */
+            external: components["schemas"]["Toggle"];
+            /** @description Сосед по установке. */
+            neighbor: components["schemas"]["Toggle"];
+            /** @description Своя организация. */
+            own: components["schemas"]["Toggle"];
+            /** @description Домен-партнёр. */
+            partner: components["schemas"]["Toggle"];
+        };
+        /** @description [`PerPeerInviteOptionSchema`] для выключено/включено. */
+        PerPeerToggleOption: {
+            external?: components["schemas"]["Toggle"] | null;
+            neighbor?: components["schemas"]["Toggle"] | null;
+            own?: components["schemas"]["Toggle"] | null;
+            partner?: components["schemas"]["Toggle"] | null;
+        };
+        /** @description По клетке — уровень, давший значение (`null` — умолчание контракта). */
+        PerPeerTrustLevel: {
+            external?: components["schemas"]["TrustLevel"] | null;
+            neighbor?: components["schemas"]["TrustLevel"] | null;
+            own?: components["schemas"]["TrustLevel"] | null;
+            partner?: components["schemas"]["TrustLevel"] | null;
         };
         /** @description Политика уровня и действующая политика. */
         Policies: {
@@ -2553,6 +2808,11 @@ export interface components {
                 spki_sha256: string[];
             };
         };
+        /**
+         * @description Выключено или включено.
+         * @enum {string}
+         */
+        Toggle: "off" | "on";
         /** @description Элемент корзины. */
         TrashEntry: {
             /**
@@ -2614,6 +2874,154 @@ export interface components {
             /** @description Пользователь может выбрать своё значение; иначе действует `mode`. */
             user_can_choose?: boolean;
         };
+        /**
+         * @description Замена политики уровня целиком: незаданные клетки наследуют уровень выше; `partners` и
+         *     `auto_forward_domains` задаёт только организация. Закреплённых клеток (бронирование, GAL, делегирование,
+         *     DSN, прочие методы iTIP) в политике нет — их тела нет и быть не может (400).
+         */
+        TrustBody: {
+            /** @description Автопересылка наружу. */
+            auto_forward?: components["schemas"]["PerPeerToggleOption"];
+            /** @description Домены, куда разрешена автопересылка (только уровень организации); канонические имена. */
+            auto_forward_domains?: string[];
+            /** @description Автоответ. */
+            auto_reply?: components["schemas"]["PerPeerToggleOption"];
+            /** @description Занятость. */
+            freebusy?: components["schemas"]["PerPeerDetailOption"];
+            /** @description Письма в группы рассылки. */
+            group_post?: components["schemas"]["PerPeerGroupPostOption"];
+            /** @description Новое приглашение. */
+            invite_new?: components["schemas"]["PerPeerInviteOption"];
+            /** @description `REPLY`, `CANCEL` и обновление `REQUEST` к существующим событиям. */
+            itip_updates?: components["schemas"]["PerPeerToggleOption"];
+            /** @description MDN наружу. */
+            mdn?: components["schemas"]["PerPeerToggleOption"];
+            /** @description Домены-партнёры (только уровень организации): канонические имена — нижний регистр, A-label IDN. */
+            partners?: string[];
+            /** @description Общий доступ и публикация. */
+            sharing?: components["schemas"]["PerPeerDetailOption"];
+        };
+        /**
+         * @description Закреплённые клетки контракта ([`TrustFixed`]) — по клетке (никто не меняет: потолок равен самому узкому
+         *     значению, умолчание — оно же).
+         */
+        TrustFixed: {
+            /** @description Автопересылка наружу. */
+            auto_forward: components["schemas"]["PerPeerBool"];
+            /** @description Автоответ. */
+            auto_reply: components["schemas"]["PerPeerBool"];
+            /** @description Занятость. */
+            freebusy: components["schemas"]["PerPeerBool"];
+            /** @description Письма в группы рассылки. */
+            group_post: components["schemas"]["PerPeerBool"];
+            /** @description Новое приглашение. */
+            invite_new: components["schemas"]["PerPeerBool"];
+            /** @description Ответ и отмена. */
+            itip_updates: components["schemas"]["PerPeerBool"];
+            /** @description MDN наружу. */
+            mdn: components["schemas"]["PerPeerBool"];
+            /** @description Общий доступ и публикация. */
+            sharing: components["schemas"]["PerPeerBool"];
+        };
+        /**
+         * @description Функция матрицы.
+         * @enum {string}
+         */
+        TrustFunction: "invite_new" | "itip_updates" | "auto_reply" | "mdn" | "auto_forward" | "free_busy" | "sharing" | "group_post";
+        /** @description Уровень политики: установка → организация → группа. */
+        TrustLevel: "installation" | {
+            /** @description Организация (UUID). */
+            org: string;
+        } | {
+            /** @description Группа (UUID организации, UUID группы). */
+            group: string[];
+        };
+        /** @description Действующая матрица: по клетке на функцию и тип абонента. */
+        TrustMatrix: {
+            /** @description Автопересылка наружу. */
+            auto_forward: components["schemas"]["PerPeerToggle"];
+            /** @description Автоответ. */
+            auto_reply: components["schemas"]["PerPeerToggle"];
+            /** @description Занятость. */
+            freebusy: components["schemas"]["PerPeerDetail"];
+            /** @description Письма в группы рассылки. */
+            group_post: components["schemas"]["PerPeerGroupPost"];
+            /** @description Новое приглашение. */
+            invite_new: components["schemas"]["PerPeerInvite"];
+            /** @description Ответ и отмена к существующим событиям. */
+            itip_updates: components["schemas"]["PerPeerToggle"];
+            /** @description MDN наружу. */
+            mdn: components["schemas"]["PerPeerToggle"];
+            /** @description Общий доступ и публикация. */
+            sharing: components["schemas"]["PerPeerDetail"];
+        };
+        /** @description Политика уровня (клетки `null` наследуют уровень выше; `partners` и `auto_forward_domains` — только организация). */
+        TrustPolicy: {
+            /** @description Автопересылка наружу. */
+            auto_forward: components["schemas"]["PerPeerToggleOption"];
+            /** @description Домены, куда разрешена автопересылка (при `auto_forward.external = on`). */
+            auto_forward_domains: string[];
+            /** @description Автоответ. */
+            auto_reply: components["schemas"]["PerPeerToggleOption"];
+            /** @description Занятость. */
+            freebusy: components["schemas"]["PerPeerDetailOption"];
+            /** @description Письма в группы рассылки. */
+            group_post: components["schemas"]["PerPeerGroupPostOption"];
+            /** @description Новое приглашение. */
+            invite_new: components["schemas"]["PerPeerInviteOption"];
+            /** @description `REPLY`, `CANCEL` и обновление `REQUEST` к существующим событиям. */
+            itip_updates: components["schemas"]["PerPeerToggleOption"];
+            /** @description MDN наружу. */
+            mdn: components["schemas"]["PerPeerToggleOption"];
+            /** @description Домены-партнёры организации (канонические имена; свой принятый домен — 422). */
+            partners: string[];
+            /** @description Общий доступ и публикация. */
+            sharing: components["schemas"]["PerPeerDetailOption"];
+        };
+        /** @description Отказ записи политики: клетки выше потолка или недопустимые домены (RFC 9457 с расширением `errors`). */
+        TrustProblem: {
+            /** @description Клетки выше потолка по-русски, через «; » (у доменов — причина). */
+            detail: string;
+            /** @description Клетки выше потолка (`level` — уровень, давший потолок; `null` — закреплено контрактом). */
+            errors: components["schemas"]["OverCeiling"][];
+            /**
+             * Format: int32
+             * @description Код HTTP (422).
+             */
+            status: number;
+            /** @description Краткое описание кода. */
+            title: string;
+        };
+        /** @description Источник значения по клеткам: уровень, давший значение; `null` — умолчание контракта. */
+        TrustSources: {
+            /** @description Автопересылка наружу. */
+            auto_forward: components["schemas"]["PerPeerTrustLevel"];
+            /** @description Автоответ. */
+            auto_reply: components["schemas"]["PerPeerTrustLevel"];
+            /** @description Занятость. */
+            freebusy: components["schemas"]["PerPeerTrustLevel"];
+            /** @description Письма в группы рассылки. */
+            group_post: components["schemas"]["PerPeerTrustLevel"];
+            /** @description Новое приглашение. */
+            invite_new: components["schemas"]["PerPeerTrustLevel"];
+            /** @description Ответ и отмена. */
+            itip_updates: components["schemas"]["PerPeerTrustLevel"];
+            /** @description MDN наружу. */
+            mdn: components["schemas"]["PerPeerTrustLevel"];
+            /** @description Общий доступ и публикация. */
+            sharing: components["schemas"]["PerPeerTrustLevel"];
+        };
+        /** @description Политика уровня и действующая матрица. */
+        TrustView: {
+            /**
+             * @description Действующая матрица: у группы — как для участника одной этой группы, у учётной записи — со всеми её
+             *     группами (самое узкое).
+             */
+            effective: components["schemas"]["Effective"];
+            /** @description Клетки, закреплённые контрактом (не меняются ни на одном уровне). */
+            fixed: components["schemas"]["TrustFixed"];
+            own?: components["schemas"]["TrustPolicy"] | null;
+        };
         /** @description Доверенный источник приёма. */
         TrustedSource: {
             /** @description Вид. */
@@ -2659,10 +3067,19 @@ export interface components {
             /** @description Должность. */
             title?: string | null;
         };
-        /** @description Автоответ учётной записи (модель JMAP `VacationResponse`, RFC 8621 §8); выполняется до активного скрипта. */
+        /**
+         * @description Автоответ учётной записи (модель JMAP `VacationResponse`, RFC 8621 §8); выполняется до активного скрипта.
+         *     Чужим отправителям — только внешний текст (CTR-93, RFC 3834): не задан — наружу ответа нет.
+         */
         VacationBody: {
             /** @description Включён. */
             enabled?: boolean;
+            /** @description Текст ответа чужим HTML. */
+            external_html_body?: string | null;
+            /** @description Тема ответа чужим; `null` — наружу ответа нет. */
+            external_subject?: string | null;
+            /** @description Текст ответа чужим. */
+            external_text_body?: string | null;
             /**
              * Format: date-time
              * @description Начало действия; `null` — сразу.
@@ -4589,6 +5006,62 @@ export interface operations {
             };
         };
     };
+    get_account_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Учётная запись (UUID) */
+                account: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     vacation: {
         parameters: {
             query?: never;
@@ -5985,6 +6458,188 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_group_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Группа (UUID) */
+                group: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_group_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Группа (UUID) */
+                group: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description организация или группа не найдена */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description клетки выше потолка или домены не на своём уровне */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustProblem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_group_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Группа (UUID) */
+                group: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7735,6 +8390,181 @@ export interface operations {
             };
         };
     };
+    get_org_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_org_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description клетки выше потолка или недопустимые домены */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustProblem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_org_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     list_units: {
         parameters: {
             query?: never;
@@ -8296,6 +9126,159 @@ export interface operations {
             };
             /** @description устаревшая версия */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_installation_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_installation_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description клетки выше потолка контракта */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustProblem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_installation_trust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustView"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

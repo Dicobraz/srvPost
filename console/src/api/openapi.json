@@ -770,6 +770,81 @@
         ],
         "type": "object"
       },
+      "Ceiling": {
+        "description": "Действующий потолок уровня: значения уровня выше и по клетке уровень, давшее его.",
+        "properties": {
+          "matrix": {
+            "$ref": "#/components/schemas/TrustMatrix",
+            "description": "Значения потолка по клеткам."
+          },
+          "sources": {
+            "$ref": "#/components/schemas/TrustSources",
+            "description": "По клетке — уровень, давший потолок; `null` — умолчание контракта."
+          }
+        },
+        "required": [
+          "matrix",
+          "sources"
+        ],
+        "type": "object"
+      },
+      "CellValue": {
+        "description": "Значение по клетке (адресация клеток в ошибках).",
+        "oneOf": [
+          {
+            "description": "Клетка «новое приглашение».",
+            "properties": {
+              "invite": {
+                "$ref": "#/components/schemas/InviteMode",
+                "description": "Клетка «новое приглашение»."
+              }
+            },
+            "required": [
+              "invite"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Клетки обновлений, автоответа, MDN, автопересылки.",
+            "properties": {
+              "toggle": {
+                "$ref": "#/components/schemas/Toggle",
+                "description": "Клетки обновлений, автоответа, MDN, автопересылки."
+              }
+            },
+            "required": [
+              "toggle"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Клетки занятости и общего доступа.",
+            "properties": {
+              "detail": {
+                "$ref": "#/components/schemas/Detail",
+                "description": "Клетки занятости и общего доступа."
+              }
+            },
+            "required": [
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Клетка «письма в группы».",
+            "properties": {
+              "post": {
+                "$ref": "#/components/schemas/GroupPost",
+                "description": "Клетка «письма в группы»."
+              }
+            },
+            "required": [
+              "post"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ClusterView": {
         "description": "Снимок уровня кластера.",
         "properties": {
@@ -1108,6 +1183,17 @@
         ],
         "type": "object"
       },
+      "Detail": {
+        "description": "Уровень детализации занятости и общего доступа.",
+        "enum": [
+          "none",
+          "free_busy",
+          "limited",
+          "details",
+          "all"
+        ],
+        "type": "string"
+      },
       "DisabledInfo": {
         "description": "Отключённый ящик.",
         "properties": {
@@ -1267,6 +1353,37 @@
         "required": [
           "accounts",
           "contacts"
+        ],
+        "type": "object"
+      },
+      "Effective": {
+        "description": "Действующая матрица с потолком и источниками.",
+        "properties": {
+          "ceiling": {
+            "$ref": "#/components/schemas/Ceiling",
+            "description": "Действующий потолок."
+          },
+          "matrix": {
+            "$ref": "#/components/schemas/TrustMatrix",
+            "description": "Действующие значения."
+          },
+          "over_ceiling": {
+            "description": "Клетки, обрезанные потолком («выше потолка»).",
+            "items": {
+              "$ref": "#/components/schemas/OverCeiling"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/TrustSources",
+            "description": "По клетке — уровень, давший значение."
+          }
+        },
+        "required": [
+          "matrix",
+          "ceiling",
+          "source",
+          "over_ceiling"
         ],
         "type": "object"
       },
@@ -1486,6 +1603,15 @@
         },
         "type": "object"
       },
+      "GroupPost": {
+        "description": "Письма в группы рассылки от типа абонента.",
+        "enum": [
+          "closed",
+          "moderated",
+          "open"
+        ],
+        "type": "string"
+      },
       "HeldInfo": {
         "description": "Письмо в очереди модерации.",
         "properties": {
@@ -1605,6 +1731,14 @@
           "errors"
         ],
         "type": "object"
+      },
+      "InviteMode": {
+        "description": "Новое приглашение: письмо с кнопкой или автодобавление.",
+        "enum": [
+          "button",
+          "auto"
+        ],
+        "type": "string"
       },
       "IssuedAppPassword": {
         "allOf": [
@@ -1930,6 +2064,45 @@
         ],
         "description": "Организация."
       },
+      "OverCeiling": {
+        "description": "Клетка выше потолка.",
+        "properties": {
+          "ceiling": {
+            "$ref": "#/components/schemas/CellValue",
+            "description": "Потолок."
+          },
+          "function": {
+            "$ref": "#/components/schemas/TrustFunction",
+            "description": "Функция клетки."
+          },
+          "level": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TrustLevel",
+                "description": "Уровень, давший потолок; `null` — умолчание контракта (закреплено)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "peer": {
+            "$ref": "#/components/schemas/PeerKind",
+            "description": "Тип абонента клетки."
+          },
+          "value": {
+            "$ref": "#/components/schemas/CellValue",
+            "description": "Заданное значение."
+          }
+        },
+        "required": [
+          "function",
+          "peer",
+          "value",
+          "ceiling"
+        ],
+        "type": "object"
+      },
       "Palette": {
         "description": "Цвета всех ролей — заданные и выведенные (ключи — имена ролей из `design/tokens.toml`).",
         "properties": {
@@ -1989,6 +2162,406 @@
           "login",
           "password"
         ],
+        "type": "object"
+      },
+      "PeerKind": {
+        "description": "Тип абонента матрицы.",
+        "enum": [
+          "own",
+          "partner",
+          "neighbor",
+          "external"
+        ],
+        "type": "string"
+      },
+      "PerPeerBool": {
+        "description": "Закреплённые клетки контракта: по клетке — ничем не меняется.",
+        "properties": {
+          "external": {
+            "description": "Интернет.",
+            "type": "boolean"
+          },
+          "neighbor": {
+            "description": "Сосед по установке.",
+            "type": "boolean"
+          },
+          "own": {
+            "description": "Своя организация.",
+            "type": "boolean"
+          },
+          "partner": {
+            "description": "Домен-партнёр.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "own",
+          "partner",
+          "neighbor",
+          "external"
+        ],
+        "type": "object"
+      },
+      "PerPeerDetail": {
+        "description": "[`PerPeerInviteSchema`] для детализации.",
+        "properties": {
+          "external": {
+            "$ref": "#/components/schemas/Detail",
+            "description": "Интернет."
+          },
+          "neighbor": {
+            "$ref": "#/components/schemas/Detail",
+            "description": "Сосед по установке."
+          },
+          "own": {
+            "$ref": "#/components/schemas/Detail",
+            "description": "Своя организация."
+          },
+          "partner": {
+            "$ref": "#/components/schemas/Detail",
+            "description": "Домен-партнёр."
+          }
+        },
+        "required": [
+          "own",
+          "partner",
+          "neighbor",
+          "external"
+        ],
+        "type": "object"
+      },
+      "PerPeerDetailOption": {
+        "description": "[`PerPeerInviteOptionSchema`] для детализации.",
+        "properties": {
+          "external": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Detail",
+                "description": "Интернет."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "neighbor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Detail",
+                "description": "Сосед по установке."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Detail",
+                "description": "Своя организация."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Detail",
+                "description": "Домен-партнёр."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PerPeerGroupPost": {
+        "description": "[`PerPeerInviteSchema`] для писем в группы.",
+        "properties": {
+          "external": {
+            "$ref": "#/components/schemas/GroupPost",
+            "description": "Интернет."
+          },
+          "neighbor": {
+            "$ref": "#/components/schemas/GroupPost",
+            "description": "Сосед по установке."
+          },
+          "own": {
+            "$ref": "#/components/schemas/GroupPost",
+            "description": "Своя организация."
+          },
+          "partner": {
+            "$ref": "#/components/schemas/GroupPost",
+            "description": "Домен-партнёр."
+          }
+        },
+        "required": [
+          "own",
+          "partner",
+          "neighbor",
+          "external"
+        ],
+        "type": "object"
+      },
+      "PerPeerGroupPostOption": {
+        "description": "[`PerPeerInviteOptionSchema`] для писем в группы.",
+        "properties": {
+          "external": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GroupPost",
+                "description": "Интернет."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "neighbor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GroupPost",
+                "description": "Сосед по установке."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GroupPost",
+                "description": "Своя организация."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GroupPost",
+                "description": "Домен-партнёр."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PerPeerInvite": {
+        "description": "Колонки матрицы со значениями (действующая матрица).",
+        "properties": {
+          "external": {
+            "$ref": "#/components/schemas/InviteMode",
+            "description": "Интернет."
+          },
+          "neighbor": {
+            "$ref": "#/components/schemas/InviteMode",
+            "description": "Сосед по установке."
+          },
+          "own": {
+            "$ref": "#/components/schemas/InviteMode",
+            "description": "Своя организация."
+          },
+          "partner": {
+            "$ref": "#/components/schemas/InviteMode",
+            "description": "Домен-партнёр."
+          }
+        },
+        "required": [
+          "own",
+          "partner",
+          "neighbor",
+          "external"
+        ],
+        "type": "object"
+      },
+      "PerPeerInviteOption": {
+        "description": "Значения по типам абонентов — колонки матрицы (клетки политики; `null` — наследуется уровнем выше).",
+        "properties": {
+          "external": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InviteMode",
+                "description": "Интернет."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "neighbor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InviteMode",
+                "description": "Сосед по установке."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InviteMode",
+                "description": "Своя организация."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InviteMode",
+                "description": "Домен-партнёр."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PerPeerToggle": {
+        "description": "[`PerPeerInviteSchema`] для выключено/включено.",
+        "properties": {
+          "external": {
+            "$ref": "#/components/schemas/Toggle",
+            "description": "Интернет."
+          },
+          "neighbor": {
+            "$ref": "#/components/schemas/Toggle",
+            "description": "Сосед по установке."
+          },
+          "own": {
+            "$ref": "#/components/schemas/Toggle",
+            "description": "Своя организация."
+          },
+          "partner": {
+            "$ref": "#/components/schemas/Toggle",
+            "description": "Домен-партнёр."
+          }
+        },
+        "required": [
+          "own",
+          "partner",
+          "neighbor",
+          "external"
+        ],
+        "type": "object"
+      },
+      "PerPeerToggleOption": {
+        "description": "[`PerPeerInviteOptionSchema`] для выключено/включено.",
+        "properties": {
+          "external": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Toggle",
+                "description": "Интернет."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "neighbor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Toggle",
+                "description": "Сосед по установке."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Toggle",
+                "description": "Своя организация."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Toggle",
+                "description": "Домен-партнёр."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PerPeerTrustLevel": {
+        "description": "По клетке — уровень, давший значение (`null` — умолчание контракта).",
+        "properties": {
+          "external": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TrustLevel",
+                "description": "Интернет."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "neighbor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TrustLevel",
+                "description": "Сосед по установке."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TrustLevel",
+                "description": "Своя организация."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TrustLevel",
+                "description": "Домен-партнёр."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
         "type": "object"
       },
       "Policies": {
@@ -3030,6 +3603,14 @@
           }
         ]
       },
+      "Toggle": {
+        "description": "Выключено или включено.",
+        "enum": [
+          "off",
+          "on"
+        ],
+        "type": "string"
+      },
       "TrashEntry": {
         "description": "Элемент корзины.",
         "properties": {
@@ -3166,6 +3747,387 @@
         ],
         "type": "object"
       },
+      "TrustBody": {
+        "additionalProperties": false,
+        "description": "Замена политики уровня целиком: незаданные клетки наследуют уровень выше; `partners` и\n`auto_forward_domains` задаёт только организация. Закреплённых клеток (бронирование, GAL, делегирование,\nDSN, прочие методы iTIP) в политике нет — их тела нет и быть не может (400).",
+        "properties": {
+          "auto_forward": {
+            "$ref": "#/components/schemas/PerPeerToggleOption",
+            "description": "Автопересылка наружу."
+          },
+          "auto_forward_domains": {
+            "description": "Домены, куда разрешена автопересылка (только уровень организации); канонические имена.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "auto_reply": {
+            "$ref": "#/components/schemas/PerPeerToggleOption",
+            "description": "Автоответ."
+          },
+          "freebusy": {
+            "$ref": "#/components/schemas/PerPeerDetailOption",
+            "description": "Занятость."
+          },
+          "group_post": {
+            "$ref": "#/components/schemas/PerPeerGroupPostOption",
+            "description": "Письма в группы рассылки."
+          },
+          "invite_new": {
+            "$ref": "#/components/schemas/PerPeerInviteOption",
+            "description": "Новое приглашение."
+          },
+          "itip_updates": {
+            "$ref": "#/components/schemas/PerPeerToggleOption",
+            "description": "`REPLY`, `CANCEL` и обновление `REQUEST` к существующим событиям."
+          },
+          "mdn": {
+            "$ref": "#/components/schemas/PerPeerToggleOption",
+            "description": "MDN наружу."
+          },
+          "partners": {
+            "description": "Домены-партнёры (только уровень организации): канонические имена — нижний регистр, A-label IDN.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sharing": {
+            "$ref": "#/components/schemas/PerPeerDetailOption",
+            "description": "Общий доступ и публикация."
+          }
+        },
+        "type": "object"
+      },
+      "TrustFixed": {
+        "description": "Закреплённые клетки контракта ([`TrustFixed`]) — по клетке (никто не меняет: потолок равен самому узкому\nзначению, умолчание — оно же).",
+        "properties": {
+          "auto_forward": {
+            "$ref": "#/components/schemas/PerPeerBool",
+            "description": "Автопересылка наружу."
+          },
+          "auto_reply": {
+            "$ref": "#/components/schemas/PerPeerBool",
+            "description": "Автоответ."
+          },
+          "freebusy": {
+            "$ref": "#/components/schemas/PerPeerBool",
+            "description": "Занятость."
+          },
+          "group_post": {
+            "$ref": "#/components/schemas/PerPeerBool",
+            "description": "Письма в группы рассылки."
+          },
+          "invite_new": {
+            "$ref": "#/components/schemas/PerPeerBool",
+            "description": "Новое приглашение."
+          },
+          "itip_updates": {
+            "$ref": "#/components/schemas/PerPeerBool",
+            "description": "Ответ и отмена."
+          },
+          "mdn": {
+            "$ref": "#/components/schemas/PerPeerBool",
+            "description": "MDN наружу."
+          },
+          "sharing": {
+            "$ref": "#/components/schemas/PerPeerBool",
+            "description": "Общий доступ и публикация."
+          }
+        },
+        "required": [
+          "invite_new",
+          "itip_updates",
+          "auto_reply",
+          "mdn",
+          "auto_forward",
+          "freebusy",
+          "sharing",
+          "group_post"
+        ],
+        "type": "object"
+      },
+      "TrustFunction": {
+        "description": "Функция матрицы.",
+        "enum": [
+          "invite_new",
+          "itip_updates",
+          "auto_reply",
+          "mdn",
+          "auto_forward",
+          "free_busy",
+          "sharing",
+          "group_post"
+        ],
+        "type": "string"
+      },
+      "TrustLevel": {
+        "description": "Уровень политики: установка → организация → группа.",
+        "oneOf": [
+          {
+            "description": "Установка — потолки для всех организаций.",
+            "enum": [
+              "installation"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Организация (UUID).",
+            "properties": {
+              "org": {
+                "description": "Организация (UUID).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "org"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Группа (UUID организации, UUID группы).",
+            "properties": {
+              "group": {
+                "description": "Группа (UUID организации, UUID группы).",
+                "items": {
+                  "description": "Группа (UUID организации, UUID группы).",
+                  "type": "string"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              }
+            },
+            "required": [
+              "group"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TrustMatrix": {
+        "description": "Действующая матрица: по клетке на функцию и тип абонента.",
+        "properties": {
+          "auto_forward": {
+            "$ref": "#/components/schemas/PerPeerToggle",
+            "description": "Автопересылка наружу."
+          },
+          "auto_reply": {
+            "$ref": "#/components/schemas/PerPeerToggle",
+            "description": "Автоответ."
+          },
+          "freebusy": {
+            "$ref": "#/components/schemas/PerPeerDetail",
+            "description": "Занятость."
+          },
+          "group_post": {
+            "$ref": "#/components/schemas/PerPeerGroupPost",
+            "description": "Письма в группы рассылки."
+          },
+          "invite_new": {
+            "$ref": "#/components/schemas/PerPeerInvite",
+            "description": "Новое приглашение."
+          },
+          "itip_updates": {
+            "$ref": "#/components/schemas/PerPeerToggle",
+            "description": "Ответ и отмена к существующим событиям."
+          },
+          "mdn": {
+            "$ref": "#/components/schemas/PerPeerToggle",
+            "description": "MDN наружу."
+          },
+          "sharing": {
+            "$ref": "#/components/schemas/PerPeerDetail",
+            "description": "Общий доступ и публикация."
+          }
+        },
+        "required": [
+          "invite_new",
+          "itip_updates",
+          "auto_reply",
+          "mdn",
+          "auto_forward",
+          "freebusy",
+          "sharing",
+          "group_post"
+        ],
+        "type": "object"
+      },
+      "TrustPolicy": {
+        "description": "Политика уровня (клетки `null` наследуют уровень выше; `partners` и `auto_forward_domains` — только организация).",
+        "properties": {
+          "auto_forward": {
+            "$ref": "#/components/schemas/PerPeerToggleOption",
+            "description": "Автопересылка наружу."
+          },
+          "auto_forward_domains": {
+            "description": "Домены, куда разрешена автопересылка (при `auto_forward.external = on`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "auto_reply": {
+            "$ref": "#/components/schemas/PerPeerToggleOption",
+            "description": "Автоответ."
+          },
+          "freebusy": {
+            "$ref": "#/components/schemas/PerPeerDetailOption",
+            "description": "Занятость."
+          },
+          "group_post": {
+            "$ref": "#/components/schemas/PerPeerGroupPostOption",
+            "description": "Письма в группы рассылки."
+          },
+          "invite_new": {
+            "$ref": "#/components/schemas/PerPeerInviteOption",
+            "description": "Новое приглашение."
+          },
+          "itip_updates": {
+            "$ref": "#/components/schemas/PerPeerToggleOption",
+            "description": "`REPLY`, `CANCEL` и обновление `REQUEST` к существующим событиям."
+          },
+          "mdn": {
+            "$ref": "#/components/schemas/PerPeerToggleOption",
+            "description": "MDN наружу."
+          },
+          "partners": {
+            "description": "Домены-партнёры организации (канонические имена; свой принятый домен — 422).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sharing": {
+            "$ref": "#/components/schemas/PerPeerDetailOption",
+            "description": "Общий доступ и публикация."
+          }
+        },
+        "required": [
+          "invite_new",
+          "itip_updates",
+          "auto_reply",
+          "mdn",
+          "auto_forward",
+          "freebusy",
+          "sharing",
+          "group_post",
+          "partners",
+          "auto_forward_domains"
+        ],
+        "type": "object"
+      },
+      "TrustProblem": {
+        "description": "Отказ записи политики: клетки выше потолка или недопустимые домены (RFC 9457 с расширением `errors`).",
+        "properties": {
+          "detail": {
+            "description": "Клетки выше потолка по-русски, через «; » (у доменов — причина).",
+            "type": "string"
+          },
+          "errors": {
+            "description": "Клетки выше потолка (`level` — уровень, давший потолок; `null` — закреплено контрактом).",
+            "items": {
+              "$ref": "#/components/schemas/OverCeiling"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "Код HTTP (422).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "Краткое описание кода.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "title",
+          "detail",
+          "errors"
+        ],
+        "type": "object"
+      },
+      "TrustSources": {
+        "description": "Источник значения по клеткам: уровень, давший значение; `null` — умолчание контракта.",
+        "properties": {
+          "auto_forward": {
+            "$ref": "#/components/schemas/PerPeerTrustLevel",
+            "description": "Автопересылка наружу."
+          },
+          "auto_reply": {
+            "$ref": "#/components/schemas/PerPeerTrustLevel",
+            "description": "Автоответ."
+          },
+          "freebusy": {
+            "$ref": "#/components/schemas/PerPeerTrustLevel",
+            "description": "Занятость."
+          },
+          "group_post": {
+            "$ref": "#/components/schemas/PerPeerTrustLevel",
+            "description": "Письма в группы рассылки."
+          },
+          "invite_new": {
+            "$ref": "#/components/schemas/PerPeerTrustLevel",
+            "description": "Новое приглашение."
+          },
+          "itip_updates": {
+            "$ref": "#/components/schemas/PerPeerTrustLevel",
+            "description": "Ответ и отмена."
+          },
+          "mdn": {
+            "$ref": "#/components/schemas/PerPeerTrustLevel",
+            "description": "MDN наружу."
+          },
+          "sharing": {
+            "$ref": "#/components/schemas/PerPeerTrustLevel",
+            "description": "Общий доступ и публикация."
+          }
+        },
+        "required": [
+          "invite_new",
+          "itip_updates",
+          "auto_reply",
+          "mdn",
+          "auto_forward",
+          "freebusy",
+          "sharing",
+          "group_post"
+        ],
+        "type": "object"
+      },
+      "TrustView": {
+        "description": "Политика уровня и действующая матрица.",
+        "properties": {
+          "effective": {
+            "$ref": "#/components/schemas/Effective",
+            "description": "Действующая матрица: у группы — как для участника одной этой группы, у учётной записи — со всеми её\nгруппами (самое узкое)."
+          },
+          "fixed": {
+            "$ref": "#/components/schemas/TrustFixed",
+            "description": "Клетки, закреплённые контрактом (не меняются ни на одном уровне)."
+          },
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TrustPolicy",
+                "description": "Политика уровня; `null` — уровень не задан (наследует уровень выше). У учётной записи своей политики нет."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "effective",
+          "fixed"
+        ],
+        "type": "object"
+      },
       "TrustedSource": {
         "description": "Доверенный источник приёма.",
         "properties": {
@@ -3293,11 +4255,32 @@
       },
       "VacationBody": {
         "additionalProperties": false,
-        "description": "Автоответ учётной записи (модель JMAP `VacationResponse`, RFC 8621 §8); выполняется до активного скрипта.",
+        "description": "Автоответ учётной записи (модель JMAP `VacationResponse`, RFC 8621 §8); выполняется до активного скрипта.\nЧужим отправителям — только внешний текст (CTR-93, RFC 3834): не задан — наружу ответа нет.",
         "properties": {
           "enabled": {
             "description": "Включён.",
             "type": "boolean"
+          },
+          "external_html_body": {
+            "description": "Текст ответа чужим HTML.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "external_subject": {
+            "description": "Тема ответа чужим; `null` — наружу ответа нет.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "external_text_body": {
+            "description": "Текст ответа чужим.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "from": {
             "description": "Начало действия; `null` — сразу.",
@@ -6083,6 +7066,82 @@
         ]
       }
     },
+    "/api/v1/orgs/{org}/accounts/{account}/trust": {
+      "get": {
+        "operationId": "get_account_trust",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Учётная запись (UUID)",
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Действующая политика учётной записи: установка → организация → группы учётной записи (из нескольких —\nсамое узкое), по клетке — источник и признак «выше потолка».",
+        "tags": [
+          "trust"
+        ]
+      }
+    },
     "/api/v1/orgs/{org}/accounts/{account}/vacation": {
       "get": {
         "operationId": "vacation",
@@ -8047,6 +9106,251 @@
         ]
       }
     },
+    "/api/v1/orgs/{org}/groups/{group}/trust": {
+      "delete": {
+        "operationId": "reset_group_trust",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Группа (UUID)",
+            "in": "path",
+            "name": "group",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Сбрасывает политику группы — действуют организация и умолчания. Сброс незаданного уровня — не ошибка.",
+        "tags": [
+          "trust"
+        ]
+      },
+      "get": {
+        "operationId": "get_group_trust",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Группа (UUID)",
+            "in": "path",
+            "name": "group",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Политика доверия группы: своя, действующая (группа поверх организации) и закреплённые клетки. Группа\nорганизации; несуществующая — 404.",
+        "tags": [
+          "trust"
+        ]
+      },
+      "put": {
+        "operationId": "put_group_trust",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Группа (UUID)",
+            "in": "path",
+            "name": "group",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "организация или группа не найдена"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustProblem"
+                }
+              }
+            },
+            "description": "клетки выше потолка или домены не на своём уровне"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Заменяет политику группы целиком (клетки не выше действующих значений организации; списки доменов — только\nу организации, здесь — 422). Клетки выше потолка — 422 problem+json с `errors`.",
+        "tags": [
+          "trust"
+        ]
+      }
+    },
     "/api/v1/orgs/{org}/mailbox-audit": {
       "get": {
         "operationId": "search_mailbox_audit",
@@ -9451,7 +10755,7 @@
             "description": "лимит размера текста"
           }
         },
-        "summary": "Задаёт скрипт организации; текст проверяется до записи.",
+        "summary": "Задаёт скрипт организации; текст проверяется до записи: синтаксис с пределами секции `sieve` и профиль\n«админский» (SIEVE-14): `vacation` запрещён, `redirect` на внешний адрес — только на домен, куда открыта\nавтопересылка организации; ошибки — 422 со строкой и столбцом.",
         "tags": [
           "sieve"
         ]
@@ -10466,6 +11770,223 @@
         ]
       }
     },
+    "/api/v1/orgs/{org}/trust": {
+      "delete": {
+        "operationId": "reset_org_trust",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Сбрасывает политику организации — действуют установка и умолчания. Сброс незаданного уровня — не ошибка.",
+        "tags": [
+          "trust"
+        ]
+      },
+      "get": {
+        "operationId": "get_org_trust",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Политика доверия организации: своя, действующая (организация поверх установки) и закреплённые клетки.",
+        "tags": [
+          "trust"
+        ]
+      },
+      "put": {
+        "operationId": "put_org_trust",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustProblem"
+                }
+              }
+            },
+            "description": "клетки выше потолка или недопустимые домены"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Заменяет политику организации целиком: клетки (не выше действующих значений установки) и списки\n`partners`, `auto_forward_domains`. Клетки выше потолка — 422 problem+json с `errors` и уровнем, откуда\nпотолок; домен-партнёр из принятых доменов организации — 422; чужая организация — 403, неизвестная — 404.",
+        "tags": [
+          "trust"
+        ]
+      }
+    },
     "/api/v1/orgs/{org}/units": {
       "get": {
         "operationId": "list_units",
@@ -11219,6 +12740,175 @@
         "summary": "Создаёт или заменяет источник кластера (общий шлюз; источник приложения — только у организации, 400).",
         "tags": [
           "transport"
+        ]
+      }
+    },
+    "/api/v1/trust": {
+      "delete": {
+        "operationId": "reset_installation_trust",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Сбрасывает политику установки к потолку контракта (`HARD_CEILING`); организации и группы продолжают\nдействовать со своими политиками. Сброс незаданного уровня — не ошибка.",
+        "tags": [
+          "trust"
+        ]
+      },
+      "get": {
+        "operationId": "get_installation_trust",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Политика доверия установки: своя, действующая и закреплённые клетки. Уровень установки читает и меняет\nтолько администратор установки.",
+        "tags": [
+          "trust"
+        ]
+      },
+      "put": {
+        "operationId": "put_installation_trust",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustProblem"
+                }
+              }
+            },
+            "description": "клетки выше потолка контракта"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Заменяет политику установки целиком (потолки для всех организаций). Клетки выше потолка контракта —\n422 problem+json с `errors`; закреплённых клеток в теле нет (`booking` и пр. — 400); хранилище не\nподключено — 503.",
+        "tags": [
+          "trust"
         ]
       }
     },
