@@ -21,6 +21,7 @@
 //! - [`resources`] — ресурсы (переговорные, оборудование) и правила бронирования;
 //! - [`branding`] — брендинг заказчика: уровни установки и организации, знак, открытый маршрут для экрана входа;
 //! - [`trust`] — политика доверия «кто — кому — что»: уровни установка → организация → группа, домены-партнёры;
+//! - [`threads`] — беседы учётных записей: беседа письма, удержание целиком и выгрузка (решение 125);
 //! - [`sieve`] — правила Sieve и автоответ учётной записи, скрипт организации: проверка текста до записи;
 //! - `extract` — разбор тела, строки и пути запроса (`Json`, `Query`, `Path`): отказ — 400 problem+json с полем;
 //! - `cors` — CORS `/api/v1/*` для консоли на отдельном веб-сервере (`admin.console.cors_origins`);
@@ -51,6 +52,7 @@ pub mod sharing;
 pub mod sieve;
 #[cfg(test)]
 mod testenv;
+pub mod threads;
 pub mod transport;
 pub mod trust;
 
@@ -72,4 +74,5 @@ pub use journal::{
 pub use server::{Admin, AdminConfig, AdminRole, Deps, RoleBinding};
 pub use sharing::SharingStores;
 pub use sieve::{OrgScriptCheck, ScriptCheck, ScriptError};
+pub use threads::{ThreadHoldBody, ThreadHoldView, ThreadHoldsView, ThreadView};
 pub use trust::{TrustBody, TrustProblem, TrustView};

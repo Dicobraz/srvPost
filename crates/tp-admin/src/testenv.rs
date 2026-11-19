@@ -206,6 +206,10 @@ pub struct Stores {
     pub moderation: MemModeration,
     pub policies: MemPolicies,
     pub trash: MemTrash,
+    /// Беседы учётных записей — то же хранилище, что у приёма писем (MS-21) и Admin API (ADM-50).
+    pub threads: MemThreads,
+    /// Объекты писем почтового хранилища — и как `held_blobs` Admin API (выгрузка беседы, ADM-50).
+    pub blobs: MemBlobStore,
     /// Адресная книга: контакты, оргструктура, динамические группы.
     pub addressbook: MemAddressBook,
     pub senders: MemSenderLists,
@@ -223,15 +227,17 @@ impl Stores {
         let quota = MemQuota::new(&meta);
         let policies = MemPolicies::new(&meta);
         let trash = MemTrash::new(&meta).with_policies(policies.clone());
+        let threads = MemThreads::new();
+        let blobs = MemBlobStore::new(clock);
         let store = tp_mailstore::Store::new(tp_mailstore::Deps {
-            blobs: Arc::new(MemBlobStore::new(clock)),
+            blobs: Arc::new(blobs.clone()),
             index: Arc::new(index),
             messages: Arc::new(meta.clone()),
             changes: Arc::new(meta.clone()),
             trash: Arc::new(trash.clone()),
             quota: Arc::new(quota.clone()),
             bus: Arc::new(MemEventBus::default()),
-            threads: Some(Arc::new(MemThreads::new())),
+            threads: Some(Arc::new(threads.clone())),
             hooks: DecisionHooks::default(),
         });
         let passwords = MemAppPasswords::new(&meta);
@@ -246,6 +252,8 @@ impl Stores {
             moderation: MemModeration::default(),
             policies,
             trash,
+            threads,
+            blobs,
             addressbook: MemAddressBook::new(),
             senders: MemSenderLists::new(),
             mailbox_audit: MemMailboxAudit::new(),
@@ -347,6 +355,8 @@ pub struct Env {
     pub trust: MemTrust,
     /// Журнал переписки (`Admin::with_journal`).
     pub journal: MemJournal,
+    /// Беседы учётных записей (`Admin::with_threads`) — то же хранилище, что у приёма писем.
+    pub threads: MemThreads,
     pub admin: Arc<Admin>,
     pub router: Router,
     pub other_tenant: TenantId,
@@ -460,36 +470,111 @@ impl Env {
 
     /// Без настроек транспорта (маршруты транспорта — 503).
     pub fn without_transport() -> Self {
-        Self::build(config(), Vec::new(), false, true, true, true, true, true)
+        Self::build(
+            config(),
+            Vec::new(),
+            false,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+        )
     }
 
     /// Без локального входа (`admin init`, вход по паролю и обмен — 503).
     pub fn without_local() -> Self {
-        Self::build(config(), Vec::new(), true, false, true, true, true, true)
+        Self::build(
+            config(),
+            Vec::new(),
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            true,
+        )
     }
 
     /// Без общего доступа, представителей и ресурсов (их маршруты — 503).
     pub fn without_sharing() -> Self {
-        Self::build(config(), Vec::new(), true, true, false, true, true, true)
+        Self::build(
+            config(),
+            Vec::new(),
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+        )
     }
 
     /// Без очереди исходящей почты (её маршруты — 503).
     pub fn without_queue() -> Self {
-        Self::build(config(), Vec::new(), true, true, true, false, true, true)
+        Self::build(
+            config(),
+            Vec::new(),
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+        )
     }
 
     /// Без брендинга (его маршруты — 503).
     pub fn without_branding() -> Self {
-        Self::build(config(), Vec::new(), true, true, true, true, false, true)
+        Self::build(
+            config(),
+            Vec::new(),
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+        )
     }
 
     /// Без журнала переписки (его маршруты — 503).
     pub fn without_journal() -> Self {
-        Self::build(config(), Vec::new(), true, true, true, true, true, false)
+        Self::build(
+            config(),
+            Vec::new(),
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+        )
+    }
+
+    /// Без бесед учётных записей (их маршруты — 503).
+    pub fn without_threads() -> Self {
+        Self::build(
+            config(),
+            Vec::new(),
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+        )
     }
 
     pub fn with(cfg: AdminConfig, modules: Vec<Arc<dyn AdminRoutes>>) -> Self {
-        Self::build(cfg, modules, true, true, true, true, true, true)
+        Self::build(cfg, modules, true, true, true, true, true, true, true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -502,6 +587,7 @@ impl Env {
         with_queue: bool,
         with_branding: bool,
         with_journal: bool,
+        with_threads: bool,
     ) -> Self {
         let auth = FakeAuthenticator::default();
         let other_tenant = TenantId::new();
@@ -564,8 +650,15 @@ impl Env {
         } else {
             admin
         };
+        let admin = if with_threads {
+            admin.with_threads(Arc::new(stores.threads.clone()))
+        } else {
+            admin
+        };
         let sieve = MemSieve::new();
-        let held_blobs = MemBlobStore::new(Arc::new(SystemClock));
+        // Объекты писем почтового хранилища — и как объекты очереди модерации: тот же BLOB, что у `store`
+        // (выгрузка беседы читает скрытые письма по объектам, ADM-50).
+        let held_blobs = stores.blobs.clone();
         let mut admin = admin
             .with_sieve(Arc::new(sieve.clone()), check_script)
             .with_org_script_check(check_org_script)
@@ -584,6 +677,7 @@ impl Env {
             moderation,
             policies,
             trash,
+            threads,
             addressbook,
             mailbox_audit,
             sync_gate,
@@ -616,6 +710,7 @@ impl Env {
             brand_blobs,
             trust,
             journal,
+            threads,
             router: admin.clone().router(),
             admin,
             other_tenant,
@@ -690,24 +785,49 @@ impl Env {
 
     /// Доставляет простое письмо во «Входящие».
     pub async fn deliver(&self, scope: AccountScope, subject: &str) -> MessageId {
+        self.deliver_raw(scope, &format!("Subject: {subject}\r\n\r\nbody\r\n"), None)
+            .await
+    }
+
+    /// Доставляет письмо во «Входящие» с заголовками `Message-ID` и `In-Reply-To` (привязка к беседе, CTR-94):
+    /// ответ (`in_reply_to` — Message-ID первого письма) присоединяется к его беседе, без ссылок — новая беседа.
+    pub async fn deliver_threaded(
+        &self,
+        scope: AccountScope,
+        message_id: &str,
+        in_reply_to: Option<&str>,
+        subject: &str,
+    ) -> MessageId {
+        let reply = in_reply_to
+            .map(|parent| format!("In-Reply-To: <{parent}>\r\nReferences: <{parent}>\r\n"))
+            .unwrap_or_default();
+        self.deliver_raw(
+            scope,
+            &format!("Message-ID: <{message_id}>\r\n{reply}Subject: {subject}\r\n\r\nbody\r\n"),
+            Some(message_id),
+        )
+        .await
+    }
+
+    /// Доставляет письмо во «Входящие» с заданными заголовками и телом (без добавленных заголовков);
+    /// `mail_from` — отправитель конверта (по умолчанию `a@example.com`).
+    pub async fn deliver_raw(
+        &self,
+        scope: AccountScope,
+        headers_and_body: &str,
+        mail_from: Option<&str>,
+    ) -> MessageId {
         let inbox = self
             .meta
             .mailbox_by_role(scope, SpecialUse::Inbox)
             .expect("inbox");
-        let raw = format!(
-            "From: a@example.com
-To: user@example.org
-Subject: {subject}
-
-body
-"
-        );
+        let raw = format!("From: a@example.com\r\nTo: user@example.org\r\n{headers_and_body}");
         let chunks: Vec<Result<Bytes>> = vec![Ok(Bytes::from(raw))];
         let got = self
             .store
             .ingest(IngestRequest {
                 tenant: scope.tenant,
-                mail_from: "a@example.com".into(),
+                mail_from: mail_from.unwrap_or("a@example.com").into(),
                 raw: Box::pin(futures::stream::iter(chunks)),
                 deliveries: vec![Delivery {
                     account: scope.account,
@@ -722,6 +842,19 @@ body
         got.delivered[0].message
     }
 
+    /// Запрос с Bearer-токеном `token` и телом JSON: код, заголовки, тело — байты как есть (двоичный ответ —
+    /// выгрузка беседы, ADM-50).
+    pub async fn call_raw(
+        &self,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+    ) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let (parts, bytes) = self.send(method, path, token, body).await;
+        (parts.status, parts.headers, bytes)
+    }
+
     /// Запрос с Bearer-токеном `token` и телом JSON: код, заголовки, тело (JSON; не JSON — строка; пусто — `Null`).
     pub async fn call(
         &self,
@@ -730,6 +863,24 @@ body
         token: Option<&str>,
         body: Option<Value>,
     ) -> (StatusCode, HeaderMap, Value) {
+        let (parts, bytes) = self.send(method, path, token, body).await;
+        let value = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes)
+                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+        };
+        (parts.status, parts.headers, value)
+    }
+
+    /// Запрос и его ответ: части и байты тела.
+    async fn send(
+        &self,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+    ) -> (axum::http::response::Parts, Vec<u8>) {
         let mut req = Request::builder().method(method).uri(path);
         if let Some(t) = token {
             req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
@@ -743,13 +894,7 @@ body
         .expect("request");
         let resp = self.router.clone().oneshot(req).await.expect("response");
         let (parts, body) = resp.into_parts();
-        let bytes = to_bytes(body, usize::MAX).await.expect("body");
-        let value = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes)
-                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
-        };
-        (parts.status, parts.headers, value)
+        let bytes = to_bytes(body, usize::MAX).await.expect("body").to_vec();
+        (parts, bytes)
     }
 }
