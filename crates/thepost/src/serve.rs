@@ -315,6 +315,19 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         aux.clone(),
         cfg.section::<SmtpConfig>(sections::SMTP)?.queue.resubscribe,
     ));
+    // Кэш политики доверия — сброс по `trust_changed` и `Resync` (APP-76, CTR-93); срок и размер кэша —
+    // секция `trust`, применяется без перезапуска (SRS 5.5).
+    tokio::spawn(
+        services
+            .trust
+            .clone()
+            .watch(bus.clone(), aux.clone(), events_cfg.retry_min),
+    );
+    tokio::spawn(apply_trust(
+        reloader.subscribe(),
+        services.trust.clone(),
+        aux.clone(),
+    ));
     // Изменение книги GAL — в JMAP push учётных записей организации (APP-49).
     if cfg.roles().contains(Role::Jmap) {
         tokio::spawn(
@@ -885,6 +898,27 @@ async fn apply_dkim(
         match section {
             Ok(smtp) => dkim.update(smtp.dkim.clone()),
             Err(e) => tracing::warn!(error = %e, "секция smtp.dkim не применена"),
+        }
+    }
+}
+
+/// Срок и размер кэша политики доверия из перечитанной секции `trust` (APP-76, SRS 5.5 — без перезапуска).
+async fn apply_trust(
+    mut rx: tokio::sync::watch::Receiver<Arc<Config>>,
+    trust: Arc<crate::trust::TrustCache>,
+    shutdown: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            changed = rx.changed() => if changed.is_err() { return },
+        }
+        let section = rx
+            .borrow_and_update()
+            .section::<crate::sections::TrustSection>(sections::TRUST);
+        match section {
+            Ok(section) => trust.update((*section).clone()),
+            Err(e) => tracing::warn!(error = %e, "секция trust не применена"),
         }
     }
 }

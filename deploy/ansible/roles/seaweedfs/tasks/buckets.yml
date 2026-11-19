@@ -1,5 +1,6 @@
-# Бакеты S3 (seaweedfs_buckets) — на одном узле filer после запуска кластера: weed shell по gRPC с взаимным TLS
-# (security.toml узла). Существующие бакеты не меняются.
+# Бакеты S3 (seaweedfs_buckets, seaweedfs_lock_buckets) — на одном узле filer после запуска кластера:
+# weed shell по gRPC с взаимным TLS (security.toml узла). Существующие бакеты не меняются; бакеты
+# seaweedfs_lock_buckets дополнительно получают S3 Object Lock (необратимо, DEP-58: бакет журнала).
 ---
 - name: Wait for filer
   ansible.builtin.wait_for:
@@ -33,3 +34,54 @@
   loop: "{{ seaweedfs_buckets }}"
   when: seaweedfs_bucket_list.stdout_lines | map('trim') | map('regex_replace', '\s.*$', '') | select('eq', item) | list | length == 0
   changed_when: true
+
+# Object Lock (DEP-58, SRS 4.9): несуществующий бакет создаётся сразу с блокировкой и версионированием
+# (-withLock); существующий получает её s3.bucket.lock -enable — идемпотентно (уже включён — «already
+# enabled», это ok). changed_when: false — итог проверяет assert ниже (состояние, а не вывод команды).
+- name: Create buckets with Object Lock
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      echo s3.bucket.create -name {{ item | quote }} -withLock | {{ seaweedfs_bin }} shell
+      -master={{ seaweedfs_masters | join(',') | quote }}
+      -filer={{ (seaweedfs_address ~ ':' ~ seaweedfs_filer_port) | quote }}
+    executable: /bin/bash
+    chdir: "{{ seaweedfs_config_dir }}"
+  loop: "{{ seaweedfs_lock_buckets }}"
+  when: seaweedfs_bucket_list.stdout_lines | map('trim') | map('regex_replace', '\s.*$', '') | select('eq', item) | list | length == 0
+  changed_when: true
+
+- name: Enable Object Lock on existing buckets
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      echo s3.bucket.lock -name {{ item | quote }} -enable | {{ seaweedfs_bin }} shell
+      -master={{ seaweedfs_masters | join(',') | quote }}
+      -filer={{ (seaweedfs_address ~ ':' ~ seaweedfs_filer_port) | quote }}
+    executable: /bin/bash
+    chdir: "{{ seaweedfs_config_dir }}"
+  loop: "{{ seaweedfs_lock_buckets }}"
+  when: seaweedfs_bucket_list.stdout_lines | map('trim') | map('regex_replace', '\s.*$', '') | select('eq', item) | list | length > 0
+  changed_when: false
+
+# Сверка: блокировка включена у всех бакетов seaweedfs_lock_buckets (создан только что или уже был).
+- name: Check Object Lock of buckets
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      echo s3.bucket.lock -name {{ item | quote }} | {{ seaweedfs_bin }} shell
+      -master={{ seaweedfs_masters | join(',') | quote }}
+      -filer={{ (seaweedfs_address ~ ':' ~ seaweedfs_filer_port) | quote }}
+    executable: /bin/bash
+    chdir: "{{ seaweedfs_config_dir }}"
+  loop: "{{ seaweedfs_lock_buckets }}"
+  register: seaweedfs_lock_check
+  changed_when: false
+
+- name: Object Lock must be enabled
+  ansible.builtin.assert:
+    that: seaweedfs_lock_check.results | map(attribute='stdout') | select('search', 'Object Lock:\s*Enabled') | list | length == seaweedfs_lock_buckets | length
+    fail_msg: >-
+      Object Lock не включён: {{ seaweedfs_lock_check.results | rejectattr('stdout', 'search', 'Object Lock:\s*Enabled')
+      | map(attribute='item') | join(', ') }}. Бакет журнала без Object Lock не защищает записи от удаления
+      (SRS 4.9); s3.bucket.lock поддерживается SeaweedFS ≥ 4.x (в кластере — {{ seaweedfs_version }}).

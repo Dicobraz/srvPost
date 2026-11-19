@@ -22,6 +22,7 @@ pub mod sections;
 pub mod serve;
 pub mod services;
 pub mod startup;
+pub mod trust;
 pub mod verify;
 
 #[cfg(test)]

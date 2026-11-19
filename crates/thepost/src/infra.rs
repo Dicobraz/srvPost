@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use tp_blob::{LocalStore, S3Store};
+use tp_blob::{JournalBackend, JournalRecords, LocalStore, S3Store};
 use tp_cluster::{BusMetrics, LocalBus};
 use tp_contracts::blob::BlobStore;
 use tp_contracts::bus::EventBus;
@@ -19,6 +19,7 @@ use tp_platform::{BusSample, Config, DbMetrics};
 
 use crate::sections::{
     self, BLOB, BUS, BlobLocation, BlobSection, BusKind, BusSection, CLUSTER, ClusterSection,
+    JournalLocation, JournalSection,
 };
 
 /// Секция `database` с профилем узла.
@@ -119,6 +120,42 @@ pub async fn open_blob(cfg: &Config, store: &dyn SecretStore) -> Result<Arc<dyn 
             Ok(Arc::new(store))
         }
     }
+}
+
+/// Хранилище записей журнала переписки по секции `journal` (SRS 4.9; APP-82, APP-83): отдельный от
+/// BLOB ящиков каталог/бакет (`journal.local.dir` / `journal.s3.bucket`), параметры записей —
+/// [`JournalSection::records_config`] (префикс, части, режим и срок блокировки). Ключи S3 — из
+/// хранилища секретов (`journal.s3.credentials`, подсекция tp-blob); локальному каталогу секреты
+/// не нужны (`store` может быть `None`).
+pub async fn open_journal_records(
+    cfg: &Config,
+    section: &JournalSection,
+    store: Option<&Arc<dyn SecretStore>>,
+) -> Result<Arc<JournalRecords>> {
+    let records = section.records_config()?;
+    let backend: Arc<dyn JournalBackend> = match section.location()? {
+        JournalLocation::Local(dir) => {
+            let local = LocalStore::open(section.local_config(dir))
+                .await
+                .map_err(|e| context("journal.local", e))?;
+            Arc::new(local)
+        }
+        JournalLocation::S3 { bucket } => {
+            let Some(store) = store else {
+                return Err(Error::invalid(
+                    "journal.s3: ключи S3 — из хранилища секретов, оно не настроено",
+                ));
+            };
+            let s3 = S3Store::connect(section.s3_config(bucket), cfg.profile(), store.as_ref())
+                .await
+                .map_err(|e| context("journal.s3", e))?;
+            Arc::new(s3)
+        }
+    };
+    Ok(Arc::new(
+        JournalRecords::new(backend, records, tp_blob::system_now())
+            .map_err(|e| context("journal", e))?,
+    ))
 }
 
 /// Снимок метрик шины для реестра метрик платформы.

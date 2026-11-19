@@ -16,7 +16,7 @@ use tp_contracts::{Result, TenantId};
 use tp_testkit::MemTrust;
 use tp_testkit::{
     BlobOp, Clock, FakeDirectory, MemBlobIndex, MemBlobStore, MemEventBus, MemGroups, MemMetadata,
-    MemQuota, MemTransport, MemTrash, RecordingDecisionHook, SystemClock,
+    MemQuota, MemThreads, MemTransport, MemTrash, RecordingDecisionHook, SystemClock,
 };
 
 use super::*;
@@ -112,6 +112,7 @@ impl Env {
             trash: Arc::new(MemTrash::new(&meta)),
             quota: Arc::new(quota.clone()),
             bus: Arc::new(MemEventBus::default()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks,
         });
         for login in ["alice@example.org", "bob@example.org", "carol@example.org"] {
@@ -1155,6 +1156,7 @@ async fn submission_copy_to_local_address() {
 mod addressbook;
 mod imip;
 mod invite;
+mod journal;
 mod moderation;
 mod outbound_milter;
 
@@ -1551,6 +1553,7 @@ async fn outbound_suite() {
 
 mod local_domains;
 mod org_policy;
+mod pipeline;
 mod rcpt_rate;
 mod rules;
 mod scheduled;

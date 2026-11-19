@@ -303,10 +303,16 @@ impl Painter<'_> {
             Some(Overlay::Menu { sel }) => self.op_menu(&body, *sel),
             Some(Overlay::Help) => self.help(&body, m),
             Some(Overlay::ConfigEdit(e)) => self.config_edit(&body, m, e),
+            Some(Overlay::TrustPick { what, form }) => {
+                self.form(&body, form, crate::trust::pick_title(*what))
+            }
+            Some(Overlay::TrustDomain(d)) => self.trust_domain(&body, d),
+            Some(Overlay::TrustConfirm(req)) => self.trust_confirm(&body, req),
             None => match &m.view {
                 View::List(l) => self.list(&body, l),
                 View::Card(c) => self.card(&body, c),
                 View::Config(c) => self.config(&body, c),
+                View::Trust(t) => self.trust(&body, t),
                 View::Info { title, lines } => {
                     self.put(body.x0, 4, title, Role::Text);
                     for (i, l) in lines.iter().enumerate() {
@@ -663,6 +669,208 @@ impl Painter<'_> {
         }
     }
 
+    /// Раздел «Доверие» (TUI-09): матрица функций × типов абонентов или вкладка «Партнёры».
+    fn trust(&mut self, b: &Body, t: &crate::trust::Trust) {
+        match t.tab {
+            crate::trust::Tab::Matrix => self.trust_matrix(b, t),
+            crate::trust::Tab::Partners => self.trust_partners(b, t),
+        }
+    }
+
+    /// Матрица: курсор по клеткам стрелками; закреплённые клетки — знак ⊘, «выше потолка» — знак ▲
+    /// и роль «внимание»; уровень и домены под таблицей; отказ 422 — текст `detail` у клетки.
+    fn trust_matrix(&mut self, b: &Body, t: &crate::trust::Trust) {
+        let role_of = |mark| match mark {
+            crate::trust::Mark::Over => Role::Warn,
+            crate::trust::Mark::Plain | crate::trust::Mark::Fixed => Role::Muted,
+        };
+        for (i, head) in crate::trust::PEER_HEADS.iter().enumerate() {
+            self.put_n(
+                crate::trust::cell_x(b.x0, i),
+                2,
+                head,
+                Role::Head,
+                crate::trust::CELL_W,
+            );
+        }
+        let Some(v) = t.view.as_ref() else {
+            self.put(b.x0, 3, "чтение политики доверия…", Role::Muted);
+            return;
+        };
+        let sources = !t.scope.editable();
+        for (i, def) in crate::trust::FUNCTIONS.iter().enumerate() {
+            let y = 3 + i as u16;
+            self.put_n(b.x0, y, def.short, Role::Text, crate::trust::LABEL_W);
+            for (j, p) in crate::trust::PEERS.iter().enumerate() {
+                let (text, mark) = crate::trust::cell(v, def.f, p, sources);
+                let x = crate::trust::cell_x(b.x0, j);
+                let cur = t.cur == (i, j);
+                let role = match (cur, b.active) {
+                    (true, true) => Role::Sel,
+                    (true, false) => Role::SelI,
+                    _ => role_of(mark),
+                };
+                if cur {
+                    self.fill(x, x + crate::trust::CELL_W - 1, y, role);
+                }
+                self.put_n(x, y, &text, role, crate::trust::CELL_W);
+            }
+        }
+        self.put_n(
+            b.x0,
+            12,
+            &crate::trust::level_line(t),
+            Role::Muted,
+            b.width(),
+        );
+        if sources {
+            self.put_n(
+                b.x0,
+                13,
+                "у — установка · о — организация · г — группа",
+                Role::Muted,
+                b.width(),
+            );
+        } else if let Some(line) = crate::trust::domain_line(t) {
+            self.put_n(b.x0, 13, &line, Role::Muted, b.width());
+        }
+        if let Some(err) = &t.err {
+            for (i, line) in wrap(&format!("× {err}"), b.width() as usize)
+                .iter()
+                .take(3)
+                .enumerate()
+            {
+                self.put_n(b.x0, 14 + i as u16, line, Role::Err, b.width());
+            }
+        }
+        if let Some(line) = crate::trust::values_line(t) {
+            self.put_n(b.x0, 18, &line, Role::Muted, b.width());
+        }
+        self.put_n(b.x0, 19, crate::trust::hint(t), Role::Muted, b.width());
+    }
+
+    /// Вкладка «Партнёры»: домены-партнёры и домены автопересылки; отказ 422 — внизу списка.
+    fn trust_partners(&mut self, b: &Body, t: &crate::trust::Trust) {
+        let (partners, forwards) = crate::trust::domains(t);
+        let mut rows: Vec<(Option<bool>, String)> = vec![(None, "Партнёры".to_owned())];
+        rows.extend(partners.iter().map(|d| (Some(false), d.clone())));
+        rows.push((None, "Автопересылка".to_owned()));
+        rows.extend(forwards.iter().map(|d| (Some(true), d.clone())));
+        let visible = 13usize;
+        let top = if rows.len() > visible {
+            t.pick.saturating_sub(visible - 1)
+        } else {
+            0
+        };
+        for (i, (fw, text)) in rows.iter().enumerate().skip(top).take(visible) {
+            let y = 2 + (i - top) as u16;
+            match fw {
+                None => self.put_n(b.x0, y, text, Role::Head, b.width()),
+                Some(f) => {
+                    let sel = i == t.pick;
+                    let role = match (sel, b.active) {
+                        (true, true) => Role::Sel,
+                        (true, false) => Role::SelI,
+                        _ => Role::Text,
+                    };
+                    if sel {
+                        self.fill(b.x0 - 1, b.x1 + 1, y, role);
+                    }
+                    let mark = if *f { " ▸" } else { "" };
+                    self.put_n(b.x0, y, &format!("{text}{mark}"), role, b.width());
+                }
+            }
+        }
+        if partners.is_empty() && forwards.is_empty() {
+            self.put_n(
+                b.x0,
+                4,
+                "Доменов нет · F7 — добавить домен",
+                Role::Muted,
+                b.width(),
+            );
+        }
+        if let Some(err) = &t.err {
+            for (i, line) in wrap(&format!("× {err}"), b.width() as usize)
+                .iter()
+                .take(2)
+                .enumerate()
+            {
+                self.put_n(b.x0, 15 + i as u16, line, Role::Err, b.width());
+            }
+        }
+        if let Some((f, d)) = crate::trust::partner_rows(t).get(t.pick) {
+            let what = if *f {
+                "автопересылка"
+            } else {
+                "партнёр"
+            };
+            self.put_n(b.x0, 18, &format!("{d} · {what}"), Role::Text, b.width());
+        }
+        self.put_n(b.x0, 19, crate::trust::hint(t), Role::Muted, b.width());
+    }
+
+    /// Ввод домена на вкладке «Партнёры» (F7).
+    fn trust_domain(&mut self, b: &Body, d: &crate::trust::DomainInput) {
+        let what = match d.list {
+            crate::trust::DomainList::Partners => "домен-партнёр",
+            crate::trust::DomainList::Forward => "домен автопересылки",
+        };
+        self.put_n(b.x0, 2, &format!("Новый {what}"), Role::TitleA, b.width());
+        let lw: u16 = 8;
+        let vx = b.x0 + lw + 1;
+        let vw = b.x1 - vx + 1;
+        self.put_n(b.x0, 5, "Домен", Role::Text, lw);
+        self.fill(vx, b.x1, 5, Role::Sel);
+        self.put_n(vx, 5, &d.value, Role::Sel, vw);
+        if let Some(err) = &d.error {
+            self.put_n(b.x0, 7, &format!("× {err}"), Role::Err, b.width());
+        }
+        self.put_n(
+            b.x0,
+            18,
+            "нижний регистр · правила проверит сервер",
+            Role::Muted,
+            b.width(),
+        );
+        self.put_n(
+            b.x0,
+            19,
+            "Enter — добавить · Esc — отмена",
+            Role::Muted,
+            b.width(),
+        );
+    }
+
+    /// Подтверждение сброса уровня политики доверия (F8).
+    fn trust_confirm(&mut self, b: &Body, req: &engine::Request) {
+        self.put(b.x0, 4, "▲ Сбросить политику уровня?", Role::Warn);
+        self.put_n(b.x0, 6, &req.op.title(), Role::Text, b.width());
+        for (i, (name, v)) in req.op.path_names().iter().zip(&req.params).enumerate() {
+            self.put_n(
+                b.x0,
+                8 + i as u16,
+                &format!("{name}: {v}"),
+                Role::Text,
+                b.width(),
+            );
+        }
+        self.put_n(
+            b.x0,
+            18,
+            "Уровень получит значения уровня выше.",
+            Role::Muted,
+            b.width(),
+        );
+        self.put_n(
+            b.x0,
+            19,
+            "Enter — сбросить · Esc — отмена",
+            Role::Muted,
+            b.width(),
+        );
+    }
+
     fn card(&mut self, b: &Body, c: &CardView) {
         let lines = card_lines(&c.value);
         let top = c.top.min(lines.len().saturating_sub(1));
@@ -853,7 +1061,7 @@ impl Painter<'_> {
         let op = match &m.view {
             View::List(l) => Some(l.req.op),
             View::Card(c) => Some(c.req.op),
-            View::Info { .. } | View::Config(_) => None,
+            View::Info { .. } | View::Config(_) | View::Trust(_) => None,
         };
         if let Some(op) = op {
             for (i, l) in wrap(&op.summary.replace('\n', " "), b.width() as usize)
@@ -918,6 +1126,14 @@ fn idle_status(app: &App) -> String {
         Stage::Login(f) if f.busy => "вход…".to_owned(),
         Stage::Login(_) => "вход в Admin API".to_owned(),
         Stage::Main(m) => {
+            // Раздел «Доверие»: пояснение клетки под курсором (TUI-09).
+            if let View::Trust(t) = &m.view {
+                let mut s = crate::trust::status(t);
+                if app.busy() {
+                    s.push_str(" · загрузка…");
+                }
+                return s;
+            }
             let mut s = format!("{} → {}", m.session.login, m.session.server);
             if let View::List(l) = &m.view {
                 s.push_str(&format!(" · записей: {}", l.rows.len()));
@@ -1024,8 +1240,9 @@ mod tests {
     use ratatui::style::Color;
 
     use super::*;
+    use crate::app::Effect;
     use crate::app::LoginForm;
-    use crate::app::tests::{call, key, ok, section, with_accounts, with_members};
+    use crate::app::tests::{call, key, ok, section, who, with_accounts, with_members};
     use crate::theme::{Brand, Mode};
     use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use serde_json::json;
@@ -1071,7 +1288,9 @@ mod tests {
         );
         assert!(rows[2].contains("▾ it-task.ru"));
         assert!(rows[3].contains("├ Учётные записи"));
-        assert!(rows[13].contains("└ Очередь"));
+        assert!(rows[10].contains("├ Доверие"));
+        assert!(rows[13].contains("├ Корзина"));
+        assert!(rows[14].contains("└ Очередь"));
         assert!(rows[18].contains("◆ Конфигурация узла"));
         assert!(rows[2].contains("Адрес"), "{}", rows[2]);
         assert!(rows[3].contains("●"), "{}", rows[3]);
@@ -1716,5 +1935,203 @@ mod tests {
 
     fn app_mouse_steps() -> u16 {
         crate::mouse::MouseConfig::default().shift_steps
+    }
+
+    /// Вошедший интерфейс с открытым разделом «Доверие» (TUI-09) в режиме `mode`; ответ `GET` — `view`.
+    fn with_trust_view(mode: Mode, view: serde_json::Value) -> App {
+        let mut app = App::new(
+            Theme::new(mode, Brand::default()),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let fx = app.on_login(Ok((who(), "node:9443".into())));
+        let ids: Vec<u64> = fx
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Call(id, _) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        app.on_result(ids[0], ok(json!([{"id": "o1", "default": true}])));
+        app.on_result(ids[1], ok(json!([])));
+        let id = call(&section(&mut app, "Доверие"), "get_org_trust");
+        app.on_result(id, ok(view));
+        app
+    }
+
+    fn with_trust(mode: Mode) -> App {
+        with_trust_view(mode, crate::trust::tests::org_json())
+    }
+
+    /// Матрица 80×24: заголовки и значения клеток без обрезки; закреплённая клетка — знак ⊘;
+    /// уровень, домены и подсказка под таблицей; строка состояния и команда CLI — про клетку.
+    #[test]
+    fn trust_screen_layout() {
+        let app = with_trust(Mode::Dark);
+        let (rows, _) = screen(&app);
+        assert!(rows[1].contains(" Доверие "), "{}", rows[1]);
+        assert!(
+            rows[2].contains("СВОИ") && rows[2].contains("ПАРТНЁР"),
+            "{}",
+            rows[2]
+        );
+        assert!(
+            rows[2].contains("СОСЕД") && rows[2].contains("ИНТЕРНЕТ"),
+            "{}",
+            rows[2]
+        );
+        assert!(rows[3].contains("Приглаш"), "{}", rows[3]);
+        // Значения помещаются в колонки без обрезки (и со знаками).
+        for (y, row) in rows.iter().enumerate().take(11).skip(2) {
+            assert!(!row.contains('…'), "обрезка в строке {y}: {row}");
+        }
+        assert!(rows[3].contains("кнопка"), "{}", rows[3]);
+        // Закреплённая клетка (приглашение соседу и интернету — «кнопка»): знак замка.
+        assert!(rows[3].contains("⊘"), "{}", rows[3]);
+        assert!(
+            rows[12].contains("Уровень: организация · политика задана"),
+            "{}",
+            rows[12]
+        );
+        assert!(
+            rows[13].contains("Партнёры: 1 · автопересылка: 1 · F2 — домены"),
+            "{}",
+            rows[13]
+        );
+        assert!(rows[18].contains("F4 — значение из:"), "{}", rows[18]);
+        assert!(rows[19].contains("F4 — значение"), "{}", rows[19]);
+        assert!(
+            rows[21].contains("Новое приглашение · свои: авто · потолок: авто"),
+            "{}",
+            rows[21]
+        );
+        // Команда с полным UUID организации шире 80 колонок — строка обрезана с «…».
+        assert!(
+            rows[22].contains("$ thepost admin trust set --file <ПУТЬ> --org 00000000"),
+            "{}",
+            rows[22]
+        );
+        assert!(
+            rows[23].contains("2Партн") && rows[23].contains("4Знач"),
+            "{}",
+            rows[23]
+        );
+        assert!(
+            rows[23].contains("5Уровень") && rows[23].contains("6Учетн"),
+            "{}",
+            rows[23]
+        );
+        assert!(rows[23].contains("8Сброс"), "{}", rows[23]);
+    }
+
+    /// «Выше потолка» видно знаком ▲ без цвета (монохром): клетка организации шире потолка установки.
+    #[test]
+    fn trust_over_ceiling_in_mono() {
+        let mut app = with_trust_view(Mode::Mono, crate::trust::tests::over_json());
+        let (rows, _) = screen(&app);
+        // Строка «Занят», колонка «Партнёр»: значение обрезано потолком, знак ▲ виден без цвета.
+        assert!(rows[8].contains("▲"), "{}", rows[8]);
+        assert!(rows[12].contains("Уровень: организация"), "{}", rows[12]);
+        // Курсор на занятость партнёра: статус называет клетку выше потолка.
+        for _ in 0..5 {
+            app.on_key(key(KeyCode::Down));
+        }
+        app.on_key(key(KeyCode::Right));
+        let (rows, _) = screen(&app);
+        assert!(rows[21].contains("выше потолка"), "{}", rows[21]);
+    }
+
+    /// Вкладка «Партнёры»: списки доменов и автопересылки, подсказки, команда CLI.
+    #[test]
+    fn trust_partners_screen() {
+        let mut app = with_trust(Mode::Dark);
+        app.on_key(key(KeyCode::F(2)));
+        let (rows, _) = screen(&app);
+        assert!(rows[2].contains("Партнёры"), "{}", rows[2]);
+        assert!(rows[3].contains("partner.example"), "{}", rows[3]);
+        assert!(rows[4].contains("Автопересылка"), "{}", rows[4]);
+        assert!(rows[5].contains("mail.example"), "{}", rows[5]);
+        assert!(
+            rows[19].contains("F7 — добавить · F8 — удалить"),
+            "{}",
+            rows[19]
+        );
+        // Команда с полным UUID организации шире 80 колонок — строка обрезана с «…».
+        assert!(
+            rows[22].contains("$ thepost admin trust partners set <ДОМЕН>… --org 00000000"),
+            "{}",
+            rows[22]
+        );
+        assert!(
+            rows[23].contains("7Добав") && rows[23].contains("8Удалит"),
+            "{}",
+            rows[23]
+        );
+        // F2 — назад к матрице.
+        app.on_key(key(KeyCode::F(2)));
+        let (rows, _) = screen(&app);
+        assert!(rows[3].contains("Приглаш"), "{}", rows[3]);
+    }
+
+    /// Действующая матрица учётной записи: источник клетки знаком в строке, легенда под матрицей.
+    #[test]
+    fn trust_account_sources_screen() {
+        let mut app = with_trust(Mode::Dark);
+        app.on_key(key(KeyCode::F(6)));
+        for c in "user1@it-task.ru".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        let id = call(&app.on_key(key(KeyCode::Enter)), "list_accounts");
+        let id = call(
+            &app.on_result(
+                id,
+                ok(json!([{"id": "acc-1", "login": "user1@it-task.ru"}])),
+            ),
+            "get_account_trust",
+        );
+        app.on_result(id, ok(crate::trust::tests::org_json()));
+        let (rows, _) = screen(&app);
+        assert!(
+            rows[12].contains("Учётная запись: user1@it-task.ru"),
+            "{}",
+            rows[12]
+        );
+        // Источник клетки — организация: «авто о» в колонке партнёра.
+        assert!(rows[3].contains("авто о"), "{}", rows[3]);
+        assert!(
+            rows[13].contains("у — установка · о — организация · г — группа"),
+            "{}",
+            rows[13]
+        );
+    }
+
+    /// Отказ 422 записи клетки — текст `detail` сервера у клетки и в строке состояния.
+    #[test]
+    fn trust_422_detail_at_cell() {
+        let mut app = with_trust(Mode::Dark);
+        // MDN партнёру — F4: значение «да» в пределах потолка.
+        for _ in 0..3 {
+            app.on_key(key(KeyCode::Down));
+        }
+        app.on_key(key(KeyCode::Right));
+        let id = call(&app.on_key(key(KeyCode::F(4))), "put_org_trust");
+        app.on_result(
+            id,
+            Err(tp_admin_client::Error::Api {
+                status: 422,
+                problem: Some(tp_admin::server::Problem {
+                    status: 422,
+                    title: "Unprocessable Entity".into(),
+                    detail: Some("клетки выше потолка: mdn.partner = on выше потолка on".into()),
+                }),
+                message: "PUT: 422".into(),
+            }),
+        );
+        let (rows, _) = screen(&app);
+        assert!(
+            rows.join("\n").contains("× клетки выше потолка"),
+            "{}",
+            rows[14]
+        );
+        assert!(rows[21].contains("× клетки выше потолка"), "{}", rows[21]);
     }
 }

@@ -10,7 +10,7 @@ use tp_contracts::mailstore::{Delivery as MailDelivery, IngestRequest};
 use tp_contracts::secrets::SecretRef;
 use tp_testkit::{
     Clock, MemBlobIndex, MemBlobStore, MemEventBus, MemEventLog, MemMetadata, MemQuota,
-    MemSecretStore, MemTrash, SystemClock,
+    MemSecretStore, MemThreads, MemTrash, SystemClock,
 };
 
 use super::*;
@@ -71,6 +71,7 @@ impl Env {
             trash: Arc::new(MemTrash::new(&meta)),
             quota: Arc::new(MemQuota::new(&meta)),
             bus: Arc::new(MemEventBus::default()),
+            threads: Some(Arc::new(MemThreads::new())),
             hooks: Default::default(),
         });
         let scope = meta.account("alice@example.org").await.expect("account");

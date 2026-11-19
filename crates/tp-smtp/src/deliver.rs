@@ -39,6 +39,17 @@
 //!   локального получателя (smtp-in, submission, [`Delivery::submit`]) после правил потока и до `ingest`: папки и
 //!   флаги, отброс, перенаправление, автоответ; перенаправленное письмо и внутренний автоответ — через правила
 //!   получателя с проверкой петли ([`Delivery::relay`], SMTP-34);
+//! - конвейер обработки (SMTP-54, SRS 4.9; CTR-96): доставка выполняет этапы ядра в порядке реестра
+//!   [`tp_contracts::pipeline`] ([`Delivery::pipeline`]) — проверки сессии (`MAIL`, `RCPT`), Milter (`DATA`),
+//!   журналирование, Sieve ящика, итоговый контроль, доставка/очередь; модульные этапы — [`Delivery::with_stage`]
+//!   (точки расширения SRS 2.5 до и после Sieve ящика, задел под SRS 4.10); итоговый контроль действий
+//!   ([`Delivery::with_org_policy`]) после Sieve и модулей: запрет внешней пересылки организации
+//!   (`forbid_external_forward`) перехватывает `redirect` из скрипта ящика — нарушение отказывает письму с
+//!   причиной в журнале доставки; служебные письма (DSN, отбивки, MDN) этапы правил минуют (`SystemMessage`);
+//! - журналирование переписки (SMTP-53, SRS 4.9; CTR-97): письмо, подошедшее под правило журналирования
+//!   организации ([`Delivery::with_journal`]), копируется в отдельный бакет журнала целиком с конвертом —
+//!   этапом ядра до Sieve ящика и этапов модулей: `discard`/`stop` скрипта получателя запись не отменяют,
+//!   получатели записи — конверт на момент конвейера (скрытые Bcc и раскрытые из групп);
 //! - матрица доверия (решение 124, SMTP-50, [`Delivery::with_trust`]): тип абонента (`PeerKind`) вычисляется для
 //!   каждого письма — submission со входом и [`Delivery::submit`] — свой, smtp-in — по домену `From` и DMARC
 //!   (партнёр — домен из [`TrustStore::partner_of`] с пройденным DMARC, RFC 9989; заголовкам
@@ -99,11 +110,13 @@ use tp_contracts::auth::{Authorizer, DirChange, DirCursor, Directory, Principal,
 use tp_contracts::blob::{BlobIndex, BlobStore};
 use tp_contracts::ext::{CopyTo, Decision, DecisionHooks, SubmissionInfo};
 use tp_contracts::groups::{DistributionGroup, MAX_RULE_NAME_LEN};
+use tp_contracts::journal::JournalDirection;
 use tp_contracts::mailstore::{Delivery as MailDelivery, IngestRequest, Ingested, MailStore};
 use tp_contracts::meta::{
     Account, AccountScope, AccountStore, Mailbox, MailboxStore, MessageQuery, MessageStore, Policy,
     PolicyResolver, SpecialUse,
 };
+use tp_contracts::pipeline::{ActionSet, OrgPolicy, PipelinePoint, StageRegistry};
 use tp_contracts::queue::{DsnRet, Outbound, SubmitStatus, Submitted};
 use tp_contracts::retention::Quota;
 use tp_contracts::schedule::{ItipDelivery, ItipMessage, ItipMethod};
@@ -292,6 +305,14 @@ pub struct Delivery {
     send_limits: Option<Arc<SendLimits>>,
     /// `smtp.limits.max_tracked_accounts`.
     max_tracked: usize,
+    /// Журналирование конвейера (SMTP-53): правила организации и хранилище записей; до подключения —
+    /// этап не пишет ничего.
+    journal: Option<journal::Journaling>,
+    /// Конвейер обработки (SMTP-54, CTR-96): этапы ядра в порядке контракта и модульные этапы
+    /// ([`Delivery::with_stage`]).
+    pipeline: StageRegistry,
+    /// Политика организации для итогового контроля действий (SMTP-54); по умолчанию выключена.
+    org_policy: OrgPolicy,
 }
 
 impl fmt::Debug for Delivery {
@@ -413,6 +434,9 @@ impl Delivery {
             redirect_total: cfg.delivery.redirect_total,
             send_limits: None,
             max_tracked: cfg.limits.max_tracked_accounts,
+            journal: None,
+            pipeline: pipeline::core_registry(),
+            org_policy: OrgPolicy::default(),
         }
     }
 
@@ -2133,6 +2157,17 @@ impl Delivery {
             }
             full = out.message;
         }
+        // Точка Data конвейера (SMTP-54): модульные этапы — условия по содержимому, отказ всему письму
+        // (Milter ядра уже отработал; правила потока — ниже).
+        let flow = pipeline::flow_of(env.mode);
+        let system = pipeline::system_message(
+            &env.mail_from,
+            env.mode == Mode::Submission && dsn::is_mdn(&full),
+        );
+        if let Some(reason) = self.data_point(flow, &env.mail_from, &full, system).await? {
+            tracing::info!(id = %env.id, %reason, "smtp: письмо отклонено этапом конвейера на DATA");
+            return Ok(Some(stage_reject(trail, env.rcpts.clone(), &reason)));
+        }
         // Правила потока — после Milter, до точек принятия решений, доставки и очереди; один раз на письмо.
         let input = FlowInput {
             tenant: self.deps.tenant,
@@ -2295,6 +2330,42 @@ impl Delivery {
         }
         self.add_copies(&env.id, &mut prepared, &copy_to, filing, &mut trail.steps)
             .await?;
+        // Этап журналирования ядра (SMTP-53, CTR-96: первый этап точки BeforeMailboxSieve) — до модульных
+        // этапов и Sieve ящика: запись не зависит от ящика, `discard`/`stop` скрипта получателя её не
+        // отменяют. Служебные письма (DSN, MDN) — `SystemMessage`: не журналируются.
+        if system.is_none() {
+            let direction = match env.mode {
+                Mode::Inbound => JournalDirection::In,
+                Mode::Submission => JournalDirection::Out,
+            };
+            self.journal_message(
+                &env.id,
+                direction,
+                &env.mail_from,
+                &rcpts,
+                &full,
+                received_at,
+            )
+            .await?;
+        }
+        // Модульные этапы до Sieve ящика (SMTP-54): по каждому локальному получателю; отказ — всему письму.
+        for rcpt in local_rcpts(&prepared.deliveries) {
+            if let Some(reason) = self
+                .delivery_point(
+                    PipelinePoint::BeforeMailboxSieve,
+                    flow,
+                    &env.mail_from,
+                    &rcpt,
+                    &full,
+                    None,
+                    system,
+                )
+                .await?
+            {
+                tracing::info!(id = %env.id, %rcpt, %reason, "smtp: письмо отклонено этапом конвейера до Sieve");
+                return Ok(Some(stage_reject(trail, vec![rcpt], &reason)));
+            }
+        }
         // Внешние получатели smtp-in от обычного клиента — только перенаправления правил потока: пересылка.
         let redirect = env.mode == Mode::Inbound && !app;
         let mut forwarded = Vec::new();
@@ -2313,6 +2384,7 @@ impl Delivery {
             mut replies,
             steps: mut sieve_steps,
             org_failed,
+            actions,
         } = self
             .apply_rules(
                 &env.id,
@@ -2331,6 +2403,51 @@ impl Delivery {
                 [4, 3, 0],
                 "Sieve organization script failed, try again later",
             )));
+        }
+        // Точки после Sieve и итоговый контроль действий (SMTP-54): итоговый набор действий получателя —
+        // перенаправления скрипта ящика, копии и адресаты. Запрет внешней пересылки организации
+        // (`forbid_external_forward`) перехватывает redirect из скрипта ящика: нарушение — отказ письму с
+        // причиной в журнале доставки. Служебные письма этапы правил минуют.
+        for (rcpt, redirect) in &actions {
+            let acts = ActionSet {
+                redirect: redirect.clone(),
+                copies: copy_to.clone(),
+                recipients: rcpts.clone(),
+            };
+            let mut reason = self
+                .delivery_point(
+                    PipelinePoint::AfterMailboxSieve,
+                    flow,
+                    &env.mail_from,
+                    rcpt,
+                    &full,
+                    Some(acts.clone()),
+                    system,
+                )
+                .await?;
+            if reason.is_none() && system.is_none() {
+                reason = self.final_action_check(&acts).await?;
+                if reason.is_some() {
+                    tracing::info!(id = %env.id, %rcpt, "smtp: письмо отклонено итоговым контролем действий");
+                }
+            }
+            if reason.is_none() {
+                reason = self
+                    .delivery_point(
+                        PipelinePoint::FinalActionCheck,
+                        flow,
+                        &env.mail_from,
+                        rcpt,
+                        &full,
+                        Some(acts),
+                        system,
+                    )
+                    .await?;
+            }
+            if let Some(reason) = reason {
+                tracing::info!(id = %env.id, %rcpt, %reason, "smtp: письмо отклонено после Sieve");
+                return Ok(Some(stage_reject(trail, vec![rcpt.clone()], &reason)));
+            }
         }
         // Очередь модерации — до доставки: её сбой — временный отказ без частичной доставки (после проверки
         // скрипта организации — письмо не задерживается перед временным отказом).
@@ -2657,8 +2774,10 @@ impl Delivery {
         // Отправка вне сессии SMTP — путь вошедшего (CTR-82): тип абонента — свой (SMTP-50).
         let peer = PeerKind::Own;
         // Отчёт о прочтении (MDN, RFC 8098) получателям с выключенной клеткой `mdn` не отправляется (SMTP-50);
-        // события политики (MDN, запрещённая автопересылка) — в журнал доставки.
+        // события политики (MDN, запрещённая автопересылка) — в журнал доставки. MDN — служебное письмо
+        // (SystemMessage, CTR-96): этапы правил конвейера его минуют, не журналируется (SMTP-53).
         let mut policy_steps = Vec::new();
+        let system = pipeline::system_message(mail_from, dsn::is_mdn(&raw));
         let rcpts = if dsn::is_mdn(&raw) {
             let (org, _) = self.org_matrix().await?;
             let (allowed, steps) = self.mdn_rcpts(id, rcpts, &org).await?;
@@ -2690,11 +2809,44 @@ impl Delivery {
         };
         let delivered = accounts_of(&prepared.deliveries);
         let mut forward = Vec::new();
+        // Этап журналирования ядра (SMTP-53) — до модульных этапов и Sieve ящика (CTR-96): копия письма и
+        // конверт по правилам организации, отправка — направление Out. Служебные письма не журналируются.
+        if system.is_none() {
+            self.journal_message(
+                id,
+                JournalDirection::Out,
+                mail_from,
+                &rcpts,
+                &full,
+                received_at,
+            )
+            .await?;
+        }
+        // Модульные этапы до Sieve ящика (SMTP-54): по каждому локальному получателю; отказ — всему письму
+        // (статусы получателей ниже).
+        for rcpt in local_rcpts(&prepared.deliveries) {
+            if let Some(reason) = self
+                .delivery_point(
+                    PipelinePoint::BeforeMailboxSieve,
+                    FlowDirection::Submission,
+                    mail_from,
+                    &rcpt,
+                    &full,
+                    None,
+                    system,
+                )
+                .await?
+            {
+                tracing::info!(%id, %rcpt, %reason, "smtp: отправка отклонена этапом конвейера до Sieve");
+                return Ok(self.refused(mail_from, &raw, &rcpts, &reason).await);
+            }
+        }
         let Sieved {
             redirect: hops,
             mut replies,
             steps: mut sieve_steps,
             org_failed,
+            actions,
         } = self
             .apply_rules(
                 id,
@@ -2710,6 +2862,47 @@ impl Delivery {
         // временным отказом (SMTP-50), без уведомления (статус — у вызывающего).
         for rcpt in org_failed {
             failed.push(denied(rcpt, ORG_SCRIPT_FAILED));
+        }
+        // Точки после Sieve и итоговый контроль действий (SMTP-54): итоговый набор действий получателя по
+        // `OrgPolicy` — запрет внешней пересылки перехватывает `redirect` из скрипта ящика; нарушение —
+        // отказ отправке с причиной в журнале доставки. Служебные письма этапы правил минуют.
+        for (rcpt, redirect) in &actions {
+            let acts = ActionSet {
+                redirect: redirect.clone(),
+                copies: Vec::new(),
+                recipients: rcpts.clone(),
+            };
+            let mut reason = self
+                .delivery_point(
+                    PipelinePoint::AfterMailboxSieve,
+                    FlowDirection::Submission,
+                    mail_from,
+                    rcpt,
+                    &full,
+                    Some(acts.clone()),
+                    system,
+                )
+                .await?;
+            if reason.is_none() && system.is_none() {
+                reason = self.final_action_check(&acts).await?;
+            }
+            if reason.is_none() {
+                reason = self
+                    .delivery_point(
+                        PipelinePoint::FinalActionCheck,
+                        FlowDirection::Submission,
+                        mail_from,
+                        rcpt,
+                        &full,
+                        Some(acts),
+                        system,
+                    )
+                    .await?;
+            }
+            if let Some(reason) = reason {
+                tracing::info!(%id, %rcpt, %reason, "smtp: отправка отклонена после Sieve");
+                return Ok(self.refused(mail_from, &raw, &rcpts, &reason).await);
+            }
         }
         let local_list = local_rcpts(&prepared.deliveries);
         let spam = junk_rcpts(&prepared.deliveries, &prepared.junk);
@@ -2824,6 +3017,25 @@ impl Delivery {
             .await;
         tracing::info!(%id, count = rcpts.len(), "smtp: отправка вне сессии обработана");
         Ok(statuses)
+    }
+
+    /// Отказ этапа конвейера отправки вне сессии (SMTP-54): причина — в журнал доставки, всем получателям —
+    /// `SubmitStatus::Failed` с тем же текстом (статус — у вызывающего, без уведомления).
+    async fn refused(
+        &self,
+        mail_from: &str,
+        raw: &[u8],
+        rcpts: &[String],
+        reason: &str,
+    ) -> Vec<(String, SubmitStatus)> {
+        let steps = vec![Step::new(Ek::Reject, Dd::Reject, rcpts.to_vec()).reason(clean(reason))];
+        self.track(mail_from, tracking::message_id(raw).as_deref(), steps)
+            .await;
+        let line = format!("550 5.7.1 {}", clean(reason));
+        rcpts
+            .iter()
+            .map(|r| (r.clone(), SubmitStatus::Failed(line.clone())))
+            .collect()
     }
 
     /// Отправка от имени пользователя вне сессии SMTP (JMAP `EmailSubmission/set`, CMP-04): получатели в
@@ -3116,6 +3328,8 @@ impl Delivery {
                     skipped.push(to);
                 }
             }
+            // Итоговые действия получателя (SMTP-54): перенаправления — этапам после Sieve и итоговому контролю.
+            out.actions.push((rcpt.clone(), redirect.clone()));
             let redirected = !redirect.is_empty();
             if redirected {
                 notes.push(format!("redirect {}", redirect.join(", ")));
@@ -3542,14 +3756,25 @@ impl Handler for Delivery {
     }
 
     async fn sender(&self, env: &Envelope) -> Option<Reply> {
-        let r = match self.check_mail_from(env).await {
-            Ok(r) => r?,
-            Err(e) => temporary(&e),
+        let core = match self.check_mail_from(env).await {
+            Ok(r) => r,
+            Err(e) => Some(temporary(&e)),
         };
-        let step =
-            Step::new(Ek::Reject, tracking::decision(&r), Vec::new()).reason(tracking::reason(&r));
-        self.track(&env.mail_from, None, vec![step]).await;
-        Some(r)
+        // Точка MailFrom конвейера (SMTP-54): модульные этапы — условия по конверту, отказ всему письму
+        // (проверки сессии ядра уже отработали).
+        let r = match core {
+            Some(r) => Some(r),
+            None => {
+                self.envelope_point(PipelinePoint::MailFrom, env, None)
+                    .await
+            }
+        };
+        if let Some(r) = &r {
+            let step = Step::new(Ek::Reject, tracking::decision(r), Vec::new())
+                .reason(tracking::reason(r));
+            self.track(&env.mail_from, None, vec![step]).await;
+        }
+        r
     }
 
     async fn limited(&self, env: &Envelope, reply: &Reply) {
@@ -3602,8 +3827,15 @@ impl Handler for Delivery {
 }
 
 impl Delivery {
-    /// Проверка получателя до ответа `250` (SRS 4.1): существование, группа рассылки, квота.
+    /// Проверка получателя до ответа `250` (SRS 4.1): существование, группа рассылки, квота; затем точка
+    /// `RcptTo` конвейера (SMTP-54) — модульные этапы по конверту, отказ — отдельному получателю.
     async fn check_rcpt(&self, env: &Envelope, rcpt: &str) -> Reply {
+        let core = self.check_rcpt_core(env, rcpt).await;
+        self.rcpt_point(env, rcpt, core).await
+    }
+
+    /// Проверки ядра получателя (SMTP-54: точка `RcptTo` конвейера после них).
+    async fn check_rcpt_core(&self, env: &Envelope, rcpt: &str) -> Reply {
         let queue_ok = || {
             if self.deps.outbound.is_some() {
                 reply(250, [2, 1, 5], "OK")
@@ -3752,6 +3984,14 @@ fn junk_rcpts(deliveries: &[(String, MailDelivery)], junk: &HashSet<AccountId>) 
             .collect(),
     );
     out
+}
+
+/// Отказ этапа конвейера в сессии приёма (SMTP-54): понятная причина — в журнал доставки и SMTP-ответ.
+fn stage_reject(trail: &mut Trail, rcpts: Vec<String>, reason: &str) -> Reply {
+    trail
+        .steps
+        .push(Step::new(Ek::Reject, Dd::Reject, rcpts).reason(clean(reason)));
+    reply(550, [5, 7, 1], clean(reason))
 }
 
 /// События журнала доставки после приёма: модерация, доставка в ящики (`local` без `failed`), отказы
@@ -3992,7 +4232,9 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+mod journal;
 mod moderation;
+mod pipeline;
 mod scheduled;
 
 #[cfg(test)]
