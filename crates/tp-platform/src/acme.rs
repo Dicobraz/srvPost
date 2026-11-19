@@ -1,6 +1,7 @@
 //! Встроенный клиент ACME для профиля SMB (SRS 6.2): выпуск сертификата по HTTP-01 (ответ на проверку отдаёт
-//! служебный HTTP — [`challenge_router`]), продление за `renew_before` до истечения, перечитывание [`TlsCerts`]
-//! без перезапуска.
+//! служебный HTTP — [`challenge_router`]), продление, когда осталось меньше `min(renew_before, трети срока
+//! жизни)` (сроки публичных сертификатов сокращаются — ballot SC-081v3; cert-manager и Caddy — по той же доле),
+//! перечитывание [`TlsCerts`] без перезапуска.
 //!
 //! Ключ TLS — только в хранилище секретов (решение 100, PLT-29): выпущенный ключ пишется новой версией секрета
 //! `tls.key` ([`SecretStore::put`]), затем цепочка — в `tls.cert_file`. Ошибка записи ключа — `ERROR` в журнал,
@@ -51,7 +52,7 @@ pub struct AcmeConfig {
     pub domains: Vec<String>,
     /// Каталог состояния: учётная запись ACME и список доменов последнего выпуска.
     pub state_dir: PathBuf,
-    /// За сколько до истечения продлевать сертификат (`30d`).
+    /// Максимальное окно продления: осталось меньше `min(renew_before, трети срока жизни)` сертификата (`30d`).
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]
     pub renew_before: Duration,
@@ -234,29 +235,43 @@ impl Acme {
         Ok(true)
     }
 
-    /// Нужен ли выпуск на момент `now`.
+    /// Нужен ли выпуск на момент `now`: сертификата нет, домены изменились — да; иначе календарное окно —
+    /// осталось меньше `min(renew_before, треть срока жизни)` (⅔ срока прошли). Срок жизни читается из
+    /// `notBefore`; нестандартное время — прежнее поведение, фиксированное `renew_before`.
     pub async fn needs_renewal_at(&self, now: SystemTime) -> tp_contracts::Result<bool> {
         if self.cfg.domains.is_empty() {
             return Err(AcmeError::NoDomains.into());
         }
         let cert_file = self.tls.cert_file.clone();
         let domains_file = self.domains_file();
-        let (not_after, issued_for) = tokio::task::spawn_blocking(move || {
-            let not_after = std::fs::read_to_string(&cert_file)
-                .ok()
-                .and_then(|pem| pem_not_after(&pem));
+        let (cert_pem, issued_for) = tokio::task::spawn_blocking(move || {
+            let cert_pem = std::fs::read_to_string(&cert_file).ok();
             let issued_for = std::fs::read_to_string(&domains_file).ok();
-            (not_after, issued_for)
+            (cert_pem, issued_for)
         })
         .await
         .map_err(|_| AcmeError::Join)?;
-        let Some(not_after) = not_after else {
+        let Some(chain) = cert_pem else {
             return Ok(true);
         };
         if issued_for.as_deref() != Some(self.domains_text().as_str()) {
             return Ok(true);
         }
-        Ok(now + self.cfg.renew_before >= not_after)
+        let (not_before, not_after) = pem_validity(&chain);
+        let Some(not_after) = not_after else {
+            return Ok(true);
+        };
+        // Срок жизни по `notBefore`; если его разобрать не удалось (нестандартный формат) — прежнее поведение,
+        // фиксированное `renew_before`.
+        let lifetime = not_before
+            .and_then(|nb| not_after.duration_since(nb).ok())
+            .unwrap_or(Duration::ZERO);
+        let window = if lifetime.is_zero() {
+            self.cfg.renew_before
+        } else {
+            self.cfg.renew_before.min(lifetime / 3)
+        };
+        Ok(now + window >= not_after)
     }
 
     /// Выпускает сертификат безусловно: заказ, проверки HTTP-01, финализация, запись ключа в секрет и цепочки в
@@ -510,11 +525,20 @@ fn write_atomic(path: &Path, data: &[u8], private: bool) -> Result<(), AcmeError
 /// `notAfter` первого сертификата PEM-цепочки.
 fn pem_not_after(pem: &str) -> Option<SystemTime> {
     let der = rustls_pemfile::certs(&mut pem.as_bytes()).next()?.ok()?;
-    cert_not_after(&der)
+    cert_validity(&der).1
 }
 
-/// `notAfter` сертификата X.509 (DER): Certificate → TBSCertificate → [version] serial signature issuer validity.
-fn cert_not_after(der: &[u8]) -> Option<SystemTime> {
+/// `notBefore` и `notAfter` первого сертификата PEM-цепочки; время, разобрать которое не удалось, — `None`.
+fn pem_validity(pem: &str) -> (Option<SystemTime>, Option<SystemTime>) {
+    match rustls_pemfile::certs(&mut pem.as_bytes()).next() {
+        Some(Ok(der)) => cert_validity(&der),
+        _ => (None, None),
+    }
+}
+
+/// Срок сертификата X.509 (DER): Certificate → TBSCertificate → [version] serial signature issuer validity;
+/// `validity` — `notBefore`, `notAfter`. Время в нестандартном формате — `None`.
+fn cert_validity(der: &[u8]) -> (Option<SystemTime>, Option<SystemTime>) {
     let (_, cert, _) = der_tlv(der).filter(|(tag, _, _)| *tag == 0x30)?;
     let (_, tbs, _) = der_tlv(cert).filter(|(tag, _, _)| *tag == 0x30)?;
     let mut rest = tbs;
@@ -525,9 +549,9 @@ fn cert_not_after(der: &[u8]) -> Option<SystemTime> {
         rest = der_tlv(rest)?.2; // serialNumber, signature, issuer
     }
     let (_, validity, _) = der_tlv(rest).filter(|(tag, _, _)| *tag == 0x30)?;
-    let after_not_before = der_tlv(validity)?.2;
-    let (tag, time, _) = der_tlv(after_not_before)?;
-    der_time(tag, time)
+    let (tag, not_before, rest) = der_tlv(validity)?;
+    let (tag, not_after, _) = der_tlv(rest)?;
+    (der_time(tag, not_before), der_time(tag, not_after))
 }
 
 /// Элемент DER: (тег, содержимое, остаток).
@@ -815,17 +839,7 @@ mod tests {
             .concat(),
         );
         let sig = tlv(0x03, &[0, 0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
-        let cert = tlv(0x30, &[tbs, alg, sig].concat());
-        let b64 = b64_encode(&cert);
-        let lines: Vec<&str> = b64
-            .as_bytes()
-            .chunks(64)
-            .map(|c| std::str::from_utf8(c).expect("ascii"))
-            .collect();
-        format!(
-            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
-            lines.join("\n")
-        )
+        pem_from_der(&tlv(0x30, &[tbs, alg, sig].concat()))
     }
 
     fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
@@ -841,6 +855,63 @@ mod tests {
         }
         out.extend_from_slice(content);
         out
+    }
+
+    /// UTCTime (`YYMMDDHHMMSSZ`) с заданной датой; месяц вне 1..=12 делает время нечитаемым (`der_time` → None).
+    fn utc(year: i64, month: i64, day: i64) -> Vec<u8> {
+        let text = format!("{:02}{:02}{:02}000000Z", year % 100, month, day);
+        tlv(0x17, text.as_bytes())
+    }
+
+    /// Момент полуночи UTC заданной даты.
+    fn civil(year: i64, month: i64, day: i64) -> SystemTime {
+        let days = u64::try_from(days_from_civil(year, month, day)).expect("days");
+        UNIX_EPOCH + Duration::from_secs(days * 86_400)
+    }
+
+    /// PEM-цепочка с заданным сроком (`notBefore`, `notAfter` — DER-времена). Подписи нет: календарю продления
+    /// нужен разбор срока, а не проверка подписи.
+    fn cert_chain(not_before: Vec<u8>, not_after: Vec<u8>) -> String {
+        let alg = tlv(
+            0x30,
+            &[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02],
+        );
+        let name = tlv(0x30, &[]);
+        let validity = tlv(0x30, &[not_before, not_after].concat());
+        // spki: idEcPublicKey без точки кривой — календарь spki не разбирает.
+        let spki = tlv(
+            0x30,
+            &[0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01],
+        );
+        let tbs = tlv(
+            0x30,
+            &[
+                tlv(0xa0, &tlv(0x02, &[2])),
+                tlv(0x02, &[1]),
+                alg.clone(),
+                name.clone(),
+                validity,
+                name,
+                spki,
+            ]
+            .concat(),
+        );
+        let sig = tlv(0x03, &[0, 0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
+        pem_from_der(&tlv(0x30, &[tbs, alg, sig].concat()))
+    }
+
+    /// DER → PEM (одна секция CERTIFICATE).
+    fn pem_from_der(der: &[u8]) -> String {
+        let b64 = b64_encode(der);
+        let lines: Vec<&str> = b64
+            .as_bytes()
+            .chunks(64)
+            .map(|c| std::str::from_utf8(c).expect("ascii"))
+            .collect();
+        format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+            lines.join("\n")
+        )
     }
 
     const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1183,7 +1254,96 @@ mod tests {
         assert_eq!(der_time(0x18, b"2026103011Z"), None);
         assert_eq!(days_from_civil(2000, 3, 1), 11_017);
         assert_eq!(pem_not_after("not a pem"), None);
-        assert_eq!(cert_not_after(&[0x30, 0x82, 0xff]), None);
+        assert_eq!(cert_validity(&[0x30, 0x82, 0xff]), (None, None));
+    }
+
+    /// Календарное окно продления — по доле срока жизни (PLT-37): 90 дней — за 30, короткие — при ⅔ срока.
+    #[tokio::test]
+    async fn renewal_window_follows_lifetime_share() {
+        let dir = TempDir::new("acme-window");
+        let (acme, _mock, tls, _keys) = setup(&dir.0, None);
+        std::fs::create_dir_all(dir.0.join("tls")).expect("dir");
+        std::fs::create_dir_all(dir.0.join("acme")).expect("dir");
+        std::fs::write(dir.0.join("acme/domains"), DOMAIN).expect("domains");
+
+        // 90 дней: треть срока (30 дней) не меньше renew_before — окно прежнее, продление за 30 дней.
+        std::fs::write(&tls.cert_file, cert_chain(utc(2026, 1, 1), utc(2026, 4, 1))).expect("cert");
+        assert!(
+            acme.needs_renewal_at(civil(2026, 3, 2))
+                .await
+                .expect("check"),
+            "остался месяц — продлевать"
+        );
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 2, 28))
+                .await
+                .expect("check"),
+            "до окна ещё два дня"
+        );
+
+        // 47 дней (ballot SC-081v3, 2029): не при остатке 30, а при ⅔ срока — остаток ≤ 15⅔ дня.
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(utc(2026, 1, 1), utc(2026, 2, 17)),
+        )
+        .expect("cert");
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 2, 1))
+                .await
+                .expect("check"),
+            "остаток 16 дней больше трети срока"
+        );
+        assert!(
+            acme.needs_renewal_at(civil(2026, 2, 2))
+                .await
+                .expect("check"),
+            "⅔ срока прошли"
+        );
+
+        // 6 дней (профиль коротких сертификатов Let's Encrypt): продление при остатке ≤ 2 дней; до этого
+        // прежний код продлевал бы на каждой проверке.
+        std::fs::write(&tls.cert_file, cert_chain(utc(2026, 1, 1), utc(2026, 1, 7))).expect("cert");
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 1, 4))
+                .await
+                .expect("check"),
+            "остаток 3 дня больше трети срока"
+        );
+        assert!(
+            acme.needs_renewal_at(civil(2026, 1, 5))
+                .await
+                .expect("check")
+        );
+    }
+
+    /// Сертификат без `notBefore` (разобрать не удалось) — прежнее поведение: фиксированное `renew_before`.
+    #[tokio::test]
+    async fn unreadable_not_before_keeps_fixed_window() {
+        let dir = TempDir::new("acme-nobefore");
+        let (acme, _mock, tls, _keys) = setup(&dir.0, None);
+        std::fs::create_dir_all(dir.0.join("tls")).expect("dir");
+        std::fs::create_dir_all(dir.0.join("acme")).expect("dir");
+        std::fs::write(dir.0.join("acme/domains"), DOMAIN).expect("domains");
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(utc(2026, 13, 1), utc(2026, 4, 1)),
+        )
+        .expect("cert");
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 2, 28))
+                .await
+                .expect("check")
+        );
+        assert!(
+            acme.needs_renewal_at(civil(2026, 3, 2))
+                .await
+                .expect("check"),
+            "фиксированное окно 30 дней без доли срока"
+        );
     }
 
     #[test]
