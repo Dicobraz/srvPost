@@ -48,6 +48,7 @@ pub mod submissions;
 mod sync_gate;
 pub mod transport;
 mod trust;
+pub mod writers;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -76,6 +77,7 @@ use crate::shards::{ReadIntent, ShardId, ShardResolver};
 use crate::sieve::SieveConfig;
 use crate::signals::SignalsConfig;
 use crate::submissions::SubmissionsConfig;
+use crate::writers::{IngestConfig, Writers};
 
 /// Секция конфигурации контура метаданных `meta` (SRS 5.5); пул соединений — отдельная секция
 /// `database` ([`pool::PoolConfig`]). Все поля необязательны; неизвестное поле — ошибка разбора.
@@ -132,6 +134,8 @@ pub struct MetaConfig {
     pub submissions: SubmissionsConfig,
     /// Аудит доступа к ящику: срок хранения ([`mailbox_audit`]).
     pub mailbox_audit: MailboxAuditConfig,
+    /// Писатели приёма: сериализация записей писем учётной записи ([`writers`], PERF-09).
+    pub ingest: IngestConfig,
 }
 
 impl MetaConfig {
@@ -155,6 +159,7 @@ impl Default for MetaConfig {
             sieve: SieveConfig::default(),
             submissions: SubmissionsConfig::default(),
             mailbox_audit: MailboxAuditConfig::default(),
+            ingest: IngestConfig::default(),
         }
     }
 }
@@ -267,6 +272,7 @@ pub struct PgMeta {
     failover: Option<Failover>,
     shards: Shards,
     routing: Arc<Routing>,
+    writers: Arc<Writers>,
     intent: ReadIntent,
     replica: ReplicaOf,
 }
@@ -281,6 +287,7 @@ impl PgMeta {
             failover: None,
             shards: Shards::default(),
             routing: Arc::default(),
+            writers: Arc::new(Writers::new()),
             intent: ReadIntent::Primary,
             replica: ReplicaOf::default(),
         }
@@ -540,6 +547,7 @@ impl PgMeta {
             },
             shards: Shards::default(),
             routing: Arc::default(),
+            writers: Arc::new(Writers::new()),
             intent: self.intent,
             replica,
         })
