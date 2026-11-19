@@ -29,26 +29,29 @@ async fn passes_contract_suite() {
     // не видит (RLS), повтор своей записи идемпотентен.
     let a = common::tenant(meta.pool()).await;
     let b = common::tenant(meta.pool()).await;
-    let record = |tenant: TenantId| SentRecord {
+    let record = |tenant: TenantId, account: AccountId| SentRecord {
         tenant,
-        account: AccountId::new(),
+        account,
         tag: vec![7u8; 16],
         message_id_hash: MessageIdHash([9u8; 32]),
         recipients: vec!["bob@partner.example".into()],
         thread: None,
         sent_at: OffsetDateTime::UNIX_EPOCH,
     };
-    SentLog::record(meta, record(a))
+    let first = record(a, AccountId::new());
+    SentLog::record(meta, first.clone())
         .await
         .expect("первая запись");
     assert_eq!(
-        SentLog::record(meta, record(b)).await,
+        SentLog::record(meta, record(b, AccountId::new())).await,
         Err(Error::Conflict),
         "метка уникальна в инсталляции"
     );
-    SentLog::record(meta, record(a))
+    SentLog::record(meta, first.clone())
         .await
         .expect("повтор идемпотентен");
+    assert_eq!(SentLog::by_tag(meta, b, &[7u8; 16]).await, Ok(None));
+    assert_eq!(SentLog::by_tag(meta, a, &[7u8; 16]).await, Ok(Some(first)));
     assert_eq!(SentLog::by_tag(meta, b, &[7u8; 16]).await, Ok(None));
     assert!(
         SentLog::by_tag(meta, a, &[7u8; 16])

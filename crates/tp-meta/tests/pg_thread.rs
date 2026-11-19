@@ -246,6 +246,7 @@ async fn background_binding_by_thread_key() {
         .bind(scope, m5, &["<m5@example.org>"])
         .await
         .expect("bind m5");
+    received += time::Duration::minutes(1);
     insert_message(&meta, scope, mailbox, m5, "chain-1", received).await;
 
     let bound = meta
