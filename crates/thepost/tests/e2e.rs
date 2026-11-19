@@ -1805,6 +1805,22 @@ async fn sieve_rules_and_vacation() {
     assert_eq!(r["list"][0]["isEnabled"], true, "{r}");
     assert_eq!(r["list"][0]["textBody"], "Back on Monday.", "{r}");
 
+    // Отправитель письма — внешний: чужим ответ идёт только внешним текстом (SIEVE-14, решение 124 г),
+    // без него наружу ничего. Маршрут Admin API внешний текст ещё не принимает (ADM-49) — дополняем
+    // настройку хранилищем.
+    use tp_contracts::sieve::{SieveStore, Vacation as VacationSetting};
+    let setting = meta.vacation(scope).await.expect("vacation");
+    meta.set_vacation(
+        scope,
+        VacationSetting {
+            external_subject: Some("Out of office".into()),
+            external_text_body: Some("Back on Monday.".into()),
+            ..setting
+        },
+    )
+    .await
+    .expect("set vacation");
+
     // Письмо внешнего отправителя: в папку по правилу, автоответ — в очередь.
     let sender = "bob@sender.test";
     let send = |n: u32, subject: &'static str| {
