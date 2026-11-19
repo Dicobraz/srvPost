@@ -95,7 +95,7 @@ impl ThreadFacts {
     /// Добавляет значения `other` без повторов и обрезает списки по пределам (самые старые — в начале —
     /// вытесняются). Чистая функция, используется реализациями [`ThreadStore::remember_facts`].
     pub fn merge(mut self, other: &ThreadFacts, limits: &ThreadLimits) -> Self {
-        let mut push = |list: &mut Vec<String>, items: &[String], max: usize| {
+        let push = |list: &mut Vec<String>, items: &[String], max: usize| {
             for v in items {
                 if !list.iter().any(|x| x == v) {
                     list.push(v.clone());

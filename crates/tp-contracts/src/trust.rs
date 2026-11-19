@@ -574,7 +574,9 @@ impl TrustMatrix {
             },
             (_, Update | Reply | Cancel) => match self.itip_updates.get(kind) {
                 Toggle::On => InboundDecision::ApplyIfExisting,
-                Toggle::Off => InboundDecision::MailOnly,
+                // ReplyOnly задуман для клеток auto_reply и mdn (решение 125 а); на прочих клетках —
+                // как Off: приём iTIP не привязан к признаку ответа.
+                Toggle::Off | Toggle::ReplyOnly => InboundDecision::MailOnly,
             },
         }
     }
@@ -1355,10 +1357,10 @@ mod tests {
         // Сужение берёт узкое: ReplyOnly не шире On, но уже Off.
         let mut wide = TrustMatrix::default();
         wide.mdn.partner = Toggle::On;
-        assert_eq!(wide.mdn.narrow_with(&m).partner, Toggle::ReplyOnly);
+        assert_eq!(wide.mdn.narrow_with(&m.mdn).partner, Toggle::ReplyOnly);
         let mut off = TrustMatrix::default();
         off.mdn.partner = Toggle::Off;
-        assert_eq!(m.mdn.narrow_with(&off).partner, Toggle::Off);
+        assert_eq!(m.mdn.narrow_with(&off.mdn).partner, Toggle::Off);
         // Умолчания и закрытая матрица клеток ReplyOnly не содержат (значения по умолчанию не меняются).
         for f in [TrustFunction::AutoReply, TrustFunction::Mdn] {
             for peer in PeerKind::ALL {
