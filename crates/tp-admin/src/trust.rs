@@ -22,7 +22,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use tp_contracts::trust::{
@@ -473,7 +473,7 @@ pub struct TrustFixedSchema {
 pub struct TrustBody {
     /// Новое приглашение.
     #[serde(default)]
-    #[schema(value_type = PerPeerInviteOptionSchema>)]
+    #[schema(value_type = PerPeerInviteOptionSchema)]
     pub invite_new: PerPeer<Option<InviteMode>>,
     /// `REPLY`, `CANCEL` и обновление `REQUEST` к существующим событиям.
     #[serde(default)]
@@ -631,7 +631,7 @@ pub struct TrustView {
     pub own: Option<TrustPolicy>,
     /// Действующая матрица: у группы — как для участника одной этой группы, у учётной записи — со всеми её
     /// группами (самое узкое).
-    #[schema(value_type = EffectiveSchema>)]
+    #[schema(value_type = EffectiveSchema)]
     pub effective: Effective,
     /// Клетки, закреплённые контрактом (не меняются ни на одном уровне).
     #[schema(value_type = TrustFixedSchema>)]
