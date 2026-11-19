@@ -66,6 +66,8 @@ pub const CLI: &str = "cli";
 pub const AUTH: &str = "auth";
 /// Имя секции слушателей HTTP ролей jmap, dav и admin.
 pub const HTTP: &str = "http";
+/// Имя секции кэша политики доверия.
+pub const TRUST: &str = "trust";
 
 /// Реестр секций: платформа, `tp-meta`, приложение и встроенные модули; проверки каналов.
 pub fn registry() -> Result<SectionRegistry> {
@@ -95,6 +97,7 @@ pub fn registry_of(builtin: &[modules::Builtin]) -> Result<SectionRegistry> {
     r.add_section::<tp_mailstore::Config>(MAILSTORE)?;
     r.add_section::<AuthSection>(AUTH)?;
     r.add_section::<HttpSection>(HTTP)?;
+    r.add_section::<TrustSection>(TRUST)?;
     r.add_check::<PoolConfig>(PoolConfig::SECTION, |c, profile| {
         pool_config(c, profile).check().map(drop)
     })?;
@@ -488,6 +491,41 @@ impl AuthSection {
         }
         self.abuse.check()?;
         Ok(())
+    }
+}
+
+// ---------- trust ----------
+
+/// Секция `trust`: кэш действующей матрицы политики доверия на узле (APP-76, решение 124; SRS 5.5). Сама политика
+/// — уровни в хранилище (`PgMeta`, META-85) и Admin API (ADM-49); узел читает её через [`crate::trust::TrustCache`]:
+/// срок и размер кэша — здесь, сброс — по событию `trust_changed` шины (CTR-93). Значения применяются без
+/// перезапуска.
+///
+/// ```yaml
+/// trust:
+///   cache_ttl: 1m         # срок записи кэша; 0s — без кэша
+///   cache_entries: 10000  # наибольшее число записей кэша; 0 — без кэша
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TrustSection {
+    /// Срок действующей матрицы учётной записи и политик уровней в кэше узла (`1m`); запись перечитывается и
+    /// раньше срока — по событию `trust_changed` шины (изменение политики через Admin API) и по `Resync`
+    /// (потеря сигналов). `0s` — без кэша: каждое чтение — в хранилище. Применяется без перезапуска.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub cache_ttl: Duration,
+    /// Наибольшее число записей кэша (учётные записи, домены-партнёры, уровни) — `10000`; сверх — вытесняется
+    /// давнее. `0` — без кэша. Применяется без перезапуска.
+    pub cache_entries: usize,
+}
+
+impl Default for TrustSection {
+    fn default() -> Self {
+        Self {
+            cache_ttl: Duration::from_secs(60),
+            cache_entries: 10_000,
+        }
     }
 }
 
@@ -1510,6 +1548,7 @@ blob:
             "\"admin\"",
             "\"auth\"",
             "\"http\"",
+            "\"trust\"",
         ] {
             assert!(schema.contains(key), "{key}");
         }
