@@ -11,10 +11,9 @@ use std::collections::BTreeMap;
 
 use time::OffsetDateTime;
 use tp_contracts::meta::{
-    AccountScope, ChangeLog, Inserted, MailboxId, MailboxStore, MessageStore, NewMessage,
-    SpecialUse,
+    AccountScope, ChangeLog, Inserted, MailboxStore, MessageStore, NewMessage, SpecialUse,
 };
-use tp_contracts::{BlobHash, BlobKey, Gen, ModSeq, Uid};
+use tp_contracts::{BlobHash, BlobKey, Gen, MailboxId, ModSeq, Uid};
 use tp_meta::PgMeta;
 
 fn message(scope: AccountScope) -> NewMessage {
