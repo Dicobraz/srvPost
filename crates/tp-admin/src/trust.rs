@@ -1150,7 +1150,7 @@ mod tests {
     use axum::http::StatusCode;
     use serde_json::{Value, json};
     use tp_contracts::GroupId;
-    use tp_contracts::trust::{Detail, InviteMode, Toggle};
+    use tp_contracts::trust::{Detail, InviteMode};
 
     use super::*;
     use crate::testenv::{Env, config};
@@ -1169,11 +1169,11 @@ mod tests {
     #[tokio::test]
     async fn put_org_policy_and_ceiling() {
         let env = Env::new();
-        let path = org_trust(&env);
+        let path = org_trust();
 
         // Пустой `GET`: уровня нет, действующая матрица — умолчания.
         let (s, _, b) = env.call("GET", &path, Some("operator"), None).await;
-        assert_eq!(s, axum::http::StatusCode::OK, "{b}");
+        assert_eq!(s, StatusCode::OK, "{b}");
         assert_eq!(b["own"], Value::Null);
         assert_eq!(
             b["effective"]["matrix"]["invite_new"]["partner"],
@@ -1185,7 +1185,7 @@ mod tests {
         // В пределах потолка: партнёру «авто» — 200, аудит.
         let body = json!({"invite_new": {"partner": "auto"}, "partners": ["partner.example"]});
         let (s, _, b) = env.call("PUT", &path, Some("org"), Some(body)).await;
-        assert_eq!(s, axum::http::StatusCode::OK, "{b}");
+        assert_eq!(s, StatusCode::OK, "{b}");
         assert_eq!(b["own"]["invite_new"]["partner"], json!("auto"));
         assert_eq!(
             b["effective"]["matrix"]["invite_new"]["partner"],
@@ -1200,13 +1200,13 @@ mod tests {
         // Выше потолка контракта: новое приглашение интернету — кнопка, закреплено.
         let body = json!({"invite_new": {"external": "auto"}});
         let (s, h, b) = env.call("PUT", &path, Some("org"), Some(body)).await;
-        assert_eq!(s, axum::http::StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
         assert_eq!(h["content-type"], "application/problem+json");
         assert_eq!(b["status"], 422);
         assert_eq!(
             b["errors"],
             json!([{"function": "invite_new", "peer": "external", "value": {"invite": "auto"},
-                    "ceiling": {"invite": "button"}, "level": None}])
+                    "ceiling": {"invite": "button"}, "level": null}])
         );
         assert!(
             b["detail"].as_str().expect("detail").contains(
@@ -1222,16 +1222,16 @@ mod tests {
         // Закреплённая функция в теле — 400.
         let body = json!({"booking": {"external": "on"}});
         let (s, _, _) = env.call("PUT", &path, Some("org"), Some(body)).await;
-        assert_eq!(s, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(s, StatusCode::BAD_REQUEST);
 
         // Снижение потолка установки не отклоняется; организация шире — `over_ceiling`.
         let inst = json!({"invite_new": {"partner": "button"}});
         let (s, _, _) = env
             .call("PUT", INSTALLATION_TRUST, Some("root"), Some(inst))
             .await;
-        assert_eq!(s, axum::http::StatusCode::OK);
+        assert_eq!(s, StatusCode::OK);
         let (s, _, b) = env.call("GET", &path, Some("org"), None).await;
-        assert_eq!(s, axum::http::StatusCode::OK);
+        assert_eq!(s, StatusCode::OK);
         assert_eq!(
             b["effective"]["matrix"]["invite_new"]["partner"],
             json!("button"),
@@ -1245,7 +1245,7 @@ mod tests {
         // Шире нового потолка организация больше не пишет.
         let body = json!({"invite_new": {"partner": "auto"}});
         let (s, _, b) = env.call("PUT", &path, Some("org"), Some(body)).await;
-        assert_eq!(s, axum::http::StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
         assert_eq!(b["errors"][0]["ceiling"], json!({"invite": "button"}));
 
         // Аудит: PUT организации, 422, 400, PUT установки, GET не пишется.
@@ -1258,42 +1258,42 @@ mod tests {
     #[tokio::test]
     async fn roles_and_partner_domains() {
         let env = Env::new();
-        let path = org_trust(&env);
+        let path = org_trust();
 
         // Уровень установки — только администратор установки.
         let (s, _, _) = env.call("GET", INSTALLATION_TRUST, Some("org"), None).await;
-        assert_eq!(s, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(s, StatusCode::FORBIDDEN);
         let (s, _, _) = env
             .call("GET", INSTALLATION_TRUST, Some("operator"), None)
             .await;
-        assert_eq!(s, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(s, StatusCode::FORBIDDEN);
         let (s, _, _) = env
             .call("PUT", INSTALLATION_TRUST, Some("root"), Some(json!({})))
             .await;
-        assert_eq!(s, axum::http::StatusCode::OK);
+        assert_eq!(s, StatusCode::OK);
 
         // Чужая организация: своя — 403 (до проверки существования), чужой администратор — 404.
         let other = format!("/api/v1/orgs/{}/trust", env.other_tenant);
         let (s, _, _) = env.call("GET", &other, Some("org"), None).await;
-        assert_eq!(s, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(s, StatusCode::FORBIDDEN);
         let (s, _, _) = env.call("GET", &other, Some("other"), None).await;
-        assert_eq!(s, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(s, StatusCode::NOT_FOUND);
 
         // Оператор читает, но не меняет.
         let (s, _, _) = env.call("GET", &path, Some("operator"), None).await;
-        assert_eq!(s, axum::http::StatusCode::OK);
+        assert_eq!(s, StatusCode::OK);
         let (s, _, _) = env
             .call("PUT", &path, Some("operator"), Some(json!({})))
             .await;
-        assert_eq!(s, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(s, StatusCode::FORBIDDEN);
         let (s, _, _) = env.call("DELETE", &path, Some("operator"), None).await;
-        assert_eq!(s, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(s, StatusCode::FORBIDDEN);
 
         // Домен-партнёр из принятых доменов организации — 422.
         env.put_domain(TenantId::DEFAULT, "example.org").await;
         let body = json!({"partners": ["example.org"]});
         let (s, _, b) = env.call("PUT", &path, Some("org"), Some(body)).await;
-        assert_eq!(s, axum::http::StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
         assert!(
             b["detail"]
                 .as_str()
@@ -1303,17 +1303,17 @@ mod tests {
         // Другой домен организации — можно: соседняя организация — партнёр.
         let body = json!({"partners": ["neighbor.example"]});
         let (s, _, b) = env.call("PUT", &path, Some("org"), Some(body)).await;
-        assert_eq!(s, axum::http::StatusCode::OK, "{b}");
+        assert_eq!(s, StatusCode::OK, "{b}");
         assert_eq!(b["own"]["partners"], json!(["neighbor.example"]));
         // Неканоническая запись — 422.
         let body = json!({"partners": ["Neighbor.Example"]});
         let (s, _, _) = env.call("PUT", &path, Some("org"), Some(body)).await;
-        assert_eq!(s, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
 
         // Сброс организации — 200; повторный сброс — не ошибка.
         for _ in 0..2 {
             let (s, _, b) = env.call("DELETE", &path, Some("org"), None).await;
-            assert_eq!(s, axum::http::StatusCode::OK, "{b}");
+            assert_eq!(s, StatusCode::OK, "{b}");
         }
         let (_, _, b) = env.call("GET", &path, Some("org"), None).await;
         assert_eq!(b["own"], Value::Null);
@@ -1329,20 +1329,18 @@ mod tests {
         for (name, g) in [("а", g1), ("б", g2)] {
             env.group(TenantId::DEFAULT, name, g, account.account).await;
         }
-        let path1 = group_trust(&env, g1);
-        let path2 = group_trust(&env, g2);
+        let path1 = group_trust(g1);
+        let path2 = group_trust(g2);
 
         // Организация открывает занятость партнёру и MDN партнёру.
         let org = json!({"freebusy": {"partner": "free_busy"}, "mdn": {"partner": "on"}});
-        let (s, _, _) = env
-            .call("PUT", &org_trust(&env), Some("org"), Some(org))
-            .await;
-        assert_eq!(s, axum::http::StatusCode::OK);
+        let (s, _, _) = env.call("PUT", &org_trust(), Some("org"), Some(org)).await;
+        assert_eq!(s, StatusCode::OK);
 
         // Группа шире организации — 422 (потолок группы — действующее значение организации).
         let wide = json!({"mdn": {"partner": "on"}, "freebusy": {"partner": "limited"}});
         let (s, _, b) = env.call("PUT", &path1, Some("org"), Some(wide)).await;
-        assert_eq!(s, axum::http::StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
         assert_eq!(b["errors"][0]["function"], json!("freebusy"));
         assert_eq!(
             b["errors"][0]["level"],
@@ -1358,7 +1356,7 @@ mod tests {
                 Some(json!({"freebusy": {"partner": "none"}})),
             )
             .await;
-        assert_eq!(s, axum::http::StatusCode::OK);
+        assert_eq!(s, StatusCode::OK);
         let (s, _, _) = env
             .call(
                 "PUT",
@@ -1367,14 +1365,14 @@ mod tests {
                 Some(json!({"mdn": {"partner": "off"}})),
             )
             .await;
-        assert_eq!(s, axum::http::StatusCode::OK);
+        assert_eq!(s, StatusCode::OK);
         let account_path = format!(
             "/api/v1/orgs/{}/accounts/{}/trust",
             TenantId::DEFAULT,
             account.account
         );
         let (s, _, b) = env.call("GET", &account_path, Some("operator"), None).await;
-        assert_eq!(s, axum::http::StatusCode::OK, "{b}");
+        assert_eq!(s, StatusCode::OK, "{b}");
         assert_eq!(b["own"], Value::Null);
         assert_eq!(
             b["effective"]["matrix"]["freebusy"]["partner"],
@@ -1399,14 +1397,14 @@ mod tests {
                 Some(json!({"partners": ["x.example"]})),
             )
             .await;
-        assert_eq!(s, axum::http::StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
 
         // Несуществующая группа — 404; сброс — 200.
-        let missing = group_trust(&env, GroupId::new());
+        let missing = group_trust(GroupId::new());
         let (s, _, _) = env.call("GET", &missing, Some("org"), None).await;
-        assert_eq!(s, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(s, StatusCode::NOT_FOUND);
         let (s, _, _) = env.call("DELETE", &path2, Some("org"), None).await;
-        assert_eq!(s, axum::http::StatusCode::OK);
+        assert_eq!(s, StatusCode::OK);
         let (_, _, b) = env.call("GET", &account_path, Some("org"), None).await;
         assert_eq!(b["effective"]["matrix"]["mdn"]["partner"], json!("on"));
 
