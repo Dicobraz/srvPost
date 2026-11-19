@@ -46,6 +46,7 @@ use tp_contracts::queue::QueueStore;
 use tp_contracts::retention::{Quota, TrashStore};
 use tp_contracts::senders::SenderLists;
 use tp_contracts::transport::TransportStore;
+use tp_contracts::trust::TrustStore;
 use tp_contracts::{Error, Result, TenantId};
 use utoipa::openapi::path::ParameterIn;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
@@ -118,8 +119,10 @@ impl AdminRole {
         ]
         .contains(&route);
         let cluster = route.starts_with(crate::transport::CLUSTER_PREFIX);
-        // Брендинг установки — уровень инсталляции (ADM-48): администратору организации и оператору нельзя.
-        let installation = route.starts_with(crate::branding::BRANDING_PREFIX);
+        // Брендинг установки и политика доверия установки — уровень инсталляции (ADM-48, ADM-49): администратору
+        // организации и оператору нельзя.
+        let installation = route.starts_with(crate::branding::BRANDING_PREFIX)
+            || route.starts_with(crate::trust::INSTALLATION_TRUST);
         match self {
             AdminRole::InstallationAdmin => true,
             AdminRole::OrganizationAdmin => own_scope && !cluster && !installation,
@@ -391,6 +394,8 @@ pub struct Admin {
     pub(crate) local: Option<Arc<Local>>,
     /// Правила Sieve и автоответ; `None` — не подключено (маршруты отвечают 503).
     pub(crate) sieve: Option<crate::sieve::Sieve>,
+    /// Проверка скрипта организации профилем «админский» (SIEVE-14); подключается к [`Admin::with_sieve`].
+    pub(crate) org_script_check: Option<Arc<dyn crate::sieve::OrgScriptCheck>>,
     /// Объекты писем очереди модерации; `None` — не подключено (тема письма очереди — `null`).
     pub(crate) held_blobs: Option<Arc<dyn BlobStore>>,
     /// Общий доступ, представители, ресурсы; `None` — не подключено (маршруты отвечают 503).
@@ -399,6 +404,8 @@ pub struct Admin {
     pub(crate) queue: Option<Arc<dyn QueueStore>>,
     /// Брендинг установки и организаций ([`crate::branding`]); `None` — не подключено (маршруты — 503).
     pub(crate) branding: Option<crate::branding::BrandingStores>,
+    /// Политика доверия ([`crate::trust`]); `None` — не подключено (маршруты — 503).
+    pub(crate) trust: Option<Arc<dyn TrustStore>>,
     /// Организации инсталляции: без модуля «Мультитенантность» — только организация по умолчанию (решение 10).
     /// Маршрут `/api/v1/orgs/{org}/...` другой организации — 404 ([`guard`]).
     pub(crate) organizations: BTreeSet<TenantId>,
@@ -416,6 +423,7 @@ impl fmt::Debug for Admin {
             .field("sharing", &self.sharing.is_some())
             .field("queue", &self.queue.is_some())
             .field("branding", &self.branding.is_some())
+            .field("trust", &self.trust.is_some())
             .field("organizations", &self.organizations)
             .finish()
     }
@@ -450,10 +458,12 @@ impl Admin {
             transport: None,
             local: None,
             sieve: None,
+            org_script_check: None,
             held_blobs: None,
             sharing: None,
             queue: None,
             branding: None,
+            trust: None,
             organizations: BTreeSet::from([TenantId::DEFAULT]),
         })
     }
@@ -505,6 +515,7 @@ impl Admin {
         api = crate::resources::routes(api);
         api = crate::queue::routes(api);
         api = crate::branding::routes(api);
+        api = crate::trust::routes(api);
         for m in &self.d.modules {
             let prefix = m.prefix().to_owned();
             let handler = {
@@ -866,6 +877,7 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     api.merge(crate::resources::Doc::openapi());
     api.merge(crate::queue::Doc::openapi());
     api.merge(crate::branding::Doc::openapi());
+    api.merge(crate::trust::Doc::openapi());
     CommonErrors.modify(&mut api);
     api
 }

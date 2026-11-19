@@ -15,18 +15,20 @@ use tp_contracts::admin_audit::AdminAuditRecord;
 use tp_contracts::auth::Principal;
 use tp_contracts::ext::AdminRoutes;
 use tp_contracts::ext::DecisionHooks;
+use tp_contracts::groups::{DistributionGroup, GroupMember, SenderRestriction};
 use tp_contracts::mailstore::{Delivery, IngestRequest, MailStore};
 use tp_contracts::meta::{
     Account, AccountKind, AccountScope, AccountState, AccountStore, AccountUpsert, AddressTarget,
     DisabledAccount, ExistingContent, Flags, QuotaUsage, SpecialUse,
 };
-use tp_contracts::{AccountId, DomainId, MessageId, Result, TenantId};
+use tp_contracts::transport::{AcceptedDomain, DomainKind, TransportStore};
+use tp_contracts::{AccountId, DomainId, GroupId, MessageId, Result, TenantId};
 use tp_testkit::{
     Clock, FakeAuthenticator, MemAppPasswords, MemAuditLog, MemBlobIndex, MemBlobStore,
     MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemLocalAdminTokens, MemMetadata,
     MemPolicies, MemQueue, MemQuota, MemSieve, MemTransport, MemTrash, SystemClock,
 };
-use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate};
+use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate, MemTrust};
 
 use crate::server::{Admin, AdminConfig, AdminRole, Deps, RoleBinding};
 use crate::sharing::SharingStores;
@@ -339,6 +341,8 @@ pub struct Env {
     pub branding: MemBranding,
     /// Байты знаков брендинга.
     pub brand_blobs: MemBlobStore,
+    /// Политика доверия (`Admin::with_trust`).
+    pub trust: MemTrust,
     pub admin: Arc<Admin>,
     pub router: Router,
     pub other_tenant: TenantId,
@@ -354,6 +358,44 @@ pub fn check_script(text: &str) -> Vec<ScriptError> {
                 column: line[..at].chars().count() as u32 + 1,
                 message: "неизвестная команда".into(),
             });
+        }
+    }
+    errors
+}
+
+/// Профиль «админский» тестов (вместо профиля SIEVE-14 узла): `vacation` запрещён; `redirect` на адрес, чей
+/// домен не из `internal` (принятые домены организации) и не из `forward` (домены автопересылки) — ошибка.
+pub fn check_org_script(text: &str, internal: &[String], forward: &[String]) -> Vec<ScriptError> {
+    let mut errors = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let column_of = |needle: &str| {
+            line.find(needle)
+                .map(|at| line[..at].chars().count() as u32 + 1)
+        };
+        if let Some(column) = column_of("vacation") {
+            errors.push(ScriptError {
+                line: i as u32 + 1,
+                column,
+                message: "vacation в скрипте организации запрещён".into(),
+            });
+        }
+        if let Some(column) = column_of("redirect") {
+            let address = line
+                .split('"')
+                .nth(1)
+                .unwrap_or_default()
+                .rsplit_once('@')
+                .map(|(_, d)| d.to_owned())
+                .unwrap_or_default();
+            if !internal.contains(&address) && !forward.contains(&address) {
+                errors.push(ScriptError {
+                    line: i as u32 + 1,
+                    column,
+                    message: format!(
+                        "redirect на внешний адрес {address:?}: автопересылка туда не открыта"
+                    ),
+                });
+            }
         }
     }
     errors
@@ -497,10 +539,14 @@ impl Env {
         } else {
             admin
         };
+        // Политика доверия: группы — членство MemGroups (уровни групп в `effective_for`).
+        let trust = MemTrust::new().with_groups(Arc::new(stores.groups.clone()));
+        let admin = admin.with_trust(Arc::new(trust.clone()));
         let sieve = MemSieve::new();
         let held_blobs = MemBlobStore::new(Arc::new(SystemClock));
         let mut admin = admin
             .with_sieve(Arc::new(sieve.clone()), check_script)
+            .with_org_script_check(check_org_script)
             .with_held_blobs(Arc::new(held_blobs.clone()));
         // Вторая организация инсталляции — для проверок области ролей.
         admin.organizations.insert(other_tenant);
@@ -546,6 +592,7 @@ impl Env {
             queue,
             branding,
             brand_blobs,
+            trust,
             router: admin.clone().router(),
             admin,
             other_tenant,
@@ -581,6 +628,41 @@ impl Env {
             tenant: acc.tenant,
             account: acc.id,
         }
+    }
+
+    /// Группа рассылки с участником `account`.
+    pub async fn group(&self, tenant: TenantId, name: &str, id: GroupId, account: AccountId) {
+        self.groups
+            .put(DistributionGroup {
+                id,
+                tenant,
+                name: name.to_owned(),
+                address: Some(format!("{name}@groups.example")),
+                external_id: None,
+                members: vec![GroupMember::Account(account)],
+                senders: SenderRestriction::default(),
+                moderators: Vec::new(),
+                hidden_from_gal: false,
+            })
+            .await
+            .expect("group");
+    }
+
+    /// Принятый домен организации (транспорт).
+    pub async fn put_domain(&self, tenant: TenantId, name: &str) {
+        let version = self.transport.cluster().await.expect("cluster").version;
+        self.transport
+            .put_domain(
+                version,
+                &AcceptedDomain {
+                    id: DomainId::new(),
+                    tenant,
+                    name: name.to_owned(),
+                    kind: DomainKind::Authoritative,
+                },
+            )
+            .await
+            .expect("domain");
     }
 
     /// Доставляет простое письмо во «Входящие».

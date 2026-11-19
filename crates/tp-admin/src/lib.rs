@@ -18,6 +18,7 @@
 //!   коллекции;
 //! - [`resources`] — ресурсы (переговорные, оборудование) и правила бронирования;
 //! - [`branding`] — брендинг заказчика: уровни установки и организации, знак, открытый маршрут для экрана входа;
+//! - [`trust`] — политика доверия «кто — кому — что»: уровни установка → организация → группа, домены-партнёры;
 //! - [`sieve`] — правила Sieve и автоответ учётной записи, скрипт организации: проверка текста до записи;
 //! - `extract` — разбор тела, строки и пути запроса (`Json`, `Query`, `Path`): отказ — 400 problem+json с полем;
 //! - `cors` — CORS `/api/v1/*` для консоли на отдельном веб-сервере (`admin.console.cors_origins`);
@@ -48,6 +49,7 @@ pub mod sieve;
 #[cfg(test)]
 mod testenv;
 pub mod transport;
+pub mod trust;
 
 pub use audit::{AuditEntry, AuditPage, AuditRecord};
 pub use console::ConsoleConfig;
@@ -61,4 +63,5 @@ pub use init::{
 };
 pub use server::{Admin, AdminConfig, AdminRole, Deps, RoleBinding};
 pub use sharing::SharingStores;
-pub use sieve::{ScriptCheck, ScriptError};
+pub use sieve::{OrgScriptCheck, ScriptCheck, ScriptError};
+pub use trust::{TrustBody, TrustProblem, TrustView};
