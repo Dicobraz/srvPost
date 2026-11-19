@@ -160,7 +160,7 @@ async fn thread_exists_tx(
     scope: AccountScope,
     thread: ThreadId,
 ) -> Result<bool> {
-    Ok(sqlx::query_scalar(
+    let found: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM threads
          WHERE tenant_id = $1 AND account_id = $2 AND thread_id = $3)",
     )
@@ -169,7 +169,8 @@ async fn thread_exists_tx(
     .bind(thread.as_uuid())
     .fetch_one(&mut *tx)
     .await
-    .map_err(db_err)?)
+    .map_err(db_err)?;
+    Ok(found)
 }
 
 /// Память беседы (`{}` — пустая память).
@@ -340,7 +341,7 @@ async fn bind_unthreaded_in_tx(
     }
     let mut bound: usize = 0;
     for (key, messages) in chains {
-        let thread = match earliest_thread_tx(tx, scope, &[key.clone()]).await? {
+        let thread = match earliest_thread_tx(tx, scope, std::slice::from_ref(&key)).await? {
             Some(thread) => thread,
             None => {
                 let thread = ThreadId::new();
