@@ -494,10 +494,22 @@ impl JournalRecords {
     /// организации. Нет — `NotFound`.
     async fn find_record_path(&self, tenant: TenantId, id: JournalId) -> Result<String> {
         let prefix = format!("{}/t/{}/", self.cfg.prefix, tenant);
+        self.find_under(&prefix, id).await
+    }
+
+    /// Поиск объекта записи по всему журналу (организация неизвестна): идентификатор записи —
+    /// UUID, глобально уникален. Нет — `NotFound`.
+    async fn find_record_path_any(&self, id: JournalId) -> Result<String> {
+        let prefix = format!("{}/t/", self.cfg.prefix);
+        self.find_under(&prefix, id).await
+    }
+
+    /// Объекты под `prefix`, чей путь заканчивается именем записи `id`.
+    async fn find_under(&self, prefix: &str, id: JournalId) -> Result<String> {
         let suffix = format!("/{id}");
         let mut paths: Vec<String> = self
             .store
-            .list(&prefix, far_future())
+            .list(prefix, far_future())
             .map_ok(|entry| entry.path)
             .try_collect()
             .await?;
@@ -563,12 +575,16 @@ impl JournalRecords {
 
     /// Тест набора `suite::journal` (и doctor): подменяет конверт записи `id` в хранилище без
     /// пересчёта цепочки — выявляется [`Self::verify`] и [`JournalStore::verify_chain`].
-    pub async fn tamper(&self, tenant: TenantId, id: JournalId) -> Result<()> {
-        let mut stored = self.stored(tenant, id).await?;
+    /// Организация не нужна: идентификатор записи глобально уникален.
+    pub async fn tamper(&self, id: JournalId) -> Result<()> {
+        let path = self.find_record_path_any(id).await?;
+        let mut stored = self.read_record(&path).await?;
+        if stored.id != id {
+            return Err(Error::NotFound);
+        }
         stored.record.sender = "tampered@example.invalid".to_owned();
         let body = serde_json::to_vec(&stored)
             .map_err(|e| Error::internal(format!("journal: encode record: {e}")))?;
-        let path = self.find_record_path(tenant, id).await?;
         self.store.put_raw(&path, Bytes::from(body)).await
     }
 
@@ -875,11 +891,9 @@ mod tests {
     }
 
     /// Замыкание `corrupt` набора `suite::journal`: подмена записи в отдельном потоке со своим
-    /// маленьким рантаймом (замыкание синхронное, из задачи его не вызвать).
-    fn corrupt_hook(
-        journal: Arc<JournalRecords>,
-        tenant: TenantId,
-    ) -> impl Fn(JournalId) + Send + Sync {
+    /// маленьким рантаймом (замыкание синхронное, из задачи его не вызвать). Организация записи
+    /// неизвестна вызывающему — подмена ищет запись по глобально уникальному идентификатору.
+    fn corrupt_hook(journal: Arc<JournalRecords>) -> impl Fn(JournalId) + Send + Sync {
         move |id: JournalId| {
             let journal = journal.clone();
             std::thread::spawn(move || {
@@ -887,8 +901,7 @@ mod tests {
                     .enable_all()
                     .build()
                     .expect("journal tamper runtime");
-                rt.block_on(journal.tamper(tenant, id))
-                    .expect("journal tamper");
+                rt.block_on(journal.tamper(id)).expect("journal tamper");
             })
             .join()
             .expect("journal tamper thread");
@@ -901,8 +914,7 @@ mod tests {
         let backend = backend_local(dir.path()).await;
         let (_, now) = test_clock(OffsetDateTime::UNIX_EPOCH);
         let journal = Arc::new(JournalRecords::new(backend, cfg(), now).expect("journal"));
-        let tenant = TenantId::new();
-        let corrupt = corrupt_hook(journal.clone(), tenant);
+        let corrupt = corrupt_hook(journal.clone());
         let drop_idx = {
             let journal = journal.clone();
             move || journal.drop_index()
@@ -914,8 +926,7 @@ mod tests {
     async fn suite_journal_on_s3_memory_backend() {
         let (_, now) = test_clock(OffsetDateTime::UNIX_EPOCH);
         let journal = Arc::new(JournalRecords::new(backend_memory(), cfg(), now).expect("journal"));
-        let tenant = TenantId::new();
-        let corrupt = corrupt_hook(journal.clone(), tenant);
+        let corrupt = corrupt_hook(journal.clone());
         let drop_idx = {
             let journal = journal.clone();
             move || journal.drop_index()
@@ -1156,7 +1167,7 @@ mod tests {
         }
 
         // Защита от изменений локального файла — цепочка: перезапись записи ловится проверкой.
-        journal.tamper(tenant, id).await.expect("tamper");
+        journal.tamper(id).await.expect("tamper");
         let report = journal.verify(tenant).await.expect("verify");
         assert!(!report.ok, "подмена локального объекта ловится цепью");
         // (от администратора ОС локальный диск не защищает — предупреждение doctor, APP-82;
