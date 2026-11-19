@@ -109,7 +109,8 @@ use tp_contracts::transport::{
     FlowOutcome, FlowVerdict, MailFlow,
 };
 use tp_contracts::trust::{
-    GroupPost, PeerKind, Toggle, TrustLevel, TrustMatrix, TrustStore, effective,
+    CellValue, GroupPost, PeerContext, PeerKind, Toggle, TrustFunction, TrustLevel, TrustMatrix,
+    TrustStore, effective,
 };
 use tp_contracts::{AccountId, Error, MailboxId, QueueId, Result, TenantId};
 
@@ -2896,8 +2897,9 @@ impl Delivery {
                 message: raw.clone(),
                 mailboxes: self.deps.mailboxes.list(scope).await?,
                 // Тип абонента — от пути письма (CTR-93, SMTP-50): заголовкам письма не доверяем
-                // (RFC 8601 §5, RFC 5183); матрица — действующая для получателя.
-                peer: ctx.peer,
+                // (RFC 8601 §5, RFC 5183); матрица — действующая для получателя. Признак «ответ на
+                // наше письмо» ставит SMTP-51 по записи об отправленном (CTR-94); до неё — false.
+                peer: PeerContext::new(ctx.peer),
                 matrix: self.matrix_for(scope).await,
             };
             let mut notes = Vec::new();
@@ -3007,7 +3009,14 @@ impl Delivery {
                 Some(_) if ctx.junk.contains(&d.account) => {
                     notes.push("auto-reply skipped: junk".into())
                 }
-                Some(_) if input.matrix.auto_reply.get(ctx.peer) == Toggle::Off => {
+                // Клетка auto_reply для типа абонента; ReplyOnly решает признак ответа на наше
+                // письмо (CTR-94, решение 125 а) — его ставит SMTP-51, до неё — нет ответа.
+                Some(_)
+                    if input
+                        .matrix
+                        .effective(TrustFunction::AutoReply, &PeerContext::new(ctx.peer))
+                        != CellValue::Toggle(Toggle::On) =>
+                {
                     notes.push("auto-reply skipped: policy".into())
                 }
                 Some(_) if ctx.group.contains(&d.account) => {
