@@ -99,8 +99,11 @@ test("раздел «Брендинг»: ошибка контраста 422 —
   expect(await within(form).findByText(/Действует: Сервер/)).toBeTruthy();
   fireEvent.click(within(form).getByRole("button", { name: "Сохранить брендинг" }));
   // Ошибка — у поля роли (вкладка открывается на теме первой ошибки) с текстом detail сервера.
-  const shown = await screen.findAllByText(detail);
-  expect(shown.some((e) => e.closest(".ant-form-item-explain-error"))).toBeTruthy();
+  await waitFor(() => {
+    const field = [...document.querySelectorAll(".ant-form-item-explain-error")].find((e) => e.textContent === detail);
+    expect(field).toBeTruthy();
+    expect(field?.closest("tr")?.textContent).toContain("sel"); // у поля роли
+  });
 });
 
 test("оператор: раздел «Брендинг» только для чтения — вкладки установки и кнопки изменения скрыты", async () => {
