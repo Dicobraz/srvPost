@@ -39,6 +39,7 @@ pub mod pool;
 pub mod queue;
 pub mod replica;
 pub mod retention;
+pub mod risk;
 pub mod schema;
 pub mod sent;
 pub mod shards;
@@ -75,6 +76,7 @@ use crate::mailbox_audit::MailboxAuditConfig;
 use crate::pool::{DbPool, TxFuture};
 use crate::replica::Replica;
 use crate::retention::RetentionConfig;
+use crate::risk::RiskConfig;
 use crate::shards::{ReadIntent, ShardId, ShardResolver};
 use crate::sieve::SieveConfig;
 use crate::signals::SignalsConfig;
@@ -102,6 +104,8 @@ use crate::writers::{IngestConfig, Writers};
 ///     tombstone_ttl: 90d
 ///   sieve:
 ///     max_scripts: 16
+///   risk:
+///     package_keep: 5
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -138,6 +142,8 @@ pub struct MetaConfig {
     pub mailbox_audit: MailboxAuditConfig,
     /// Писатели приёма: сериализация записей писем учётной записи ([`writers`], PERF-09).
     pub ingest: IngestConfig,
+    /// Справочник аномалий и TI ([`risk`]): хранение пакетов поставщика.
+    pub risk: RiskConfig,
 }
 
 impl MetaConfig {
@@ -162,6 +168,7 @@ impl Default for MetaConfig {
             submissions: SubmissionsConfig::default(),
             mailbox_audit: MailboxAuditConfig::default(),
             ingest: IngestConfig::default(),
+            risk: RiskConfig::default(),
         }
     }
 }
@@ -355,7 +362,10 @@ impl PgMeta {
     ///   `Membership::heartbeat` (`upsert_node`), `set_policy`, `set_user_trash_purge`, `ContactStore::put_contact`,
     ///   `OrgStore::put_org_unit`, `set_org`, `DynamicGroupStore::put_dynamic` (замена целиком),
     ///   `BrandingStore::set_branding` (набор уровня заменяется целиком), `TrustStore::set_policy`
-    ///   (уровень и доменные списки заменяются целиком), запись об отправленном (`SentLog::record`; метка
+    ///   (уровень и доменные списки заменяются целиком), `RiskStore::set_policy` (уровень заменяется
+    ///   целиком), `put_source` (источник заменяется целиком), `put_list_version` (`ON CONFLICT DO
+    ///   NOTHING`, повтор — не ошибка), `rollback` (повтор переключает на ту же версию пакета),
+    ///   запись об отправленном (`SentLog::record`; метка
     ///   уникальна, повтор с тем же содержимым — не ошибка, META-86), удержание и действие по беседе
     ///   (`ThreadStore::set_hold`, `set_rule` — замена по значению, META-86);
     /// - `set_*` по значению: `MailboxStore::set_subscribed` (повтор лишь добавляет запись `updated` в
@@ -367,7 +377,8 @@ impl PgMeta {
     /// - удаление по ключу без возврата удалённого: `AbuseBlocks::unblock`, `Membership::leave`,
     ///   `DeliveryLog::purge` (секции суток), `purge_events` (число удалённых при повторе — только
     ///   оставшиеся), `SentLog::purge_before` (число удалённых при повторе — только оставшиеся, META-86),
-    ///   `TrustStore::reset_policy` (удаление уровня без возврата удалённого);
+    ///   `TrustStore::reset_policy` (удаление уровня без возврата удалённого), `RiskStore::reset_policy`,
+    ///   `delete_source` (удаление по ключу без возврата удалённого);
     ///
     /// Не повторяются: CAS по версии (`transport`, `put_manifest`) и номеру захвата (лизы, очередь) —
     /// повтор применённой записи отвечает `Conflict`; счётчики ссылок BLOB, UID и `ModSeq` писем,
