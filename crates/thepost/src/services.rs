@@ -2644,7 +2644,9 @@ mod tests {
         // Два узла роли admin над одной БД: у каждого свой Admin API и локальный вход (как в `serve`),
         // хранилище сессий — общее `PgMeta` (`Services::admin`).
         let node_a = Arc::new(crate::local_admin::attach(
-            services.admin(&ext, admin_cfg.clone(), &smtp).expect("admin a"),
+            services
+                .admin(&ext, admin_cfg.clone(), &smtp)
+                .expect("admin a"),
             &services,
         ));
         let node_b = Arc::new(crate::local_admin::attach(
@@ -2698,9 +2700,10 @@ mod tests {
                     .send()
                     .await
                     .expect("whoami");
+                let status = r.status();
                 let body: serde_json::Value =
                     serde_json::from_slice(&r.bytes().await.expect("body")).expect("json");
-                (r.status(), body)
+                (status, body)
             }
         };
         let (s, b) = whoami(base_b.clone()).await;
@@ -2736,7 +2739,11 @@ mod tests {
             itip: None,
         };
         let done = purge.step().await;
-        assert_eq!(done.admin_sessions.expect("шаг сессий"), 1, "истёкшая сессия удалена: {done:?}");
+        assert_eq!(
+            done.admin_sessions.expect("шаг сессий"),
+            1,
+            "истёкшая сессия удалена"
+        );
         let mut tx = tp_meta::schema::begin(&pool, TenantId::DEFAULT)
             .await
             .expect("begin");
