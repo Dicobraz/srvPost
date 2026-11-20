@@ -471,7 +471,11 @@ async fn h2_and_one_connection_for_parallel_calls() {
     for call in calls {
         call.await.expect("join").expect("call");
     }
-    assert_eq!(handshakes(&b), (1, 1), "параллельные вызовы — одно соединение");
+    assert_eq!(
+        handshakes(&b),
+        (1, 1),
+        "параллельные вызовы — одно соединение"
+    );
 }
 
 /// Недоступный узел маршрута — следующий; все недоступны — `Unavailable`; чужой УЦ и подмена узла — отказ.

@@ -28,9 +28,9 @@ use std::future::Future;
 use std::io;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -844,6 +844,8 @@ async fn accept_loop(
             &inner.tls.read().unwrap_or_else(PoisonError::into_inner),
         ));
         let tx = tx.clone();
+        #[cfg(test)]
+        let inner = Arc::clone(&inner);
         tokio::spawn(async move {
             match handshake(acceptor, tcp, handshake_timeout).await {
                 Ok((stream, peer)) => {
