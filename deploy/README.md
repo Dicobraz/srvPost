@@ -2,7 +2,7 @@
 
 | Путь | Содержание |
 |---|---|
-| `docker/Dockerfile` | OCI-образ: веб-консоль — стадия `node:<ver>-bookworm-slim`, сборка на `rust:<ver>-bookworm` с фичами `gssapi` и `console`, запуск на `distroless/cc-debian12:nonroot` |
+| `docker/Dockerfile` | OCI-образ: веб-консоль и веб-клиент `/mail/` — стадии `node:<ver>-bookworm-slim`, сборка на `rust:<ver>-bookworm` с фичами `gssapi`, `console` и `webmail`, запуск на `distroless/cc-debian12:nonroot` |
 | `compose/dev.yml` | Зависимости: только TLS (профиль `tls`, по умолчанию) и открытые для тестов (`dev`); эталон SMB (`smb`) |
 | `compose/tls/` | Генерация самоподписанного CA (`gen-certs.sh`), `pg_hba.conf` (только `hostssl`) |
 | `compose/openbao/` | OpenBao в compose: конфигурация (Raft, TLS, seal `static`), запуск, начальная настройка (`init.sh`) |
@@ -22,6 +22,7 @@
 3. Rust через rustup (тулчейн подхватится из `rust-toolchain.toml`), `cargo install cargo-nextest --locked`.
    Пакеты для сборки: `build-essential pkg-config`; с фичей `gssapi` (как выпуск и образ) — ещё `libkrb5-dev libclang-dev`;
    с веб-консолью (фича `console`) — ещё Node 26: `npm ci && npm run build` в `console/` до `cargo build`;
+   с веб-клиентом (фича `webmail`, как выпуск и образ) — так же в `web/`;
    клиенты для проверок (необязательно): `postgresql-client`, `awscli`.
 4. `git clone https://github.com/Dicobraz/srvPost && cd srvPost`.
 
@@ -126,7 +127,8 @@ docker compose -f deploy/compose/dev.yml --profile smb run --rm thepost doctor  
 `TP_SUBMISSIONS_PORT`, `TP_SUBMISSION_PORT`, `TP_IMAP_PORT`, `TP_IMAPS_PORT`, `TP_MANAGESIEVE_PORT`, `TP_HTTP_PORT`,
 `TP_HTTPS_PORT`.
 Отдельная сборка образа: `docker build -f deploy/docker/Dockerfile -t thepost .` (`--build-arg RUST_VERSION=…`;
-без веб-консоли и Node — `--build-arg CONSOLE=0`). Готовый образ выпуска вместо сборки — `THEPOST_IMAGE`
+без веб-консоли — `--build-arg CONSOLE=0`; web/dist веб-клиента образ собирает всегда, как и выпуск, — Node нужен
+и при `CONSOLE=0`). Готовый образ выпуска вместо сборки — `THEPOST_IMAGE`
 (образ в ghcr.io закрытый: сначала `docker login ghcr.io -u <логин GitHub>`, токен `read:packages`):
 ```bash
 THEPOST_IMAGE=ghcr.io/dicobraz421/thepost:<версия> docker compose -f deploy/compose/dev.yml --profile smb up -d
@@ -408,6 +410,21 @@ sha256sum -c thepost-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256 && tar xzf th
   предыдущий релиз работает, пока идёт окно совместимости (правило расширение/сжатие: старый формат удаляется
   не в том же релизе, где добавлен новый, а в следующем);
 - даунгрейд после сжатия схемы — только восстановление из копии (PITR pgBackRest, `restore.yml` — выше).
+
+## Веб-клиент (/mail/, SRS 1.3)
+Веб-клиент вшит в бинарный файл выпуска и в образ; архив `thepost-webmail-<тег>.tar.gz` — те же файлы для раздачи
+отдельным веб-сервером, как архив веб-консоли (подпись cosign и `.sha256` — рядом, см. «Проверка подписи» выпуска).
+Модуль opt-in (SRS 1.3, осознанное отличие от веб-консоли): маршруты `/mail/*` на слушателе jmap по умолчанию
+выключены — включаются секцией `modules.webmail` узла (пресеты `config/all.yaml` и `config/mailbox.yaml` —
+закомментированный пример; Ansible — `thepost_config_extra`, Helm — `config.modules` в своих значениях):
+```yaml
+modules:
+  webmail:
+    enabled: true
+    # connect_src: ["https://idp.example.ru"]   # поставщик OIDC вне узла, https://узел[:порт]
+```
+Секции нет или `enabled: false` — маршрутов `/mail/*` нет (404); `enabled: true` в сборке без фичи `webmail` —
+ошибка конфигурации. Клиент обращается к JMAP того же узла (same-origin, за одним портом 443).
 
 ## Малый Enterprise (Ansible)
 Два узла `thepost` (`roles: [mailbox]`; Rspamd и шлюз S3 SeaweedFS на каждом) и три ВМ данных: на двух — PostgreSQL
