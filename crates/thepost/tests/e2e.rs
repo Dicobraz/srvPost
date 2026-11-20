@@ -1244,20 +1244,20 @@ async fn exchange_parity_wave() {
     let (_, secret) = apps.issue(scope, "e2e").await.expect("issue");
     let app_password = secret.expose().to_owned();
     let (_, bob_secret) = apps.issue(bob_scope, "e2e").await.expect("issue bob");
-    let basic = |password: &str| {
+    let basic = |user: &str, password: &str| {
         format!(
             "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode(format!("{login}:{password}"))
+            base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
         )
     };
     let jmap = Jmap {
         addr: addr(&running, "jmap"),
-        auth: basic(&app_password),
+        auth: basic(&login, &app_password),
         account: account.id.to_string(),
     };
     let bob_jmap = Jmap {
         addr: jmap.addr,
-        auth: basic(bob_secret.expose()),
+        auth: basic(&bob_login, bob_secret.expose()),
         account: bob.id.to_string(),
     };
     let identity = jmap
