@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tp_contracts::TenantId;
 use tp_contracts::addressbook::{ContactStore, MailContact};
-use tp_contracts::auth::{DirAccount, DirContact, DirGroup, DirOrg};
+use tp_contracts::auth::{DirAccount, DirContact, DirGroup, DirOrg, DirUnit};
 use tp_contracts::dav::{CollectionKind, DavStore};
 use tp_contracts::groups::{DistributionGroup, GroupStore, SenderRestriction};
 use tp_contracts::ids::{ContactId, GroupId};
@@ -539,6 +539,102 @@ async fn contacts() {
         .send("GET", &format!("{}c-partner.vcf", gal()), &[], "")
         .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
+}
+
+/// DAV-22, DAV-21: оргструктура каталога в карточке учётной записи (`ORG` — путь подразделения от корня,
+/// `TITLE`, `RELATED;TYPE=x-manager` — руководитель) и ссылка занятости `FBURL` из атрибута каталога
+/// `calFBURL`; снимок карточки. Цикл в дереве подразделений — карточка без `ORG`.
+#[tokio::test]
+async fn org_structure() {
+    let env = Env::new();
+    let t = env.scope.tenant;
+    env.dir.set_units(
+        t,
+        vec![
+            DirUnit {
+                external_id: "u-company".to_owned(),
+                name: "Компания".to_owned(),
+                parent: None,
+            },
+            DirUnit {
+                external_id: "u-account".to_owned(),
+                name: "Бухгалтерия".to_owned(),
+                parent: Some("u-company".to_owned()),
+            },
+            DirUnit {
+                external_id: "u-it".to_owned(),
+                name: "ИТ".to_owned(),
+                parent: Some("u-it".to_owned()),
+            },
+        ],
+    );
+    let mut ivan = account("u-ivan", "Иван Петров", &["ivan@example.org"], true);
+    ivan.org = DirOrg {
+        department: Some("u-account".to_owned()),
+        title: Some("Главный бухгалтер".to_owned()),
+        manager: Some("u-boss".to_owned()),
+        seniority: None,
+    };
+    ivan.attributes = BTreeMap::from([
+        ("telephoneNumber".to_owned(), "+7 495 123-45-67".to_owned()),
+        (
+            "calFBURL".to_owned(),
+            "https://mail.example.org/dav/freebusy/cal-abc.vfb".to_owned(),
+        ),
+    ]);
+    env.dir.upsert_account(t, ivan);
+    let mut boss = account("u-boss", "Ольга Директорова", &["boss@example.org"], true);
+    boss.org.department = Some("u-company".to_owned());
+    env.dir.upsert_account(t, boss);
+    let mut petr = account("u-petr", "Пётр Сидоров", &["petr@example.org"], true);
+    petr.org.department = Some("u-it".to_owned());
+    petr.org.title = Some("Инженер".to_owned());
+    env.dir.upsert_account(t, petr);
+    env.sync_gal().await;
+
+    // Снимок карточки: путь подразделения, должность, руководитель, ссылка занятости.
+    let r = env
+        .send("GET", &format!("{}u-ivan.vcf", gal()), &[], "")
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    insta::assert_snapshot!("org_card", r.body.replace("\r\n", "\n"));
+
+    // Корневое подразделение — одна компонента `ORG`; руководитель без должности и `RELATED`.
+    let r = env
+        .send("GET", &format!("{}u-boss.vcf", gal()), &[], "")
+        .await;
+    assert!(r.body.contains("ORG;CHARSET=UTF-8:Компания"), "{}", r.body);
+    assert!(!r.body.contains("TITLE"), "{}", r.body);
+    assert!(!r.body.contains("RELATED"), "{}", r.body);
+
+    // Цикл в дереве (ИТ ссылается на себя) — пути нет, карточка без `ORG`, должность остаётся.
+    let r = env
+        .send("GET", &format!("{}u-petr.vcf", gal()), &[], "")
+        .await;
+    assert!(!r.body.contains("ORG"), "{}", r.body);
+    assert!(r.body.contains("TITLE;CHARSET=UTF-8:Инженер"), "{}", r.body);
+
+    // Изменение подразделения — новая версия карточки.
+    let first = env
+        .send("GET", &format!("{}u-ivan.vcf", gal()), &[], "")
+        .await
+        .header("etag")
+        .expect("ETag")
+        .to_owned();
+    env.dir.set_units(
+        t,
+        vec![DirUnit {
+            external_id: "u-account".to_owned(),
+            name: "Финансы".to_owned(),
+            parent: None,
+        }],
+    );
+    env.sync_gal().await;
+    let r = env
+        .send("GET", &format!("{}u-ivan.vcf", gal()), &[], "")
+        .await;
+    assert!(r.body.contains("ORG;CHARSET=UTF-8:Финансы"), "{}", r.body);
+    assert_ne!(r.header("etag"), Some(first.as_str()), "{}", r.body);
 }
 
 /// GAL — только своя организация (DAV-44, решение 124): две организации одного узла, книга каждой — только её
