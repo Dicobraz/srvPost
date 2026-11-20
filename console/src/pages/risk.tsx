@@ -988,13 +988,13 @@ function SourceModal(p: { open: { row?: Schemas["TiSourceView"] } | null; refs: 
         </Form.Item>
         {values?.kind === "http" && (
           <Form.Item name="url" label="Адрес фида" rules={[{ required: true, message: "Укажите адрес" }]}>
-            <Input placeholder="https://feeds.example/list.txt" />
+            <Input placeholder="feeds.example/list.txt" />
           </Form.Item>
         )}
         {values?.kind === "taxii" && (
           <>
             <Form.Item name="api_root" label="API root" rules={[{ required: true, message: "Укажите API root" }]}>
-              <Input placeholder="https://taxii.example/api" />
+              <Input placeholder="taxii.example/api" />
             </Form.Item>
             <Form.Item name="collection" label="Коллекция" rules={[{ required: true, message: "Укажите коллекцию" }]}>
               <Input placeholder="discovery" />
@@ -1032,13 +1032,13 @@ function SourceModal(p: { open: { row?: Schemas["TiSourceView"] } | null; refs: 
           </Form.Item>
         )}
         <Form.Item name="terms_url" label="Условия использования (лицензия)" rules={[{ required: true, message: "Укажите адрес условий" }]}>
-          <Input placeholder="https://feeds.example/terms" />
+          <Input placeholder="feeds.example/terms" />
         </Form.Item>
         <Form.Item name="commercial" label="Коммерческое использование разрешено" valuePropName="checked">
           <Switch />
         </Form.Item>
         <Form.Item name="attribution" label="Атрибуция (ссылка, дата, ©)">
-          <Input placeholder="https://feeds.example/about" />
+          <Input placeholder="feeds.example/about" />
         </Form.Item>
         <Form.Item name="auth" label="Авторизация">
           <Select
