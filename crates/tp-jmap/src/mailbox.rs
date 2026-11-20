@@ -52,13 +52,16 @@ fn rights(role: Option<SpecialUse>) -> Value {
     })
 }
 
-/// Объект Mailbox; `threads` — считать `totalThreads`/`unreadThreads` (читает письма папки).
+/// Объект Mailbox; `threads` — считать `totalThreads`/`unreadThreads` (читает письма папки). Беседы
+/// писем — по привязке с подключённым `ThreadStore` (JMAP-48), иначе ключ цепочки.
 async fn to_json(ctx: &Ctx<'_>, mb: &Mailbox, threads: bool) -> MethodResult<Map<String, Value>> {
     let st = ctx.jmap.d.mailboxes.status(ctx.scope, mb.id).await?;
     let (mut all, mut unread) = (HashSet::new(), HashSet::new());
     if threads {
-        for m in ctx.jmap.messages_in(ctx.scope, Some(mb.id)).await? {
-            let t = thread_id(&m);
+        let msgs = ctx.jmap.messages_in(ctx.scope, Some(mb.id)).await?;
+        let tids = ctx.jmap.thread_ids(ctx.scope, &msgs).await?;
+        for m in &msgs {
+            let t = tids.get(&m.id).cloned().unwrap_or_else(|| thread_id(m));
             if !m.flags.contains(&Flag::Seen) {
                 unread.insert(t.clone());
             }

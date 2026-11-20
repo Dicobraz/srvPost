@@ -412,6 +412,9 @@ mod tests {
             mailboxes: Vec::new(),
             peer: PeerContext::new(PeerKind::External),
             matrix: TrustMatrix::default(),
+            // Справочник аномалий до Sieve — SMTP-52 (CTR-95); фейку правил без срабатываний.
+            risk: tp_contracts::risk::Verdict::default(),
+            thread_trusted: false,
         };
         let folder = RulesOutcome {
             keep: vec![KeepTo {

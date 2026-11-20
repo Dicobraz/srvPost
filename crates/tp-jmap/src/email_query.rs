@@ -235,15 +235,25 @@ fn search_detail(f: &Filter) -> Option<String> {
     (!out.is_empty()).then(|| out.join(" "))
 }
 
-/// Данные для проверки условий: результаты текстовых запросов и цепочки.
+/// Данные для проверки условий: результаты текстовых запросов и цепочки. `ids` — беседы писем
+/// (привязка с подключённым `ThreadStore`, JMAP-48, иначе ключ цепочки); пустая — условий по цепочкам
+/// нет (как `threads`).
 struct Eval<'a> {
     text: HashMap<(TextField, String), HashSet<MessageId>>,
     threads: HashMap<String, Vec<&'a Message>>,
+    ids: HashMap<MessageId, String>,
 }
 
 impl Eval<'_> {
+    /// Идентификатор беседы письма (запасной расчёт — ключ цепочки).
+    fn thread_id_of(&self, m: &Message) -> String {
+        self.ids.get(&m.id).cloned().unwrap_or_else(|| thread_id(m))
+    }
+
     fn thread(&self, m: &Message) -> &[&Message] {
-        self.threads.get(&thread_id(m)).map_or(&[], Vec::as_slice)
+        self.threads
+            .get(&self.thread_id_of(m))
+            .map_or(&[], Vec::as_slice)
     }
 
     fn matches(&self, f: &Filter, m: &Message) -> bool {
@@ -551,13 +561,20 @@ async fn run(
                 Some(c) => fetch_candidates(ctx, &c, &boxes).await?,
                 None => ctx.jmap.messages_of(ctx.scope, boxes).await?,
             };
+            // Беседы писем (JMAP-48): привязка с подключённым `ThreadStore`, иначе ключ цепочки.
+            let tids = if uses_threads || a.collapse_threads {
+                ctx.jmap.thread_ids(ctx.scope, &msgs).await?
+            } else {
+                HashMap::new()
+            };
             let ev = Eval {
                 text,
                 threads: if uses_threads || a.collapse_threads {
-                    threads(&msgs)
+                    threads(&msgs, &tids)
                 } else {
                     HashMap::new()
                 },
+                ids: tids,
             };
             match &spec {
                 Some(s) => key_order(&msgs, filter.as_ref(), s, &ev),
@@ -610,6 +627,7 @@ async fn try_patch(
     let ev = Eval {
         text: HashMap::new(),
         threads: HashMap::new(),
+        ids: HashMap::new(),
     };
     // «Удалённые» по журналу: журнал сворачивает «изменено, скрыто и восстановлено в интервале»
     // в один `destroyed`, хотя письмо существует — проверяем фактическое существование каждого.
@@ -778,7 +796,8 @@ fn chain(sort: &[Comparator], x: &Message, y: &Message, ev: &Eval<'_>) -> Orderi
     x.id.cmp(&y.id)
 }
 
-/// Идентификаторы писем под фильтром по порядку `sort`; с `collapse` — первое письмо каждой цепочки.
+/// Идентификаторы писем под фильтром по порядку `sort`; с `collapse` — первое письмо каждой цепочки
+/// (беседа письма — `ev.ids`, привязка с подключённым `ThreadStore`, JMAP-48).
 fn order(
     msgs: &[Message],
     filter: Option<&Filter>,
@@ -793,7 +812,7 @@ fn order(
     hits.sort_by(|x, y| chain(sort, x, y, ev));
     let mut seen = HashSet::new();
     hits.into_iter()
-        .filter(|m| !collapse || seen.insert(thread_id(m)))
+        .filter(|m| !collapse || seen.insert(ev.thread_id_of(m)))
         .map(|m| m.id)
         .collect()
 }
@@ -977,9 +996,12 @@ pub(crate) fn fuzz(args: Map<String, Value>, msgs: &[Message], max_limit: u32) {
             .collect();
         text.insert((field.clone(), value.clone()), hits);
     }
+    // Без хранилища — беседы писем по ключу цепочки (запасной расчёт).
+    let tids: HashMap<MessageId, String> = msgs.iter().map(|m| (m.id, thread_id(m))).collect();
     let ev = Eval {
         text,
-        threads: threads(msgs),
+        threads: threads(msgs, &tids),
+        ids: tids,
     };
     if let (Some(f), Some(v)) = (&filter, &a.filter) {
         let _ = text_of(f);
@@ -1010,7 +1032,7 @@ pub(crate) fn fuzz(args: Map<String, Value>, msgs: &[Message], max_limit: u32) {
     let expected = if a.collapse_threads {
         matching
             .iter()
-            .map(|m| thread_id(m))
+            .map(|m| ev.thread_id_of(m))
             .collect::<HashSet<_>>()
             .len()
     } else {
@@ -1550,8 +1572,9 @@ mod tests {
         use std::collections::HashMap;
         use tp_contracts::meta::{MessageQuery, MessageStore as _};
 
-        use super::{Comparator, Eval, key_order, numeric_sort, order};
+        use super::{Comparator, Eval, key_order, numeric_sort, order, thread_id};
         use crate::email_get::threads;
+        use tp_contracts::MessageId;
 
         let env = Env::new().await;
         fixture(&env).await;
@@ -1564,9 +1587,11 @@ mod tests {
                     .expect("list"),
             );
         }
+        let tids: HashMap<MessageId, String> = msgs.iter().map(|m| (m.id, thread_id(m))).collect();
         let ev = Eval {
             text: HashMap::new(),
-            threads: threads(&msgs),
+            threads: threads(&msgs, &tids),
+            ids: tids,
         };
         let cases = [
             json!([{"property": "receivedAt", "isAscending": false}]),

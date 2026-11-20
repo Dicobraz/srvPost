@@ -7,6 +7,10 @@
 //! Ссылки на объекты BLOB: `copy` добавляет, `expunge_final` снимает — в той же транзакции.
 //! Скрытые письма корзины (`hidden_at`, `TrashStore::purge`) пользователю не видны: все операции, кроме
 //! `expunge_final`, обходят их как отсутствующие.
+//!
+//! Записи писем (`insert`, `insert_batch` — приём SMTP и IMAP APPEND) идут через писателя учётной
+//! записи ([`crate::writers`], PERF-09): письма окна — одна транзакция, один замок строки
+//! `mailbox_state` на пачку вместо одного на письмо.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -24,11 +28,12 @@ use tp_contracts::{
 };
 use uuid::Uuid;
 
+use crate::PgMeta;
 use crate::changelog::{self, Change, Op};
 use crate::mailboxes::{self, Relocated, alloc_uids, by_role, relocate, touch};
 use crate::schema::{begin, db_err, to_i64, to_u32, to_u64};
-use crate::shards::{ReadIntent, ShardId};
-use crate::{BoxDb, PgMeta};
+use crate::shards::ShardId;
+use crate::writers::Writers;
 
 // ---------- Флаги ----------
 
@@ -365,7 +370,7 @@ fn check_new(scope: AccountScope, msg: &NewMessage) -> Result<()> {
 /// изменений (журнал не очищается; письмо после вставки могло быть перемещено или удалено): все
 /// вставлены — `Some` в порядке `keys`, ни одного — `None`. Сначала проверяется первое письмо: без
 /// него остальные не ищутся.
-async fn inserted_by_id(
+pub(crate) async fn inserted_by_id(
     tx: &mut PgConnection,
     tenant: TenantId,
     keys: &[(AccountId, MessageId)],
@@ -421,8 +426,9 @@ async fn inserted_by_id(
 }
 
 /// Вставка письма `id` в открытой транзакции: новый `ModSeq`, UID, строки письма и частей, журнал изменений
-/// и событие доставки.
-async fn insert_one(
+/// и событие доставки. Вызывается писателем учётной записи ([`crate::writers`]) в пачке окна и повторами
+/// по заданиям.
+pub(crate) async fn insert_one(
     tx: &mut PgConnection,
     partitions: u32,
     scope: AccountScope,
@@ -504,9 +510,6 @@ async fn insert_one(
     })
 }
 
-/// Доставка пачки: номер в `items`, ящик, папка, id письма, письмо.
-type BatchItem = (usize, AccountScope, MailboxId, MessageId, NewMessage);
-
 #[async_trait]
 impl MessageStore for PgMeta {
     async fn insert(
@@ -516,27 +519,12 @@ impl MessageStore for PgMeta {
         msg: NewMessage,
     ) -> Result<Inserted> {
         check_new(scope, &msg)?;
-        let partitions = self.cfg.event_partitions;
-        // Ключ — идентификатор письма, выданный до транзакции (META-40).
+        // Ключ — идентификатор письма, выданный до транзакции (META-40); запись — через писателя
+        // учётной записи (PERF-09): окно приёма — одна транзакция на пачку.
         let id = MessageId::new();
-        let keys = [(scope.account, id)];
-        let db = self.box_db(scope).await?;
-        let inserted = self
-            .keyed_at(
-                &db,
-                scope.tenant,
-                |tx| Box::pin(insert_one(tx, partitions, scope, mailbox, id, msg.clone())),
-                move |tx| {
-                    Box::pin(async move {
-                        Ok(inserted_by_id(tx, scope.tenant, &keys)
-                            .await?
-                            .and_then(|v| v.into_iter().next()))
-                    })
-                },
-            )
-            .await?;
-        self.signal_log([scope.account]).await;
-        Ok(inserted)
+        let mut inserted =
+            Writers::write(&self.writers, self, scope, vec![(scope, mailbox, id, msg)]).await?;
+        Ok(inserted.pop().expect("письмо писателя учётной записи"))
     }
 
     async fn insert_batch(
@@ -553,67 +541,41 @@ impl MessageStore for PgMeta {
         if items.is_empty() {
             return Ok(Vec::new());
         }
-        // Ключи — идентификаторы писем, выданные до транзакции, в порядке `items` (META-40).
-        let keys: Vec<(AccountId, MessageId)> = items
-            .iter()
-            .map(|(scope, _, _)| (scope.account, MessageId::new()))
-            .collect();
-        // Доставки группируются по шардам ящиков: одна транзакция на шард (атомарность — в пределах шарда).
-        let mut groups: BTreeMap<ShardId, Vec<BatchItem>> = BTreeMap::new();
-        for (i, ((scope, mailbox, msg), (_, id))) in items.into_iter().zip(&keys).enumerate() {
+        // Ключи — идентификаторы писем, выданные до транзакции, в порядке `items` (META-40). Доставки
+        // группируются по шардам ящиков: одна транзакция на шард (атомарность — в пределах шарда);
+        // строки учётных записей и папок блокируются по порядку идентификаторов — встречные приёмы
+        // не ждут друг друга по кругу. Записи группы — через писателя её первой учётной записи
+        // (PERF-09): письма окна — одна транзакция на пачку.
+        let mut positions: HashMap<MessageId, usize> = HashMap::with_capacity(items.len());
+        let mut groups: BTreeMap<ShardId, Vec<(AccountScope, MailboxId, MessageId, NewMessage)>> =
+            BTreeMap::new();
+        for (i, (scope, mailbox, msg)) in items.into_iter().enumerate() {
+            let id = MessageId::new();
+            positions.insert(id, i);
             let shard = self.shard_of(scope).await?;
             groups
                 .entry(shard)
                 .or_default()
-                .push((i, scope, mailbox, *id, msg));
+                .push((scope, mailbox, id, msg));
         }
-        let partitions = self.cfg.event_partitions;
-        let mut out: Vec<(usize, Inserted)> = Vec::with_capacity(keys.len());
-        for (shard, mut group) in groups {
-            // Строки учётных записей и папок блокируются по порядку идентификаторов: встречные приёмы
-            // не ждут друг друга по кругу.
-            group.sort_by_key(|(_, scope, mailbox, _, _)| {
+        let mut out: Vec<Option<Inserted>> = vec![None; positions.len()];
+        // Группы шардов — по порядку, как без писателей: сбой группы — сбой вызова, остальные
+        // группы после него не записываются.
+        for mut group in groups.into_values() {
+            group.sort_by_key(|(scope, mailbox, _, _)| {
                 (*scope.account.as_uuid(), *mailbox.as_uuid())
             });
-            let db = BoxDb {
-                shard,
-                pool: self.shard_pool(shard, ReadIntent::Primary).await?,
-            };
-            let order: Vec<usize> = group.iter().map(|(i, ..)| *i).collect();
-            let group_keys: Vec<(AccountId, MessageId)> = group
-                .iter()
-                .map(|(_, s, _, id, _)| (s.account, *id))
-                .collect();
-            let group = &group;
-            let group_keys = &group_keys;
-            let inserted = self
-                .keyed_at(
-                    &db,
-                    tenant,
-                    |tx| {
-                        let items = group.clone();
-                        Box::pin(async move {
-                            let mut out = Vec::with_capacity(items.len());
-                            for (_, scope, mailbox, id, msg) in items {
-                                out.push(
-                                    insert_one(tx, partitions, scope, mailbox, id, msg).await?,
-                                );
-                            }
-                            Ok(out)
-                        })
-                    },
-                    |tx| {
-                        let keys = group_keys.clone();
-                        Box::pin(async move { inserted_by_id(tx, tenant, &keys).await })
-                    },
-                )
-                .await?;
-            out.extend(order.into_iter().zip(inserted));
+            let key = group[0].0;
+            let inserted = Writers::write(&self.writers, self, key, group).await?;
+            for ins in inserted {
+                let pos = positions.get(&ins.id).expect("письмо группы шарда");
+                out[*pos] = Some(ins);
+            }
         }
-        out.sort_by_key(|(i, _)| *i);
-        let inserted: Vec<Inserted> = out.into_iter().map(|(_, ins)| ins).collect();
-        self.signal_log(keys.iter().map(|(a, _)| *a)).await;
-        Ok(inserted)
+        Ok(out
+            .into_iter()
+            .map(|ins| ins.expect("письмо группы шарда"))
+            .collect())
     }
 
     async fn get(&self, scope: AccountScope, id: MessageId) -> Result<Option<Message>> {

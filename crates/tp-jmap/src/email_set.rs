@@ -144,7 +144,8 @@ async fn store_message(
     }
 }
 
-/// Объект созданного письма: `id`, `blobId`, `threadId`, `size`.
+/// Объект созданного письма: `id`, `blobId`, `threadId`, `size`. Письмо кладёт клиент (не доставка) —
+/// привязки беседы нет, `threadId` — запасной расчёт по ключу цепочки (JMAP-48).
 async fn summary(ctx: &Ctx<'_>, id: MessageId) -> MethodResult<Value> {
     let m = ctx
         .jmap

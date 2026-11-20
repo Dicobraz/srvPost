@@ -40,14 +40,17 @@ pub mod queue;
 pub mod replica;
 pub mod retention;
 pub mod schema;
+pub mod sent;
 pub mod shards;
 pub mod sharing;
 pub mod sieve;
 pub mod signals;
 pub mod submissions;
 mod sync_gate;
+pub mod thread;
 pub mod transport;
 mod trust;
+pub mod writers;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -76,6 +79,7 @@ use crate::shards::{ReadIntent, ShardId, ShardResolver};
 use crate::sieve::SieveConfig;
 use crate::signals::SignalsConfig;
 use crate::submissions::SubmissionsConfig;
+use crate::writers::{IngestConfig, Writers};
 
 /// Секция конфигурации контура метаданных `meta` (SRS 5.5); пул соединений — отдельная секция
 /// `database` ([`pool::PoolConfig`]). Все поля необязательны; неизвестное поле — ошибка разбора.
@@ -132,6 +136,8 @@ pub struct MetaConfig {
     pub submissions: SubmissionsConfig,
     /// Аудит доступа к ящику: срок хранения ([`mailbox_audit`]).
     pub mailbox_audit: MailboxAuditConfig,
+    /// Писатели приёма: сериализация записей писем учётной записи ([`writers`], PERF-09).
+    pub ingest: IngestConfig,
 }
 
 impl MetaConfig {
@@ -155,6 +161,7 @@ impl Default for MetaConfig {
             sieve: SieveConfig::default(),
             submissions: SubmissionsConfig::default(),
             mailbox_audit: MailboxAuditConfig::default(),
+            ingest: IngestConfig::default(),
         }
     }
 }
@@ -251,6 +258,7 @@ pub(crate) struct BoxDb {
 /// [`failover`]). Повторяются чтения, записи с ключом и записи, идемпотентные по сути:
 /// - **с ключом** (исход обрыва во время COMMIT — по ключу, [`Failover::with_tenant_keyed`], META-40): вставка
 ///   письма по его id (`MessageStore::insert`, `insert_batch`; ключ — запись `created` журнала изменений),
+///   привязка письма к беседе (`ThreadStore::bind`; ключ — привязка письма по его `MessageId`, META-86),
 ///   журнал доставки (`DeliveryLog::record*`; ключ — номера `seq`, выданные до транзакции), очередь
 ///   модерации (`GroupStore::hold`; ключ — `HeldId` вызывающего), позиция подписчика (`EventLog::commit`;
 ///   ключ — позиция не меньше заданной), очередь отправки (`QueueStore::enqueue`; ключ — `QueueId`, выданный
@@ -267,6 +275,7 @@ pub struct PgMeta {
     failover: Option<Failover>,
     shards: Shards,
     routing: Arc<Routing>,
+    writers: Arc<Writers>,
     intent: ReadIntent,
     replica: ReplicaOf,
 }
@@ -281,6 +290,7 @@ impl PgMeta {
             failover: None,
             shards: Shards::default(),
             routing: Arc::default(),
+            writers: Arc::new(Writers::new()),
             intent: ReadIntent::Primary,
             replica: ReplicaOf::default(),
         }
@@ -345,14 +355,19 @@ impl PgMeta {
     ///   `Membership::heartbeat` (`upsert_node`), `set_policy`, `set_user_trash_purge`, `ContactStore::put_contact`,
     ///   `OrgStore::put_org_unit`, `set_org`, `DynamicGroupStore::put_dynamic` (замена целиком),
     ///   `BrandingStore::set_branding` (набор уровня заменяется целиком), `TrustStore::set_policy`
-    ///   (уровень и доменные списки заменяются целиком);
+    ///   (уровень и доменные списки заменяются целиком), запись об отправленном (`SentLog::record`; метка
+    ///   уникальна, повтор с тем же содержимым — не ошибка, META-86), удержание и действие по беседе
+    ///   (`ThreadStore::set_hold`, `set_rule` — замена по значению, META-86);
     /// - `set_*` по значению: `MailboxStore::set_subscribed` (повтор лишь добавляет запись `updated` в
     ///   журнал изменений), `AppPasswords::revoke` (`COALESCE` — время первого отзыва),
     ///   `mark_blob_damaged` (`coalesce` — время первой пометки), `disable_account`, `restore_account` (срок
-    ///   хранения по значению);
+    ///   хранения по значению), память беседы (`ThreadStore::remember_facts` — повтор добавляет только
+    ///   новое, META-86), фоновая привязка писем (`bind_unthreaded_messages` — повтор привязывает только
+    ///   ещё не привязанные, META-86);
     /// - удаление по ключу без возврата удалённого: `AbuseBlocks::unblock`, `Membership::leave`,
     ///   `DeliveryLog::purge` (секции суток), `purge_events` (число удалённых при повторе — только
-    ///   оставшиеся), `TrustStore::reset_policy` (удаление уровня без возврата удалённого);
+    ///   оставшиеся), `SentLog::purge_before` (число удалённых при повторе — только оставшиеся, META-86),
+    ///   `TrustStore::reset_policy` (удаление уровня без возврата удалённого);
     ///
     /// Не повторяются: CAS по версии (`transport`, `put_manifest`) и номеру захвата (лизы, очередь) —
     /// повтор применённой записи отвечает `Conflict`; счётчики ссылок BLOB, UID и `ModSeq` писем,
@@ -540,6 +555,7 @@ impl PgMeta {
             },
             shards: Shards::default(),
             routing: Arc::default(),
+            writers: Arc::new(Writers::new()),
             intent: self.intent,
             replica,
         })
