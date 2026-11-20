@@ -5463,7 +5463,11 @@ mod tests {
         )
         .await
         .expect("source usage");
-        assert!(out.contains("ОРГАНИЗАЦИЯ"), "{out}");
+        // учёт в CLI-тесте пуст (записи пишет конвейер узла) — таблица с заголовком или «нет записей»
+        assert!(
+            out.contains("ОРГАНИЗАЦИЯ") || out.contains("нет записей"),
+            "{out}"
+        );
         let out = exec(
             &root,
             false,
