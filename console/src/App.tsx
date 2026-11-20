@@ -1,6 +1,26 @@
 import "@refinedev/antd/dist/reset.css";
 import "dayjs/locale/ru";
 
+// Иконки разделов панели (FIX-23): у свёрнутой панели подписей нет — у каждого раздела своя различимая иконка.
+import {
+  ApartmentOutlined,
+  BankOutlined,
+  BookOutlined,
+  CalendarOutlined,
+  ClockCircleOutlined,
+  EyeOutlined,
+  FileDoneOutlined,
+  FileSearchOutlined,
+  FilterOutlined,
+  FolderOpenOutlined,
+  InboxOutlined,
+  MailOutlined,
+  NodeIndexOutlined,
+  SafetyCertificateOutlined,
+  TeamOutlined,
+  UserDeleteOutlined,
+  UserOutlined,
+} from "@ant-design/icons";
 import { ErrorComponent, ThemedLayout, ThemedTitle, useNotificationProvider } from "@refinedev/antd";
 import { Authenticated, CanAccess, Refine, usePermissions } from "@refinedev/core";
 import routerProvider, { CatchAllNavigate, DocumentTitleHandler, NavigateToResource } from "@refinedev/react-router";
@@ -76,51 +96,53 @@ export function App() {
             accessControlProvider={accessControlProvider}
             i18nProvider={i18nProvider}
             notificationProvider={useNotificationProvider}
+            // Порядок разделов — по предполагаемой частоте обращений (FIX-24): повседневные сверху,
+            // настройка «раз при развёртывании» ниже, журналы аудитора внизу (для них это дом).
             resources={[
-              { name: "organization", list: "/organization", meta: { label: "Организация" } },
               {
                 name: "accounts",
                 list: "/accounts",
                 create: "/accounts/create",
                 show: "/accounts/:id",
-                meta: { label: "Учётные записи" },
+                meta: { label: "Учётные записи", icon: <UserOutlined /> },
+              },
+              { name: "queue", list: "/queue", meta: { label: "Очередь", icon: <ClockCircleOutlined /> } },
+              { name: "delivery", list: "/delivery", meta: { label: "Журнал доставки", icon: <MailOutlined /> } },
+              { name: "moderation", list: "/moderation", meta: { label: "Модерация", icon: <EyeOutlined /> } },
+              {
+                name: "groups",
+                list: "/groups",
+                create: "/groups/create",
+                edit: "/groups/:id",
+                meta: { label: "Группы рассылки", icon: <TeamOutlined /> },
               },
               {
                 name: "resources",
                 list: "/resources",
                 create: "/resources/create",
                 show: "/resources/:id",
-                meta: { label: "Ресурсы" },
-              },
-              { name: "disabled-accounts", list: "/disabled-accounts", meta: { label: "Отключённые ящики" } },
-              {
-                name: "groups",
-                list: "/groups",
-                create: "/groups/create",
-                edit: "/groups/:id",
-                meta: { label: "Группы рассылки" },
+                meta: { label: "Ресурсы", icon: <CalendarOutlined /> },
               },
               {
                 name: "contacts",
                 list: "/contacts",
                 create: "/contacts/create",
                 edit: "/contacts/:id",
-                meta: { label: "Адресная книга" },
+                meta: { label: "Адресная книга", icon: <BookOutlined /> },
               },
-              { name: "units", list: "/units", meta: { label: "Оргструктура" } },
-              { name: "moderation", list: "/moderation", meta: { label: "Модерация" } },
-              { name: "queue", list: "/queue", meta: { label: "Очередь" } },
-              { name: "sieve", list: "/sieve", meta: { label: "Правила организации" } },
-              { name: "trust", list: "/trust", meta: { label: "Доверие" } },
-              { name: "transport", list: "/transport", meta: { label: "Транспорт" } },
-              { name: "delivery", list: "/delivery", meta: { label: "Журнал доставки" } },
-              { name: "audit", list: "/audit", meta: { label: "Журнал аудита" } },
-              // Отдельно от журналов доставки и аудита: содержимое писем — только аудитору журнала (UI-25).
-              { name: "journal", list: "/journal", meta: { label: "Журнал переписки" } },
+              { name: "units", list: "/units", meta: { label: "Оргструктура", icon: <ApartmentOutlined /> } },
+              { name: "disabled-accounts", list: "/disabled-accounts", meta: { label: "Отключённые ящики", icon: <UserDeleteOutlined /> } },
+              { name: "sieve", list: "/sieve", meta: { label: "Правила организации", icon: <FilterOutlined /> } },
+              { name: "trust", list: "/trust", meta: { label: "Доверие", icon: <SafetyCertificateOutlined /> } },
+              { name: "transport", list: "/transport", meta: { label: "Транспорт", icon: <NodeIndexOutlined /> } },
               // Правила журналирования (UI-26, решение #171): ведёт администратор организации —
               // аудитор журнала правил не видит (узел отвечает 403, раздел — другая роль).
-              { name: "journal-rules", list: "/journal-rules", meta: { label: "Правила журналирования" } },
-              { name: "mailbox-audit", list: "/mailbox-audit", meta: { label: "Аудит ящиков" } },
+              { name: "journal-rules", list: "/journal-rules", meta: { label: "Правила журналирования", icon: <FileDoneOutlined /> } },
+              { name: "organization", list: "/organization", meta: { label: "Организация", icon: <BankOutlined /> } },
+              // Отдельно от журналов доставки и аудита: содержимое писем — только аудитору журнала (UI-25).
+              { name: "journal", list: "/journal", meta: { label: "Журнал переписки", icon: <InboxOutlined /> } },
+              { name: "audit", list: "/audit", meta: { label: "Журнал аудита", icon: <FileSearchOutlined /> } },
+              { name: "mailbox-audit", list: "/mailbox-audit", meta: { label: "Аудит ящиков", icon: <FolderOpenOutlined /> } },
             ]}
             // Без внешних обращений (SRS 5.2): телеметрия Refine выключена.
             options={{ disableTelemetry: true, syncWithLocation: true, warnWhenUnsavedChanges: true }}

@@ -1,7 +1,7 @@
 // Приёмка UI-22: страница входа перезапрашивает брендинг по домену имени входа (знак, название, заголовок
-// вкладки); после входа — знак и название своей организации в шапке; в разделе «Брендинг» незаданная роль
-// показывает действующий цвет уровня выше, ошибки контраста 422 — у поля роли из `errors`, сброс организации
-// возвращает тему установки.
+// вкладки); после входа — знак и название своей организации в шапке; настройки интерфейса — в меню пользователя
+// (FIX-24): незаданная роль показывает действующий цвет уровня выше, ошибки контраста 422 — у поля роли из
+// `errors`, сброс организации возвращает тему установки.
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, expect, test } from "vitest";
@@ -15,6 +15,13 @@ const empty = { archive_after: null, archive_quota_bytes: null, dkim_selector: n
 const noPalette = { palette: { light: {}, dark: {}, cli: {} } };
 const org = () => ({ id: ORG, default: true, policy: empty, effective: empty });
 const levelForm = async (name: string) => await screen.findByRole("form", { name });
+// Брендинг живёт в меню пользователя (FIX-24), не на странице «Организация»: открыть панель настроек.
+// Имя пункта — с подписью иконки, поэтому совпадение по части имени.
+const openSettings = async () => {
+  fireEvent.click(await screen.findByRole("button", { name: "Меню пользователя" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Настройки интерфейса/ }));
+  await screen.findByRole("dialog");
+};
 
 afterEach(() => {
   cleanup();
@@ -78,6 +85,7 @@ test("раздел «Брендинг»: незаданная роль — де�
     },
   });
   // Вкладка организации: sel задана уровнем, screen — нет: действующий цвет — с уровня выше (установки).
+  await openSettings();
   fireEvent.click(await screen.findByRole("tab", { name: "Организация" }));
   expect(await within(await levelForm("Брендинг организации")).findByText("#ABCDEF")).toBeTruthy();
   // Сброс с подтверждением: свой набор организации удаляется, действующие цвета — установки.
@@ -95,6 +103,7 @@ test("раздел «Брендинг»: ошибка контраста 422 —
     "GET /api/v1/branding": { body: { own: { product_name: "Сервер", primary: null, logo: null, light: {}, dark: {}, cli: {} }, effective: { product_name: "Сервер", logo: null, palette: { light: {}, dark: {}, cli: {} } } } },
     "PUT /api/v1/branding": { status: 422, body: { status: 422, title: "Unprocessable Entity", detail, errors: [{ field: "dark.sel", role: "sel", theme: "dark", bg: "panel", contrast: 1.3, min: 3 }] } },
   });
+  await openSettings();
   const form = await levelForm("Брендинг установки");
   expect(await within(form).findByText(/Действует: Сервер/)).toBeTruthy();
   fireEvent.click(within(form).getByRole("button", { name: "Сохранить брендинг" }));
@@ -115,9 +124,9 @@ test("оператор: раздел «Брендинг» только для ч
     },
     ["operator"],
   );
-  expect(await screen.findByText("Брендинг")).toBeTruthy();
+  await openSettings();
   await levelForm("Брендинг организации");
-  expect(screen.queryByRole("form", { name: "Брендинг установки" })).toBeNull();
+  expect(screen.queryByRole("tab", { name: "Установка" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Сохранить брендинг" })).toBeNull();
   expect(calls.some((c) => c.path === "/api/v1/branding")).toBe(false);
 });
