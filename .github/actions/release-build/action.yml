@@ -21,6 +21,9 @@ inputs:
   console-archive:
     description: Имя архива console/dist (без .tar.gz; пусто — архива нет)
     default: ''
+  webmail-archive:
+    description: Имя архива web/dist (без .tar.gz; пусто — архива нет)
+    default: ''
 
 outputs:
   binary:
@@ -29,6 +32,9 @@ outputs:
   console-archive:
     description: Путь к архиву консоли (.tar.gz, рядом .tar.gz.sha256); пусто — архива нет
     value: ${{ steps.archive.outputs.path }}
+  webmail-archive:
+    description: Путь к архиву веб-клиента (.tar.gz, рядом .tar.gz.sha256); пусто — архива нет
+    value: ${{ steps.webmail-archive.outputs.path }}
 
 runs:
   using: composite
@@ -80,6 +86,22 @@ runs:
       run: |
         mkdir -p "$OUT"
         tar -C console --format=gnu --sort=name --mtime="@$(git log -1 --format=%ct)" \
+          --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' --transform "s|^dist|$NAME|" \
+          -cf - dist | gzip -9n > "$OUT/$NAME.tar.gz"
+        (cd "$OUT" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256" && cat "$NAME.tar.gz.sha256")
+        echo "path=$OUT/$NAME.tar.gz" >> "$GITHUB_OUTPUT"
+    # Архив web/dist (WEB-11, по образцу архива консоли, CI-10) для раздачи веб-сервером — те же файлы,
+    # что вшиты в бинарь этой сборки. Детерминированный тем же способом; repro сверяет его sha256.
+    - id: webmail-archive
+      name: Архив веб-клиента
+      if: inputs.webmail-archive != '' && steps.webmail.outputs.cargo-args != ''
+      shell: bash
+      env:
+        NAME: ${{ inputs.webmail-archive }}
+        OUT: ${{ runner.temp }}/webmail-archive
+      run: |
+        mkdir -p "$OUT"
+        tar -C web --format=gnu --sort=name --mtime="@$(git log -1 --format=%ct)" \
           --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' --transform "s|^dist|$NAME|" \
           -cf - dist | gzip -9n > "$OUT/$NAME.tar.gz"
         (cd "$OUT" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256" && cat "$NAME.tar.gz.sha256")

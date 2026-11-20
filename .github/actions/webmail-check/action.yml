@@ -1,9 +1,9 @@
 # Веб-клиент в поставке (WEB-01, SRS 1.3): thepost отвечает на `GET /mail/` страницей веб-клиента, а не
-# «веб-клиент не собран» (503), deep-link `/mail/folder/x` отдаёт SPA (fallback на index.html), ассеты не
-# режутся CSP. Узел — роль jmap (profile dev, открытый HTTP на loopback) с `modules.webmail.enabled: true`
-# против PostgreSQL 16 в контейнере. Один из входов: `binary` — бинарный файл на раннере (x86_64),
-# `image` — образ в локальном docker. Пока образ не собирает web/dist (deploy/docker/Dockerfile — полоса
-# deploy), проверять образом нельзя — только бинарным файлом.
+# «веб-клиент не собран» (503), deep-link `/mail/folder/x` отдаёт SPA (fallback на index.html), `/mail`
+# ведёт на /mail/ (307), ассеты не режутся CSP. Узел — роль jmap (profile dev, открытый HTTP на loopback)
+# с `modules.webmail.enabled: true` против PostgreSQL 16 в контейнере. Один из входов: `binary` — бинарный
+# файл на раннере (x86_64), `image` — образ в локальном docker (WEB-11: образ собирает web/dist, как бинарь
+# выпуска; бета проверяет им образ, как console-check).
 name: webmail-check
 description: Бинарный файл или образ раздаёт веб-клиент /mail/
 

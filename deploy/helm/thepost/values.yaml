@@ -285,6 +285,12 @@ config:
   #     tls: { ca_file: /etc/thepost/tls/ca.crt }
   #   export:                                       # выгрузка .eml с конвертом во внешний архив заказчика
   #     address: archive.example.ru:25
+  # Веб-клиент /mail/ (SRS 1.3): маршруты на слушателе jmap. Модуль opt-in — по умолчанию выключен
+  # (осознанное отличие от веб-консоли, которая включена всегда); клиент вшит в образ выпуска.
+  # modules:
+  #   webmail:
+  #     enabled: true
+  #     # connect_src: ["https://idp.example.ru"]   # поставщик OIDC вне узла, https://узел[:порт]
   tls:
     cert_file: /etc/thepost/tls/tls.crt
     # Ключ — только из OpenBao (решение 100); новая версия секрета подхватывается без перезапуска.
