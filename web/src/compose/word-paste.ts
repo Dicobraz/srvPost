@@ -168,8 +168,7 @@ export function htmlToText(html: string): string {
   root.innerHTML = html;
   // Абзацы и строки таблиц в textContent идут вплотную — разделяем переносом.
   for (const el of [...root.querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote")]) {
-    el.before(document.createTextNode("
-"));
+    el.before(document.createTextNode("\n"));
   }
   return (root.textContent ?? "").replace(/\s+/g, " ").trim();
 }
