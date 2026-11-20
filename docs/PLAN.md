@@ -1016,6 +1016,7 @@ SPA как PWA, паттерны mobile Outlook. Дизайн-эталон — D
 | mod-webmail-8 | WEB-08 (мобильный layout, PWA) | A | mod-webmail-3, mod-webmail-4 | 4 |
 | mod-webmail-9 | WEB-09 (офлайн-кэш, очередь исходящих) | A | mod-webmail-4 | 4 |
 | mod-webmail-10 | WEB-10 (SAML 2.0 SP, после v1) | B | mod-webmail-2 | 4 |
+| mod-webmail-11 | WEB-11 (deploy: web/dist в образе, webmail-check образом, архив выпуска) | B | mod-webmail-1 | 4 |
 
 ## Открытые вопросы
 
