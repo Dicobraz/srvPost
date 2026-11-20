@@ -938,8 +938,8 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ smtp-32 (#219, рестарт после снятия #193) | SMTP-52 | A | contracts-66, deps-19, smtp-31 | 4 |
 | ✅ admin-37 (#206) | ADM-51 | B | contracts-66, admin-36 | 3 |
 | ✅ console-15 | UI-24 | A | console-14, admin-37 | 1 |
-| tui-07 | TUI-10 | A | tui-06, admin-37 | 1 |
-| app-75 | APP-78 | A | meta-60, admin-37, smtp-32, sieve-08, app-74 | 2 |
+| ✅ tui-07 (#280) | TUI-10 | A | tui-06, admin-37 | 1 |
+| ✅ app-75 (#283) | APP-78 | A | meta-60, admin-37, smtp-32, sieve-08, app-74 | 2 |
 | app-76 | APP-79 | A | app-75 | 2 |
 | deploy-44 | DEP-57 | A | app-75, deploy-43 | 1 |
 | docs-14 | DOC-14 | A | app-76, deploy-44 | 1 |
