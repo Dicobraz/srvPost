@@ -326,7 +326,7 @@ async fn two_shards_delivery_idle_and_replica_reads() {
         secrets.clone(),
         |_, _| Arc::new(NoAcquireObserver),
     ));
-    let meta = PgMeta::new(main_pool.clone(), MetaConfig::default()).with_shards(dir);
+    let meta = PgMeta::new(main_pool.clone(), MetaConfig::default()).with_shards(dir.clone());
     let tenant = tp_contracts::TenantId::DEFAULT;
     let domain = "example.org";
     let domain_id = {
