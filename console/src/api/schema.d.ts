@@ -3919,6 +3919,7 @@ export interface components {
                 /** @description Адрес. */
                 url: string;
             };
+        } | {
             /** @description Коллекция TAXII 2.1. */
             taxii: {
                 /** @description API root. */
@@ -3972,6 +3973,7 @@ export interface components {
                 /** @description Имя заголовка (`X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch). */
                 name: string;
             };
+        } | {
             /** @description Basic; пользователь здесь, пароль — секрет. */
             basic: {
                 /** @description Имя пользователя (Kaspersky TAXII: `taxii`). */
