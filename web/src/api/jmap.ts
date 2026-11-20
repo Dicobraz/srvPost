@@ -325,7 +325,7 @@ export async function callMethod(
   return result;
 }
 
-/** Общий разбор ответа `*/get`: объекты и не найденные идентификаторы. */
+/** Общий разбор ответа get-методов: объекты и не найденные идентификаторы. */
 function parseGet<T>(result: Record<string, unknown>): { list: T[]; notFound: string[] } {
   return {
     list: (result.list as T[] | undefined) ?? [],
