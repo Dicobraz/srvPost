@@ -1,0 +1,114 @@
+# Веб-клиент в поставке (WEB-01, SRS 1.3): thepost отвечает на `GET /mail/` страницей веб-клиента, а не
+# «веб-клиент не собран» (503), deep-link `/mail/folder/x` отдаёт SPA (fallback на index.html), ассеты не
+# режутся CSP. Узел — роль jmap (profile dev, открытый HTTP на loopback) с `modules.webmail.enabled: true`
+# против PostgreSQL 16 в контейнере. Один из входов: `binary` — бинарный файл на раннере (x86_64),
+# `image` — образ в локальном docker. Пока образ не собирает web/dist (deploy/docker/Dockerfile — полоса
+# deploy), проверять образом нельзя — только бинарным файлом.
+name: webmail-check
+description: Бинарный файл или образ раздаёт веб-клиент /mail/
+
+inputs:
+  binary:
+    description: Путь к бинарному файлу thepost (x86_64)
+    default: ''
+  image:
+    description: Образ в локальном docker (CMD — serve --config /etc/thepost/config.yaml)
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: GET /mail/ — страница веб-клиента
+      shell: bash
+      env:
+        BIN: ${{ inputs.binary }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        if { [ -n "$BIN" ] && [ -n "$IMAGE" ]; } || { [ -z "$BIN" ] && [ -z "$IMAGE" ]; }; then
+          echo "::error::webmail-check: нужен ровно один вход — binary или image"; exit 1
+        fi
+        dir="$RUNNER_TEMP/webmail-check"
+        rm -rf "$dir"; mkdir -p "$dir/blob"
+        pg=tp-webmail-pg; app=tp-webmail-app; pid=
+        cleanup() {
+          if [ -n "$pid" ]; then kill -KILL "$pid" 2>/dev/null || true; fi
+          docker rm -f "$app" "$pg" >/dev/null 2>&1 || true
+        }
+        trap cleanup EXIT
+        logs() {
+          if [ -n "$BIN" ]; then cat "$dir/log" || true; else docker logs "$app" 2>&1 || true; fi
+        }
+
+        docker run -d --name "$pg" -p 127.0.0.1:5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16 >/dev/null
+        # По TCP: во время initdb сервер слушает только сокет — готовность по pg_isready на сокете ложная.
+        for _ in $(seq 60); do
+          docker exec "$pg" psql -h 127.0.0.1 -U postgres -qtAc 'select 1' >/dev/null 2>&1 && break
+          sleep 1
+        done
+
+        # Каталоги на запись (BLOB; индекс поиска `search.index.dir` запуск создаёт при любых ролях) и сокет
+        # `admin init`: у бинарного файла — во временном каталоге, у образа — его /var/lib/thepost (владелец nonroot).
+        blob=/var/lib/thepost/blob
+        if [ -n "$BIN" ]; then blob="$dir/blob"; fi
+        cat > "$dir/config.yaml" <<EOF
+        domain: example.test
+        profile: dev
+        roles: [jmap]
+        service_http: { listen: "127.0.0.1:0", allow_plaintext: true }
+        http:
+          jmap: { listen: "127.0.0.1:18443", allow_plaintext: true }
+        modules:
+          webmail: { enabled: true }
+        database:
+          url: postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable
+          tls: { allow_plaintext: true }
+        blob:
+          url: file://$blob
+        EOF
+        if [ -n "$BIN" ]; then
+          printf 'admin:\n  init: { socket: "%s" }\nsearch:\n  index: { dir: "%s" }\n' \
+            "$dir/admin.sock" "$dir/search" >> "$dir/config.yaml"
+        fi
+        cat "$dir/config.yaml"
+
+        if [ -n "$BIN" ]; then
+          "$BIN" serve --config "$dir/config.yaml" > "$dir/log" 2>&1 &
+          pid=$!
+        else
+          docker run -d --name "$app" --network host \
+            -v "$dir/config.yaml:/etc/thepost/config.yaml:ro" "$IMAGE" >/dev/null
+        fi
+
+        base=http://127.0.0.1:18443
+        code=000
+        for _ in $(seq 90); do
+          code=$(curl -s -o "$dir/page" -w '%{http_code}' "$base/mail/" || true)
+          [ "$code" != 000 ] && break
+          if [ -n "$BIN" ]; then
+            kill -0 "$pid" 2>/dev/null || { logs; echo "::error::thepost serve завершился до ответа"; exit 1; }
+          elif [ "$(docker inspect -f '{{.State.Running}}' "$app")" != true ]; then
+            logs; echo "::error::контейнер thepost завершился до ответа"; exit 1
+          fi
+          sleep 1
+        done
+        if [ "$code" != 200 ] || ! grep -q 'id="root"' "$dir/page" || grep -q 'Веб-клиент не собран' "$dir/page"; then
+          logs; echo "--- ответ $code:"; cat "$dir/page" || true
+          echo "::error::GET /mail/ — $code, не страница веб-клиента (клиент не вшит или модуль выключен?)"; exit 1
+        fi
+        # Deep-link маршрута SPA (приёмка WEB-01) и редирект /mail → /mail/.
+        code=$(curl -s -o /dev/null -w '%{http_code}' "$base/mail/folder/x")
+        [ "$code" = 200 ] || { logs; echo "::error::GET /mail/folder/x — $code, ожидался 200 (deep-link SPA)"; exit 1; }
+        code=$(curl -s -o /dev/null -w '%{http_code}' "$base/mail")
+        [ "$code" = 307 ] || { logs; echo "::error::GET /mail — $code, ожидался 307 (редирект на /mail/)"; exit 1; }
+        csp=$(curl -s -I "$base/mail/" | tr -d '\r')
+        grep -qi "^content-security-policy: default-src 'self'" <<< "$csp" || {
+          logs; echo "::error::на /mail/ нет строгой CSP (default-src 'self')"; exit 1
+        }
+        grep -qi "^x-frame-options: DENY" <<< "$csp" || {
+          logs; echo "::error::на /mail/ нет X-Frame-Options: DENY"; exit 1
+        }
+        js=$(grep -o '/mail/assets/[^"]*\.js' "$dir/page" | head -n1)
+        [ -n "$js" ] || { cat "$dir/page"; echo "::error::в странице веб-клиента нет скрипта assets/"; exit 1; }
+        curl -fsS -o /dev/null "$base$js" || { logs; echo "::error::GET $js — не 200 (CSP режет ассеты?)"; exit 1; }
+        echo "веб-клиент раздаётся: /mail/ и /mail/folder/x — 200, CSP и X-Frame-Options на месте, $js — 200"
