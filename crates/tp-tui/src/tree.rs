@@ -14,8 +14,8 @@ const fn section(label: &'static str, op: &'static str) -> Section {
     Section { label, op }
 }
 
-/// Разделы организации по порядку.
-pub const SECTIONS: [Section; 12] = [
+/// Разделы организации по порядку (13 разделов занимают строки дерева 3–15).
+pub const SECTIONS: [Section; 13] = [
     section("Учётные записи", "list_accounts"),
     section("Домены", "list_domains"),
     section("Группы", "list_groups"),
@@ -24,6 +24,7 @@ pub const SECTIONS: [Section; 12] = [
     section("Ресурсы", "list_resources"),
     section("Политики", "get_org"),
     section("Доверие", "get_org_trust"),
+    section("Признаки риска", "list_org_signals"),
     section("Журналы", "search_audit"),
     section("Модерация", "list_held"),
     section("Корзина", "list_trash"),
@@ -33,8 +34,9 @@ pub const SECTIONS: [Section; 12] = [
 /// Подпись раздела конфигурации узла.
 pub const NODE_CONFIG: &str = "Конфигурация узла";
 
-/// Сколько строк дерева отведено другим организациям (строки между разделами и разделителем).
-pub const ORG_ROWS: usize = 2;
+/// Сколько строк дерева отведено другим организациям: разделов 13 (строки 3–15), до разделителя
+/// остаётся одна (TUI-10).
+pub const ORG_ROWS: usize = 1;
 
 #[cfg(test)]
 mod tests {

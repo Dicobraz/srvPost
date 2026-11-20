@@ -193,9 +193,18 @@ impl App {
                             f.focus = i;
                         }
                     }
+                    // Формы раздела «Признаки риска» (TUI-10).
+                    Some(Overlay::RiskSignalEdit { form: f })
+                    | Some(Overlay::RiskThresholds { form: f })
+                    | Some(Overlay::RiskFilter { form: f }) => {
+                        if let Some(i) = form_index(f, y) {
+                            f.focus = i;
+                        }
+                    }
                     Some(Overlay::Help) => close_help = true,
                     Some(Overlay::Confirm(_)) | Some(Overlay::ConfigEdit(_)) => {}
                     Some(Overlay::TrustDomain(_)) | Some(Overlay::TrustConfirm(_)) => {}
+                    Some(Overlay::RiskImport(_)) | Some(Overlay::RiskConfirm { .. }) => {}
                     None => match &mut m.view {
                         View::List(l) => {
                             if let Some(i) = list_index(y, l.top, l.rows.len()) {
@@ -209,7 +218,7 @@ impl App {
                                 open = double;
                             }
                         }
-                        View::Card(_) | View::Info { .. } | View::Trust(_) => {}
+                        View::Card(_) | View::Info { .. } | View::Trust(_) | View::Risk(_) => {}
                     },
                 }
             }

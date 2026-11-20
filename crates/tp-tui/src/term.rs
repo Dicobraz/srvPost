@@ -563,6 +563,31 @@ fn apply(
                     let _ = tx.send(Msg::Done(id, r));
                 });
             }
+            Effect::Import {
+                id,
+                op,
+                params,
+                path,
+            } => {
+                let tx = tx.clone();
+                let Some(client) = client.cloned() else {
+                    let _ = tx.send(Msg::Done(
+                        id,
+                        Err(tp_admin_client::Error::Client("нет входа".to_owned())),
+                    ));
+                    continue;
+                };
+                tokio::spawn(async move {
+                    // Файл пакета или списка читается с узла (TUI-10) и передаётся octet-stream.
+                    let params: Vec<&str> = params.iter().map(String::as_str).collect();
+                    let r = match tokio::fs::read(&path).await {
+                        Ok(bytes) => client.call_octet::<Value>(op.op(), &params, bytes).await,
+                        Err(e) => Err(tp_admin_client::Error::Client(format!("файл {path}: {e}"))),
+                    };
+                    let r = r.map(|value| Page { value, next: None });
+                    let _ = tx.send(Msg::Done(id, r));
+                });
+            }
         }
     }
 }
