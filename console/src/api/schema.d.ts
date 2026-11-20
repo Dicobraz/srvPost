@@ -9819,14 +9819,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["ThreadView"];
                 };
-            };            400: {
+            };
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9939,14 +9940,15 @@ export interface operations {
             };
         };
         responses: {
-            {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["ThreadHoldView"];
                 };
-            };            400: {
+            };
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10048,14 +10050,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["ThreadHoldsView"];
                 };
-            };            400: {
+            };
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

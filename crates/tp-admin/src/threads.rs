@@ -38,13 +38,13 @@ use axum::{Extension, Router};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tp_contracts::admin_audit::AdminAuditQuery;
-use tp_contracts::blob::{BlobStore, ByteStream};
+use tp_contracts::blob::ByteStream;
 use tp_contracts::meta::{AccountScope, Message};
 use tp_contracts::thread::{ThreadHold, ThreadStore};
 use tp_contracts::{AccountId, Error, MessageId, Result, TenantId, ThreadId};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter, result::ZipError};
+use zip::{CompressionMethod, ZipWriter};
 
 use crate::accounts::account;
 use crate::content::Access;
@@ -189,19 +189,25 @@ async fn find_thread(
         tenant: org,
         account: id,
     };
-    let thread = store(&a)?
+    let threads = store(&a)?;
+    let thread = threads
         .thread_of(scope, message)
         .await?
         .ok_or(Error::NotFound)?;
-    Ok(Json(view(&a, scope, thread).await?))
+    Ok(Json(
+        view(threads, a.cfg.max_page_size, scope, thread).await?,
+    ))
 }
 
-/// Беседа с удержанием и письмами (до `admin.max_page_size`).
-async fn view(a: &Admin, scope: AccountScope, thread: ThreadId) -> Result<ThreadView> {
-    let hold = store(a)?.hold(scope, thread).await?;
-    let messages = store(a)?
-        .messages(scope, thread, a.cfg.max_page_size)
-        .await?;
+/// Беседа с удержанием и письмами (до `limit`).
+async fn view(
+    threads: &dyn ThreadStore,
+    limit: usize,
+    scope: AccountScope,
+    thread: ThreadId,
+) -> Result<ThreadView> {
+    let hold = threads.hold(scope, thread).await?;
+    let messages = threads.messages(scope, thread, limit).await?;
     Ok(ThreadView {
         thread: thread.to_string(),
         hold: hold.as_ref().map(Into::into),
@@ -234,7 +240,9 @@ async fn hold_thread(
         tenant: org,
         account: id,
     };
-    store(&a)?.set_hold(scope, thread, Some(hold.clone()))?;
+    store(&a)?
+        .set_hold(scope, thread, Some(hold.clone()))
+        .await?;
     Ok(Json((&hold).into()))
 }
 
@@ -254,7 +262,7 @@ async fn unhold_thread(
         tenant: org,
         account: id,
     };
-    store(&a)?.set_hold(scope, thread, None)?;
+    store(&a)?.set_hold(scope, thread, None).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -484,7 +492,7 @@ async fn read_all(stream: ByteStream) -> Result<Vec<u8>> {
 }
 
 /// Ошибка архива.
-fn zip_error(e: ZipError) -> Error {
+fn zip_error(e: impl std::fmt::Display) -> Error {
     Error::internal(format!("экспорт беседы: архив ZIP: {e}"))
 }
 
