@@ -707,6 +707,8 @@
 | [FIX-19](FIX-19.md) | плоский путь зонда blob (root-прогон не оставляет каталог root:root) |  |  | app-82 | done | — |
 | [FIX-20](FIX-20.md) | loopback SAN (admin login к 127.0.0.1 проходит проверку имени) |  |  | deploy-53 | done | — |
 | [FIX-21](FIX-21.md) | проверки privileges_* по процессу службы, а не CLI |  |  | platform-27 | done | — |
+| [FIX-22](FIX-22.md) | беседы — фоновая привязка ищет сырой `thread_key`, приём пишет канонический `join_key` | meta | A | meta-91 | ready | — |
+| [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | meta-91 | ready | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
 
 ## Ф1 · ACME: короткие сертификаты (ballot SC-081v3, RFC 9773)
 
@@ -947,7 +949,7 @@
 | [ADM-50](ADM-50.md) | удержание беседы в Admin API — удержать, снять, перечислить, выгрузить; CLI | admin | B | admin-36 | done | CTR-94,ADM-44 |
 | [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | app-74 | done | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
 | [DEP-56](DEP-56.md) | Rspamd — балл за признак ответа; ключи меток и BATV в поставке | deploy | A | deploy-43 | done | SMTP-51 |
-| [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | ready | APP-77,DEP-56 |
+| [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | done | APP-77,DEP-56 |
 | [DEPS-19](DEPS-19.md) | зависимости каталога признаков и TI — `ring` (Ed25519), `regex`, `publicsuffix`, `winnow`; `zip`, `infer`, `ipnet` в крейты | deps | B | deps-19 | done | — |
 | [DEPS-20](DEPS-20.md) | — | — | — | deps-20 | done | — |
 | [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | done | CTR-94 |
