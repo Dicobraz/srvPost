@@ -1230,15 +1230,22 @@ impl Installer {
         Ok(())
     }
 
-    /// Полная установка проверенного пакета: BLOB, манифест ([`RiskStore::put_package`]), активация
-    /// ([`RiskStore::activate`]), очистка архивов прошлых версий — после фиксации. Новые для каталога
-    /// признаки — «только отчёт» (как в Admin API: отчёт считают до записи). Возвращает отчёт.
-    pub async fn install(&self, mut verified: Verified) -> Result<UpdateReport> {
+    /// Ставит проверенный пакет, не активируя (как маршрут Admin API после проверки узла): BLOB,
+    /// манифест ([`RiskStore::put_package`]); новые для каталога признаки — «только отчёт» (отчёт
+    /// считают до записи). Возвращает отчёт «что изменится»; активация — отдельно.
+    pub async fn put(&self, mut verified: Verified) -> Result<UpdateReport> {
         let old = self.store.effective(TenantId::DEFAULT).await?;
         let update = Catalog::apply_update(&old, &mut verified.manifest.signals);
         self.stage(&verified).await?;
-        let version = verified.manifest.version;
         self.store.put_package(&verified.manifest).await?;
+        Ok(update)
+    }
+
+    /// Полная установка проверенного пакета: [`Installer::put`], активация
+    /// ([`RiskStore::activate`]), очистка архивов прошлых версий — после фиксации.
+    pub async fn install(&self, verified: Verified) -> Result<UpdateReport> {
+        let version = verified.manifest.version;
+        let update = self.put(verified).await?;
         self.store.activate(version).await?;
         tracing::info!(
             version,
@@ -2086,10 +2093,11 @@ impl RiskUpdate {
         if stored.contains(&version) {
             return Ok(UpdateOutcome::UpToDate);
         }
-        self.installer.install(verified).await?;
+        self.installer.put(verified).await?;
         let activated = self.section.update.auto_activate;
         if activated {
             self.store.activate(version).await?;
+            self.installer.cleanup().await;
         } else {
             tracing::info!(
                 version,

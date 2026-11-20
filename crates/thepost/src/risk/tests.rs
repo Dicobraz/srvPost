@@ -314,18 +314,20 @@ async fn v2_over_v1_keeps_admin_weight_and_rejects_old_versions() {
         .await
         .expect("политика");
 
-    // v2: вес пакета 5 — действующий вес остаётся 7 (изменение администратора сохранено).
+    // v2: вес пакета 5 (режим и срок — как у хранимой v1: новые в первом пакете приходят
+    // «только отчёт»), действующий вес остаётся 7 (изменение администратора сохранено).
     let v2 = {
         let (list, list_bytes) = bad_domains("lists/bad-domains.txt");
+        let mut disk = disk_signal();
+        disk.mode = Mode::Report;
+        let mut listed = list_signal();
+        listed.weight = 5;
+        listed.mode = Mode::Report;
         build_package(
             &key,
             VENDOR,
             2,
-            vec![disk_signal(), {
-                let mut s = list_signal();
-                s.weight = 5;
-                s
-            }],
+            vec![disk, listed],
             vec![(list, list_bytes)],
             Vec::new(),
             vec![source()],
@@ -589,7 +591,7 @@ async fn min_node_and_format_are_checked() {
     let err = Verifier::with_key(VENDOR, public(&key))
         .verify(&bad, None)
         .expect_err("формат");
-    assert!(err.to_string().contains("формата пакета"), "{err}");
+    assert!(err.to_string().contains("формат пакета"), "{err}");
 }
 
 /// Переписывает манифест в архиве (проверка схемы выполняется до проверки подписи).
@@ -783,6 +785,7 @@ async fn pack_signs_and_verify_accepts_roundtrip() {
     .expect("sources.json");
     // Манифест сборки: хэши списка ещё не заполнены (считает `pack`).
     let zeros = [0u8; 32];
+    let hex_zero = "0".repeat(64);
     let manifest = serde_json::json!({
         "format": 1,
         "version": 7,
@@ -802,7 +805,7 @@ async fn pack_signs_and_verify_accepts_roundtrip() {
         "lists": [{
             "id": "bad-domains",
             "path": "lists/bad-domains.txt",
-            "sha256": zeros,
+            "sha256": hex_zero,
             "entries": 2,
             "kind": "domain",
             "source": "vendor-feed"
@@ -937,6 +940,11 @@ async fn admin_node_stages_lists_before_activation() {
     let bytes = package_v1(&key, 1);
     let verified = node.verify_package(&bytes).await.expect("проверка");
     assert_eq!(verified.manifest.version, 1);
+    // Манифест записывает маршрут Admin API (put_package), активация — отдельно.
+    cache
+        .put_package(&verified.manifest)
+        .await
+        .expect("манифест");
     let catalog = cache.effective(TenantId::DEFAULT).await.expect("каталог");
     assert!(
         catalog.signals.is_empty(),
