@@ -37,7 +37,9 @@
 | Enterprise-ВМ, Enterprise-K8s | по результатам испытаний на стенде (приложение Д) | [S8](spec/S8.md), [APP-Z З.3, З.4](spec/APP-Z.md) |
 
 Общее для СУБД: рабочий набор (горячие ящики, индексы) — в RAM, хранилище — SSD/NVMe ([S3 п. 3.1](spec/S3.md)).
-Проверки размера ВМ в `doctor` нет: при нехватке — рост задержек, проверить — метрики `/metrics`.
+Носитель PostgreSQL — без соседей по очереди записи: хранилище блобов узла, журналы и прочие тяжёлые писатели —
+в сторону ([PostgreSQL](#postgresql)). Проверки размера ВМ в `doctor` нет: при нехватке — рост задержек,
+проверить — метрики `/metrics`.
 
 ## Сеть и порты
 
@@ -145,6 +147,7 @@ ManageSieve. JMAP, DAV и Admin API по Kerberos не входят — прин
 | Часовой пояс UTC | `database.timezone`, `database.log_timezone` | см. [Время](#время) | там же |
 | Enterprise: синхронная реплика, ≥ 2 кандидата (малый Enterprise — 1), `synchronous_commit` `on` или `remote_apply`, RPO = 0, RTO ≤ 30 с | `database.sync_replication` при `meta.doctor.sync_replication: true` | `FAIL`/`WARN` по числу кандидатов и `synchronous_commit` | [S3 п. 3.1](spec/S3.md), [deploy/README](../deploy/README.md#postgresql-высокая-доступность-enterprise) |
 | Enterprise: PgBouncer 1.21+ в режиме transaction; слушатель сигналов и миграции — напрямую к primary (`direct_url`) | конфигурация PgBouncer | сигналы и миграции через пул не работают | [S3 п. 3.1](spec/S3.md), [deploy/README](../deploy/README.md#enterprise-вм-ansible-pg_auto_failover) |
+| Носитель — SSD/NVMe, физически отдельный от записи блобов узла и других тяжёлых писателей (индексатор, антивирус, резервное копирование); `pg_wal` на другом разделе/томе того же устройства отдельным носителем не считается — эффект даёт только физическое разделение | под приёмной нагрузкой: `ALTER SYSTEM SET log_min_duration_statement = '100ms'; ALTER SYSTEM SET log_lock_waits = on; SELECT pg_reload_conf();` и смотри журнал СУБД — в здоровом окружении стоек `COMMIT`/`FOR UPDATE` дольше 100 мс почти нет (после замера — `ALTER SYSTEM RESET ALL`) | на совмещённом или занятом носителе фиксации встают на сотни мс с хвостами в секунды: растёт SMTP p95 при приёме, насыщается пул соединений, появляются стойки `FOR UPDATE` на `mailbox_state`; одинаковая сборка: 120–158 мс p95 на здоровом SSD против 1.76 с на совмещённом носителе эталона (Д.7) | [S3 п. 3.1](spec/S3.md), [DEP-13 «Диагностика 2026-11-20 — ноутбук»](manual-tests/DEP-13.md) |
 
 ### Пересоздать базу в UTF-8
 
