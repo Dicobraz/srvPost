@@ -7,6 +7,10 @@
   получатели, пустая тема. Отправка — Email/set + EmailSubmission/set (send.ts), окно undo ~15 с
   с тостом «Отменить» (undo возвращает письмо в черновики; после срока — cannotUnsend, тост
   честно сообщает). Ответы/пересылка — из письма (цитата, forward attached .eml).
+
+  Правила react-hooks (React Compiler): начальное содержимое — lazy useState (не setState в
+  эффекте), сохранитель черновика — в ref и создаётся в эффекте (доступ к ref — только в
+  эффектах и обработчиках, ни во время рендера), состояния mutируются только через setState.
 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -74,6 +78,69 @@ function snapshotFromDraft(email: EmailFull, identity: Identity | null): Compose
     bodyHtml: sanitizeComposeHtml(bodyHtml),
     attachments,
   };
+}
+
+/** Начальное содержимое вкладки: черновик сервера, ответ/пересылка с цитатой или пустое письмо
+ * с подписью (identity → каталог; пусто — подпись из localStorage, настройки — WEB-14). */
+function buildInitial(
+  kind: ComposeKind,
+  draft: EmailFull | null,
+  source: EmailFull | null,
+  from: Identity,
+  selfAddress: string,
+): ComposeSnapshot & { html: string } {
+  const signatureHtml = from.htmlSignature?.trim()
+    ? sanitizeComposeHtml(from.htmlSignature)
+    : sanitizeComposeHtml(localSignature());
+  const signature = signatureHtml ? `<div class="tp-sig">${signatureHtml}</div>` : "";
+  if (draft) {
+    const snap = snapshotFromDraft(draft, from);
+    return { ...snap, html: snap.bodyHtml };
+  }
+  if (source) {
+    const quote = kind === "forward" ? forwardQuoteHtml(source) : quoteHtml(source);
+    let to = replyToOf(source);
+    let cc: Recipient[] = [];
+    if (kind === "reply-all") {
+      const all = replyAllToOf(source, selfAddress);
+      to = all.to;
+      cc = all.cc;
+    }
+    return {
+      from: { name: from.name || from.email, email: from.email },
+      to,
+      cc,
+      bcc: [],
+      subject: subjectFor(kind === "forward" ? "forward" : "reply", source.subject),
+      bodyHtml: `${quote}${signature}`,
+      // Пересылка с вложением: оригинал — как .eml (forward attached, PARITY.md).
+      attachments: kind === "forward" ? forwardParts(source) : [],
+      html: `${quote}${signature}`,
+    };
+  }
+  return {
+    from: { name: from.name || from.email, email: from.email },
+    to: [],
+    cc: [],
+    bcc: [],
+    subject: "",
+    bodyHtml: signature,
+    attachments: [],
+    html: signature,
+  };
+}
+
+/** Вложения пересылки: .eml оригинала — в снимок при создании письма. */
+function forwardParts(source: EmailFull): Attachment[] {
+  return forwardAttachments(source).map((p, i) => ({
+    id: `f${i}`,
+    name: p.name ?? "Письмо.eml",
+    size: p.size,
+    type: p.type,
+    status: "ready" as const,
+    progress: 1,
+    blobId: p.blobId ?? undefined,
+  }));
 }
 
 /** Причина открытия композера — параметры маршрута /compose. */
@@ -208,21 +275,24 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
   );
   const knownDomains = useMemo(() => domainsOf(contacts.data ?? []), [contacts.data]);
 
-  // Состояние письма: поля и тело отдельно (редактор даёт HTML по onUpdate).
+  // Адрес отправителя (Send As): переключение — состояние; права проверяет сервер.
   const [fromId, setFromId] = useState(identity.id);
   const from = identities.find((i) => i.id === fromId) ?? identity;
-  const [to, setTo] = useState<Recipient[]>([]);
-  const [cc, setCc] = useState<Recipient[]>([]);
-  const [bcc, setBcc] = useState<Recipient[]>([]);
-  const [subject, setSubject] = useState("");
-  const [bodyHtml, setBodyHtml] = useState("");
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  // Начальное содержимое — один раз на вкладку (ComposerPage гарантирует готовность данных).
+  const [initial] = useState(() => buildInitial(kind, draft, source, identity, env.selfAddress));
+  const [to, setTo] = useState<Recipient[]>(initial.to);
+  const [cc, setCc] = useState<Recipient[]>(initial.cc);
+  const [bcc, setBcc] = useState<Recipient[]>(initial.bcc);
+  const [subject, setSubject] = useState(initial.subject);
+  const [bodyHtml, setBodyHtml] = useState(initial.bodyHtml);
+  const [attachments, setAttachments] = useState<Attachment[]>(initial.attachments);
   const [confirmSend, setConfirmSend] = useState(false);
   const [sending, setSending] = useState(false);
   const [dropHot, setDropHot] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
-  const [initialHtml, setInitialHtml] = useState<string | null>(null);
+  const [hasDraft, setHasDraft] = useState(Boolean(draft));
 
   const snapshotWith = useCallback(
     (patch: Partial<ComposeSnapshot>): ComposeSnapshot => ({
@@ -238,74 +308,35 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
     [from, to, cc, bcc, subject, bodyHtml, attachments],
   );
 
-  // Сохранитель черновика — обычный объект в состоянии (никаких ref: правила react-hooks
-  // запрещают доступ к ref во время рендера); восстановленный черновик сервера — его же id.
-  const [saver] = useState(
-    () =>
-      new DraftSaver(env, (s) => {
+  // Сохранитель черновика — объект в ref, создаётся в эффекте (не во время рендера); доступ —
+  // только в эффектах и обработчиках. Восстановленный черновик сервера — его же id.
+  const saverRef = useRef<DraftSaver | null>(null);
+  useEffect(() => {
+    if (!saverRef.current) {
+      saverRef.current = new DraftSaver(env, (s) => {
         setSavedAt(s.draftId ? new Date() : null);
         setDraftError(s.error ?? null);
-      }),
-  );
-  useEffect(() => {
-    saver.draftsMailboxId = draftsMailboxId;
-  }, [saver, draftsMailboxId]);
+        setHasDraft(Boolean(s.draftId));
+      });
+      if (draft) saverRef.current.draftId = draft.id;
+    }
+    saverRef.current.draftsMailboxId = draftsMailboxId;
+  }, [saverRef, draftsMailboxId, env, draft]);
 
   const scheduleDraft = useCallback(
     (snap: ComposeSnapshot) => {
-      if (draftsMailboxId && snapshotHasContent(snap)) saver.schedule(snap);
+      if (draftsMailboxId && snapshotHasContent(snap)) saverRef.current?.schedule(snap);
     },
-    [saver, draftsMailboxId],
+    [draftsMailboxId],
   );
-
-  // Начальное содержимое — один раз: черновик сервера (источник истины) или ответ/пересылка
-  // с цитатой и подписью (identity → каталог; пусто — подпись из localStorage, настройки WEB-14).
-  useEffect(() => {
-    if (initialHtml !== null) return;
-    const signatureHtml = from.htmlSignature?.trim()
-      ? sanitizeComposeHtml(from.htmlSignature)
-      : sanitizeComposeHtml(localSignature());
-    const signature = signatureHtml ? `<div class="tp-sig">${signatureHtml}</div>` : "";
-    if (draft) {
-      const snap = snapshotFromDraft(draft, from);
-      setTo(snap.to);
-      setCc(snap.cc);
-      setBcc(snap.bcc);
-      setSubject(snap.subject);
-      setBodyHtml(snap.bodyHtml);
-      setAttachments(snap.attachments);
-      setInitialHtml(snap.bodyHtml);
-      return;
-    }
-    if (source) {
-      const quote = kind === "forward" ? forwardQuoteHtml(source) : quoteHtml(source);
-      if (kind === "reply-all") {
-        const all = replyAllToOf(source, env.selfAddress);
-        setTo(all.to);
-        setCc(all.cc);
-      } else {
-        setTo(replyToOf(source));
-      }
-      setSubject(subjectFor(kind === "forward" ? "forward" : "reply", source.subject));
-      // Пересылка с вложением: оригинал — как .eml (forward attached, PARITY.md).
-      if (kind === "forward") setAttachments(forwardParts(source));
-      const html = `${quote}${signature}`;
-      setBodyHtml(html);
-      setInitialHtml(html);
-      return;
-    }
-    setBodyHtml(signature);
-    setInitialHtml(signature);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- сборка начального письма один раз на вкладку
-  }, [initialHtml]);
 
   // Уход со вкладки (Закрыть, смена раздела) — непустые правки идут в черновики; нет
   // накопленного снимка — черновик сервера не трогается (закрытие без правок ничего не удаляет).
   useEffect(() => {
     return () => {
-      void saver.flush().catch(() => undefined);
+      void saverRef.current?.flush().catch(() => undefined);
     };
-  }, [saver]);
+  }, []);
 
   // ---------- Вложения: пикер, drag-drop, прогресс, отмена ----------
 
@@ -359,6 +390,7 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
   );
 
   const send = async () => {
+    const saver = saverRef.current;
     if (!sentMailboxId || !draftsMailboxId) {
       toast.show("Папки «Отправленные» и «Черновики» недоступны — отправка не выполнена.");
       return;
@@ -373,12 +405,12 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
     }
     setSending(true);
     try {
-      await saver.flush();
+      if (saver) await saver.flush();
       const snapshot = snapshotWith({});
       const result = await sendMessage(env, snapshot, {
         sentMailboxId,
         identityId: from.id,
-        destroyDraftId: saver.draftId ?? null,
+        destroyDraftId: saver?.draftId ?? null,
         undoable: supportsUndoSend(env.session, env.accountId),
         references: source && kind !== "forward" ? replyReferences(source) : undefined,
       });
@@ -406,18 +438,20 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
           }
         : undefined;
       toast.show(label, undo, undo ? UNDO_SEND_SECONDS * 1000 : undefined);
-      saver.draftId = null;
+      if (saver) saver.draftId = null;
       navigate("/");
     } catch (e) {
       // Честная ошибка сервера (forbiddenToSend и пр.) — текст в тост, письмо остаётся открытым.
       toast.show(e instanceof Error ? e.message : "Отправка не выполнена.");
-      saver.schedule(snapshotWith({}));
+      if (saver) saver.schedule(snapshotWith({}));
     } finally {
       setSending(false);
     }
   };
 
   const saveDraftNow = async () => {
+    const saver = saverRef.current;
+    if (!saver) return;
     saver.schedule(snapshotWith({}));
     await saver.flush();
     if (saver.error) toast.show(saver.error);
@@ -426,6 +460,8 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
   };
 
   const deleteDraft = async () => {
+    const saver = saverRef.current;
+    if (!saver) return;
     await saver.destroyCurrent();
     void queryClient.invalidateQueries({ queryKey: ["window"] });
     toast.show("Черновик удалён");
@@ -433,15 +469,6 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
   };
 
   // ---------- Рендер ----------
-
-  if (initialHtml === null) {
-    return (
-      <section className="stub" aria-busy="true">
-        <h1>Новое письмо</h1>
-        <p>Готовим письмо…</p>
-      </section>
-    );
-  }
 
   return (
     <div
@@ -475,7 +502,7 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
           type="button"
           className="btn-q"
           onClick={() => void deleteDraft()}
-          disabled={!saver.draftId && !draft}
+          disabled={!hasDraft && !draft}
           title="Черновик сервера удаляется, вкладка закрывается"
         >
           <Icon name="trash" size={16} />
@@ -581,7 +608,7 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
           )}
 
           <ComposeEditor
-            initialHtml={initialHtml}
+            initialHtml={initial.html}
             onChange={(html) => {
               setBodyHtml(html);
               scheduleDraft(snapshotWith({ bodyHtml: html }));
@@ -649,17 +676,4 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
       </div>
     </div>
   );
-}
-
-/** Вложения пересылки: .eml оригинала + его файлы — в снимок при создании письма. */
-export function forwardParts(source: EmailFull): Attachment[] {
-  return forwardAttachments(source).map((p, i) => ({
-    id: `f${i}`,
-    name: p.name ?? "Письмо.eml",
-    size: p.size,
-    type: p.type,
-    status: "ready" as const,
-    progress: 1,
-    blobId: p.blobId ?? undefined,
-  }));
 }

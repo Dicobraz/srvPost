@@ -6,7 +6,7 @@
   редактора (UndoRedo из StarterKit v3). Обработчики — через ref: замыкание editorProps живёт
   на создании редактора, свежие пропсы читает handlers.current.
 */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -61,10 +61,6 @@ export function ComposeEditor({ initialHtml, onChange, onFiles, onPickFiles }: E
   useEffect(() => {
     handlers.current = { onChange, onFiles, onPickFiles };
   });
-
-  // Пикер файлов — через useCallback (замыкание ленивое, react-hooks/refs не считает его
-  // доступом к ref во время рендера).
-  const pickFiles = useCallback(() => handlers.current.onPickFiles(), []);
 
   const editor = useEditor({
     extensions: [
@@ -193,7 +189,7 @@ export function ComposeEditor({ initialHtml, onChange, onFiles, onPickFiles }: E
           )}
         </span>
         <span className="fs" />
-        {btn("Вложить файл", false, () => pickFiles(), <Icon name="clip" size={16} />)}
+        {btn("Вложить файл", false, onPickFiles, <Icon name="clip" size={16} />)}
       </div>
       <div className="bodyc" ref={bodyRef}>
         <EditorContent editor={editor} className="compose-editor" />
