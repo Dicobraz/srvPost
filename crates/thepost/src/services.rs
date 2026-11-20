@@ -160,6 +160,11 @@ pub struct Services {
     /// `trust`, сброс по `trust_changed` шины). Один для доставки SMTP, приёма iTIP, DAV, JMAP и Admin API;
     /// сигналы шины — [`TrustCache::watch`] (запускает `serve`).
     pub trust: Arc<TrustCache>,
+    /// Журналирование переписки (APP-84, SRS 4.9): этап конвейера доставки `Delivery::with_journal`
+    /// (SMTP-53) — правила организации ([`crate::journal::NodeJournal`], чтение на каждое письмо) и
+    /// хранилище записей с индексом (бакет BLOB-18 + `PgJournal`, двухфазная запись); `None` — секция
+    /// `journal` (APP-83) выключена, этапа нет, поведение прежнее.
+    pub journal: Option<crate::journal::NodeJournal>,
 }
 
 impl std::fmt::Debug for Services {
@@ -468,6 +473,11 @@ impl Services {
 
         let gal_push = Arc::new(crate::gal::GalPush::new(bus.clone()));
 
+        // Журналирование переписки (APP-84, SRS 4.9): секция `journal` (APP-83) выключена — этапа
+        // конвейера нет, поведение прежнее; включена — открываются хранилище записей (BLOB-18,
+        // отдельный бакет/каталог) и индекс `PgJournal` (META-88) на пуле узла.
+        let journal = crate::journal::NodeJournal::open(cfg, &meta, Some(&secrets)).await?;
+
         Ok(Self {
             tenant,
             meta,
@@ -504,6 +514,7 @@ impl Services {
             sieve: sieve_section,
             itip,
             trust,
+            journal,
         })
     }
 
@@ -531,6 +542,9 @@ impl Services {
     /// приглашение представителя (`SENT-BY`) — по записи представителя организатора с `schedule_on_behalf` из
     /// `PgMeta` (`Delivery::with_delegates`, APP-69). Письма учётных записей — `PgMeta`
     /// (`Delivery::with_messages`, SMTP-55): ручной iTIP-ответ на приглашение из папки «Спам» отклоняется.
+    /// Журналирование переписки (`Delivery::with_journal`, SMTP-53, APP-84): копия письма и полный конверт —
+    /// в отдельный бакет журнала по правилам организации, до Sieve ящика и независимо от него; секция `journal`
+    /// (APP-83) выключена — этапа нет.
     fn base_delivery(&self, smtp: &SmtpConfig) -> Result<Delivery> {
         let resolver = system_resolver()?;
         let milter = (!smtp.milter.filters.is_empty())
@@ -553,7 +567,7 @@ impl Services {
             Arc::new(self.meta.clone()),
         );
         let forwarding = Forwarding::new(self.secrets.clone(), smtp.forward.clone());
-        Ok(Delivery::new(deps, smtp)
+        let delivery = Delivery::new(deps, smtp)
             .with_groups(groups)
             .with_tracking(self.tracking.clone())
             .with_transport(self.routes.clone())
@@ -567,7 +581,13 @@ impl Services {
             .with_messages(Arc::new(self.meta.clone()))
             // Политика доверия (APP-76, решение 124): тип абонента, действующая матрица получателя,
             // домены-партнёры и автопересылки — тот же кэш узла, что у iTIP, DAV, JMAP и Admin API.
-            .with_trust(Arc::clone(&self.trust) as Arc<dyn TrustStore>))
+            .with_trust(Arc::clone(&self.trust) as Arc<dyn TrustStore>);
+        // Этап журналирования (SMTP-53, APP-84): секция `journal` выключена — этап не ставится
+        // (нулевое поведение прежнее); включена — этап JOURNAL перед Sieve ящика.
+        Ok(match &self.journal {
+            Some(journal) => delivery.with_journal(journal.journaling()),
+            None => delivery,
+        })
     }
 
     /// Планирование встреч (APP-28) для CalDAV (`tp_dav::router_shared`) и JMAP (`Jmap::with_schedule`): учётным
@@ -873,7 +893,7 @@ impl Services {
                 })
                 .collect(),
         };
-        Ok(tp_admin::Admin::new(deps, cfg)
+        let admin = tp_admin::Admin::new(deps, cfg)
             .map_err(|e| infra::context("admin", e))?
             // Правила Sieve и автоответ за пользователя (ADM-14).
             .with_sieve(Arc::new(self.meta.clone()), check)
@@ -901,7 +921,13 @@ impl Services {
             // Брендинг установки и организаций (ADM-48): наборы уровней — `BrandingStore` поверх `PgMeta`
             // (META-84), байты знаков — BLOB узла (`BrandLogo::path`, без распаковки: знак записан как есть);
             // без этого маршруты брендинга и открытый маршрут отвечают 503.
-            .with_branding(Arc::new(self.meta.clone()), self.blob.clone()))
+            .with_branding(Arc::new(self.meta.clone()), self.blob.clone());
+        // Журнал переписки (ADM-52): хранилище узла — тот же индекс с бакетом, что у этапа конвейера
+        // доставки (APP-84); секция `journal` выключена — журнал не подключён, маршруты отвечают 503.
+        Ok(match &self.journal {
+            Some(journal) => admin.with_journal(journal.store()),
+            None => admin,
+        })
     }
 
     /// Обучение антиспама (подписчик журнала событий `smtp-learn` роли maintenance): письмо, перенесённое в «Спам»

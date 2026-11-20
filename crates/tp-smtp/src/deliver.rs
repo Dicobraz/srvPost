@@ -4232,7 +4232,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-mod journal;
+pub mod journal;
 mod moderation;
 mod pipeline;
 mod scheduled;

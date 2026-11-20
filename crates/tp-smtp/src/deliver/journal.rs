@@ -93,6 +93,12 @@ impl Delivery {
         if mail_from.is_empty() || rcpts.is_empty() {
             return Ok(());
         }
+        // Момент письма — микросекунды: доля длиннее шести цифр в каноническом JSON записи округляется
+        // PostgreSQL при сверке со столбцом (journal.tp_consistent), а столбец timestamptz пишется
+        // усечением — запись выглядела бы разрывом цепочки. Запись одна и в индексе, и в хранилище.
+        let at = at
+            .replace_nanosecond(at.nanosecond() / 1_000 * 1_000)
+            .expect("микросекунды");
         let tenant = self.deps.tenant;
         let rules: Vec<JournalRule> = journal
             .rules
