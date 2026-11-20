@@ -139,7 +139,7 @@ pub trait ExternalLists: std::fmt::Debug + Send + Sync + 'static {
 
 /// Списков нет — умолчание [`Context::lists`] (и [`crate::Rules`] без `with_lists`).
 #[derive(Debug)]
-struct NoLists;
+pub(crate) struct NoLists;
 
 impl ExternalLists for NoLists {
     fn contains(&self, _uri: &str, _value: &str) -> bool {
