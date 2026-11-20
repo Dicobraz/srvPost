@@ -50,6 +50,7 @@ use tp_admin_client::{
 };
 use tp_contracts::branding::{BrandColor, CliRole, Role};
 use tp_contracts::groups::{GroupMember, SenderRestriction};
+use tp_contracts::journal::JournalScope;
 use tp_contracts::transport::{
     AcceptedDomain, DestinationPolicy, DomainKind, SourceKind, SourceMatch, TlsRequirement,
     TrustedSource,
@@ -660,7 +661,8 @@ pub enum DeliveryAction {
 }
 
 /// Действия с журналом переписки (SRS 4.9, 5.2; ADM-52): роль «аудитор журнала»; администраторам
-/// организации и инсталляции содержимое журнала недоступно.
+/// организации и инсталляции содержимое журнала недоступно. Правила журналирования (ADM-53) —
+/// администратор организации.
 #[derive(Debug, Clone, Subcommand)]
 pub enum JournalAction {
     /// Записи по возрастанию времени; условия — по «и».
@@ -705,6 +707,64 @@ pub enum JournalAction {
     },
     /// Отчёт целостности хеш-цепочки индекса журнала организации.
     Verify,
+    /// Правила журналирования (ADM-53): администратор организации.
+    Rule {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<JournalRuleAction>,
+    },
+}
+
+/// Действия с правилами журналирования (ADM-53, решение #171): цель — организация, группа или ящик,
+/// направление In/Out/Both; изменение действует без перезапуска узла.
+#[derive(Debug, Clone, Subcommand)]
+pub enum JournalRuleAction {
+    /// Правила в порядке наследования: ящик > группа > организация.
+    List,
+    /// Создать или заменить правило: цель — `--group` или `--account`, иначе вся организация.
+    /// Изменение конвейер подхватывает без перезапуска.
+    Set {
+        /// Идентификатор правила (до 64 символов, без пробелов).
+        id: String,
+        /// Группа: идентификатор (UUID), имя или адрес.
+        #[arg(long, conflicts_with = "account")]
+        group: Option<String>,
+        /// Ящик: идентификатор (UUID) или имя входа.
+        #[arg(long)]
+        account: Option<String>,
+        /// Направление: входящее, исходящее или оба.
+        #[arg(long, value_enum, default_value_t = DirectionArg::Both)]
+        direction: DirectionArg,
+        /// Создать или заменить правило выключенным (по умолчанию — включено).
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// Удалить правило. Записи журнала не трогает: изменение действует на будущие письма.
+    Delete {
+        /// Идентификатор правила (из `journal rule list`).
+        id: String,
+    },
+}
+
+/// Направление правила журналирования для CLI (`in`, `out`, `both`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DirectionArg {
+    /// Доставляемое в ящики организации.
+    In,
+    /// Отправляемое клиентом.
+    Out,
+    /// Оба направления.
+    Both,
+}
+
+impl From<DirectionArg> for tp_contracts::journal::JournalDirection {
+    fn from(d: DirectionArg) -> Self {
+        match d {
+            DirectionArg::In => Self::In,
+            DirectionArg::Out => Self::Out,
+            DirectionArg::Both => Self::Both,
+        }
+    }
 }
 
 /// Ресурсы транспорта; каждая запись — по версии снимка последнего чтения (устарела — 409, повторите команду).
@@ -2598,6 +2658,125 @@ async fn journal_command(
             };
             out(args, &r, text)
         }
+        JournalAction::Rule { action } => journal_rule_command(client, args, &org, *action).await,
+    }
+}
+
+/// `thepost admin journal rule list/set/delete` (ADM-53): правила журналирования — администратор
+/// организации; аудитор журнала правил не видит.
+async fn journal_rule_command(
+    client: &Client,
+    args: &ApiArgs,
+    org: &str,
+    action: JournalRuleAction,
+) -> CliResult<String> {
+    match action {
+        JournalRuleAction::List => {
+            let list: tp_admin::journal::JournalRulesView = client
+                .call(JOURNAL_RULES_LIST, &[org], &[], NO_BODY)
+                .await?;
+            let rows: Vec<Vec<String>> = list
+                .rules
+                .iter()
+                .map(|r| {
+                    vec![
+                        r.id.clone(),
+                        rule_scope(&r.scope),
+                        rule_direction(r.direction).to_owned(),
+                        yes_no(r.enabled),
+                    ]
+                })
+                .collect();
+            let text = format!(
+                "{}Порядок наследования: ящик > группа > организация.\n",
+                style::table(
+                    args.theme(),
+                    &["ПРАВИЛО", "ЦЕЛЬ", "НАПРАВЛЕНИЕ", "ВКЛЮЧЕНО"],
+                    &rows,
+                )
+            );
+            out(args, &list, text)
+        }
+        JournalRuleAction::Set {
+            id,
+            group,
+            account,
+            direction,
+            disabled,
+        } => {
+            let scope = match (group, account) {
+                (Some(g), _) => JournalScope::Group(
+                    group_id(client, org, &g)
+                        .await?
+                        .parse()
+                        .map_err(|e| format!("группа {g}: {e}"))?,
+                ),
+                (None, Some(a)) => JournalScope::Mailbox(
+                    account_id(client, org, &a)
+                        .await?
+                        .parse()
+                        .map_err(|e| format!("учётная запись {a}: {e}"))?,
+                ),
+                (None, None) => JournalScope::Org,
+            };
+            let body = tp_admin::journal::JournalRuleBody {
+                scope,
+                direction: direction.into(),
+                enabled: !disabled,
+            };
+            let r: tp_admin::journal::JournalRuleView = client
+                .call(JOURNAL_RULE_PUT, &[org, &id], &[], Some(&body))
+                .await?;
+            let text = format!(
+                "{}Изменение конвейер подхватывает без перезапуска (следующие письма).\n",
+                rule_record(&r)
+            );
+            out(args, &r, text)
+        }
+        JournalRuleAction::Delete { id } => {
+            let r: tp_admin::journal::JournalRuleView = client
+                .call(JOURNAL_RULE_DELETE, &[org, &id], &[], NO_BODY)
+                .await?;
+            out(args, &r, format!("Правило {id} удалено.\n"))
+        }
+    }
+}
+
+/// Правило журналирования — строки «подпись: значение».
+fn rule_record(r: &tp_admin::journal::JournalRuleView) -> String {
+    record(&[
+        ("Правило", r.id.clone()),
+        ("Организация", r.tenant.clone()),
+        ("Цель", rule_scope(&r.scope)),
+        ("Направление", rule_direction(r.direction).to_owned()),
+        ("Включено", yes_no(r.enabled)),
+    ])
+}
+
+/// Область правила — текст таблицы и записи.
+fn rule_scope(scope: &JournalScope) -> String {
+    match scope {
+        JournalScope::Org => "организация".to_owned(),
+        JournalScope::Group(g) => format!("группа {g}"),
+        JournalScope::Mailbox(a) => format!("ящик {a}"),
+    }
+}
+
+/// Направление правила — имя из API.
+fn rule_direction(direction: tp_contracts::journal::JournalDirection) -> &'static str {
+    match direction {
+        tp_contracts::journal::JournalDirection::In => "in",
+        tp_contracts::journal::JournalDirection::Out => "out",
+        tp_contracts::journal::JournalDirection::Both => "both",
+    }
+}
+
+/// Да/нет для таблиц.
+fn yes_no(yes: bool) -> String {
+    if yes {
+        "да".to_owned()
+    } else {
+        "нет".to_owned()
     }
 }
 
@@ -3218,6 +3397,33 @@ mod tests {
         let cli = Cli::try_parse_from([
             "thepost",
             "admin",
+            "journal",
+            "rule",
+            "set",
+            "team-in",
+            "--group",
+            "board",
+            "--direction",
+            "in",
+            "--disabled",
+        ])
+        .expect("journal rule set");
+        let Command::Admin { action, .. } = cli.command else {
+            panic!("{:?}", cli.command)
+        };
+        let AdminAction::Api(ApiAction::Journal { action }) = action else {
+            panic!("{action:?}")
+        };
+        let JournalAction::Rule { action } = *action else {
+            panic!("{action:?}")
+        };
+        let JournalRuleAction::Set { id, group, .. } = *action else {
+            panic!("{action:?}")
+        };
+        assert_eq!((id.as_str(), group.as_deref()), ("team-in", Some("board")));
+        let cli = Cli::try_parse_from([
+            "thepost",
+            "admin",
             "--org",
             "00000000-0000-0000-0000-000000000001",
             "trust",
@@ -3740,6 +3946,16 @@ mod tests {
                 scopes: None,
             },
         );
+        bearer.add_token(
+            "org",
+            Principal {
+                tenant: TenantId::DEFAULT,
+                account: AccountId::new(),
+                login: "org@example.test".into(),
+                groups: BTreeSet::from(["mail-admins".to_owned()]),
+                scopes: None,
+            },
+        );
         let password = tp_auth::PasswordAuthenticator::new(tp_auth::Accounts::new(
             TenantId::DEFAULT,
             Arc::new(meta.clone()),
@@ -3789,6 +4005,11 @@ mod tests {
                     logins: vec![],
                     groups: vec!["compliance".into()],
                 },
+                RoleBinding {
+                    role: AdminRole::OrganizationAdmin,
+                    logins: vec![],
+                    groups: vec!["mail-admins".into()],
+                },
             ],
             page_size: 2,
             max_page_size: 2,
@@ -3803,6 +4024,7 @@ mod tests {
                     MemTrust::new().with_groups(Arc::new(groups.clone())),
                 ))
                 .with_journal(Arc::new(journal.clone()))
+                .with_journal_rules(Arc::new(journal.clone()))
                 .with_sieve(Arc::new(MemSieve::new()), check_script)
                 .with_org_script_check(check_org_script)
                 .with_local_tokens(Arc::new(MemLocalAdminTokens::new()))
@@ -4180,6 +4402,157 @@ mod tests {
             text.contains("Цепочка целостна") && text.contains("да") && !text.contains("нет"),
             "{text}"
         );
+    }
+
+    /// Приёмка ADM-53: `thepost admin journal rule list/set/delete` — администратор организации ведёт
+    /// правила (цель, направление, включение), изменение конвейер читает без перезапуска; несуществующая
+    /// область — отказ с подсказкой; аудитор журнала правил не видит (403).
+    #[tokio::test]
+    async fn journal_rule_commands_against_admin_api() {
+        use tp_contracts::journal::JournalRuleStore as _;
+
+        let (_admin, url, journal) = admin_api().await;
+        let org_admin = client(&url, "org");
+        let ja = client(&url, "ja");
+        let json = |out: CliResult<String>| -> Value {
+            serde_json::from_str(&out.expect("ответ")).expect("json")
+        };
+        let rule = |id: &str,
+                    group: Option<String>,
+                    account: Option<String>,
+                    direction: DirectionArg,
+                    disabled: bool| {
+            ApiAction::Journal {
+                action: Box::new(JournalAction::Rule {
+                    action: Box::new(JournalRuleAction::Set {
+                        id: id.to_owned(),
+                        group,
+                        account,
+                        direction,
+                        disabled,
+                    }),
+                }),
+            }
+        };
+        let d = TenantId::DEFAULT;
+
+        // Задание: организация целиком, оба направления, включено (по умолчанию).
+        let v = json(
+            exec(
+                &org_admin,
+                true,
+                rule("all-mail", None, None, DirectionArg::Both, false),
+            )
+            .await,
+        );
+        assert_eq!(v["id"], "all-mail");
+        assert_eq!(v["scope"], "org");
+        assert_eq!(v["direction"], "both");
+        assert_eq!(v["enabled"], true);
+        let text = exec(
+            &org_admin,
+            false,
+            rule("all-mail", None, None, DirectionArg::Both, false),
+        )
+        .await
+        .expect("set text");
+        assert!(
+            text.contains("Цель:")
+                && text.contains("организация")
+                && text.contains("без перезапуска"),
+            "{text}"
+        );
+
+        // Изменение видно конвейеру без перезапуска: порт читает на каждом письме (SMTP-53).
+        assert_eq!(
+            journal
+                .rules(d)
+                .await
+                .expect("правила")
+                .iter()
+                .map(|r| r.id.clone())
+                .collect::<Vec<_>>(),
+            vec!["all-mail".to_owned()]
+        );
+
+        // Несуществующая группа и ящик — отказ с подсказкой (422).
+        for (what, group, account) in [
+            ("группа", Some(GroupId::new().to_string()), None),
+            ("ящик", None, Some(AccountId::new().to_string())),
+        ] {
+            let err = exec(
+                &org_admin,
+                false,
+                rule("team", group, account, DirectionArg::In, false),
+            )
+            .await
+            .expect_err("области нет");
+            assert!(err.contains("422") && err.contains(what), "{what}: {err}");
+        }
+
+        // Замена: выключение того же правила, дубликат идентификатора не плодится.
+        let v = json(
+            exec(
+                &org_admin,
+                true,
+                rule("all-mail", None, None, DirectionArg::In, true),
+            )
+            .await,
+        );
+        assert_eq!(v["enabled"], false);
+        assert_eq!(v["direction"], "in");
+        let list = json(exec(&org_admin, true, journal_rule_list()).await);
+        assert_eq!(list["rules"].as_array().expect("rules").len(), 1);
+        let text = exec(&org_admin, false, journal_rule_list())
+            .await
+            .expect("list text");
+        assert!(
+            text.contains("all-mail")
+                && text.contains("нет")
+                && text.contains("ящик > группа > организация"),
+            "{text}"
+        );
+
+        // Аудитор журнала правил не видит: чтение и запись — 403.
+        for action in [
+            journal_rule_list(),
+            rule("all-mail", None, None, DirectionArg::Both, false),
+            journal_rule_delete("all-mail"),
+        ] {
+            let err = exec(&ja, false, action).await.expect_err("аудитор журнала");
+            assert!(err.contains("403"), "{err}");
+        }
+
+        // Удаление: подсказка; повтор — 404; список пуст.
+        let text = exec(&org_admin, false, journal_rule_delete("all-mail"))
+            .await
+            .expect("delete text");
+        assert!(text.contains("удалено"), "{text}");
+        let err = exec(&org_admin, false, journal_rule_delete("all-mail"))
+            .await
+            .expect_err("правила нет");
+        assert!(err.contains("404"), "{err}");
+        let list = json(exec(&org_admin, true, journal_rule_list()).await);
+        assert_eq!(list["rules"].as_array().expect("rules").len(), 0);
+        assert!(journal.rules(d).await.expect("правила").is_empty());
+    }
+
+    /// `journal rule list`.
+    fn journal_rule_list() -> ApiAction {
+        ApiAction::Journal {
+            action: Box::new(JournalAction::Rule {
+                action: Box::new(JournalRuleAction::List),
+            }),
+        }
+    }
+
+    /// `journal rule delete <id>`.
+    fn journal_rule_delete(id: &str) -> ApiAction {
+        ApiAction::Journal {
+            action: Box::new(JournalAction::Rule {
+                action: Box::new(JournalRuleAction::Delete { id: id.to_owned() }),
+            }),
+        }
     }
 
     /// Сценарий пилота без curl: admin init → login → домены, учётная запись, пароль приложения, whoami;

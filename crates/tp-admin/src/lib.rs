@@ -6,7 +6,8 @@
 //! - [`export`] — выгрузка журнала аудита из базы в SIEM: syslog (RFC 5424 поверх TLS) и OTLP;
 //! - [`delivery`] — поиск в журнале доставки;
 //! - [`journal`] — журнал переписки для роли «аудитор журнала»: поиск, просмотр, выгрузка `.eml`,
-//!   проверка цепочки, выгрузка во внешний архив заказчика;
+//!   проверка цепочки, выгрузка во внешний архив заказчика; правила журналирования (ADM-53) —
+//!   управление администратором организации;
 //! - [`groups`] — группы рассылки: ограничения, скрытие из GAL, очередь модерации;
 //! - [`accounts`] — организация, домены, учётные записи, квоты и политики уровней;
 //! - [`queue`] — очередь исходящей почты: список записей с фильтрами, повтор доставки;
@@ -67,7 +68,8 @@ pub use init::{
 pub use journal::{
     ArchiveLedger, ArchivePosition, ArchiveSink, ChainReportView, DirectoryArchive, HttpsArchive,
     HttpsArchiveConfig, JournalArchiveConfig, JournalEntryView, JournalPageView, JournalParams,
-    JournalRecordView, MemArchiveLedger, archive_pass,
+    JournalRecordView, JournalRuleBody, JournalRuleView, JournalRulesView, MemArchiveLedger,
+    archive_pass,
 };
 pub use server::{Admin, AdminConfig, AdminRole, Deps, RoleBinding};
 pub use sharing::SharingStores;
