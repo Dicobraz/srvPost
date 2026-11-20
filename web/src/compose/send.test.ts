@@ -2,7 +2,8 @@
 // sendAt на окно undo при поддержке сервера, отмена update {undoStatus: canceled}, честные
 // ошибки (forbiddenToSend, cannotUnsend — как SetError), запись истории получателей.
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { callMethod, jmapCall } from "../api/jmap";
+import { jmapCall, submissionSet } from "../api/jmap";
+import type { SetResult } from "../api/jmap";
 import type { JmapSession } from "../api/jmap";
 import type { JmapEnv } from "../mail/types";
 import type { ComposeSnapshot } from "./model";
@@ -11,12 +12,13 @@ import { rememberSent } from "./send-history";
 
 vi.mock("../api/jmap", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/jmap")>();
-  // jmapCall — запросы sendMessage; callMethod — внутри настоящих submissionSet/identitiesGet.
-  return { ...actual, jmapCall: vi.fn(), callMethod: vi.fn() };
+  // jmapCall — запросы sendMessage; submissionSet — отмена отслеживает свой jmapCall изнутри
+  // модуля (перепривязка экспортов его не меняет), поэтому мокается сам.
+  return { ...actual, jmapCall: vi.fn(), submissionSet: vi.fn() };
 });
 
 const mocked = vi.mocked(jmapCall);
-const mockedCallMethod = vi.mocked(callMethod);
+const mockedSubmissionSet = vi.mocked(submissionSet);
 
 const ENV: JmapEnv = {
   session: {} as JmapSession,
@@ -59,7 +61,7 @@ function okResponses(submissionId = "s1") {
 
 beforeEach(() => {
   mocked.mockReset();
-  mockedCallMethod.mockReset();
+  mockedSubmissionSet.mockReset();
   localStorage.clear();
 });
 
@@ -161,12 +163,16 @@ describe("undo-send", () => {
   });
 
   test("cancelSend: update undoStatus=canceled; успех — true, cannotUnsend — false", async () => {
-    mockedCallMethod
-      .mockResolvedValueOnce({ updated: { s1: null } })
-      .mockResolvedValueOnce({ notUpdated: { s1: { type: "cannotUnsend", description: "письмо уже ушло" } } });
+    mockedSubmissionSet
+      .mockResolvedValueOnce({ created: {}, errors: {}, destroyed: [] } satisfies SetResult)
+      .mockResolvedValueOnce({
+        created: {},
+        errors: { s1: { type: "cannotUnsend", description: "письмо уже ушло" } },
+        destroyed: [],
+      } satisfies SetResult);
     await expect(cancelSend(ENV, "s1")).resolves.toBe(true);
-    expect(mockedCallMethod.mock.calls[0][2]).toBe("EmailSubmission/set");
-    expect(mockedCallMethod.mock.calls[0][3].update).toEqual({ s1: { undoStatus: "canceled" } });
+    expect(mockedSubmissionSet.mock.calls[0][2]).toBe("EmailSubmission/set");
+    expect(mockedSubmissionSet.mock.calls[0][3].update).toEqual({ s1: { undoStatus: "canceled" } });
     await expect(cancelSend(ENV, "s1")).resolves.toBe(false);
   });
 

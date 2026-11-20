@@ -25,10 +25,10 @@ test("maxSizeUpload из сессии; нет свойства — null (не п
 test("файл больше лимита — честная ошибка с числом, не больше лимита — null", () => {
   const big = new File([new Uint8Array(30)], "большой.pdf");
   const small = new File([new Uint8Array(10)], "небольшой.pdf");
-  const err = fileError(big, 25_000_000);
+  const err = fileError(big, 20);
   expect(err).toContain("большой.pdf");
-  expect(err).toContain("23,8 МБ");
-  expect(fileError(small, 25_000_000)).toBeNull();
+  expect(err).toContain("20 Б");
+  expect(fileError(small, 20)).toBeNull();
   expect(fileError(big, null)).toBeNull();
 });
 
