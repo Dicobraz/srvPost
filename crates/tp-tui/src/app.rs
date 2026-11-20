@@ -1086,8 +1086,9 @@ impl App {
                     None => Vec::new(),
                 }
             }
-            // Запросы «Доверия» разобраны раньше (ветка Pending::Trust выше).
-            Pending::Trust(_) => Vec::new(),
+            // Запросы «Доверия» и «Признаков риска» разобраны раньше (ветки Pending::Trust и
+            // Pending::Risk выше).
+            Pending::Trust(_) | Pending::Risk(_) => Vec::new(),
         }
     }
 
@@ -1715,7 +1716,7 @@ fn list_action(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect> {
             },
             None => return Vec::new(),
         },
-        View::Info { .. } | View::Config(_) | View::Trust(_) => return Vec::new(),
+        View::Info { .. } | View::Config(_) | View::Trust(_) | View::Risk(_) => return Vec::new(),
     };
     let n = match key.code {
         KeyCode::Enter => 3,

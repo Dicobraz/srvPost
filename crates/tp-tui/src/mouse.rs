@@ -204,7 +204,7 @@ impl App {
                     Some(Overlay::Help) => close_help = true,
                     Some(Overlay::Confirm(_)) | Some(Overlay::ConfigEdit(_)) => {}
                     Some(Overlay::TrustDomain(_)) | Some(Overlay::TrustConfirm(_)) => {}
-                    Some(Overlay::RiskImport(_)) | Some(Overlay::RiskConfirm { .. }) => {}
+                    Some(Overlay::RiskImport { .. }) | Some(Overlay::RiskConfirm { .. }) => {}
                     None => match &mut m.view {
                         View::List(l) => {
                             if let Some(i) = list_index(y, l.top, l.rows.len()) {

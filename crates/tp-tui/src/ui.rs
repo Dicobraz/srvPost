@@ -1406,7 +1406,7 @@ impl Painter<'_> {
         let op = match &m.view {
             View::List(l) => Some(l.req.op),
             View::Card(c) => Some(c.req.op),
-            View::Info { .. } | View::Config(_) | View::Trust(_) => None,
+            View::Info { .. } | View::Config(_) | View::Trust(_) | View::Risk(_) => None,
         };
         if let Some(op) = op {
             for (i, l) in wrap(&op.summary.replace('\n', " "), b.width() as usize)
@@ -2569,7 +2569,7 @@ mod tests {
     /// «Только отчёт» в монохроме: знак виден, цвета нет (приёмка карточки).
     #[test]
     fn risk_marks_in_mono() {
-        let mut app = with_risk(Mode::Mono);
+        let app = with_risk(Mode::Mono);
         let (rows, buf) = screen(&app);
         assert!(rows[6].contains("▲пометка"), "{}", rows[6]);
         assert!(rows[7].contains("⊘"), "{}", rows[7]);

@@ -269,12 +269,12 @@ pub(crate) fn open(m: &mut Main, bus: &mut Bus) -> Vec<Effect> {
 /// предупреждение.
 fn shift_tab(t: &mut Risk, bus: &mut Bus, step: isize) -> Vec<Effect> {
     let at = |tab: Tab| TABS.iter().position(|(x, _)| *x == tab).unwrap_or(0);
-    let mut i = at(t.tab);
+    let mut i = at(t.tab) as isize;
+    let n = TABS.len() as isize;
     let mut passed_gated = false;
     loop {
-        let n = TABS.len() as isize;
-        i = ((i + step).rem_euclid(n)) as usize;
-        let (tab, _) = TABS[i];
+        i = (i + step).rem_euclid(n);
+        let (tab, _) = TABS[usize::try_from(i).unwrap_or(0)];
         if reachable(tab, t.install) {
             if passed_gated {
                 bus.say(Level::Warn, "пакеты и источники — администратору установки");
@@ -1119,7 +1119,11 @@ pub fn tenants_text(row: &Value) -> String {
     match row.get("tenants") {
         Some(Value::String(s)) if s == "all" => "доступен всем организациям".to_owned(),
         Some(Value::Object(m)) if m.contains_key("only") => {
-            let n = m["only"].and_then(Value::as_array).map_or(0, |a| a.len());
+            let n = m
+                .get("only")
+                .and_then(Value::as_array)
+                .map(|a| a.len())
+                .unwrap_or(0);
             format!("доступен {n} организациям")
         }
         _ => "—".to_owned(),
