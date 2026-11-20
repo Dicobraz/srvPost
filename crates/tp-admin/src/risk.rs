@@ -2251,3 +2251,816 @@ async fn list_risk_hits(
         next,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+    use tp_contracts::risk::{Detector, Hit, HitSource, PackageState, Semver};
+
+    use super::*;
+    use crate::testenv::{Env, config};
+
+    fn manifest(version: u64, weight: u16, key_id: &str) -> PackageManifest {
+        PackageManifest {
+            format: tp_contracts::risk::PACKAGE_FORMAT,
+            version,
+            created: OffsetDateTime::UNIX_EPOCH,
+            min_node: Semver::new(0, 1, 0),
+            key_id: key_id.to_owned(),
+            signals: vec![Signal {
+                id: SignalId::new("tp.encrypted_archive").expect("id"),
+                detector: Detector::EncryptedArchive,
+                weight,
+                threshold: 0,
+                action: RiskAction::None,
+                mode: Mode::Enforce,
+                origin: Origin::Vendor,
+                since: OffsetDateTime::UNIX_EPOCH,
+            }],
+            lists: Vec::new(),
+            samples: Vec::new(),
+        }
+    }
+
+    /// Пакет версии 1 активен: признак `tp.encrypted_archive` весом 6.
+    async fn seeded() -> Env {
+        let env = Env::new();
+        env.risk
+            .put_package(&manifest(1, 6, "vendor"))
+            .await
+            .expect("package");
+        env.risk.activate(1).await.expect("activate");
+        env
+    }
+
+    fn org_path(rest: &str) -> String {
+        format!("/api/v1/orgs/{}/risk/{rest}", TenantId::DEFAULT)
+    }
+
+    /// Загрузка файла (пакет, список) с типом содержимого.
+    async fn upload(
+        env: &Env,
+        path: &str,
+        token: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> (StatusCode, Value) {
+        let req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(bytes.to_vec()))
+            .expect("request");
+        let resp = env.router.clone().oneshot(req).await.expect("response");
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let v = if body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&body)
+                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).into_owned()))
+        };
+        (status, v)
+    }
+
+    /// Приёмка ADM-51: `PUT` признака установки — 200 и запись аудита; свой признак `org.*` создаётся
+    /// тем же `PUT`; каталог показывает источник значения и «осиротевшие» изменения.
+    #[tokio::test]
+    async fn installation_signal_put_and_audit() {
+        let env = seeded().await;
+        let path = "/api/v1/risk/signals/tp.encrypted_archive";
+
+        // Каталог уровня установки: признак пакета без изменений.
+        let (s, _, b) = env
+            .call("GET", RISK_SIGNALS_ROUTE, Some("root"), None)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        let list = b["signals"].as_array().expect("signals");
+        assert_eq!(list.len(), 1, "{b}");
+        assert_eq!(list[0]["id"], json!("tp.encrypted_archive"));
+        assert_eq!(list[0]["weight"], json!(6));
+        assert_eq!(list[0]["source"], Value::Null);
+        assert_eq!(list[0]["orphaned"], json!(false));
+
+        // Изменение веса — 200, аудит; каталог показывает источник «установка».
+        let (s, _, b) = env
+            .call("PUT", path, Some("root"), Some(json!({"weight": 3})))
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["weight"], json!(3));
+        assert_eq!(b["source"], json!("installation"));
+        let log: Vec<_> = env
+            .audit
+            .records()
+            .into_iter()
+            .filter(|r| r.method == "PUT" && r.path == path)
+            .collect();
+        assert_eq!(log.len(), 1, "изменение — в журнале аудита");
+        assert_eq!(log[0].status, 200);
+        assert_eq!(log[0].route, RISK_SIGNAL_ROUTE);
+        assert_eq!(log[0].tenant, None, "уровень установки");
+
+        // Свой признак `org.*` — тем же `PUT` (уровень установки: для всех организаций).
+        let own = "/api/v1/risk/signals/org.ext-file";
+        let body = json!({"detector": "disk_image_or_shortcut", "weight": 2, "threshold": 40,
+                          "action": "tag", "mode": "enforce"});
+        let (s, _, b) = env.call("PUT", own, Some("root"), Some(body)).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["id"], json!("org.ext-file"));
+        assert_eq!(b["source"], json!("installation"));
+        // Неполный свой признак и детектор у признака поставщика — 400; чужой префикс — 400.
+        let (s, _, _) = env
+            .call("PUT", own, Some("root"), Some(json!({"weight": 1})))
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                path,
+                Some("root"),
+                Some(json!({"detector": "encrypted_archive"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                "/api/v1/risk/signals/plain",
+                Some("root"),
+                Some(json!({"weight": 1})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        // Вес выше предела — 422.
+        let (s, _, _) = env
+            .call("PUT", path, Some("root"), Some(json!({"weight": 101})))
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+        // «Осиротевшее» изменение: признака нет в пакете — показывается, не удаляется молча.
+        let gone = "/api/v1/risk/signals/tp.removed-by-vendor";
+        let (s, _, b) = env
+            .call("PUT", gone, Some("root"), Some(json!({"weight": 5})))
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["orphaned"], json!(true));
+        assert_eq!(b["detector"], Value::Null);
+        assert_eq!(b["source"], json!("installation"));
+        let (_, _, b) = env
+            .call("GET", RISK_SIGNALS_ROUTE, Some("root"), None)
+            .await;
+        assert_eq!(b["signals"].as_array().expect("list").len(), 3, "{b}");
+
+        // Сброс: у пакета — значение пакета; изменения уровня нет — 404.
+        let (s, _, b) = env.call("DELETE", path, Some("root"), None).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["weight"], json!(6), "значение пакета");
+        assert_eq!(b["source"], Value::Null);
+        let (s, _, _) = env.call("DELETE", path, Some("root"), None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "сброшено — нечего сбрасывать");
+        // Свой признак удаляется сбросом.
+        let (s, _, _) = env.call("DELETE", own, Some("root"), None).await;
+        assert_eq!(s, StatusCode::OK);
+        // Осиротевшее изменение сбрасывается.
+        let (s, _, b) = env.call("DELETE", gone, Some("root"), None).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["orphaned"], json!(true), "показано удалённым");
+    }
+
+    /// Приёмка ADM-51: организация смягчает — 422 problem+json с `errors: [{signal, field, value,
+    /// base}]` и пояснением по-русски; ужесточает — 200; права — организация, установка, оператор.
+    #[tokio::test]
+    async fn org_only_tightens() {
+        let env = seeded().await;
+        let path = format!("{}/tp.encrypted_archive", org_path("signals"));
+
+        // Снижение веса — 422 с перечнем.
+        let (s, h, b) = env
+            .call("PUT", &path, Some("org"), Some(json!({"weight": 3})))
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(h["content-type"], "application/problem+json");
+        assert_eq!(b["status"], json!(422));
+        assert_eq!(
+            b["errors"],
+            json!([{"signal": "tp.encrypted_archive", "field": "weight", "value": "3",
+                    "base": "6"}])
+        );
+        assert!(
+            b["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("ужесточить"),
+            "{}",
+            b["detail"]
+        );
+        // Действие мягче и «только отчёт» — тоже 422 (установка поставила Quarantine).
+        env.call(
+            "PUT",
+            "/api/v1/risk/signals/tp.encrypted_archive",
+            Some("root"),
+            Some(json!({"action": "quarantine"})),
+        )
+        .await;
+        let (s, _, b) = env
+            .call("PUT", &path, Some("org"), Some(json!({"action": "junk"})))
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(b["errors"][0]["field"], json!("action"));
+        let (s, _, b) = env
+            .call("PUT", &path, Some("org"), Some(json!({"mode": "report"})))
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert_eq!(b["errors"][0]["field"], json!("mode"));
+
+        // Ужесточение — 200, источник значения — организация.
+        let (s, _, b) = env
+            .call("PUT", &path, Some("org"), Some(json!({"weight": 9})))
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["source"], json!({"org": TenantId::DEFAULT.to_string()}));
+        // Каталог организации видит признак установки (Quarantine) поверх пакета.
+        let (_, _, b) = env
+            .call("GET", &org_path("signals"), Some("org"), None)
+            .await;
+        let signals = b["signals"].as_array().expect("signals");
+        assert_eq!(signals.len(), 1, "{b}");
+        assert_eq!(signals[0]["weight"], json!(9));
+        assert_eq!(signals[0]["action"], json!("quarantine"));
+        // Свой признак организации.
+        let own = format!("{}/org.own-rule", org_path("signals"));
+        let body = json!({"detector": "reply_to_changed", "weight": 4, "threshold": 0,
+                          "action": "none", "mode": "report"});
+        let (s, _, b) = env.call("PUT", &own, Some("org"), Some(body)).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["origin"], json!("admin"));
+
+        // Сброс изменения организации; своего изменения нет — 404.
+        let (s, _, b) = env.call("DELETE", &path, Some("org"), None).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["weight"], json!(6));
+        let (s, _, _) = env.call("DELETE", &path, Some("org"), None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        // Права: организация не читает уровень установки; оператор читает каталог и не меняет.
+        let (s, _, _) = env.call("GET", RISK_SIGNALS_ROUTE, Some("org"), None).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = env
+            .call("GET", RISK_SIGNALS_ROUTE, Some("operator"), None)
+            .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = env
+            .call("GET", &org_path("signals"), Some("operator"), None)
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = env
+            .call("PUT", &path, Some("operator"), Some(json!({"weight": 9})))
+            .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+
+    /// Приёмка ADM-51: загрузка пакета — 202 с отчётом; чужая подпись и не растущий номер — 422 с
+    /// причиной; активация и откат — 200, неизвестная версия отката — 404; тип не тот — 415, больше
+    /// предела — 413; организации и оператору — 403.
+    #[tokio::test]
+    async fn packages_upload_activate_rollback() {
+        let env = seeded().await;
+        let second = manifest(2, 8, "vendor");
+        let bytes = serde_json::to_vec(&second).expect("json");
+
+        // Загрузка — 202 и отчёт: пакет поставлен, но не активен.
+        let (s, _, b) = upload(&env, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &bytes).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{b}");
+        assert_eq!(b["version"], json!(2));
+        assert_eq!(b["key_id"], json!("vendor"));
+        assert_eq!(b["signals"], json!(1));
+        assert_eq!(
+            b["update"]["changed"],
+            json!(["tp.encrypted_archive"]),
+            "{b}"
+        );
+        let (s, _, b) = env
+            .call("GET", RISK_PACKAGES_ROUTE, Some("root"), None)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(
+            b["packages"],
+            json!([{"version": 2, "state": "previous"}, {"version": 1, "state": "active"}]),
+            "новый пакет не активен"
+        );
+
+        // Активация — 200; откат на 1 — 200; откат на неизвестную версию — 404.
+        let (s, _, b) = env
+            .call(
+                "POST",
+                "/api/v1/risk/packages/2/activate",
+                Some("root"),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["packages"][0], json!({"version": 2, "state": "active"}));
+        let (_, _, b) = env
+            .call("GET", RISK_SIGNALS_ROUTE, Some("root"), None)
+            .await;
+        assert_eq!(
+            b["signals"][0]["weight"],
+            json!(8),
+            "каталог — нового пакета"
+        );
+        let (s, _, _) = env
+            .call(
+                "POST",
+                "/api/v1/risk/packages/1/rollback",
+                Some("root"),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, b) = env
+            .call(
+                "POST",
+                "/api/v1/risk/packages/99/rollback",
+                Some("root"),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{b}");
+        // Активация не растущего номера — 422.
+        let (s, _, b) = env
+            .call(
+                "POST",
+                "/api/v1/risk/packages/1/activate",
+                Some("root"),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+
+        // Чужая подпись — 422 с причиной; тот же номер повторно — 422 (не растёт).
+        let stranger = manifest(3, 8, "stranger");
+        let (s, _, b) = upload(
+            &env,
+            RISK_PACKAGES_ROUTE,
+            "root",
+            OCTET_STREAM,
+            &serde_json::to_vec(&stranger).expect("json"),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert!(
+            b["detail"].as_str().unwrap_or_default().contains("подпись"),
+            "{}",
+            b["detail"]
+        );
+        let (s, _, b) = upload(&env, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &bytes).await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert!(
+            b["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("не растёт"),
+            "{}",
+            b["detail"]
+        );
+
+        // Тип не тот — 415; больше предела — 413.
+        let (s, _, _) = upload(
+            &env,
+            RISK_PACKAGES_ROUTE,
+            "root",
+            "application/json",
+            &bytes,
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        let cfg = crate::server::AdminConfig {
+            risk: RiskApiConfig {
+                max_package_bytes: 1024,
+            },
+            ..config()
+        };
+        let small = Env::with(cfg, Vec::new());
+        let big = vec![b'x'; 2048];
+        let (s, _, _) = upload(&small, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &big).await;
+        assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
+
+        // Права: организация и оператор пакетов не касаются.
+        for token in ["org", "operator"] {
+            let (s, _, _) = env
+                .call("GET", RISK_PACKAGES_ROUTE, Some(token), None)
+                .await;
+            assert_eq!(s, StatusCode::FORBIDDEN, "{token}");
+            let (s, _, _) = upload(&env, RISK_PACKAGES_ROUTE, token, OCTET_STREAM, &bytes).await;
+            assert_eq!(s, StatusCode::FORBIDDEN, "{token}");
+        }
+        // Установка и активация — в журнале аудита.
+        let log: Vec<_> = env
+            .audit
+            .records()
+            .into_iter()
+            .filter(|r| r.route.contains("packages"))
+            .collect();
+        assert!(log.len() >= 3, "загрузка, активация, откат: {log:?}");
+        assert!(
+            log.iter()
+                .all(|r| (200..300).contains(&r.status) || r.status == 422)
+        );
+    }
+
+    /// Источник TI для тела запроса.
+    fn source_body(id: &str) -> Value {
+        json!({
+            "id": id, "tier": "customer_key",
+            "kind": {"http": {"url": "https://feodo.tracker.abuse.ch/downloads/ipblocklist/"}},
+            "format": "txt", "ttl": "1h",
+            "stale": {"reduce": {"percent": 50}},
+            "license": {"terms_url": "https://abuse.ch/terms/", "commercial": true},
+            "tenants": "all", "key": {"secret": "thepost/db#api_key"},
+            "auth": {"header": {"name": "Auth-Key"}}, "origin": "vendor"
+        })
+    }
+
+    /// Приёмка ADM-51: источники TI — CRUD; ключ-значение в теле — 400; `Bundled` в `POST` — 400;
+    /// импорт файла — версия списка; обновление; учёт — суммы по организациям.
+    #[tokio::test]
+    async fn sources_crud_import_usage() {
+        let env = Env::new();
+        let (s, _, b) = env
+            .call(
+                "POST",
+                RISK_SOURCES_ROUTE,
+                Some("root"),
+                Some(source_body("feodo")),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["id"], json!("feodo"));
+        assert_eq!(b["key"], json!({"secret": "thepost/db#api_key"}), "{b}");
+
+        // Ключ-значение (не ссылка) — 400; Bundled — 400; нет источника — 404.
+        let mut plaintext = source_body("leak");
+        plaintext["key"] = json!("secret-value");
+        let (s, _, _) = env
+            .call("POST", RISK_SOURCES_ROUTE, Some("root"), Some(plaintext))
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let mut bundled = source_body("openphish");
+        bundled["tier"] = json!("bundled");
+        let (s, _, b) = env
+            .call("POST", RISK_SOURCES_ROUTE, Some("root"), Some(bundled))
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+        let (s, _, _) = env
+            .call("GET", "/api/v1/risk/sources/unknown", Some("root"), None)
+            .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        // Замена целиком; список; учёт по организациям.
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                "/api/v1/risk/sources/feodo",
+                Some("root"),
+                Some(json!({
+                    "tier": "import", "kind": "file", "format": "txt", "ttl": "30m",
+                    "stale": "report",
+                    "license": {"terms_url": "https://example.org/", "commercial": true},
+                    "tenants": {"only": [TenantId::DEFAULT.to_string()]},
+                    "key": null, "auth": "none", "origin": "own"
+                })),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["ttl"], json!("30m"));
+        let (s, _, b) = env
+            .call("GET", RISK_SOURCES_ROUTE, Some("root"), None)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["sources"].as_array().expect("sources").len(), 1);
+        let feodo = SourceId::new("feodo").expect("id");
+        env.risk
+            .record_usage(&feodo, TenantId::DEFAULT, 10, 2)
+            .await
+            .expect("usage");
+        env.risk
+            .record_usage(&feodo, env.other_tenant, 5, 1)
+            .await
+            .expect("usage");
+        let (s, _, b) = env
+            .call(
+                "GET",
+                "/api/v1/risk/sources/feodo/usage",
+                Some("root"),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(
+            b["usage"],
+            json!([
+                {"tenant": TenantId::DEFAULT.to_string(), "lookups": 10, "hits": 2},
+                {"tenant": env.other_tenant.to_string(), "lookups": 5, "hits": 1},
+            ]),
+            "суммы по организациям"
+        );
+
+        // Импорт файла списка — версия становится текущей; тип не тот — 415.
+        let list: &[u8] = b"1.2.3.4\n5.6.7.8\n\n9.9.9.9\n";
+        let (s, _, b) = upload(
+            &env,
+            "/api/v1/risk/sources/feodo/import",
+            "root",
+            OCTET_STREAM,
+            list,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["entries"], json!(3), "пустые строки не считаются");
+        assert_eq!(b["list"], json!("feodo"));
+        assert_eq!(b["sha256"].as_str().map(str::len), Some(64), "hex");
+        let (s, _, _) = upload(
+            &env,
+            "/api/v1/risk/sources/feodo/import",
+            "root",
+            "text/plain",
+            list,
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        // Обновление сейчас — новая версия (коннектор памяти).
+        let (s, _, b) = env
+            .call(
+                "POST",
+                "/api/v1/risk/sources/feodo/refresh",
+                Some("root"),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["list"], json!("feodo"));
+
+        // Удаление; повтор — 404.
+        let (s, _, b) = env
+            .call("DELETE", "/api/v1/risk/sources/feodo", Some("root"), None)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["id"], json!("feodo"));
+        let (s, _, _) = env
+            .call("DELETE", "/api/v1/risk/sources/feodo", Some("root"), None)
+            .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        // Права: организация и оператор источников не касаются (403).
+        for token in ["org", "operator"] {
+            let (s, _, _) = env.call("GET", RISK_SOURCES_ROUTE, Some(token), None).await;
+            assert_eq!(s, StatusCode::FORBIDDEN, "{token}");
+        }
+    }
+
+    /// Приёмка ADM-51: пороги — умолчания, замена установки, организация не мягче (выше — 422);
+    /// срабатывания — журнал организации постранично с фильтрами, оператор — только чтение; без
+    /// хранилища — 503.
+    #[tokio::test]
+    async fn thresholds_and_hits() {
+        let env = seeded().await;
+        let (s, _, b) = env
+            .call("GET", RISK_THRESHOLDS_ROUTE, Some("root"), None)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["own"], Value::Null);
+        assert_eq!(
+            b["effective"],
+            json!({"tag": 1, "junk": 6, "quarantine": 10, "reject": 15}),
+            "константы контракта"
+        );
+        assert_eq!(b["source"], Value::Null);
+        // Порядок нарушен — 422; замена — 200.
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                RISK_THRESHOLDS_ROUTE,
+                Some("root"),
+                Some(json!({"tag": 2, "junk": 1, "quarantine": 10, "reject": 15})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                RISK_THRESHOLDS_ROUTE,
+                Some("root"),
+                Some(json!({"tag": 2, "junk": 7, "quarantine": 11, "reject": 16})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["source"], json!("installation"));
+        // Организация: действуют установки; выше базового — 422, не выше — 200.
+        let (s, _, b) = env
+            .call("GET", &org_path("thresholds"), Some("org"), None)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["own"], Value::Null);
+        assert_eq!(b["source"], json!("installation"));
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                &org_path("thresholds"),
+                Some("org"),
+                Some(json!({"tag": 3, "junk": 8, "quarantine": 11, "reject": 16})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert!(
+            b["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("базового"),
+            "{}",
+            b["detail"]
+        );
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                &org_path("thresholds"),
+                Some("org"),
+                Some(json!({"tag": 1, "junk": 5, "quarantine": 9, "reject": 14})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["source"], json!({"org": TenantId::DEFAULT.to_string()}));
+        let (s, _, _) = env
+            .call("PUT", RISK_THRESHOLDS_ROUTE, Some("org"), None)
+            .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+
+        // Срабатывания: два вердикта (применённый и «только отчёт») — журнал организации.
+        let verdict = |report: bool| Verdict {
+            score: 6,
+            hits: if report {
+                Vec::new()
+            } else {
+                vec![Hit {
+                    signal: SignalId::new("tp.encrypted_archive").expect("id"),
+                    strength: 100,
+                    weight: 6,
+                    source: HitSource::Detector,
+                }]
+            },
+            report_only: if report {
+                vec![Hit {
+                    signal: SignalId::new("tp.report").expect("id"),
+                    strength: 80,
+                    weight: 4,
+                    source: HitSource::Sieve,
+                }]
+            } else {
+                Vec::new()
+            },
+            action: RiskAction::Junk,
+            drops_reply: false,
+        };
+        env.risk
+            .record_hits(TenantId::DEFAULT, BlobHash([1u8; 32]), &verdict(false))
+            .await
+            .expect("hits");
+        env.risk
+            .record_hits(TenantId::DEFAULT, BlobHash([2u8; 32]), &verdict(true))
+            .await
+            .expect("hits");
+        let (s, _, b) = env.call("GET", &org_path("hits"), Some("org"), None).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        let hits = b["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 2, "по записи на вердикт: {b}");
+        assert_eq!(hits[0]["mode"], json!("enforce"), "свежие первыми");
+        assert_eq!(b["next"], Value::Null, "всё влезло");
+        // Фильтры: признак и режим; страница с продолжением.
+        let url = format!("{}?signal=tp.report", org_path("hits"));
+        let (s, _, b) = env.call("GET", &url, Some("org"), None).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["hits"].as_array().expect("hits").len(), 1);
+        // Некорректный режим и признак — 400.
+        let url = format!("{}?mode=soft", org_path("hits"));
+        let (s, _, _) = env.call("GET", &url, Some("org"), None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let url = format!("{}?signal=NOPE", org_path("hits"));
+        let (s, _, _) = env.call("GET", &url, Some("org"), None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+
+        // Без хранилища справочника — 503.
+        let bare = Env::without_risk();
+        let (s, _, _) = bare
+            .call("GET", RISK_SIGNALS_ROUTE, Some("root"), None)
+            .await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+        let (s, _, _) = bare.call("GET", &org_path("hits"), Some("org"), None).await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// Схема: маршруты справочника с операциями и 422; тела и ответы — туда и обратно (ADM-13).
+    #[test]
+    fn openapi_and_roundtrip() {
+        let spec = serde_json::to_value(crate::server::openapi_spec()).expect("spec");
+        let paths = &spec["paths"];
+        for (path, methods) in [
+            (RISK_SIGNALS_ROUTE, &["get"][..]),
+            (RISK_SIGNAL_ROUTE, &["put", "delete"]),
+            (ORG_RISK_SIGNALS_ROUTE, &["get"]),
+            (ORG_RISK_SIGNAL_ROUTE, &["put", "delete"]),
+            (RISK_THRESHOLDS_ROUTE, &["get", "put"]),
+            (ORG_RISK_THRESHOLDS_ROUTE, &["get", "put"]),
+            (RISK_PACKAGES_ROUTE, &["get", "post"]),
+            (RISK_PACKAGE_ACTIVATE_ROUTE, &["post"]),
+            (RISK_PACKAGE_ROLLBACK_ROUTE, &["post"]),
+            (RISK_SOURCES_ROUTE, &["get", "post"]),
+            (RISK_SOURCE_ROUTE, &["get", "put", "delete"]),
+            (RISK_SOURCE_IMPORT_ROUTE, &["post"]),
+            (RISK_SOURCE_REFRESH_ROUTE, &["post"]),
+            (RISK_SOURCE_USAGE_ROUTE, &["get"]),
+            (ORG_RISK_HITS_ROUTE, &["get"]),
+        ] {
+            for m in methods {
+                assert!(paths[path][m].is_object(), "{m} {path}");
+            }
+        }
+        assert!(
+            paths[ORG_RISK_SIGNAL_ROUTE]["put"]["responses"]["422"].is_object(),
+            "смягчение организации — 422"
+        );
+        for name in [
+            "RiskProblem",
+            "SignalView",
+            "SignalBody",
+            "ThresholdsView",
+            "PackageReportView",
+            "TiSourceView",
+            "HitsView",
+        ] {
+            assert!(spec["components"]["schemas"][name].is_object(), "{name}");
+        }
+
+        fn roundtrip<T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug>(
+            v: T,
+        ) {
+            let json = serde_json::to_value(&v).expect("serialize");
+            let back: T = serde_json::from_value(json.clone()).expect("deserialize");
+            assert_eq!(back, v, "{json}");
+        }
+        roundtrip(SignalBody::default());
+        roundtrip(SignalBody {
+            detector: Some(Detector::EncryptedArchive),
+            weight: Some(6),
+            threshold: Some(10),
+            action: Some(RiskAction::Quarantine),
+            mode: Some(Mode::Report),
+        });
+        roundtrip(ThresholdsBody {
+            tag: 1,
+            junk: 6,
+            quarantine: 10,
+            reject: 15,
+        });
+        roundtrip(RiskProblem {
+            status: 422,
+            title: "Unprocessable Entity".into(),
+            detail: "организация может только ужесточить".into(),
+            errors: vec![PolicyViolation {
+                signal: SignalId::new("tp.x").expect("id"),
+                field: "weight".to_owned(),
+                value: "3".to_owned(),
+                base: "6".to_owned(),
+            }],
+        });
+        let _ = PackageState::Active;
+    }
+
+    /// Память проверки узла: доверенный ключ принимает, чужой — нет; число образцов — из манифеста.
+    #[tokio::test]
+    async fn mem_node_checks_signature() {
+        let node = MemRiskNode::default().with_trusted_key("second");
+        let mut m = manifest(9, 1, "vendor");
+        m.samples = vec![tp_contracts::risk::SampleFile {
+            path: "sample/1.eml".into(),
+            sha256: BlobHash([7u8; 32]),
+            expect: vec![SignalId::new("tp.encrypted_archive").expect("id")],
+        }];
+        let verified = node
+            .verify_package(&serde_json::to_vec(&m).expect("json"))
+            .await
+            .expect("verified");
+        assert_eq!(verified.samples, 1);
+        m.key_id = "stranger".to_owned();
+        assert!(
+            node.verify_package(&serde_json::to_vec(&m).expect("json"))
+                .await
+                .is_err()
+        );
+    }
+}
