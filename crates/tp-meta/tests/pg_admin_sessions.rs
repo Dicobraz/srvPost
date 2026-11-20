@@ -12,6 +12,12 @@ use tp_contracts::{AccountId, TenantId};
 use tp_meta::schema;
 use tp_testkit::suite;
 
+/// Момент с целыми секундами: PostgreSQL хранит микросекунды, хранилище усекает срок при выпуске —
+/// чтение сравнивается с выпущенной сессией без расхождений на наносекундах.
+fn now_whole_seconds() -> OffsetDateTime {
+    OffsetDateTime::from_unix_timestamp(OffsetDateTime::now_utc().unix_timestamp()).expect("now")
+}
+
 /// Сессия для теста: организация, имя входа, срок.
 fn session(tenant: TenantId, login: &str, expires_at: OffsetDateTime) -> AdminSession {
     let (a, b) = (AccountId::new(), AccountId::new());
@@ -53,7 +59,7 @@ async fn purge_expired_in_portions() {
     };
     let meta = &db.meta;
     let pool = meta.pool();
-    let now = OffsetDateTime::now_utc();
+    let now = now_whole_seconds();
 
     // Порция очистки tp-meta — 10 000: expired — на две порции с остатком, живые — остаются.
     let (tenant_a, tenant_b) = (common::tenant(pool).await, common::tenant(pool).await);
@@ -231,7 +237,7 @@ async fn tenant_cascade_and_system_access() {
     };
     let meta = &db.meta;
     let pool = meta.pool();
-    let now = OffsetDateTime::now_utc();
+    let now = now_whole_seconds();
     let tenant = common::tenant(pool).await;
     let s = session(tenant, "admin@example.org", now + Duration::seconds(600));
     meta.put(s.clone()).await.expect("put");
