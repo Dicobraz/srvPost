@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
 
 import { CalendarPage } from "./pages/calendar";
@@ -121,20 +121,19 @@ function Splash() {
 function Protected({ children }: { children: ReactNode }) {
   const { ready, session, config, loginOidc } = useAuth();
   const location = useLocation();
-  const kicked = useRef(false);
   const [kickFailed, setKickFailed] = useState(false);
   const route = location.pathname + location.search;
 
   useEffect(() => {
-    if (!ready || session || kicked.current || !config?.oidc) return;
-    kicked.current = true; // один перевод; неудача (поставщик недоступен) — форма входа ниже
+    if (!ready || session || !config?.oidc) return;
+    // Неудача перевхода (поставщик недоступен) — вернёмся к форме входа ниже.
     loginOidc(route).catch(() => setKickFailed(true));
   }, [ready, session, config, loginOidc, route]);
 
   if (!ready) return <Splash />;
   if (!session) {
-    // OIDC-перевход уже начат (ждём поставщика); если он не настроен или не удался — форма входа.
-    if (config?.oidc && kicked.current && !kickFailed) return <Splash />;
+    // Перевход начат — ждём поставщика; нет OIDC или он отказал — форма входа с возвратом.
+    if (config?.oidc && !kickFailed) return <Splash />;
     return <Navigate to={`/login?next=${encodeURIComponent(route)}`} replace />;
   }
   return children;

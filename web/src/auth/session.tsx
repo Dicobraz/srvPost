@@ -42,22 +42,36 @@ export function useAuth(): AuthContextValue {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [store, setStore] = useState<AuthStore | null>(null);
   const [config, setConfig] = useState<MailConfig | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
+  const storeRef = useRef<AuthStore | null>(null);
   const managerRef = useRef<UserManager | null>(null);
   const renewingRef = useRef(false);
 
   // Конфигурация для эффектов и logout: после загрузки не меняется, UserManager создаётся один раз.
   const configRef = useRef<MailConfig | null>(null);
 
+  /** Тихий renew (refresh-токеном); неудача — сброс сессии у всех вкладок, дальше перевход. */
+  const renew = async (s: AuthStore): Promise<void> => {
+    const current = s.get();
+    const oidc = configRef.current?.oidc;
+    if (current?.kind !== "oidc" || !oidc) return;
+    try {
+      const m = (managerRef.current ??= userManager(oidc));
+      s.loginOidc(await signinSilent(m));
+    } catch {
+      s.clear(true); // соседям тоже; Protected отправит на перевход, маршрут сохранится
+    }
+  };
+
   useEffect(() => {
     const s = new AuthStore();
-    setStore(s);
+    storeRef.current = s;
+    // Сессия попадает в состояние через подписку: store сам уведомляет (и restore, и канал).
     const unsubscribe = s.subscribe(() => setSession(s.get()));
-    setSession(s.restore());
+    s.restore();
     loadMailConfig()
       .then((loaded) => {
         configRef.current = loaded;
@@ -75,8 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // токен за минуту до конца его жизни, остальные подхватывают по каналу (auth/store).
     const timer = window.setInterval(() => {
       const current = s.get();
-      const due =
-        current?.kind === "oidc" && Date.now() >= current.expiresAt - RENEW_BEFORE_MS;
+      const due = current?.kind === "oidc" && Date.now() >= current.expiresAt - RENEW_BEFORE_MS;
       if (s.tick(Date.now()) && due && !renewingRef.current) {
         renewingRef.current = true;
         renew(s)
@@ -91,21 +104,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unsubscribe();
       s.close();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- эффект один на жизнь провайдера: renew работает с ref-ами
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- эффект один на жизнь провайдера; renew работает с ref-ами
   }, []);
-
-  /** Тихий renew (refresh-токеном); неудача — сброс сессии у всех вкладок, дальше перевход. */
-  const renew = async (s: AuthStore): Promise<void> => {
-    const current = s.get();
-    const oidc = configRef.current?.oidc;
-    if (current?.kind !== "oidc" || !oidc) return;
-    try {
-      const m = (managerRef.current ??= userManager(oidc));
-      s.loginOidc(await signinSilent(m));
-    } catch {
-      s.clear(true); // соседям тоже; Protected отправит на перевход, маршрут сохранится
-    }
-  };
 
   /** UserManager по конфигурации; без OIDC — null (вход только по паролю приложения). */
   const manager = (): UserManager | null => {
@@ -116,8 +116,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   /** Store появляется в первом эффекте; действия входа до этого недостижимы (экран — заставка). */
   const requireStore = (): AuthStore => {
-    if (!store) throw new Error("Сессия ещё не готова — обновите страницу.");
-    return store;
+    const s = storeRef.current;
+    if (!s) throw new Error("Сессия ещё не готова — обновите страницу.");
+    return s;
   };
 
   const value: AuthContextValue = {
@@ -159,7 +160,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (m) await signout(m, current, oidc);
       }
     },
-    renew: () => (store ? renew(store) : Promise.resolve()),
+    renew: () => {
+      const s = storeRef.current;
+      return s ? renew(s) : Promise.resolve();
+    },
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
