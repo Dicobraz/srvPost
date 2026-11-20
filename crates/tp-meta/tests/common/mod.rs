@@ -287,6 +287,11 @@ impl FreshDb {
 
 /// Хранилища над новой чистой БД со схемой.
 pub async fn fresh_meta() -> Option<FreshDb> {
+    fresh_meta_with(MetaConfig::default()).await
+}
+
+/// Как [`fresh_meta`], но с заданной конфигурацией `meta` (например, свои пределы хранения).
+pub async fn fresh_meta_with(cfg: MetaConfig) -> Option<FreshDb> {
     use std::str::FromStr;
 
     use sqlx::postgres::PgConnectOptions;
@@ -310,9 +315,7 @@ pub async fn fresh_meta() -> Option<FreshDb> {
         .connect_with(opts)
         .await
         .expect("подключение к чистой БД");
-    let meta = PgMeta::open(db(pool), MetaConfig::default())
-        .await
-        .expect("open");
+    let meta = PgMeta::open(db(pool), cfg).await.expect("open");
     Some(FreshDb { meta, admin, name })
 }
 

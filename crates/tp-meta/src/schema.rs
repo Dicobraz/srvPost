@@ -25,6 +25,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "sent log and threads (META-86)",
         include_str!("../migrations/0002_sent_threads.sql"),
     ),
+    (
+        3,
+        "risk catalog and threat intelligence (META-87)",
+        include_str!("../migrations/0003_risk.sql"),
+    ),
 ];
 
 /// Мигратор схемы ядра.
