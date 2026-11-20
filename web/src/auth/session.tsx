@@ -154,8 +154,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const current = s.get();
       const oidc = configRef.current?.oidc;
       s.clear(true); // вкладкам — сразу; выход «везде» — ниже, у поставщика
-      const m = oidc && current?.kind === "oidc" ? manager() : null;
-      if (m) await signout(m, current, oidc);
+      if (current?.kind === "oidc" && oidc) {
+        const m = manager();
+        if (m) await signout(m, current, oidc);
+      }
     },
     renew: () => (store ? renew(store) : Promise.resolve()),
   };
