@@ -224,19 +224,24 @@
 # Ротация — задачей роли: новый id в начале thepost_reply_keys прогон создаёт (patch — прежние поля пути
 # сохраняются) и делает активным в config.yaml. Выполняет узел OpenBao с токеном администратора
 # (thepost_openbao_from), как запись ключа TLS в tls-files.yml.
+# Путь в KV — без маунта (FIX-25): thepost_reply_secret в формате конфига «<маунт>/<путь>#<поле>», флаг
+# -mount=thepost задаёт маунт, поэтому префикс срезается — иначе ключи ложатся в thepost/thepost/reply,
+# и узел падает на старте (secret thepost/reply#k1: not found).
 - name: Create reply label keys in OpenBao
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
       changed=no
+      s={{ thepost_reply_secret | quote }}
+      p=${s#thepost/}
       for k in {{ thepost_reply_keys | map('quote') | join(' ') }}; do
-        bao kv get -mount=thepost -field="$k" {{ thepost_reply_secret | quote }} >/dev/null 2>&1 && continue
-        if bao kv get -mount=thepost {{ thepost_reply_secret | quote }} >/dev/null 2>&1; then
+        bao kv get -mount=thepost -field="$k" "$p" >/dev/null 2>&1 && continue
+        if bao kv get -mount=thepost "$p" >/dev/null 2>&1; then
           head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' \
-            | bao kv patch -mount=thepost {{ thepost_reply_secret | quote }} "$k=-" >/dev/null
+            | bao kv patch -mount=thepost "$p" "$k=-" >/dev/null
         else
           head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' \
-            | bao kv put -mount=thepost {{ thepost_reply_secret | quote }} "$k=-" >/dev/null
+            | bao kv put -mount=thepost "$p" "$k=-" >/dev/null
         fi
         changed=yes
       done
