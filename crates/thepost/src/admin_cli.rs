@@ -5284,7 +5284,8 @@ mod tests {
         )
         .await
         .expect("signals set");
-        assert!(out.contains("Вес: 3"), "{out}");
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Вес: 3"), "{out}");
         let out = exec(
             &root,
             false,
@@ -5341,7 +5342,8 @@ mod tests {
         )
         .await
         .expect("строже");
-        assert!(out.contains("Вес: 9"), "{out}");
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Вес: 9"), "{out}");
 
         // Пороги: показ и замена установки; организация видит действующими пороги установки.
         let out = exec(
@@ -5360,7 +5362,8 @@ mod tests {
         )
         .await
         .expect("thresholds set");
-        assert!(out.contains("отказ 16"), "{out}");
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("отказ 16"), "{out}");
         let out = execute(
             &org,
             &org_args,
