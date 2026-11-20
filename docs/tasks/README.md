@@ -273,17 +273,17 @@
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
 | [SYS-13](SYS-13.md) | свободное место файловой системы (`statvfs`) | sys | A | sys-08 | done | — |
-| [APP-45](APP-45.md) | межузловой канал: перечитывание сертификатов по событиям | app | A | app-40 | ready | CLU-14 |
-| [APP-46](APP-46.md) | службы ролей узла в Rpc | app | A | app-40 | ready | APP-18 |
-| [APP-47](APP-47.md) | шарды и реплики СУБД в узле | app | A | app-40 | ready | META-30,META-31,META-32,META-41 |
-| [APP-48](APP-48.md) | нагрузка узла: свободное место дисков кэша | app | A | app-40 | ready | SYS-13,APP-10 |
+| [APP-45](APP-45.md) | межузловой канал: перечитывание сертификатов по событиям | app | A | app-40 | done | CLU-14 |
+| [APP-46](APP-46.md) | службы ролей узла в Rpc | app | A | app-40 | done | APP-18 |
+| [APP-47](APP-47.md) | шарды и реплики СУБД в узле | app | A | app-40 | done | META-30,META-31,META-32,META-41 |
+| [APP-48](APP-48.md) | нагрузка узла: свободное место дисков кэша | app | A | app-40 | done | SYS-13,APP-10 |
 | [META-61](META-61.md) | срок корзины уровня папки на шарде, отличном от основного | meta | A | meta-38 | done | META-30 |
 | [META-62](META-62.md) | — | — | — | meta-38 | done | — |
-| [DEP-30](DEP-30.md) | эталоны: прямые адреса и реплики СУБД | deploy | A | deploy-24 | ready | META-41,META-32 |
-| [DEP-31](DEP-31.md) | прогон pg-ha и «малого Enterprise» после правки community.postgresql | deploy | A | deploy-24 | ready | DEP-17,DEP-18 |
-| [DEP-32](DEP-32.md) | «малый Enterprise» на 5 ВМ и отказ одной ВМ | deploy | A | deploy-24 | ready | DEP-10,DEP-31 |
-| [DEP-33](DEP-33.md) | OpenBao в Kubernetes без `bootstrap.sh` | deploy | A | deploy-24 | ready | DEP-10 |
-| [DEP-34](DEP-34.md) | пресет edge по SRS 2.6: без BLOB и очереди | deploy | A | deploy-24 | ready | SYS-12 |
+| [DEP-30](DEP-30.md) | эталоны: прямые адреса и реплики СУБД | deploy | A | deploy-24 | done | META-41,META-32 |
+| [DEP-31](DEP-31.md) | прогон pg-ha и «малого Enterprise» после правки community.postgresql | deploy | A | deploy-24 | done | DEP-17,DEP-18 |
+| [DEP-32](DEP-32.md) | «малый Enterprise» на 5 ВМ и отказ одной ВМ | deploy | A | deploy-24 | done | DEP-10,DEP-31 |
+| [DEP-33](DEP-33.md) | OpenBao в Kubernetes без `bootstrap.sh` | deploy | A | deploy-24 | done | DEP-10 |
+| [DEP-34](DEP-34.md) | пресет edge по SRS 2.6: без BLOB и очереди | deploy | A | deploy-24 | done | SYS-12 |
 | [DEPS-09](DEPS-09.md) | mail-parser 1.0 в коде крейтов | deps | B | deps-09 | done | — |
 | [CLU-18](CLU-18.md) | идентичность узла — только URI `thepost:node:<id>` | cluster | A | cluster-13 | todo | DEP-22 |
 | [CTR-71](CTR-71.md) | ключ подписчика шарда — всегда `<имя>@<шард>` | contracts | B | contracts-47 | done | — |
@@ -307,9 +307,9 @@
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
-| [CTR-61](CTR-61.md) | контракт хранилища сессий Admin API | contracts | B | contracts-43 | ready | CTR-41 |
-| [META-64](META-64.md) | сессии Admin API в PostgreSQL | meta | B | meta-40 | todo | CTR-61 |
-| [ADM-28](ADM-28.md) | сессии Admin API через хранилище | admin | A | admin-18 | todo | CTR-61 |
+| [CTR-61](CTR-61.md) | контракт хранилища сессий Admin API | contracts | B | contracts-43 | done | CTR-41 |
+| [META-64](META-64.md) | сессии Admin API в PostgreSQL | meta | B | meta-40 | ready | CTR-61 |
+| [ADM-28](ADM-28.md) | сессии Admin API через хранилище | admin | A | admin-18 | ready | CTR-61 |
 | [APP-50](APP-50.md) | узел: сессии Admin API в PostgreSQL и их очистка | app | A | app-42 | todo | META-64,ADM-28 |
 | [DEP-36](DEP-36.md) | эталон: движок PKI OpenBao для внутренних сертификатов | deploy | A | deploy-26 | ready | PLT-26 |
 
@@ -333,14 +333,14 @@
 | [JMAP-14](JMAP-14.md) | автонастройка клиентов | jmap | A | jmap-14 | done | JMAP-01 |
 | [IMAP-15](IMAP-15.md) | аудит доступа к ящику в IMAP | imap | A | imap-06 | done | CTR-35,IMAP-07 |
 | [ADM-10](ADM-10.md) | Admin API: контакты, группы, оргструктура, отключённые ящики, аудит | admin | A | admin-05 | done | CTR-35,ADM-07 |
-| [APP-12](APP-12.md) | сборка: соответствие Exchange и doctor автонастройки | app | A | app-08 | ready | META-33,AUTH-10,MS-17,SMTP-27,JMAP-18,IMAP-15,ADM-10 |
+| [APP-12](APP-12.md) | сборка: соответствие Exchange и doctor автонастройки | app | A | app-08 | done | META-33,AUTH-10,MS-17,SMTP-27,JMAP-18,IMAP-15,ADM-10 |
 
 ## Ф1 · Решение 2026-11-04: внешние встречи — API занятости и публикации — этап 3
 
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
-| [CTR-36](CTR-36.md) | точка расширения источников занятости, публикации календарей | contracts | B | contracts-24 | ready | CTR-35 |
-| [META-34](META-34.md) | хранение публикаций календарей и шаблонов партнёров | meta | A | meta-16 | todo | CTR-36,META-33 |
+| [CTR-36](CTR-36.md) | точка расширения источников занятости, публикации календарей | contracts | B | contracts-24 | done | CTR-35 |
+| [META-34](META-34.md) | хранение публикаций календарей и шаблонов партнёров | meta | A | meta-16 | ready | CTR-36,META-33 |
 | [JMAP-19](JMAP-19.md) | расширение Availability/get | jmap | A | jmap-09 | done | CTR-36,JMAP-14 |
 | [JMAP-20](JMAP-20.md) | расширение публикации календарей | jmap | A | jmap-09 | done | CTR-36,JMAP-14 |
 
