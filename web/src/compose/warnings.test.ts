@@ -6,6 +6,7 @@ import { composeWarnings, externalDomains } from "./warnings";
 
 const BASE = {
   subject: "Договор поставки",
+  bodyHtml: "",
   to: [{ name: null, email: "o@vektor.example" }],
   cc: [],
   bcc: [],

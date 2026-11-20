@@ -1,6 +1,6 @@
 // Вставка из Word (WEB-04): pastedown — мусор Office вычищен, структура сохранена (приёмка
 // карточки: «письмо с таблицей из Word читается в Postman и Outlook без развала вёрстки»).
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 
 import { htmlToText, looksLikeWordHtml, sanitizeComposeHtml } from "./word-paste";
 

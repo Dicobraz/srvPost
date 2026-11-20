@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { jmapCall } from "../api/jmap";
 import type { JmapSession } from "../api/jmap";
 import type { JmapEnv } from "../mail/types";
+import type { ComposeSnapshot } from "./model";
 import { UNDO_SEND_SECONDS, cancelSend, sendMessage, SendError, supportsUndoSend } from "./send";
 import { rememberSent } from "./send-history";
 
@@ -23,7 +24,7 @@ const ENV: JmapEnv = {
   selfAddress: "user@example.org",
 };
 
-const SNAPSHOT = {
+const SNAPSHOT: ComposeSnapshot = {
   from: { name: "Анна Антропова", email: "user@example.org" },
   to: [{ name: "Ольга", email: "o@vektor.example" }],
   cc: [{ name: null, email: "k@thepost.example" }],
@@ -36,6 +37,14 @@ const SNAPSHOT = {
   ],
 };
 
+type CreateObject = Record<string, Record<string, unknown>>;
+
+/** Созданные объекты первого вызова Email/set и EmailSubmission/set запроса отправки. */
+function createdOf(callIndex: number): { email: CreateObject; submission: CreateObject } {
+  const methodCalls = mocked.mock.calls[callIndex][3] as Array<[string, Record<string, CreateObject>, string]>;
+  return { email: methodCalls[0][1].create, submission: methodCalls[1][1].create };
+}
+
 function okResponses(submissionId = "s1") {
   return {
     methodResponses: [
@@ -43,7 +52,7 @@ function okResponses(submissionId = "s1") {
       ["EmailSubmission/set", { created: { s0: { id: submissionId } } }, "s"],
     ],
     sessionState: "1",
-  };
+  } as unknown as Awaited<ReturnType<typeof jmapCall>>;
 }
 
 beforeEach(() => {
@@ -62,20 +71,19 @@ describe("sendMessage", () => {
     expect(result).toMatchObject({ submissionId: "s1", undoable: true });
     expect(result.recipients.map((r) => r.email)).toEqual(["o@vektor.example", "k@thepost.example"]);
 
-    const [, emailArgs] = mocked.mock.calls[0][3][0];
-    expect(emailArgs.create.e0.mailboxIds).toEqual({ "mb-sent": true });
-    expect(emailArgs.create.e0.keywords).toEqual({ $seen: true });
-    expect(emailArgs.create.e0.subject).toBe("Счёт № 419");
-    expect(emailArgs.create.e0.from).toEqual([{ name: "Анна Антропова", email: "user@example.org" }]);
-    expect(emailArgs.create.e0.to).toEqual([{ name: "Ольга", email: "o@vektor.example" }]);
-    expect(emailArgs.create.e0.cc).toEqual([{ name: null, email: "k@thepost.example" }]);
-    expect(emailArgs.create.e0.attachments).toHaveLength(1); // только загруженные
-    expect(emailArgs.create.e0.attachments[0].blobId).toBe("U123_1");
+    const { email, submission } = createdOf(0);
+    expect(email.e0.mailboxIds).toEqual({ "mb-sent": true });
+    expect(email.e0.keywords).toEqual({ $seen: true });
+    expect(email.e0.subject).toBe("Счёт № 419");
+    expect(email.e0.from).toEqual([{ name: "Анна Антропова", email: "user@example.org" }]);
+    expect(email.e0.to).toEqual([{ name: "Ольга", email: "o@vektor.example" }]);
+    expect(email.e0.cc).toEqual([{ name: null, email: "k@thepost.example" }]);
+    expect(email.e0.attachments).toHaveLength(1); // только загруженные
+    expect((email.e0.attachments as Array<{ blobId?: string }>)[0]?.blobId).toBe("U123_1");
 
-    const [, subArgs] = mocked.mock.calls[0][3][1];
-    expect(subArgs.create.s0.identityId).toBe("I1");
-    expect(subArgs.create.s0.emailId).toBe("#e0");
-    expect(new Date(subArgs.create.s0.sendAt).getTime() - Date.now()).toBeGreaterThan(
+    expect(submission.s0.identityId).toBe("I1");
+    expect(submission.s0.emailId).toBe("#e0");
+    expect(new Date(submission.s0.sendAt as string).getTime() - Date.now()).toBeGreaterThan(
       (UNDO_SEND_SECONDS - 2) * 1000,
     );
     expect(mocked.mock.calls[0][2]).toEqual([
@@ -93,17 +101,17 @@ describe("sendMessage", () => {
       undoable: false,
     });
     expect(result.undoable).toBe(false);
-    const [, subArgs] = mocked.mock.calls[0][3][1];
-    expect(subArgs.create.s0.sendAt).toBeUndefined();
-    const history = JSON.parse(localStorage.getItem("thepost-webmail-recipients") ?? "[]");
-    expect(history.map((h: { email: string }) => h.email)).toEqual(["o@vektor.example", "k@thepost.example"]);
+    const { submission } = createdOf(0);
+    expect(submission.s0.sendAt).toBeUndefined();
+    const history = JSON.parse(localStorage.getItem("thepost-webmail-recipients") ?? "[]") as Array<{ email: string }>;
+    expect(history.map((h) => h.email)).toEqual(["o@vektor.example", "k@thepost.example"]);
   });
 
   test("ошибка Email/set → SendError с типом и текстом сервера", async () => {
     mocked.mockResolvedValue({
       methodResponses: [["Email/set", { notCreated: { e0: { type: "overQuota" } } }, "e"]],
       sessionState: "1",
-    });
+    } as unknown as Awaited<ReturnType<typeof jmapCall>>);
     await expect(
       sendMessage(ENV, SNAPSHOT, { sentMailboxId: "mb", identityId: "I1", undoable: false }),
     ).rejects.toMatchObject({ type: "overQuota" });
@@ -120,7 +128,7 @@ describe("sendMessage", () => {
         ],
       ],
       sessionState: "1",
-    });
+    } as unknown as Awaited<ReturnType<typeof jmapCall>>);
     await expect(
       sendMessage(ENV, SNAPSHOT, { sentMailboxId: "mb", identityId: "I9", undoable: false }),
     ).rejects.toSatisfy((e: unknown) => e instanceof SendError && e.message.includes("Send As"));
@@ -130,7 +138,7 @@ describe("sendMessage", () => {
     mocked.mockResolvedValue({
       methodResponses: [["EmailSubmission/set", { "@type": "error", type: "serverFail" }, "s"]],
       sessionState: "1",
-    });
+    } as unknown as Awaited<ReturnType<typeof jmapCall>>);
     await expect(
       sendMessage(ENV, SNAPSHOT, { sentMailboxId: "mb", identityId: "I1", undoable: false }),
     ).rejects.toMatchObject({ type: "serverFail" });
@@ -154,16 +162,16 @@ describe("undo-send", () => {
       .mockResolvedValueOnce({
         methodResponses: [["EmailSubmission/set", { updated: { s1: null } }, "s"]],
         sessionState: "1",
-      })
+      } as unknown as Awaited<ReturnType<typeof jmapCall>>)
       .mockResolvedValueOnce({
         methodResponses: [
           ["EmailSubmission/set", { notUpdated: { s1: { type: "cannotUnsend", description: "письмо уже ушло" } } }, "s"],
         ],
         sessionState: "1",
-      });
+      } as unknown as Awaited<ReturnType<typeof jmapCall>>);
     await expect(cancelSend(ENV, "s1")).resolves.toBe(true);
-    const [, , , args1] = mocked.mock.calls[0];
-    expect(args1.update).toEqual({ s1: { undoStatus: "canceled" } });
+    const methodCalls = mocked.mock.calls[0][3] as Array<[string, Record<string, Record<string, unknown>>, string]>;
+    expect(methodCalls[0][1].update).toEqual({ s1: { undoStatus: "canceled" } });
     await expect(cancelSend(ENV, "s1")).resolves.toBe(false);
   });
 
