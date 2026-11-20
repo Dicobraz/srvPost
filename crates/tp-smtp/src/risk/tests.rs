@@ -492,7 +492,7 @@ async fn engine_link_domain_and_drops_reply() {
     let environ = Environ::default()
         .with_facts(account, memory)
         .with_psl(psl(PSL_TEXT));
-    let (risk, _) = risk(
+    let (engine, _) = risk(
         vec![
             signal(
                 "tp.link.new_domain",
@@ -510,7 +510,7 @@ async fn engine_link_domain_and_drops_reply() {
         environ,
     )
     .await;
-    let scan = risk
+    let scan = engine
         .scan("192.0.2.1".parse().expect("ip"), &raw, &[(account, tenant)])
         .await;
     let verdict = scan.verdict_for(tenant);
@@ -599,7 +599,7 @@ async fn engine_list_match() {
     let raw =
         b"From: alice@example.net\r\nSubject: x\r\n\r\nsee https://a.b.example.co.uk/login\r\n"
             .to_vec();
-    let (risk, _) = risk(
+    let (engine, _) = risk(
         vec![
             signal(
                 "tp.ti.sender_ip",
@@ -642,7 +642,7 @@ async fn engine_list_match() {
     )
     .await;
     // Совпадают IP соединения и домен From; ссылки и хэшей в письме нет.
-    let scan = risk
+    let scan = engine
         .scan("192.0.2.1".parse().expect("ip"), &raw, &[(account, tenant)])
         .await;
     let verdict = scan.verdict_for(tenant);
