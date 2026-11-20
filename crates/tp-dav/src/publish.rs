@@ -120,7 +120,7 @@ impl Publish {
             Err(retry) => {
                 tracing::debug!(retry_after = ?retry, "publish: частота запросов ссылки исчерпана");
                 let mut resp = status(StatusCode::TOO_MANY_REQUESTS);
-                if let Ok(v) = HeaderValue::from(retry.as_secs().max(1)) {
+                if let Ok(v) = HeaderValue::from_str(&retry.as_secs().max(1).to_string()) {
                     resp.headers_mut().insert(header::RETRY_AFTER, v);
                 }
                 return Err(resp);
@@ -197,7 +197,7 @@ fn allow(
     }
     if window.len() >= usize::try_from(limit).unwrap_or(usize::MAX) {
         let oldest = window.front().copied().unwrap_or(now);
-        return Err(WINDOW.satur_sub(now.duration_since(oldest)));
+        return Err(WINDOW.saturating_sub(now.duration_since(oldest)));
     }
     window.push_back(now);
     Ok(())
@@ -237,7 +237,7 @@ fn calendar_response(code: StatusCode, etag: &str, body: String, head: bool) -> 
 
 /// 304 с теми же `ETag` и `Cache-Control`.
 fn not_modified_response(etag: &str) -> Response {
-    let resp = StatusCode::NOT_MODIFIED.into_response();
+    let mut resp = StatusCode::NOT_MODIFIED.into_response();
     let h = resp.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static(CACHE));
     if let Ok(v) = HeaderValue::from_str(&format!("\"{etag}\"")) {

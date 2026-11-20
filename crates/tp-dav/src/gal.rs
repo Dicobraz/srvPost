@@ -288,7 +288,7 @@ fn org(o: &DirOrg, units: &Units, entries: &mut Vec<VCardEntry>) {
         entries.push(
             VCardEntry::new(VCardProperty::Related)
                 .with_param(VCardParameter::typ("x-manager".to_owned()))
-                .with_value(manager),
+                .with_value(manager.to_owned()),
         );
     }
 }
