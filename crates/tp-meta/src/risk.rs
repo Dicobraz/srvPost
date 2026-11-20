@@ -944,7 +944,8 @@ impl RiskStore for PgMeta {
     }
 
     /// Журнал срабатываний организации (свежие первыми, при равном моменте — порядок записи),
-    /// не больше `filter.limit`; чужая организация срабатываний другой не видит (RLS).
+    /// не больше `filter.limit`; чужая организация срабатываний другой не видит (условие `tenant_id`
+    /// в запросе и RLS).
     async fn hits(&self, tenant: TenantId, filter: &HitsQuery) -> Result<Vec<HitRecord>> {
         filter.validate()?;
         let (signal, message) = (
@@ -962,12 +963,14 @@ impl RiskStore for PgMeta {
                     Box::pin(async move {
                         let rows: Vec<HitRow> = sqlx::query_as(
                             "SELECT message, signal, strength, weight, mode, at FROM risk_hits
-                             WHERE ($1::text IS NULL OR signal = $1)
-                               AND ($2::bytea IS NULL OR message = $2)
-                               AND ($3::timestamptz IS NULL OR at >= $3)
-                               AND ($4::timestamptz IS NULL OR at < $4)
-                             ORDER BY at DESC, ord ASC LIMIT $5",
+                             WHERE tenant_id = $1
+                               AND ($2::text IS NULL OR signal = $2)
+                               AND ($3::bytea IS NULL OR message = $3)
+                               AND ($4::timestamptz IS NULL OR at >= $4)
+                               AND ($5::timestamptz IS NULL OR at < $5)
+                             ORDER BY at DESC, ord ASC LIMIT $6",
                         )
+                        .bind(*tenant.as_uuid())
                         .bind(signal)
                         .bind(message)
                         .bind(since)

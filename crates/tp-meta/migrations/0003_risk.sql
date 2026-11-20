@@ -29,8 +29,8 @@ CREATE TABLE risk_packages (
     installed_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Один действующий пакет.
-CREATE UNIQUE INDEX risk_packages_active ON risk_packages (version) WHERE state = 'active';
+-- Один действующий пакет (уникальность константы в частичном индексе: не больше одной строки).
+CREATE UNIQUE INDEX risk_packages_active ON risk_packages ((true)) WHERE state = 'active';
 
 -- Номер версии только растёт: sa-update не ставит пакет со старым или тем же номером.
 CREATE FUNCTION risk_package_version_grows() RETURNS trigger
