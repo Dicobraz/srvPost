@@ -3832,7 +3832,6 @@ export interface components {
         FieldSchema: "sender_ip" | "link_domain" | "link_url" | "from_domain" | "attachment_sha256";
         /** @description Детектор признака — типизированный Rust-код с параметрами (решение 126 г). */
         DetectorSchema: "thread_new_attachment_type" | "encrypted_archive" | "disk_image_or_shortcut" | "thread_new_link_domain" | "reply_to_changed" | {
-        } | {
             /** @description Поле письма. */
             field: components["schemas"]["FieldSchema"];
             /** @description Список. */
@@ -3850,7 +3849,6 @@ export interface components {
         ModeSchema: "report" | "enforce";
         /** @description Уровень политики справочника: установка → организация. */
         RiskLevelSchema: "installation" | {
-        } | {
             /** @description Организация (UUID) — только в сторону строгости. */
             org: string;
         };
@@ -3901,7 +3899,6 @@ export interface components {
         };
         /** @description Состояние хранимого пакета. */
         PackageStateSchema: "active" | "previous" | {
-        } | {
             /** @description Отчёт проверки (что не так). */
             report: string;
         };
@@ -3922,7 +3919,6 @@ export interface components {
                 /** @description Адрес. */
                 url: string;
             };
-        } | {
             /** @description Коллекция TAXII 2.1. */
             taxii: {
                 /** @description API root. */
@@ -3933,7 +3929,6 @@ export interface components {
         } | "file";
         /** @description Формат фида источника TI. */
         FeedFormatSchema: "txt" | {
-        } | {
             /** @description CSV; `column` — колонка с индикатором. */
             csv: {
                 /** @description Имя колонки. */
@@ -3962,7 +3957,6 @@ export interface components {
         };
         /** @description Организации, которым доступен источник. */
         TenantsSchema: "all" | {
-        } | {
             /** @description Только перечисленные (UUID). */
             only: string[];
         };
@@ -3973,13 +3967,11 @@ export interface components {
         };
         /** @description Авторизация источника TI: секрет — из ссылки `key`. */
         HttpAuthSchema: "none" | {
-        } | {
             /** @description Свой заголовок; имя здесь, значение — секрет. */
             header: {
                 /** @description Имя заголовка (`X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch). */
                 name: string;
             };
-        } | {
             /** @description Basic; пользователь здесь, пароль — секрет. */
             basic: {
                 /** @description Имя пользователя (Kaspersky TAXII: `taxii`). */
