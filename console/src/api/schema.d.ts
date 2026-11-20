@@ -3832,6 +3832,7 @@ export interface components {
         FieldSchema: "sender_ip" | "link_domain" | "link_url" | "from_domain" | "attachment_sha256";
         /** @description Детектор признака — типизированный Rust-код с параметрами (решение 126 г). */
         DetectorSchema: "thread_new_attachment_type" | "encrypted_archive" | "disk_image_or_shortcut" | "thread_new_link_domain" | "reply_to_changed" | {
+        } | {
             /** @description Поле письма. */
             field: components["schemas"]["FieldSchema"];
             /** @description Список. */
@@ -3849,28 +3850,29 @@ export interface components {
         ModeSchema: "report" | "enforce";
         /** @description Уровень политики справочника: установка → организация. */
         RiskLevelSchema: "installation" | {
+        } | {
             /** @description Организация (UUID) — только в сторону строгости. */
             org: string;
         };
         /** @description Пороги действий: балл, с которого действует действие (константы контракта — 1, 6, 10, 15). */
         ThresholdsSchema: {
             /**
-            * Format: int32
+             * Format: int32
              * @description В папку «Спам».
              */
             junk: number;
             /**
-            * Format: int32
+             * Format: int32
              * @description В карантин.
              */
             quarantine: number;
             /**
-            * Format: int32
+             * Format: int32
              * @description Отказ.
              */
             reject: number;
             /**
-            * Format: int32
+             * Format: int32
              * @description Пометка письма.
              */
             tag: number;
@@ -3899,6 +3901,7 @@ export interface components {
         };
         /** @description Состояние хранимого пакета. */
         PackageStateSchema: "active" | "previous" | {
+        } | {
             /** @description Отчёт проверки (что не так). */
             report: string;
         };
@@ -3919,6 +3922,7 @@ export interface components {
                 /** @description Адрес. */
                 url: string;
             };
+        } | {
             /** @description Коллекция TAXII 2.1. */
             taxii: {
                 /** @description API root. */
@@ -3929,6 +3933,7 @@ export interface components {
         } | "file";
         /** @description Формат фида источника TI. */
         FeedFormatSchema: "txt" | {
+        } | {
             /** @description CSV; `column` — колонка с индикатором. */
             csv: {
                 /** @description Имя колонки. */
@@ -3939,7 +3944,10 @@ export interface components {
         StaleActionSchema: {
             /** @description Снизить вес признаков источника на `percent` процентов. */
             reduce: {
-                /** @description Процент снижения, 0–100. */
+                /**
+                 * Format: int32
+                 * @description Процент снижения, 0–100.
+                 */
                 percent: number;
             };
         } | "report";
@@ -3954,6 +3962,7 @@ export interface components {
         };
         /** @description Организации, которым доступен источник. */
         TenantsSchema: "all" | {
+        } | {
             /** @description Только перечисленные (UUID). */
             only: string[];
         };
@@ -3964,11 +3973,13 @@ export interface components {
         };
         /** @description Авторизация источника TI: секрет — из ссылки `key`. */
         HttpAuthSchema: "none" | {
+        } | {
             /** @description Свой заголовок; имя здесь, значение — секрет. */
             header: {
                 /** @description Имя заголовка (`X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch). */
                 name: string;
             };
+        } | {
             /** @description Basic; пользователь здесь, пароль — секрет. */
             basic: {
                 /** @description Имя пользователя (Kaspersky TAXII: `taxii`). */
@@ -3986,32 +3997,28 @@ export interface components {
          *     само изменение.
          */
         SignalView: {
-            /** @description Собственное действие. */
             action?: components["schemas"]["RiskActionSchema"] | null;
-            /** @description Детектор; `null` — осиротевшее изменение. */
             detector?: components["schemas"]["DetectorSchema"] | null;
             /** @description Идентификатор: `tp.*` — поставщик, `org.*` — администратор. */
             id: string;
-            /** @description Режим: «только отчёт» или «применять». */
             mode?: components["schemas"]["ModeSchema"] | null;
             /** @description Происхождение значения: поставщик или администратор. */
             origin: components["schemas"]["OriginSchema"];
             /** @description Осиротевшее изменение: признака нет в действующем пакете (решение 126 в). */
             orphaned: boolean;
             /**
-            * Format: date-time
+             * Format: date-time
              * @description Дата появления признака (UTC).
              */
             since?: string | null;
-            /** @description Уровень, давший отличие от пакета; `null` — признак пакета без изменений. */
             source?: components["schemas"]["RiskLevelSchema"] | null;
             /**
-            * Format: int32
+             * Format: int32
              * @description Порог силы срабатывания детектора, 0–100; `null` — осиротевшее изменение.
              */
             threshold?: number | null;
             /**
-            * Format: int32
+             * Format: int32
              * @description Вес в балле письма, 0–100.
              */
             weight?: number | null;
@@ -4022,19 +4029,16 @@ export interface components {
          *     режим обязательны.
          */
         SignalBody: {
-            /** @description Собственное действие. */
             action?: components["schemas"]["RiskActionSchema"] | null;
-            /** @description Детектор (только свой признак `org.*`). */
             detector?: components["schemas"]["DetectorSchema"] | null;
-            /** @description Режим. */
             mode?: components["schemas"]["ModeSchema"] | null;
             /**
-            * Format: int32
+             * Format: int32
              * @description Порог силы срабатывания, 0–100 (только свой признак).
              */
             threshold?: number | null;
             /**
-            * Format: int32
+             * Format: int32
              * @description Вес, 0–100.
              */
             weight?: number | null;
@@ -4050,22 +4054,22 @@ export interface components {
         /** @description Пороги действий уровня целиком: баллы, с которых действуют действия. */
         ThresholdsBody: {
             /**
-            * Format: int32
+             * Format: int32
              * @description Балл перемещения в «Спам».
              */
             junk: number;
             /**
-            * Format: int32
+             * Format: int32
              * @description Балл карантина.
              */
             quarantine: number;
             /**
-            * Format: int32
+             * Format: int32
              * @description Балл отказа.
              */
             reject: number;
             /**
-            * Format: int32
+             * Format: int32
              * @description Балл пометки письма.
              */
             tag: number;
@@ -4074,9 +4078,7 @@ export interface components {
         ThresholdsView: {
             /** @description Действующие пороги. */
             effective: components["schemas"]["ThresholdsSchema"];
-            /** @description Пороги уровня; `null` — уровень не задан (действует уровень выше и константы контракта). */
             own?: components["schemas"]["ThresholdsSchema"] | null;
-            /** @description Уровень, давший действующие пороги; `null` — константы контракта. */
             source?: components["schemas"]["RiskLevelSchema"] | null;
         };
         /** @description Хранимый пакет: номер и состояние. */
@@ -4084,7 +4086,7 @@ export interface components {
             /** @description Состояние: активный, прошлый, отклонённый с отчётом. */
             state: components["schemas"]["PackageStateSchema"];
             /**
-            * Format: int64
+             * Format: int64
              * @description Номер версии (только растёт).
              */
             version: number;
@@ -4102,19 +4104,19 @@ export interface components {
             /** @description Ключ подписи (подпись Ed25519 проверил узел, APP-78). */
             key_id: string;
             /**
-            * Format: int64
+             * Format: int64
              * @description Прогнано образцов пакета (пробный прогон).
              */
             samples: number;
             /**
-            * Format: int64
+             * Format: int64
              * @description Признаков в пакете.
              */
             signals: number;
             /** @description Что изменится при активации (новые признаки приходят в режиме «только отчёт»). */
             update: components["schemas"]["UpdateReportSchema"];
             /**
-            * Format: int64
+             * Format: int64
              * @description Номер версии проверенного пакета.
              */
             version: number;
@@ -4128,7 +4130,6 @@ export interface components {
             auth: components["schemas"]["HttpAuthSchema"];
             /** @description Формат. */
             format: components["schemas"]["FeedFormatSchema"];
-            /** @description Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт. */
             key?: components["schemas"]["SecretRefSchema"] | null;
             /** @description Доставка. */
             kind: components["schemas"]["SourceKindSchema"];
@@ -4156,7 +4157,6 @@ export interface components {
             format: components["schemas"]["FeedFormatSchema"];
             /** @description Идентификатор: `[a-z0-9._-]`, до 64 символов. */
             id: string;
-            /** @description Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт. */
             key?: components["schemas"]["SecretRefSchema"] | null;
             /** @description Доставка. */
             kind: components["schemas"]["SourceKindSchema"];
@@ -4184,7 +4184,6 @@ export interface components {
             format: components["schemas"]["FeedFormatSchema"];
             /** @description Идентификатор. */
             id: string;
-            /** @description Ключ — ссылка на хранилище секретов; значение не отдаётся. */
             key?: components["schemas"]["SecretRefSchema"] | null;
             /** @description Доставка. */
             kind: components["schemas"]["SourceKindSchema"];
@@ -4214,12 +4213,12 @@ export interface components {
             /** @description Ссылка на объект содержимого в BLOB. */
             blob: string;
             /**
-            * Format: int64
+             * Format: int64
              * @description Число записей.
              */
             entries: number;
             /**
-            * Format: date-time
+             * Format: date-time
              * @description Момент загрузки (UTC).
              */
             fetched_at: string;
@@ -4229,18 +4228,17 @@ export interface components {
             sha256: string;
             /** @description Источник. */
             source: string;
-            /** @description Маркировка TLP из источника; `null` — маркировки нет. */
             tlp?: components["schemas"]["TlpSchema"] | null;
         };
         /** @description Учёт источника по организации: суммы обращений и совпадений (MSSP, решение 126 е). */
         UsageTotalView: {
             /**
-            * Format: int64
+             * Format: int64
              * @description Совпадения.
              */
             hits: number;
             /**
-            * Format: int64
+             * Format: int64
              * @description Обращения (проверки полей письма по спискам источника).
              */
             lookups: number;
@@ -4250,7 +4248,7 @@ export interface components {
         /** @description Учёт источника: суммы по организациям с `since`, по возрастанию организации. */
         UsageView: {
             /**
-            * Format: date-time
+             * Format: date-time
              * @description Начало периода (UTC).
              */
             since: string;
@@ -4262,7 +4260,7 @@ export interface components {
         /** @description Срабатывание признака в журнале организации. */
         HitView: {
             /**
-            * Format: date-time
+             * Format: date-time
              * @description Момент (UTC).
              */
             at: string;
@@ -4273,12 +4271,12 @@ export interface components {
             /** @description Признак. */
             signal: string;
             /**
-            * Format: int32
+             * Format: int32
              * @description Сила срабатывания, 0–100.
              */
             strength: number;
             /**
-            * Format: int32
+             * Format: int32
              * @description Вес признака при срабатывании.
              */
             weight: number;
@@ -4300,7 +4298,7 @@ export interface components {
             /** @description Несоответствия: организация смягчила признак. */
             errors: components["schemas"]["PolicyViolationSchema"][];
             /**
-            * Format: int32
+             * Format: int32
              * @description Код HTTP (422).
              */
             status: number;
