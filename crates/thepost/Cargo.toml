@@ -13,6 +13,10 @@ workspace = true
 [features]
 # Веб-консоль вшивается в бинарный файл: `cargo build -p thepost --features console`. По умолчанию выключена.
 console = ["tp-admin/console"]
+# Веб-клиент (web/dist, полоса mod-webmail, WEB-01) вшивается в бинарный файл и раздаётся слушателем JMAP
+# под /mail/ (`crates/thepost/src/webmail.rs`, секция `modules.webmail`): `cargo build -p thepost --features
+# webmail`. По умолчанию выключена.
+webmail = ["dep:tp-webmail", "tp-webmail/embed"]
 # Вход по Kerberos (GSSAPI, SRS 6.1): `cargo build -p thepost --features gssapi`; сборке нужны заголовки
 # libkrb5 (libkrb5-dev) и libclang, узлу — libgssapi_krb5. По умолчанию выключена.
 gssapi = ["tp-auth/gssapi"]
@@ -35,6 +39,7 @@ tp-admin.workspace = true
 tp-admin-client.workspace = true
 tp-sys.workspace = true
 tp-tui.workspace = true
+tp-webmail = { workspace = true, optional = true }
 schemars.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
@@ -64,3 +69,5 @@ tempfile.workspace = true
 # Записи журнала переписки в тестах CLI (`journal_commands_against_admin_api`, ADM-52).
 time.workspace = true
 tokio-rustls.workspace = true
+# Запросы к маршрутам веб-клиента в тестах (`crates/thepost/src/webmail.rs`, WEB-01) — как в tp-admin.
+tower = { workspace = true, features = ["util"] }
