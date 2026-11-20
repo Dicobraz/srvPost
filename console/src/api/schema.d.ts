@@ -1617,6 +1617,337 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/risk/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Действующий каталог уровня установки: активный пакет поставщика с изменениями установки, без
+         *     политик организаций; «осиротевшие» изменения — с признаком `orphaned`. Только администратор установки.
+         */
+        get: operations["list_installation_signals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/signals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Изменение признака поставщика (`tp.*`: вес, действие, режим) или свой признак (`org.*`, целиком) —
+         *     создание тем же `PUT`. Установка меняет значения как угодно; вес выше предела — 422.
+         */
+        put: operations["put_installation_signal"];
+        post?: never;
+        /**
+         * Сброс изменения уровня установки (у пакета — значение пакета) или удаление своего признака
+         *     `org.*`. Изменения на уровне нет — 404.
+         */
+        delete: operations["reset_installation_signal"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Пороги действий установки: свои, действующие и уровень-источник. Только администратор установки. */
+        get: operations["get_installation_thresholds"];
+        /**
+         * Замена порогов установки целиком: баллы, с которых действуют действия (пометка, «Спам», карантин,
+         *     отказ). Порядок нарушен — 422.
+         */
+        put: operations["put_installation_thresholds"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Хранимые пакеты поставщика: действующий и N прошлых (`risk.package.keep`), по убыванию номера.
+         *     Только администратор установки.
+         */
+        get: operations["list_packages"];
+        put?: never;
+        /**
+         * Загрузка файла пакета поставщика (закрытый контур, офлайн-импорт): проверка узла — подпись Ed25519
+         *     доверенным ключом, lint и пробный прогон на образцах (APP-78). Проверен — пакет поставлен (202) и
+         *     не активен; отчёт (что изменится — новые признаки в «только отчёт») виден до активации. Чужая
+         *     подпись, непрошедший lint или не растущий номер — 422 с причиной; тип не тот — 415; больше
+         *     `admin.risk.max_package_bytes` — 413.
+         */
+        post: operations["upload_package"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/packages/{version}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Активация поставленного пакета: номер строго больше действующего (не растёт — 422), нет пакета —
+         *     404. Прошлые сверх `risk.package.keep` удаляются.
+         */
+        post: operations["activate_package"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/packages/{version}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Откат на хранимую версию (действующий и N прошлых): нет — 404. Номер новой поставки всё равно
+         *     только растёт.
+         */
+        post: operations["rollback_package"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Источники TI установки по идентификатору: в поставке (пакетом), «ключ заказчика» и импорт. Только
+         *     администратор установки.
+         */
+        get: operations["list_sources"];
+        put?: never;
+        /**
+         * Новый источник TI: коннектор «ключ заказчика» (фид своим ключом) или импорт (txt, CSV, RPZ, MISP,
+         *     TAXII/STIX). Ключ — только ссылка на хранилище секретов (`{"secret": "путь#поле"}`); значение
+         *     ключа в теле — 400. Уровень «в поставке» создаёт только пакет поставщика — 400. Недопустимый
+         *     источник (TTL, запрещённые фиды) — 400.
+         */
+        post: operations["create_source"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Источник TI; нет — 404. */
+        get: operations["get_source"];
+        /**
+         * Замена источника целиком (без идентификатора — он в пути). Источник «в поставке» меняет только
+         *     пакет поставщика — 400; ключ — только ссылка на хранилище секретов (значение — 400).
+         */
+        put: operations["put_source"];
+        post?: never;
+        /**
+         * Удаление источника TI; нет — 404. Источник «в поставке» ведёт пакет поставщика — 400. Версии
+         *     списков и учёт остаются.
+         */
+        delete: operations["delete_source"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/sources/{id}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Импорт файла списка источника (закрытый контур): разбор формата делает узел (APP-78), версия
+         *     становится текущей. Источника нет — 404; тип не тот — 415; больше `admin.risk.max_package_bytes` — 413.
+         */
+        post: operations["import_source"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/sources/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Обновление источника сейчас (коннектор узла, APP-79): выгрузка фида, версия списка становится
+         *     текущей. Источника нет — 404; ошибка выгрузки — как есть.
+         */
+        post: operations["refresh_source"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/risk/sources/{id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Учёт источника по организациям (MSSP): суммы обращений и совпадений с `since` (сутки периода
+         *     складываются). Источника нет — 404.
+         */
+        get: operations["source_usage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/risk/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Действующий каталог организации: пакет поставщика, изменения установки и организации; по признаку
+         *     `source` — уровень, давший отличие. Администраторы и оператор (чтение).
+         */
+        get: operations["list_org_signals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/risk/signals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Изменение признака поставщика или свой признак уровня организации — только в сторону строгости:
+         *     вес не ниже, действие не мягче, «применять» вместо «только отчёт». Мягче — 422 problem+json с
+         *     `errors: [{signal, field, value, base}]` и пояснением по-русски.
+         */
+        put: operations["put_org_signal"];
+        post?: never;
+        /**
+         * Сброс изменения уровня организации — действуют установка и пакет; удаление своего признака
+         *     `org.*`. Изменения на уровне нет — 404.
+         */
+        delete: operations["reset_org_signal"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/risk/thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Пороги организации: свои (`null` — не заданы), действующие и уровень-источник. */
+        get: operations["get_org_thresholds"];
+        /**
+         * Замена порогов организации целиком — только не мягче установки: порог выше базового (действие
+         *     позже) — 422 с пояснением.
+         */
+        put: operations["put_org_thresholds"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/risk/hits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Журнал срабатываний организации (свежие первыми, постранично): применённые и «только отчёт»
+         *     (решение 126 а). Условия — по «и»: признак, режим, интервал. Продолжение — `next` следующего
+         *     запроса (как `until`); срабатывания одного момента (письмо — несколько признаков) не разрезаются
+         *     страницей. Администраторы и оператор (только `GET`).
+         */
+        get: operations["list_risk_hits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3488,6 +3819,465 @@ export interface components {
             hold?: components["schemas"]["ThreadHoldView"] | null;
             /** @description Письма беседы в порядке привязки (до `admin.max_page_size`). */
             messages: string[];
+        };
+        /** @description Происхождение признака: поставщик или администратор. */
+        OriginSchema: "vendor" | "admin";
+        /** @description Поле письма детектора совпадения со списком TI. */
+        FieldSchema: "sender_ip" | "link_domain" | "link_url" | "from_domain" | "attachment_sha256";
+        /** @description Детектор признака — типизированный Rust-код с параметрами (решение 126 г). */
+        DetectorSchema: "thread_new_attachment_type" | "encrypted_archive" | "disk_image_or_shortcut" | "thread_new_link_domain" | "reply_to_changed" | {
+            /** Поле письма. */
+            field: components["schemas"]["FieldSchema"];
+            /** Список. */
+            list: string;
+        };
+        /** @description Собственное действие признака (от мягкого к строгому). */
+        RiskActionSchema: "none" | "tag" | "junk" | "quarantine" | "reject";
+        /** @description Режим признака: «только отчёт» или «применять». */
+        ModeSchema: "report" | "enforce";
+        /** @description Уровень политики справочника: установка → организация. */
+        RiskLevelSchema: "installation" | {
+            /** Организация (UUID) — только в сторону строгости. */
+            org: string;
+        };
+        /** @description Пороги действий: балл, с которого действует действие (константы контракта — 1, 6, 10, 15). */
+        ThresholdsSchema: {
+             /**
+              * Format: int32
+              * @description В папку «Спам».
+              */
+            junk: number;
+             /**
+              * Format: int32
+              * @description В карантин.
+              */
+            quarantine: number;
+             /**
+              * Format: int32
+              * @description Отказ.
+              */
+            reject: number;
+             /**
+              * Format: int32
+              * @description Пометка письма.
+              */
+            tag: number;
+        };
+        /** @description Несоответствие политики организации базовым значениям: организация смягчила признак. */
+        PolicyViolationSchema: {
+            /** Базовое значение (уровней ниже). */
+            base: string;
+            /** Поле: `weight`, `action`, `mode`. */
+            field: string;
+            /** Признак. */
+            signal: string;
+            /** Заданное значение. */
+            value: string;
+        };
+        /** @description Итог обновления пакета: что изменится при активации. */
+        UpdateReportSchema: {
+            /** Добавленные признаки (приходят в режиме «только отчёт»). */
+            added: string[];
+            /** Изменённые пакетом. */
+            changed: string[];
+            /** Изменения администратора признаков, которых больше нет в пакете. */
+            orphaned_overrides: string[];
+            /** Удалённые из пакета без изменений администратора. */
+            removed: string[];
+        };
+        /** @description Состояние хранимого пакета. */
+        PackageStateSchema: "active" | "previous" | {
+            /** Отчёт проверки (что не так). */
+            report: string;
+        };
+        /** @description Уровень источника TI (решение 126 е–з). */
+        TierSchema: "bundled" | "customer_key" | "import";
+        /** @description Происхождение данных источника — для журнала и отчётов (решение 126 к). */
+        TiOriginSchema: "vendor" | "gossopka" | "fincert" | "own";
+        /** @description Доставка и параметры источника TI. */
+        SourceKindSchema: "file" | {
+            /** Фид по HTTP(S). */
+            http: {
+                /** Адрес. */
+                url: string;
+            };
+        } | {
+            /** Коллекция TAXII 2.1. */
+            taxii: {
+                /** API root. */
+                api_root: string;
+                /** Коллекция. */
+                collection: string;
+            };
+        };
+        /** @description Формат фида источника TI. */
+        FeedFormatSchema: "txt" | "rpz" | "misp_feed" | "stix21" | {
+            /** CSV; `column` — колонка с индикатором. */
+            csv: {
+                /** Имя колонки. */
+                column: string;
+            };
+        };
+        /** @description Действие при устаревании источника («отключить» нет). */
+        StaleActionSchema: "report" | {
+            /** Снизить вес признаков источника на `percent` процентов. */
+            reduce: {
+                /** Процент снижения, 0–100. */
+                percent: number;
+            };
+        };
+        /** @description Лицензия источника TI: условия и атрибуция. */
+        LicenseSchema: {
+            /** Атрибуция (ссылка, дата, ©); `null` — не требуется. */
+            attribution?: string | null;
+            /** Коммерческое использование разрешено условиями. */
+            commercial: boolean;
+            /** Адрес условий использования. */
+            terms_url: string;
+        };
+        /** @description Организации, которым доступен источник. */
+        TenantsSchema: "all" | {
+            /** Только перечисленные (UUID). */
+            only: string[];
+        };
+        /** @description Ссылка на поле секрета в хранилище (`<путь>#<поле>`); значение ключа API не принимает и не отдаёт. */
+        SecretRefSchema: {
+            /** Ссылка `<путь>#<поле>`, например `thepost/db#api_key`. */
+            secret: string;
+        };
+        /** @description Авторизация источника TI: секрет — из ссылки `key`. */
+        HttpAuthSchema: "none" | "bearer" | "client_cert" | {
+            /** Свой заголовок; имя здесь, значение — секрет. */
+            header: {
+                /** Имя заголовка (`X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch). */
+                name: string;
+            };
+        } | {
+            /** Basic; пользователь здесь, пароль — секрет. */
+            basic: {
+                /** Имя пользователя (Kaspersky TAXII: `taxii`). */
+                user: string;
+            };
+        };
+        /** @description Маркировка TLP версии списка из источника. */
+        TlpSchema: "clear" | "green" | "amber" | "amber_strict" | "red";
+        /**
+         * @description Признак действующего каталога: значение и уровень-источник. У «осиротевшего» изменения (признака
+         *     больше нет в пакете поставщика, решение 126 в) детектор, порог и дата — `null`: известно только
+         *     само изменение.
+         */
+        SignalView: {
+            /** Собственное действие. */
+            action?: components["schemas"]["RiskActionSchema"] | null;
+            /** Детектор; `null` — осиротевшее изменение. */
+            detector?: components["schemas"]["DetectorSchema"] | null;
+            /** Идентификатор: `tp.*` — поставщик, `org.*` — администратор. */
+            id: string;
+            /** Режим: «только отчёт» или «применять». */
+            mode?: components["schemas"]["ModeSchema"] | null;
+            /** Происхождение значения: поставщик или администратор. */
+            origin: components["schemas"]["OriginSchema"];
+            /** Осиротевшее изменение: признака нет в действующем пакете (решение 126 в). */
+            orphaned: boolean;
+             /**
+              * Format: date-time
+              * @description Дата появления признака (UTC).
+              */
+            since?: string | null;
+            /** Уровень, давший отличие от пакета; `null` — признак пакета без изменений. */
+            source?: components["schemas"]["RiskLevelSchema"] | null;
+             /**
+              * Format: int32
+              * @description Порог силы срабатывания детектора, 0–100; `null` — осиротевшее изменение.
+              */
+            threshold?: number | null;
+             /**
+              * Format: int32
+              * @description Вес в балле письма, 0–100.
+              */
+            weight?: number | null;
+        };
+        /**
+         * @description Изменение признака каталога: у признака поставщика (`tp.*`) — вес, действие и режим (незаданные
+         *     наследуются пакетом); свой признак (`org.*`) задаётся целиком — детектор, вес, порог, действие и
+         *     режим обязательны.
+         */
+        SignalBody: {
+            /** Собственное действие. */
+            action?: components["schemas"]["RiskActionSchema"] | null;
+            /** Детектор (только свой признак `org.*`). */
+            detector?: components["schemas"]["DetectorSchema"] | null;
+            /** Режим. */
+            mode?: components["schemas"]["ModeSchema"] | null;
+             /**
+              * Format: int32
+              * @description Порог силы срабатывания, 0–100 (только свой признак).
+              */
+            threshold?: number | null;
+             /**
+              * Format: int32
+              * @description Вес, 0–100.
+              */
+            weight?: number | null;
+        };
+        /**
+         * @description Действующий каталог: признаки по возрастанию идентификатора; «осиротевшие» изменения — в общем
+         *     списке с признаком `orphaned`.
+         */
+        SignalsView: {
+            /** Признаки каталога. */
+            signals: components["schemas"]["SignalView"][];
+        };
+        /** @description Пороги действий уровня целиком: баллы, с которых действуют действия. */
+        ThresholdsBody: {
+             /**
+              * Format: int32
+              * @description Балл перемещения в «Спам».
+              */
+            junk: number;
+             /**
+              * Format: int32
+              * @description Балл карантина.
+              */
+            quarantine: number;
+             /**
+              * Format: int32
+              * @description Балл отказа.
+              */
+            reject: number;
+             /**
+              * Format: int32
+              * @description Балл пометки письма.
+              */
+            tag: number;
+        };
+        /** @description Пороги уровня: свои (уровень не задан — `null`), действующие и уровень-источник. */
+        ThresholdsView: {
+            /** Действующие пороги. */
+            effective: components["schemas"]["ThresholdsSchema"];
+            /** Пороги уровня; `null` — уровень не задан (действует уровень выше и константы контракта). */
+            own?: components["schemas"]["ThresholdsSchema"] | null;
+            /** Уровень, давший действующие пороги; `null` — константы контракта. */
+            source?: components["schemas"]["RiskLevelSchema"] | null;
+        };
+        /** @description Хранимый пакет: номер и состояние. */
+        PackageEntryView: {
+            /** Состояние: активный, прошлый, отклонённый с отчётом. */
+            state: components["schemas"]["PackageStateSchema"];
+             /**
+              * Format: int64
+              * @description Номер версии (только растёт).
+              */
+            version: number;
+        };
+        /** @description Хранимые пакеты: действующий и N прошлых, по убыванию номера (`risk.package.keep`). */
+        PackagesView: {
+            /** Пакеты. */
+            packages: components["schemas"]["PackageEntryView"][];
+        };
+        /**
+         * @description Отчёт проверки загруженного пакета (решение 126 б): подпись, пробный прогон и что изменится — до
+         *     активации. Пакет поставлен (202), но не активен.
+         */
+        PackageReportView: {
+            /** Ключ подписи (подпись Ed25519 проверил узел, APP-78). */
+            key_id: string;
+             /**
+              * Format: int64
+              * @description Прогнано образцов пакета (пробный прогон).
+              */
+            samples: number;
+             /**
+              * Format: int64
+              * @description Признаков в пакете.
+              */
+            signals: number;
+            /** Что изменится при активации (новые признаки приходят в режиме «только отчёт»). */
+            update: components["schemas"]["UpdateReportSchema"];
+             /**
+              * Format: int64
+              * @description Номер версии проверенного пакета.
+              */
+            version: number;
+        };
+        /**
+         * @description Источник TI без идентификатора (тело `PUT`): вид, доставка, формат, TTL, действие при устаревании,
+         *     лицензия, организации, ключ-ссылка и авторизация.
+         */
+        TiSourceBody: {
+            /** Авторизация (секрет — из `key`). */
+            auth: components["schemas"]["HttpAuthSchema"];
+            /** Формат. */
+            format: components["schemas"]["FeedFormatSchema"];
+            /** Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт. */
+            key?: components["schemas"]["SecretRefSchema"] | null;
+            /** Доставка. */
+            kind: components["schemas"]["SourceKindSchema"];
+            /** Лицензия. */
+            license: components["schemas"]["LicenseSchema"];
+            /** Происхождение — для журнала и отчётов. */
+            origin: components["schemas"]["TiOriginSchema"];
+            /** Действие при устаревании («отключить» нет). */
+            stale: components["schemas"]["StaleActionSchema"];
+            /** Организации, которым доступен. */
+            tenants: components["schemas"]["TenantsSchema"];
+            /** Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
+            tier: components["schemas"]["TierSchema"];
+            /** Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`). */
+            ttl: string;
+        };
+        /** @description Новый источник TI (тело `POST`): идентификатор и параметры. */
+        NewTiSourceBody: {
+            /** Авторизация (секрет — из `key`). */
+            auth: components["schemas"]["HttpAuthSchema"];
+            /** Формат. */
+            format: components["schemas"]["FeedFormatSchema"];
+            /** Идентификатор: `[a-z0-9._-]`, до 64 символов. */
+            id: string;
+            /** Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт. */
+            key?: components["schemas"]["SecretRefSchema"] | null;
+            /** Доставка. */
+            kind: components["schemas"]["SourceKindSchema"];
+            /** Лицензия. */
+            license: components["schemas"]["LicenseSchema"];
+            /** Происхождение — для журнала и отчётов. */
+            origin: components["schemas"]["TiOriginSchema"];
+            /** Действие при устаревании («отключить» нет). */
+            stale: components["schemas"]["StaleActionSchema"];
+            /** Организации, которым доступен. */
+            tenants: components["schemas"]["TenantsSchema"];
+            /** Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
+            tier: components["schemas"]["TierSchema"];
+            /** Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`). */
+            ttl: string;
+        };
+        /** @description Источник TI в ответе API (ключ — только ссылка, значения не отдаёт). */
+        TiSourceView: {
+            /** Авторизация. */
+            auth: components["schemas"]["HttpAuthSchema"];
+            /** Формат. */
+            format: components["schemas"]["FeedFormatSchema"];
+            /** Идентификатор. */
+            id: string;
+            /** Ключ — ссылка на хранилище секретов; значение не отдаётся. */
+            key?: components["schemas"]["SecretRefSchema"] | null;
+            /** Доставка. */
+            kind: components["schemas"]["SourceKindSchema"];
+            /** Лицензия. */
+            license: components["schemas"]["LicenseSchema"];
+            /** Происхождение. */
+            origin: components["schemas"]["TiOriginSchema"];
+            /** Действие при устаревании. */
+            stale: components["schemas"]["StaleActionSchema"];
+            /** Организации, которым доступен. */
+            tenants: components["schemas"]["TenantsSchema"];
+            /** Уровень: в поставке, ключ заказчика, импорт. */
+            tier: components["schemas"]["TierSchema"];
+            /** Срок жизни данных (TTL). */
+            ttl: string;
+        };
+        /** @description Источники TI по идентификатору. */
+        SourcesView: {
+            /** Источники. */
+            sources: components["schemas"]["TiSourceView"][];
+        };
+        /** @description Версия списка TI, ставшая текущей (импорт или обновление). */
+        ListVersionView: {
+            /** Ссылка на объект содержимого в BLOB. */
+            blob: string;
+             /**
+              * Format: int64
+              * @description Число записей.
+              */
+            entries: number;
+             /**
+              * Format: date-time
+              * @description Момент загрузки (UTC).
+              */
+            fetched_at: string;
+            /** Список. */
+            list: string;
+            /** SHA-256 содержимого (hex). */
+            sha256: string;
+            /** Источник. */
+            source: string;
+            /** Маркировка TLP из источника; `null` — маркировки нет. */
+            tlp?: components["schemas"]["TlpSchema"] | null;
+        };
+        /** @description Учёт источника по организации: суммы обращений и совпадений (MSSP, решение 126 е). */
+        UsageTotalView: {
+             /**
+              * Format: int64
+              * @description Совпадения.
+              */
+            hits: number;
+             /**
+              * Format: int64
+              * @description Обращения (проверки полей письма по спискам источника).
+              */
+            lookups: number;
+            /** Организация (UUID). */
+            tenant: string;
+        };
+        /** @description Учёт источника: суммы по организациям с `since`, по возрастанию организации. */
+        UsageView: {
+             /**
+              * Format: date-time
+              * @description Начало периода (UTC).
+              */
+            since: string;
+            /** Источник. */
+            source: string;
+            /** Суммы по организациям. */
+            usage: components["schemas"]["UsageTotalView"][];
+        };
+        /** @description Срабатывание признака в журнале организации. */
+        HitView: {
+             /**
+              * Format: date-time
+              * @description Момент (UTC).
+              */
+            at: string;
+            /** Письмо (SHA-256, hex). */
+            message: string;
+            /** Режим признака при срабатывании: `report` — только журнал. */
+            mode: components["schemas"]["ModeSchema"];
+            /** Признак. */
+            signal: string;
+             /**
+              * Format: int32
+              * @description Сила срабатывания, 0–100.
+              */
+            strength: number;
+             /**
+              * Format: int32
+              * @description Вес признака при срабатывании.
+              */
+            weight: number;
+        };
+        /**
+         * @description Страница журнала срабатываний: свежие первыми; срабатывания одного момента (одно письмо —
+         *     несколько признаков) не разрезаются страницей.
+         */
+        HitsView: {
+            /** Срабатывания страницы. */
+            hits: components["schemas"]["HitView"][];
+            /** Конец интервала следующей страницы (`until`, RFC 3339); `null` — записей больше нет. */
+            next?: string | null;
+        };
+        /** @description Отказ записи признака: организация мягче установки (RFC 9457 с расширением `errors`). */
+        RiskProblem: {
+            /** Несоответствия по-русски, через «; ». */
+            detail: string;
+            /** Несоответствия: организация смягчила признак. */
+            errors: components["schemas"]["PolicyViolationSchema"][];
+             /**
+              * Format: int32
+              * @description Код HTTP (422).
+              */
+            status: number;
+            /** Краткое описание кода. */
+            title: string;
         };
     };
     responses: never;
@@ -10391,6 +11181,1411 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+
+    list_installation_signals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["SignalsView"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_installation_signal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Признак: `tp.*` — поставщика, `org.*` — свой */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignalBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["SignalView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description вес выше предела */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["RiskProblem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_installation_signal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Признак: `tp.*` — поставщика, `org.*` — свой */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["SignalView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_installation_thresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["ThresholdsView"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_installation_thresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThresholdsBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["ThresholdsView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description пороги не растут с действием */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_packages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["PackagesView"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    upload_package: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description пакет проверен и поставлен, не активен */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["PackageReportView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description больше admin.risk.max_package_bytes */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не application/octet-stream */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description чужая подпись, lint или номер не растёт */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    activate_package: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Номер версии поставленного пакета */
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["PackagesView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description номер не растёт */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rollback_package: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Номер версии отката (хранимой) */
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["PackagesView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_sources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["SourcesView"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewTiSourceBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["TiSourceView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Источник TI */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["TiSourceView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Источник TI */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TiSourceBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["TiSourceView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Источник TI */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description удалённый источник */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["TiSourceView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    import_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Источник TI */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["ListVersionView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description больше admin.risk.max_package_bytes */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не application/octet-stream */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    refresh_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Источник TI */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["ListVersionView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    source_usage: {
+        parameters: {
+            query?: {
+                /** Учёт с этого момента (RFC 3339), включительно; по умолчанию — весь учёт. */
+                since?: string;
+            };
+            header?: never;
+            path: {
+                /** Источник TI */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["UsageView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description не администратор установки */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_org_signals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["SignalsView"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_org_signal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Организация (UUID) */
+                org: string;
+                /** Признак: `tp.*` — поставщика, `org.*` — свой */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignalBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["SignalView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description организация мягче установки */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["RiskProblem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reset_org_signal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Организация (UUID) */
+                org: string;
+                /** Признак: `tp.*` — поставщика, `org.*` — свой */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["SignalView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_org_thresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["ThresholdsView"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_org_thresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThresholdsBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["ThresholdsView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description порог выше базового или порядок нарушен */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_risk_hits: {
+        parameters: {
+            query?: {
+                /** Только этот признак (`tp.*`, `org.*`). */
+                signal?: string;
+                /** Режим: `report` — только отчёт, `enforce` — применённые. */
+                mode?: string;
+                /** Начало интервала (RFC 3339), включительно. */
+                since?: string;
+                /** Конец интервала (RFC 3339), не включительно; продолжение страницы — её `next`. */
+                until?: string;
+                /** Размер страницы (по умолчанию и наибольший — из конфигурации). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["HitsView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                "application/json": components["schemas"]["Problem"];
                 };
             };
         };
