@@ -49,7 +49,7 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
 .lhead{height:42px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--div);font-weight:600;font-size:14px;flex:none;white-space:nowrap}
 .lhead .sec{color:var(--t2);font-weight:400;font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .rows{flex:1;overflow:hidden}
-.msg{border-bottom:1px solid var(--div);display:flex;gap:11px;align-items:flex-start;padding:10px 16px 10px 12px;height:66px}
+.msg{border-bottom:1px solid var(--div);display:flex;gap:11px;align-items:flex-start;padding:9px 16px 9px 12px;height:76px}
 .msg .ava{width:40px;height:40px;border-radius:20px;background:var(--fill);color:var(--t2);font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
 .msg .mid{flex:1;min-width:0}
 .msg .l1{display:flex;align-items:center;gap:6px;height:20px}
@@ -57,6 +57,9 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
 .msg.unread .l1 .from{font-weight:700}
 .msg .l1 .time{color:var(--t2);font-size:12px;flex:none}
 .msg .l2{display:flex;align-items:center;gap:6px;margin-top:2px}
+.msg .l3{display:block;color:var(--t2);font-size:11.5px;line-height:15px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg .thm{color:var(--t1);font-size:12.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg.unread .thm{font-weight:600}
 .msg .subj{color:var(--t2);font-size:12.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .msg .ends{display:flex;align-items:center;gap:5px;flex:none}
 .msg .st{color:var(--t2);font-size:11.5px}
@@ -122,56 +125,64 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
         <span class="ava">ИП</span>
         <span class="mid">
           <span class="l1"><span class="from">Иван Петров</span><span class="time">10:42</span></span>
-          <span class="l2"><span class="subj">Отчёт за октябрь — направляю с подписью</span><span class="ends"><svg class="i xs" style="color:var(--t2)"><use href="#i-clip"/></svg></span></span>
+          <span class="l2"><span class="thm">Отчёт за октябрь</span><span class="ends"><svg class="i xs" style="color:var(--t2)"><use href="#i-clip"/></svg></span></span>
+          <span class="l3">Направляю с подписью, главные цифры на листе 3</span>
         </span>
       </div>
       <div class="msg unread">
         <span class="ava">ОС</span>
         <span class="mid">
           <span class="l1"><span class="from">Ольга Смирнова</span><span class="time">вт 10:15</span></span>
-          <span class="l2"><span class="subj">Договор поставки</span><span class="ends"><span class="chip" style="--cchip-bg:var(--catblue-bg);--cchip-tx:var(--catblue-tx)">Клиенты</span><span class="st">3 письма</span></span></span>
+          <span class="l2"><span class="thm">Договор поставки</span><span class="ends"><span class="chip" style="--cchip-bg:var(--catblue-bg);--cchip-tx:var(--catblue-tx)">Клиенты</span><span class="st">3 письма</span></span></span>
+          <span class="l3">Третья редакция, правки по срокам поставки</span>
         </span>
       </div>
       <div class="msg">
         <span class="ava">СК</span>
         <span class="mid">
           <span class="l1"><span class="from">Сергей Ким</span><span class="time">09:30</span></span>
-          <span class="l2"><span class="subj">Re: план на неделю</span><span class="ends"><span class="st">Ждём ответа</span></span></span>
+          <span class="l2"><span class="thm">Re: план на неделю</span><span class="ends"><span class="st">Ждём ответа</span></span></span>
+          <span class="l3">Учёл замечания, жду подтверждения по датам</span>
         </span>
       </div>
       <div class="msg">
         <span class="ava">АЛ</span>
         <span class="mid">
           <span class="l1"><span class="from">Анна Лебедева</span><span class="duelbl"><svg class="i xs"><use href="#i-clock"/></svg>До ср</span><span class="time">Вчера</span></span>
-          <span class="l2"><span class="subj">Тендер: вопросы по заявке</span><span class="ends"><span class="chip" style="--cchip-bg:var(--tint);--cchip-tx:var(--tinttext)">Тендеры</span></span></span>
+          <span class="l2"><span class="thm">Тендер: вопросы по заявке</span><span class="ends"><span class="chip" style="--cchip-bg:var(--tint);--cchip-tx:var(--tinttext)">Тендеры</span></span></span>
+          <span class="l3">Ответы по двум позициям нужны до среды</span>
         </span>
       </div>
       <div class="msg unread">
         <span class="ava">МВ</span>
         <span class="mid">
           <span class="l1"><span class="from">Мария Волкова</span><span class="unread-badge">2</span><span class="time">Вчера</span></span>
-          <span class="l2"><span class="subj">Проект «Гамма»: правки в смете</span><span class="ends"><span class="catdot" style="background:var(--igreen)"></span><span class="st">5 писем</span></span></span>
+          <span class="l2"><span class="thm">Проект «Гамма»: правки в смете</span><span class="ends"><span class="catdot" style="background:var(--igreen)"></span><span class="st">5 писем</span></span></span>
+          <span class="l3">Согласуйте правки по кабелю и щиту</span>
         </span>
       </div>
       <div class="msg">
         <span class="ava">ДО</span>
         <span class="mid">
           <span class="l1"><span class="from">Дмитрий Орлов</span><span class="time">пн 11:20</span></span>
-          <span class="l2"><span class="subj">Ревью релиза: перенос на 16:00</span><span class="ends"><span class="chip due">Просрочено 1 д</span></span></span>
+          <span class="l2"><span class="thm">Ревью релиза: перенос на 16:00</span><span class="ends"><span class="chip due">Просрочено 1 д</span></span></span>
+          <span class="l3">Переносим из-за сборки, календарь обновлён</span>
         </span>
       </div>
       <div class="msg">
         <span class="ava">СД</span>
         <span class="mid">
           <span class="l1"><span class="from">Сервис-деск</span><span class="time">пн 09:12</span></span>
-          <span class="l2"><span class="subj">Заявка № 1207 закрыта</span><span class="ends"><span class="st">Сервисы</span></span></span>
+          <span class="l2"><span class="thm">Заявка № 1207 закрыта</span><span class="ends"><span class="st">Сервисы</span></span></span>
+          <span class="l3">Решение: заменён блок питания</span>
         </span>
       </div>
       <div class="msg">
         <span class="ava">ПО</span>
         <span class="mid">
           <span class="l1"><span class="from">noreply@thepost.example</span><span class="time">пн 08:40</span></span>
-          <span class="l2"><span class="subj">Ваш отчёт о фишинге отправлен</span></span>
+          <span class="l2"><span class="thm">Ваш отчёт о фишинге отправлен</span></span>
+          <span class="l3">Команда безопасности проверит ссылку</span>
         </span>
       </div>
     </div>
@@ -204,7 +215,7 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
       <div class="msg unread">
         <span class="mid">
           <span class="l1"><span class="from">Иван Петров</span><svg class="i xs" style="color:var(--t2)"><use href="#i-clip"/></svg><span class="time">10:42</span></span>
-          <span class="l2"><span class="subj">Отчёт за октябрь — направляю с подписью</span></span>
+          <span class="l2"><span class="subj">Отчёт за октябрь</span></span>
         </span>
       </div>
       <div class="msg unread">
