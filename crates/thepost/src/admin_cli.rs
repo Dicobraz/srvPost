@@ -7185,7 +7185,7 @@ mod tests {
         // Доверенные источники: шлюз по сети, приложение по сертификату; удаление; неверная сеть — отказ.
         let source = |action| transport(TransportAction::Source { action });
         let set = |name: &str, networks: Vec<&str>, cert: Option<&str>, senders: Vec<&str>| {
-            source(RiskSourceAction::Set {
+            source(SourceAction::Set {
                 name: name.into(),
                 networks: networks.into_iter().map(str::to_owned).collect(),
                 client_cert: cert.map(str::to_owned),
@@ -7225,7 +7225,7 @@ mod tests {
         )
         .await
         .expect("source mfu");
-        let listed = exec(&c, false, source(RiskSourceAction::List))
+        let listed = exec(&c, false, source(SourceAction::List))
             .await
             .expect("source list");
         for part in [
@@ -7237,11 +7237,11 @@ mod tests {
         ] {
             assert!(listed.contains(part), "{part}: {listed}");
         }
-        let delete = RiskSourceAction::Delete { name: "gw".into() };
+        let delete = SourceAction::Delete { name: "gw".into() };
         exec(&c, false, source(delete))
             .await
             .expect("source delete");
-        let listed = json(exec(&c, true, source(RiskSourceAction::List)).await);
+        let listed = json(exec(&c, true, source(SourceAction::List)).await);
         assert_eq!(
             listed["sources"].as_array().map(Vec::len),
             Some(1),
