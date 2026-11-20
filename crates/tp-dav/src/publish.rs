@@ -114,7 +114,7 @@ impl Publish {
         &self,
         token: &str,
         now: Instant,
-    ) -> std::result::Result<CalendarPublication, Response> {
+    ) -> std::result::Result<CalendarPublication, Box<Response>> {
         match allow(&self.rate, token, self.cfg.pub_rate_limit, now) {
             Ok(()) => {}
             Err(retry) => {
@@ -123,13 +123,13 @@ impl Publish {
                 if let Ok(v) = HeaderValue::from_str(&retry.as_secs().max(1).to_string()) {
                     resp.headers_mut().insert(header::RETRY_AFTER, v);
                 }
-                return Err(resp);
+                return Err(Box::new(resp));
             }
         }
         match self.d.publications.publication_by_token(token).await {
             Ok(Some(p)) => Ok(p),
-            Ok(None) => Err(status(StatusCode::NOT_FOUND)),
-            Err(e) => Err(store_error(&e)),
+            Ok(None) => Err(Box::new(status(StatusCode::NOT_FOUND))),
+            Err(e) => Err(Box::new(store_error(&e))),
         }
     }
 }
@@ -283,7 +283,7 @@ async fn published(State(st): State<Arc<Publish>>, req: Request) -> Response {
     };
     let p = match st.link(token, Instant::now()).await {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let level = st.ceiling(p.scope).await.min(p.detail);
     if level == Detail::None {
@@ -329,7 +329,7 @@ async fn freebusy_link(State(st): State<Arc<Publish>>, req: Request) -> Response
     };
     let p = match st.link(token, Instant::now()).await {
         Ok(p) => p,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if st.ceiling(p.scope).await.min(p.detail) < Detail::FreeBusy {
         return status(StatusCode::NOT_FOUND);

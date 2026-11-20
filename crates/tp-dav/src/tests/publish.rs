@@ -84,7 +84,7 @@ impl Fixture {
     /// Календарь «calendar» с событием `event` (PUT от владельца), политика организации
     /// `sharing.external = level`, маршруты публикации поверх того же хранилища.
     async fn new(level: Detail) -> Self {
-        Self::with_events(level, &[(event("e-1", "Планёрка"), "e-1.ics")]).await
+        Self::with_events(level, &[(event("e-1", "Планёрка").as_str(), "e-1.ics")]).await
     }
 
     async fn with_events(level: Detail, events: &[(&str, &str)]) -> Self {
@@ -191,7 +191,10 @@ END:VEVENT\r\nEND:VCALENDAR\r\n";
 async fn detail_levels() {
     let fx = Fixture::with_events(
         Detail::Details,
-        &[(RICH, "e-rich.ics"), (event("e-2", "Обед"), "e-2.ics")],
+        &[
+            (RICH, "e-rich.ics"),
+            (event("e-2", "Обед").as_str(), "e-2.ics"),
+        ],
     )
     .await;
     for (token, detail) in [
