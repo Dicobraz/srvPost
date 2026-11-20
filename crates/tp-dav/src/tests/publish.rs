@@ -360,13 +360,13 @@ async fn etag_and_conditional_get() {
         .await;
     assert_eq!(r.status, StatusCode::NOT_MODIFIED);
 
-    // Изменение календаря — новый ETag.
+    // Изменение календаря — новый ETag (уровень free_busy, темы в теле нет).
     fx.dav
         .put_event("calendar", "e-1.ics", "e-1", "Планёрка изменена")
         .await;
     let r = fx.get(&format!("/dav/pub/{TOKEN}.ics")).await;
     assert_ne!(r.header("etag"), Some(etag.as_str()), "{}", r.body);
-    assert!(r.body.contains("Планёрка изменена"), "{}", r.body);
+    assert!(r.body.contains("DTSTART:20260105T100000Z"), "{}", r.body);
 }
 
 /// Ограничение частоты по токену (`dav.pub_rate_limit`): исчерпан — 429 с `Retry-After`; у другого
