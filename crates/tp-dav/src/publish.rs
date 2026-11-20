@@ -203,15 +203,17 @@ fn allow(
     Ok(())
 }
 
-/// Ссылка `If-None-Match` совпала с `etag` (или `*`): условный `GET` отдаёт 304.
+/// Ссылка `If-None-Match` совпала с `etag` (или `*`; слабая форма `W/` тоже): условный `GET`
+/// отдаёт 304.
 fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
     headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| {
-            v.split(',')
-                .map(str::trim)
-                .any(|t| t == "*" || t.trim_matches('"') == etag)
+            v.split(',').map(str::trim).any(|t| {
+                let t = t.strip_prefix("W/").unwrap_or(t);
+                t == "*" || t.trim_matches('"') == etag
+            })
         })
 }
 

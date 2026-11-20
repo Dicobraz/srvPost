@@ -421,12 +421,14 @@ async fn rate_limit() {
         .await
         .expect("infallible");
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        resp.headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok()),
-        Some("60")
-    );
+    // Время до восполнения: минута минус прошедшая доля секунды.
+    let retry = resp
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .expect("Retry-After");
+    assert!((1..=60).contains(&retry), "Retry-After: {retry}");
     // Другой токен — своё окно.
     assert_eq!(
         status_of(&app, "/dav/pub/cal-rl-2.ics").await,
@@ -434,8 +436,9 @@ async fn rate_limit() {
     );
 }
 
-/// Ссылка занятости: `VFREEBUSY` владельца на интервал; предел интервала (`dav.max_freebusy_span`)
-/// и отсутствующие параметры — 400; отозванная ссылка и уровень ниже `free_busy` — 404.
+/// Ссылка занятости: `VFREEBUSY` владельца на интервал (уровню `limited` занятость тоже отвечает);
+/// предел интервала (`dav.max_freebusy_span`) и отсутствующие параметры — 400; отозванная ссылка
+/// и потолок политики «ничего» — 404.
 #[tokio::test]
 async fn freebusy_link() {
     let fx = Fixture::new(Detail::FreeBusy).await;
@@ -446,11 +449,6 @@ async fn freebusy_link() {
         .get("/dav/freebusy/cal-unknown-fb.vfb?start=2026-01-01T00:00:00Z&end=2026-01-10T00:00:00Z")
         .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
-
-    let r = fx
-        .get("/dav/freebusy/cal-fb-limited.vfb?start=2026-01-01T00:00:00Z&end=2026-01-10T00:00:00Z")
-        .await;
-    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.body);
 
     let r = fx
         .get(&format!(
@@ -471,6 +469,18 @@ async fn freebusy_link() {
         assert!(r.body.contains(line), "{line}: {}", r.body);
     }
 
+    // Ссылке с уровнем `limited` занятость отвечает тем же: она и так видит больше.
+    let r = fx
+        .get("/dav/freebusy/cal-fb-limited.vfb?start=2026-01-01T00:00:00Z&end=2026-01-10T00:00:00Z")
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(
+        r.body
+            .contains("FREEBUSY;FBTYPE=BUSY:20260105T100000Z/20260105T110000Z"),
+        "{}",
+        r.body
+    );
+
     // Параметры: нет, неверные, интервал вывернут, длиннее предела — 400.
     for query in [
         "",
@@ -483,7 +493,19 @@ async fn freebusy_link() {
         assert_eq!(r.status, StatusCode::BAD_REQUEST, "{query}: {}", r.body);
     }
 
-    // Отзыв — 404.
+    // Потолок политики «ничего» — ссылка занятости не отвечает.
+    fx.trust
+        .set_policy(TrustLevel::Org(fx.scope.tenant), &TrustPolicy::default())
+        .await
+        .expect("политика");
+    let r = fx
+        .get(&format!(
+            "/dav/freebusy/{TOKEN}.vfb?start=2026-01-01T00:00:00Z&end=2026-01-10T00:00:00Z"
+        ))
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+
+    // Отзыв — тоже 404.
     fx.pubs.revoke(TOKEN);
     let r = fx
         .get(&format!(
