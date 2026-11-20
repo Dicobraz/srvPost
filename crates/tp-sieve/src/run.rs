@@ -893,18 +893,17 @@ fn collect(msg: MessageRef<'_>, types: Option<&[String]>, scan: &mut Scan) {
 
 /// Заголовки верхнего уровня: имя, значение после RFC 2047 и границы сырого значения.
 pub(crate) fn parse_headers(raw: &[u8]) -> Vec<Hdr> {
-    // Непустая карта заголовков включает разбор «по умолчанию» для всех остальных — как текст с RFC 2047.
-    let parser = MessageParser::new()
-        .header(HeaderName::Subject, HeaderForm::Text)
-        .unknown_headers(HeaderForm::Text);
-    let Some(msg) = parser.parse_headers(raw) else {
+    let Some(msg) = MessageParser::new().parse_headers(raw) else {
         return Vec::new();
     };
+    // Значение каждого поля — как текст с RFC 2047 (в 0.11 это default_header_text): тестам и действиям
+    // нужен исходный вид значения, поэтому структурные формы known-заголовков 1.0 переигрываются
+    // (`parse_as`): `Message-ID` и `Received` — со скобками и сырым путём, адреса — как написаны.
     msg.headers()
         .iter()
         .map(|h| Hdr {
             name: h.name().as_str().to_owned(),
-            value: header_text(&h.value()),
+            value: header_text(&h.parse_as(HeaderForm::Text).value()),
             start: h.offset_start() as usize,
             end: h.offset_end() as usize,
         })

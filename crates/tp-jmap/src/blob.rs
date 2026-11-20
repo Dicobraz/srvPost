@@ -225,14 +225,12 @@ fn quoted_printable_decode(bytes: &[u8]) -> Option<Vec<u8>> {
                     None if ch.is_ascii_whitespace() => {}
                     None => return None,
                 },
-                State::Hex1 => match hex(ch) {
-                    Some(h) => {
-                        out.push((hex1 << 4) | h);
-                        state = State::None;
-                        ws = 0;
-                    }
-                    None => return None,
-                },
+                State::Hex1 => {
+                    let h = hex(ch)?;
+                    out.push((hex1 << 4) | h);
+                    state = State::None;
+                    ws = 0;
+                }
             },
         }
     }

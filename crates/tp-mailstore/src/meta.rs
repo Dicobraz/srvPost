@@ -49,7 +49,9 @@ pub fn message_meta_with(raw: &[u8], limits: MimeLimits) -> MessageMeta {
 
 /// Разбор письма для приёма: метаданные для протоколов и вход беседы (MS-21, CTR-94) — один разбор.
 pub fn analyze(raw: &[u8], limits: MimeLimits) -> Analyzed {
-    let Some(msg) = MessageParser::default().parse(raw) else {
+    // mail-parser 1.0: пределы разбора задаёт [`MimeLimits`] на обходе дерева (SRS 6.8), как в 0.11 —
+    // глубина парсера не ограничивается, иначе части за встроенным пределом 1.0 выпадают из BODYSTRUCTURE.
+    let Some(msg) = MessageParser::new().max_depth(usize::MAX).parse(raw) else {
         return Analyzed {
             meta: MessageMeta {
                 body: leaf_default(String::new()),

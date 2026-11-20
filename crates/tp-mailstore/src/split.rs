@@ -108,7 +108,11 @@ impl Split {
             cuts: Vec::new(),
             sections: Vec::new(),
         };
-        if let Some(msg) = MessageParser::default().parse(raw.as_ref()) {
+        // mail-parser 1.0: пределы разбора задаёт [`MimeLimits`] на обходе (SRS 6.8), как в 0.11.
+        if let Some(msg) = MessageParser::new()
+            .max_depth(usize::MAX)
+            .parse(raw.as_ref())
+        {
             let root = msg.root_part();
             walk.section("", root.offset_body(), root.offset_end());
             walk.message(msg.root(), "", 0);
