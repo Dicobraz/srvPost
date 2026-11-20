@@ -664,7 +664,7 @@ async fn org_script_signals_and_environment() {
 async fn org_script_extlists() {
     const TI: &str = "tag:node.example,2026-11-14:ti/feodo";
     let lists: Arc<dyn ExternalLists> = Arc::new(MemLists::new(&[(TI, &["example.com"])]));
-    let mut f = Fixture::with_lists(SieveConfig::default(), lists);
+    let f = Fixture::with_lists(SieveConfig::default(), lists);
     f.org(
         "require [\"extlists\", \"vnd.thepost.risk\"];\n\
              if address :list :domain \"From\" \"tag:node.example,2026-11-14:ti/feodo\" { signal \"org.ti_from_domain\" :weight 4; }\n\
@@ -675,7 +675,7 @@ async fn org_script_extlists() {
     let id = |s: &str| tp_contracts::risk::SignalId::new(s).expect("id");
     assert_eq!(o.signals, [(id("org.ti_from_domain"), Some(4))]);
     // Без интерфейса (Rules без with_lists) тот же скрипт не находит список: письмо доставляется, признака нет.
-    let mut bare = Fixture::new();
+    let bare = Fixture::new();
     bare.org(
         "require [\"extlists\", \"vnd.thepost.risk\"];\n\
              if address :list :domain \"From\" \"tag:node.example,2026-11-14:ti/feodo\" { signal \"org.ti_from_domain\" :weight 4; }",
