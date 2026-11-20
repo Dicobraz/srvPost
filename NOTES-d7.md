@@ -30,3 +30,19 @@ Guard по диску: < 3 ГБ свободно на C: — СТОП. Фоно�
 
 ## Прогон B — pg_wal на отдельном томе
 (пока не выполнен)
+
+## Чекпоинт 1 — стек поднят вручную (2026-11-20 ~09:00 UTC)
+- Образ узла: `thepost:beta5` из бинарника релиза v0.2.1-beta.5 (python:3.12-slim-bookworm + libgssapi-krb5-2,
+  USER 65532, ENTRYPOINT thepost, CMD serve) — в /tmp/d7-inbox/Dockerfile.node (вне репо).
+- Стек: `THEPOST_IMAGE=thepost:beta5 docker compose -f deploy/compose/dev.yml --profile smb up -d`
+  в worktree — TLS, OpenBao (Raft+AppRole), PostgreSQL 16 (SCRAM, учётки thepost_owner/thepost/thepost_readonly),
+  Rspamd 3.11.1, узел — все роли стартовали (smtp-in/submission/smtp-out/imap/jmap/dav/admin/search/indexer/
+  maintenance), HTTPS 443 отвечает.
+- Грабли решённые: (1) CMD serve; (2) том thepost_tpdata создался от root — chown 65532:65532.
+- Provision: запускать provision-accounts.sh ВНУТРИ контейнера узла (docker cp + docker exec; admin по локальному
+  сокету, admin init/login/account create/app-password), состояние в /tmp узла, accounts file — docker cp наружу.
+  Аргументы по provision.yml: <state> example.test user 50 probe1 probe2 probe3 big bruteforce (дефолты stand).
+- Диск: 4.6 ГБ свободно (100%), идёт ЧУЖАЯ локальная компиляция (cargo ×2, nextest — параллельная сессия волн;
+  кэши cargo-target в корне workspace ОТСУТСТВУЮТ). Не удалять чужие target-каталоги. Guard < 3 ГБ.
+- Прогон A/B ещё не выполнялся. Генератор: собрать по stand_generator/files (run-scenario.sh требует
+  /etc/thepost-stand/stand.env, smtp-source (postfix), swaks, imaptest, k6; образ grafana/k6:1.0.0 уже в docker).
