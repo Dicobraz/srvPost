@@ -4316,6 +4316,85 @@ mod tests {
                 file: ref f,
             } if f.as_os_str() == "-"
         ));
+        let cli = Cli::try_parse_from([
+            "thepost",
+            "admin",
+            "risk",
+            "signals",
+            "set",
+            "tp.encrypted_archive",
+            "--weight",
+            "9",
+        ])
+        .expect("risk signals set");
+        let Command::Admin { action, .. } = cli.command else {
+            panic!("{:?}", cli.command)
+        };
+        let AdminAction::Api(ApiAction::Risk { action }) = action else {
+            panic!("{action:?}")
+        };
+        let RiskAction::Signals { action } = *action else {
+            panic!("{action:?}")
+        };
+        let SignalsAction::Set {
+            ref id,
+            weight: Some(9),
+            ..
+        } = *action
+        else {
+            panic!("{action:?}")
+        };
+        assert_eq!(id, "tp.encrypted_archive");
+        for args in [
+            &["thepost", "admin", "risk", "signals", "list"][..],
+            &[
+                "thepost",
+                "admin",
+                "--org",
+                "00000000-0000-0000-0000-000000000001",
+                "risk",
+                "signals",
+                "list",
+            ],
+            &["thepost", "admin", "risk", "signals", "reset", "org.x"],
+            &["thepost", "admin", "risk", "thresholds", "show"],
+            &[
+                "thepost",
+                "admin",
+                "risk",
+                "thresholds",
+                "set",
+                "--tag",
+                "2",
+                "--junk",
+                "7",
+                "--quarantine",
+                "11",
+                "--reject",
+                "16",
+            ],
+            &["thepost", "admin", "risk", "package", "list"],
+            &["thepost", "admin", "risk", "package", "import", "pkg.json"],
+            &["thepost", "admin", "risk", "package", "activate", "2"],
+            &["thepost", "admin", "risk", "package", "rollback", "1"],
+            &["thepost", "admin", "risk", "source", "list"],
+            &["thepost", "admin", "risk", "source", "add", "--file", "-"],
+            &[
+                "thepost", "admin", "risk", "source", "set", "feodo", "--file", "-",
+            ],
+            &["thepost", "admin", "risk", "source", "rm", "feodo"],
+            &[
+                "thepost", "admin", "risk", "source", "import", "feodo", "list.txt",
+            ],
+            &["thepost", "admin", "risk", "source", "refresh", "feodo"],
+            &["thepost", "admin", "risk", "source", "usage", "feodo"],
+            &["thepost", "admin", "risk", "hits"],
+            &[
+                "thepost", "admin", "risk", "hits", "--signal", "tp.x", "--mode", "report",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
+        }
         // Пароль — не аргумент: только --user и --password-stdin; без --user (и без --oidc) — ошибка разбора.
         let cli = Cli::try_parse_from([
             "thepost",
@@ -4939,6 +5018,11 @@ mod tests {
                 // Беседы и объекты писем — те же, что у приёма писем (MS-21): выгрузка беседы читает
                 // скрытые письма по объектам (ADM-50).
                 .with_threads(Arc::new(threads.clone()))
+                // Справочник аномалий (ADM-51): хранилище tp-testkit, проверка пакета — память tp-admin.
+                .with_risk(
+                    Arc::new(tp_testkit::MemRisk::new(Arc::new(SystemClock))),
+                    Arc::new(tp_admin::risk::MemRiskNode::default()),
+                )
                 .with_held_blobs(Arc::new(blobs.clone()))
                 .with_sieve(Arc::new(MemSieve::new()), check_script)
                 .with_org_script_check(check_org_script)
@@ -5095,6 +5179,323 @@ mod tests {
             ..ApiArgs::default()
         };
         execute(c, &args, action).await
+    }
+
+    /// Приёмка ADM-51: команды `thepost admin risk …` против Admin API — каталог, изменение и сброс
+    /// признака (организация мягче — ошибка 422), пороги, пакет (загрузка с отчётом, активация, откат),
+    /// источник TI (добавление, импорт, обновление, удаление), срабатывания организации.
+    #[tokio::test]
+    async fn risk_commands_against_admin_api() {
+        let (_admin, url, _, _, _) = admin_api().await;
+        let root = client(&url, "oidc");
+        let org = client(&url, "org");
+
+        // Пакет версии 1 — файлом; отчёт показывает, что изменится; активация — отдельное действие.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package = dir.path().join("package.json");
+        let manifest = serde_json::json!({
+            "format": 1, "version": 1, "created": "2026-11-20T00:00:00Z",
+            "min_node": "0.1.0", "key_id": "vendor",
+            "signals": [{
+                "id": "tp.encrypted_archive", "detector": "encrypted_archive", "weight": 6,
+                "threshold": 0, "action": "none", "mode": "enforce", "origin": "vendor",
+                "since": "2026-11-01T00:00:00Z"
+            }],
+            "lists": [], "samples": []
+        });
+        std::fs::write(&package, serde_json::to_vec(&manifest).expect("json")).expect("write");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Package {
+                    action: Box::new(PackageAction::Import {
+                        file: package.clone(),
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("package import");
+        assert!(out.contains("проверен и поставлен, не активен"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Package {
+                    action: Box::new(PackageAction::Activate { version: 1 }),
+                }),
+            },
+        )
+        .await
+        .expect("package activate");
+        assert!(out.contains("активирован"), "{out}");
+        let out = exec(
+            &root,
+            true,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Package {
+                    action: Box::new(PackageAction::List),
+                }),
+            },
+        )
+        .await
+        .expect("package list");
+        assert!(out.contains("\"active\""), "{out}");
+
+        // Каталог и изменение признака установки; свой признак организации.
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::List),
+                }),
+            },
+        )
+        .await
+        .expect("signals list");
+        assert!(out.contains("tp.encrypted_archive"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::Set {
+                        id: "tp.encrypted_archive".to_owned(),
+                        weight: Some(3),
+                        action: None,
+                        mode: None,
+                        detector: None,
+                        threshold: None,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("signals set");
+        assert!(out.contains("Вес: 3"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::Reset {
+                        id: "tp.encrypted_archive".to_owned(),
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("signals reset");
+        assert!(out.contains("сброшено"), "{out}");
+        // Организация мягче — ошибка с подсказкой; строже — ок.
+        let err = exec(
+            &org,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::Set {
+                        id: "tp.encrypted_archive".to_owned(),
+                        weight: Some(1),
+                        action: None,
+                        mode: None,
+                        detector: None,
+                        threshold: None,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect_err("мягче");
+        assert!(err.contains("422"), "{err}");
+        let org_args = ApiArgs {
+            org: Some(TenantId::DEFAULT.to_string()),
+            ..ApiArgs::default()
+        };
+        let out = execute(
+            &org,
+            &org_args,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::Set {
+                        id: "tp.encrypted_archive".to_owned(),
+                        weight: Some(9),
+                        action: None,
+                        mode: None,
+                        detector: None,
+                        threshold: None,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("строже");
+        assert!(out.contains("Вес: 9"), "{out}");
+
+        // Пороги: показ и замена установки; организация видит действующими пороги установки.
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Thresholds {
+                    action: Box::new(ThresholdsAction::Set {
+                        tag: 2,
+                        junk: 7,
+                        quarantine: 11,
+                        reject: 16,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("thresholds set");
+        assert!(out.contains("отказ 16"), "{out}");
+        let out = execute(
+            &org,
+            &org_args,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Thresholds {
+                    action: Box::new(ThresholdsAction::Show),
+                }),
+            },
+        )
+        .await
+        .expect("org thresholds");
+        assert!(out.contains("установка"), "{out}");
+
+        // Источник TI: добавление из файла, список, импорт списка, обновление, учёт, удаление.
+        let source = dir.path().join("source.json");
+        std::fs::write(
+            &source,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": "feodo", "tier": "customer_key",
+                "kind": {"http": {"url": "https://feodo.tracker.abuse.ch/ipblocklist/"}},
+                "format": "txt", "ttl": "1h",
+                "stale": {"reduce": {"percent": 50}},
+                "license": {"terms_url": "https://abuse.ch/terms/", "commercial": true},
+                "tenants": "all", "key": {"secret": "thepost/db#api_key"},
+                "auth": {"header": {"name": "Auth-Key"}}, "origin": "vendor"
+            }))
+            .expect("json"),
+        )
+        .expect("write");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(SourceAction::Add { file: source }),
+                }),
+            },
+        )
+        .await
+        .expect("source add");
+        assert!(out.contains("feodo"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(SourceAction::List),
+                }),
+            },
+        )
+        .await
+        .expect("source list");
+        assert!(out.contains("customer_key"), "{out}");
+        let list = dir.path().join("list.txt");
+        std::fs::write(&list, b"1.2.3.4\n5.6.7.8\n").expect("write");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(SourceAction::Import {
+                        id: "feodo".to_owned(),
+                        file: list,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("source import");
+        assert!(out.contains("Записей: 2"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(SourceAction::Refresh {
+                        id: "feodo".to_owned(),
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("source refresh");
+        assert!(out.contains("feodo"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(SourceAction::Usage {
+                        id: "feodo".to_owned(),
+                        since: None,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("source usage");
+        assert!(out.contains("ОРГАНИЗАЦИЯ"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(SourceAction::Rm {
+                        id: "feodo".to_owned(),
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("source rm");
+        assert!(out.contains("удалён"), "{out}");
+
+        // Срабатывания организации: пустой журнал — пустая таблица.
+        let out = execute(
+            &org,
+            &org_args,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Hits(HitsArgs {
+                    signal: None,
+                    mode: None,
+                    since: None,
+                    until: None,
+                    limit: None,
+                })),
+            },
+        )
+        .await
+        .expect("hits");
+        assert!(out.contains("ПРИЗНАК"), "{out}");
+
+        // Откат пакета — на хранимую версию.
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Package {
+                    action: Box::new(PackageAction::Rollback { version: 1 }),
+                }),
+            },
+        )
+        .await
+        .expect("package rollback");
+        assert!(out.contains("Откат"), "{out}");
     }
 
     /// Имена входа `account list --json` без `--login`.
