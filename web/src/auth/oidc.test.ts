@@ -56,7 +56,8 @@ test("userManager: авторизация кодом с PKCE, state и токе�
     userStore: expect.anything(),
   });
   expect(storeArgs).toHaveBeenCalledWith({ store: sessionStorage });
-  expect(callbackUri()).toBe(`${location.origin}/mail/callback`);
+  // В сборке base = /mail/ (vite.config.ts), в тестах vitest отдаёт BASE_URL = "/" — состав тот же.
+  expect(callbackUri()).toBe(`${location.origin}${import.meta.env.BASE_URL}callback`);
 });
 
 test("signin переносит маршрут возврата в state; callback возвращает токены и маршрут", async () => {
@@ -117,7 +118,7 @@ test("выход: end session из discovery; иначе — адрес из к�
   await signout(manager, { accessToken: "a", expiresAt: 0, idToken: "id-1" }, CONFIG, navigate);
   expect(signoutRedirect).toHaveBeenCalledWith({
     id_token_hint: "id-1",
-    post_logout_redirect_uri: `${location.origin}/mail/`,
+    post_logout_redirect_uri: `${location.origin}${import.meta.env.BASE_URL}`,
   });
   expect(assigned).toHaveLength(0);
 
@@ -128,7 +129,9 @@ test("выход: end session из discovery; иначе — адрес из к�
   const url = new URL(assigned[0]);
   expect(url.toString().startsWith(CONFIG.end_session)).toBe(true);
   expect(url.searchParams.get("id_token_hint")).toBe("id-1");
-  expect(url.searchParams.get("post_logout_redirect_uri")).toBe(`${location.origin}/mail/`);
+  expect(url.searchParams.get("post_logout_redirect_uri")).toBe(
+    `${location.origin}${import.meta.env.BASE_URL}`,
+  );
 
   // Ни discovery, ни конфигурация — просто локальный выход (никаких переходов).
   await signout(manager, { accessToken: "a", expiresAt: 0, idToken: null }, { ...CONFIG, end_session: null }, navigate);

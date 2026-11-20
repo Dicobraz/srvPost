@@ -12,8 +12,10 @@ afterEach(() => {
 test("Basic — base64 UTF-8 пары логин:пароль (кириллица не теряется)", () => {
   const header = basicCredentials("user@example.org", "app-secret");
   expect(atob(header)).toBe("user@example.org:app-secret");
+  // atob отдаёт байты как Latin-1 — кириллицу читаем декодером UTF-8.
   const russian = basicCredentials("юзер@пример.рф", "пароль");
-  expect(atob(russian)).toBe("юзер@пример.рф:пароль");
+  const decoded = new TextDecoder().decode(Uint8Array.from(atob(russian), (c) => c.charCodeAt(0)));
+  expect(decoded).toBe("юзер@пример.рф:пароль");
 });
 
 test("authHeader: OIDC — Bearer, Basic-сессия — Basic, нет сессии — null", () => {

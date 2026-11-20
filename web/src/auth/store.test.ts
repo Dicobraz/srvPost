@@ -168,9 +168,10 @@ test("tick выбирает обновляющего — ровно одна в�
 });
 
 test("закрывшаяся вкладка выпадает из соседей — обновление переезжает", () => {
-  const a = new AuthStore(new FakeChannel());
-  a.loginOidc(TOKENS);
+  // Сосед должен существовать к моменту входа: иначе подхвата сессии не будет.
   const b = new AuthStore(new FakeChannel());
+  const a = new AuthStore(new FakeChannel());
+  a.loginOidc(TOKENS); // b подхватил по каналу
   const now = 500_000;
   a.tick(now);
   b.tick(now);
