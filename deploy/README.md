@@ -12,7 +12,7 @@
 | `helm/thepost/` | Чарт узла: не root, корневая ФС только для чтения, без capabilities, seccomp `RuntimeDefault`; HPA по CPU, по соединениям — опция (`autoscaling`), PodDisruptionBudget, VPA в режиме рекомендаций, anti-affinity по узлам; PostgreSQL — CloudNativePG (`cnpg.enabled`); настройка OpenBao — Job Helm-хука (`openbaoBootstrap`, DEP-33) |
 | `helm/prometheus-adapter/` | Значения чарта prometheus-adapter: метрика `tp_load_connections` для HPA по соединениям |
 | `ansible/` | Эталон SMB одной командой (`smb.yml`: роли `chrony`, `thepost_pki`, `openbao`, `postgresql`, `rspamd`, `clamav_milter`, `thepost`, `pgbackrest`); восстановление из копий (`restore.yml`); OpenBao отдельно (`openbao.yml`); СУБД Enterprise-ВМ — pg_auto_failover (`pg-ha.yml`); «Малый Enterprise» — 2 узла mailbox и 3 ВМ данных: pg_auto_failover, OpenBao (Raft), SeaweedFS с метаданными filer в PostgreSQL (`small-enterprise.yml`, роль `seaweedfs`) |
-| `stand/` | Стенд SMB и базовая нагрузка (APP-D): ВМ SMB + генератор, imaptest, smtp-source, k6, отчёт; автообновление из релизов (`stand-update.sh`, DEP-59) |
+| `stand/` | Стенд SMB и базовая нагрузка (APP-D): ВМ SMB + генератор, imaptest, smtp-source, k6, отчёт; автообновление из релизов (`stand-update.sh`, DEP-59: расписание — systemd timer `--install-timer`, итог вызова — строка «СТАТУС: ok\|skip\|fail» в журнале, FIX-26) |
 | `systemd/` | Юнит `thepost.service` с hardening, сокеты `thepost-*.socket` (порты ниже 1024), пользователь `thepost` (sysusers) |
 | `config/` | Примеры `config.yaml` для пресетов `all` (SMB), `mailbox` (Enterprise-ВМ), `edge` (DMZ) |
 

@@ -9,17 +9,23 @@
 # служб. Обновление = новая установка (решение 2026-11-19: история миграций не хранится
 # до релизов), поэтому данные узла не переносятся, fill-state.json сбрасывается.
 #
-# Использование: stand-update.sh [--check] [--tag <тег>]
+# Использование: stand-update.sh [--check] [--tag <тег>] [--install-timer] [--install-cron]
 #   (без аргументов)  обновить до последней версии, если есть; занято — пропустить
 #   --check           только сообщить (exit 2 — есть новая версия, 0 — актуален)
 #   --tag <тег>       установить указанный тег, не сверяясь с releases API
-#   --install-cron    взвести cron стенда из UPDATE_EVERY_DAYS (раз в N дней, утром) — один раз
+#   --install-timer   подготовить systemd-юниты стенда и включить таймер (FIX-26) — один раз
+#   --install-cron    запасной вариант без root: взвести cron из UPDATE_EVERY_DAYS
 #
 # Конфиг — update.conf рядом (пример: update.conf.example): каталоги inbox/rel, имена
 # контейнеров узла/генератора, образы, аргументы запуска узла (сеть, --ip, hostname),
-# теги установки, юниты проверки. Журнал — update.log (пишет вызывающий, cron).
-# Повторный запуск поверх идущего — безопасен (lock-каталог); занятость стенда
-# (ansible/прогон/fill) — пропуск до следующего вызова.
+# теги установки, юниты проверки. Журнал — update.log (пишет вызывающий, cron; у systemd —
+# journalctl -u <юнит>). Повторный запуск поверх идущего — безопасен (lock-каталог);
+# занятость стенда (ansible/прогон/fill) — пропуск до следующего вызова.
+#
+# Итог каждого вызова — последняя строка «СТАТУС: ok|skip|fail» (FIX-26): расписание,
+# умершее молча, видно по остановке строк, исход — по последней. Случай FIX-26: слетевший
+# crontab сутки оставлял стенд на старой бете — schedule живёт в systemd timer (.Persistent
+# догоняет пропущенный запуск после простоя хоста); cron — запасной вариант без root.
 #
 # Самопочинка: при сбое установки маркер не обновляется — следующий вызов повторит
 # обновление с чистого узла. Старые тарболлы и rel/<версия> подчищаются (KEEP).
@@ -65,6 +71,7 @@ if [ "$#" -ge 1 ]; then
   case "$1" in
     --check) mode=check ;;
     --tag) mode=force; tag_force=${2:?--tag требует тег} ;;
+    --install-timer) mode=timer ;;
     --install-cron) mode=cron ;;
     *) echo "неизвестный аргумент: $1 (см. шапку)" >&2; exit 64 ;;
   esac
@@ -72,8 +79,47 @@ fi
 
 say() { echo "$(date '+%F %T') $*"; }
 
+if [ "$mode" = timer ]; then
+  # systemd timer вместо cron (FIX-26): не переживает только сам хост, виден в list-timers,
+  # календарь из того же UPDATE_EVERY_DAYS («17 4 */N * *» == «*-*-*/N 04:17:00»), Persistent
+  # догоняет пропущенный запуск после простоя. Имена — с каталогом стенда: на хосте несколько
+  # стендов, юниты не должны затирать друг друга. Без root файлы готовятся рядом, команды — в выводе.
+  name="stand-update-$(basename "$DIR")"
+  cat > "$DIR/$name.service" <<EOF
+[Unit]
+Description=The Post stand auto-update ($DIR)
+
+[Service]
+Type=oneshot
+ExecStart=$DIR/stand-update.sh
+EOF
+  cat > "$DIR/$name.timer" <<EOF
+[Unit]
+Description=The Post stand auto-update schedule ($DIR)
+
+[Timer]
+OnCalendar=*-*-*/$UPDATE_EVERY_DAYS 04:17:00
+Persistent=true
+Unit=$name.service
+
+[Install]
+WantedBy=timers.target
+EOF
+  say "юниты готовы: $DIR/$name.service $DIR/$name.timer (UPDATE_EVERY_DAYS=$UPDATE_EVERY_DAYS)"
+  if [ "$(id -u)" = 0 ]; then
+    cp "$DIR/$name.service" "$DIR/$name.timer" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now "$name.timer"
+    say "timer установлен: systemctl list-timers $name.timer"
+  else
+    say "без root выполните один раз:"
+    say "  sudo cp $DIR/$name.service $DIR/$name.timer /etc/systemd/system/ && sudo systemctl enable --now $name.timer"
+  fi
+  exit 0
+fi
+
 if [ "$mode" = cron ]; then
-  # Крон стенда из UPDATE_EVERY_DAYS: раз в N дней утром. Единственный источник интервала — update.conf.
+  # Крон стенда из UPDATE_EVERY_DAYS: раз в N дней утром (без root). Единственный источник интервала — update.conf.
   line="17 4 */$UPDATE_EVERY_DAYS * * $DIR/stand-update.sh >> $LOG 2>&1"
   (crontab -l 2>/dev/null | grep -v 'stand-update.sh'; echo "$line") | crontab -
   say "cron взведён из UPDATE_EVERY_DAYS=$UPDATE_EVERY_DAYS: $(crontab -l | grep stand-update.sh)"
@@ -83,18 +129,24 @@ fi
 # Lock: повторный вызов поверх идущего обновления — не входить (mkdir атомарен).
 LOCK="$DIR/.update.lock"
 mkdir "$LOCK" 2>/dev/null || { echo "$(date '+%F %T') обновление уже выполняется — пропуск"; exit 0; }
-trap 'rmdir "$LOCK"' EXIT INT TERM
+# Итог вызова — последняя строка «СТАТУС: …» (FIX-26): живость расписания видна по свежести строк,
+# исход — по слову. Неожиданный выход (срыв set -e, обрыв) остаётся fail — это честнее тишины.
+status=fail
+trap 'trap - EXIT INT TERM; rmdir "$LOCK" 2>/dev/null; say "СТАТУС: $status"' EXIT INT TERM
 
 
 # Стенд занят (установка/прогон/наполнение) — обновление отложим до следующего вызова.
 busy=$(pgrep -f "$BUSY_PATTERNS" 2>/dev/null || true)
 for p in $busy; do
   [ "$p" != "$$" ] || continue
+  status=skip
   say "стенд занят (pid $p) — пропуск"; exit 0
 done
 
 if [ "$mode" = update ]; then
+  status=skip
   [ "$AUTO_UPDATE" = yes ] || { say "автообновление выключено (AUTO_UPDATE=no) — пропуск"; exit 0; }
+  status=fail
 fi
 
 if [ "$mode" != force ]; then
@@ -111,11 +163,14 @@ fi
 installed=$(cat "$DIR/installed-version" 2>/dev/null || true)
 if [ "$mode" = check ]; then
   if [ "$latest" = "$installed" ]; then
+    status=ok
     say "актуально: $installed"; exit 0
   fi
+  status=ok
   say "доступна новая версия: $latest (установлена: ${installed:-нет})"; exit 2
 fi
 if [ "$mode" = update ] && [ "$latest" = "$installed" ]; then
+  status=ok
   say "актуально: $installed"; exit 0
 fi
 
@@ -125,8 +180,9 @@ base="https://github.com/$REPO/releases/download/$latest"
 
 say "обновление: ${installed:-нет} -> $latest: скачивание $asset"
 mkdir -p "$INBOX" "$REL"
-curl -fL --max-time 600 -o "$INBOX/$asset" "$base/$asset" || { say "ОШИБКА: тарболл не скачался"; exit 1; }
-curl -fL --max-time 60 -o "$INBOX/$asset.sha256" "$base/$asset.sha256" || { say "ОШИБКА: sha256 не скачался"; exit 1; }
+# Тихое скачивание (-sS): журнал — про исход, не про прогресс-бары (FIX-26).
+curl -fsSL --max-time 600 -o "$INBOX/$asset" "$base/$asset" || { say "ОШИБКА: тарболл не скачался"; exit 1; }
+curl -fsSL --max-time 60 -o "$INBOX/$asset.sha256" "$base/$asset.sha256" || { say "ОШИБКА: sha256 не скачался"; exit 1; }
 (cd "$INBOX" && sha256sum -c "$asset.sha256") || { say "ОШИБКА: sha256 не сошёлся"; exit 1; }
 
 # Распаковка в rel/<pkg> (тарболл может содержать верхний каталог — срезать).
@@ -176,6 +232,7 @@ install_and_verify() { # $1 = каталог в rel/
 say "установка: ansible --tags $INSTALL_TAGS"
 if install_and_verify "$pkg"; then
   echo "$latest" > "$DIR/installed-version"
+  status=ok
   say "готово: $latest установлена и проверена"
 else
   say "ОШИБКА: установка/приёмка $latest не прошла (install-last.log)"
