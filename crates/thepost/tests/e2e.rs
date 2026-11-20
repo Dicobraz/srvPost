@@ -1325,7 +1325,10 @@ async fn exchange_parity_wave() {
         "отменённое письмо осталось в очереди"
     );
     assert!(
-        bob_jmap.query(json!({ "inMailbox": inbox })).await.is_empty(),
+        bob_jmap
+            .query(json!({ "inMailbox": inbox }))
+            .await
+            .is_empty(),
         "отменённое письмо доставлено"
     );
 
@@ -1372,7 +1375,10 @@ async fn exchange_parity_wave() {
         .await;
     assert_eq!(got["list"][0]["subject"], subject, "{got}");
     assert!(
-        bob_jmap.query(json!({ "inMailbox": inbox })).await.is_empty(),
+        bob_jmap
+            .query(json!({ "inMailbox": inbox }))
+            .await
+            .is_empty(),
         "письмо заблокированного отправителя во «Входящих»"
     );
 

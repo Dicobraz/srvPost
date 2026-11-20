@@ -697,7 +697,12 @@ async fn mail_srv(
                 let records = match query(t, dns.srv(&fq)).await {
                     Ok(records) => records,
                     Err(e) => {
-                        report.push(&id, Status::Fail, fq.clone(), format!("SRV не получены: {e}"));
+                        report.push(
+                            &id,
+                            Status::Fail,
+                            fq.clone(),
+                            format!("SRV не получены: {e}"),
+                        );
                         continue;
                     }
                 };
@@ -770,7 +775,12 @@ async fn autoconfig_dns(
         }
         let ips = match query(t, dns.ip(&name)).await {
             Err(e) => {
-                report.push(&id, Status::Fail, name.clone(), format!("адреса не получены: {e}"));
+                report.push(
+                    &id,
+                    Status::Fail,
+                    name.clone(),
+                    format!("адреса не получены: {e}"),
+                );
                 continue;
             }
             Ok(ips) => ips,
@@ -814,7 +824,10 @@ async fn autoconfig_dns(
                 format!(
                     "имя указывает не на {} ({}): клиент получит чужой ответ автонастройки",
                     host,
-                    ips.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(", ")
+                    ips.iter()
+                        .map(|ip| ip.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
             );
         }
@@ -1397,8 +1410,7 @@ mod tests {
                 }],
             );
         }
-        dns.ip
-            .insert("autoconfig.example.org".into(), vec![ip]);
+        dns.ip.insert("autoconfig.example.org".into(), vec![ip]);
         let r = run(&cfg, &dns).await;
         for id in [
             "dns.imaps.example.org",
@@ -1424,19 +1436,22 @@ mod tests {
         let c = r.get("dns.imaps.example.org").expect("imaps");
         assert_eq!(c.status, Status::Warn, "{c:?}");
         assert!(
-            c.message
-                .contains("не порт слушателя imaps (993): исправьте на _imaps._tcp.example.org. SRV 0 1 993"),
+            c.message.contains(
+                "не порт слушателя imaps (993): исправьте на _imaps._tcp.example.org. SRV 0 1 993"
+            ),
             "{c:?}"
         );
 
         // autoconfig указывает на другой узел — предупреждение.
         let other: IpAddr = "203.0.113.5".parse().expect("ip");
-        dns.ip
-            .insert("autoconfig.example.org".into(), vec![other]);
+        dns.ip.insert("autoconfig.example.org".into(), vec![other]);
         let r = run(&cfg, &dns).await;
         let c = r.get("dns.autoconfig.example.org").expect("autoconfig");
         assert_eq!(c.status, Status::Warn, "{c:?}");
-        assert!(c.message.contains("указывает не на mx.example.org"), "{c:?}");
+        assert!(
+            c.message.contains("указывает не на mx.example.org"),
+            "{c:?}"
+        );
 
         // Роли imap, submission и jmap выключены — проверок нет.
         let r = run(
