@@ -1800,7 +1800,11 @@ mod tests {
         assert!(store.paths().is_empty(), "пробный объект удалён");
         // FIX-19 (issue #195): путь без подкаталога — root-прогон не оставляет каталог `doctor/` root:root
         assert!(
-            !report.get("blob.write").expect("blob.write").value.contains('/'),
+            !report
+                .get("blob.write")
+                .expect("blob.write")
+                .value
+                .contains('/'),
             "плоский путь зонда"
         );
         assert_eq!(report.exit_code(), 0);
