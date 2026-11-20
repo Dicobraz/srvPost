@@ -148,7 +148,7 @@ jobs:
         with:
           shared-key: test
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-nextest
       # Фича webmail (WEB-01) — как в выпуске: wiring веб-клиента (`crates/thepost/src/webmail.rs`) и вшивание
@@ -219,7 +219,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-deny,cargo-audit
       - run: cargo deny --locked check licenses bans sources

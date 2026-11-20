@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@nightly
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-fuzz
       # rust-cache не нужен: nightly обновляется ежедневно, кэш сборки к следующей ночи устаревает.
