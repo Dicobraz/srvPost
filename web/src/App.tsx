@@ -3,7 +3,7 @@ import { NavLink, Navigate, Route, Routes } from "react-router";
 import { CalendarPage } from "./pages/calendar";
 import { ContactsPage } from "./pages/contacts";
 import { MailPage } from "./pages/mail";
-import { signs, useTheme, type ThemeChoice } from "./theme";
+import { useTheme, type ThemeChoice } from "./theme";
 
 // Оболочка веб-клиента (WEB-01): разделы Почта / Календарь / Контакты и шов «Каналы» — место под будущий
 // веб-чат (решение 2026-11-17: свой брендированный чат после запуска, сейчас не реализуется). На узких
@@ -53,7 +53,7 @@ function ThemeButton() {
   const next = () => setTheme(THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length]);
   return (
     <button type="button" className="theme-button" onClick={next} title="Сменить тему">
-      {signs.ok} {THEME_LABELS[theme]}
+      {THEME_LABELS[theme]}
     </button>
   );
 }
