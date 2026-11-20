@@ -398,7 +398,7 @@ fn scan_zip(decoded: &[u8], out: &mut Findings, budget: &mut usize, max_depth: u
 /// `vint` (7 бит на байт, старший бит — продолжение).
 fn rar5_encrypted(decoded: &[u8]) -> bool {
     let mut i = 8;
-    let mut next = |decoded: &[u8], i: &mut usize| -> Option<u64> {
+    let next = |decoded: &[u8], i: &mut usize| -> Option<u64> {
         let mut value = 0u64;
         for shift in (0..64).step_by(7) {
             let b = *decoded.get(*i)?;

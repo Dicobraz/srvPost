@@ -2531,11 +2531,11 @@ impl Delivery {
         // Внешние получатели smtp-in от обычного клиента — только перенаправления правил потока: пересылка.
         let redirect = env.mode == Mode::Inbound && !app;
         let mut forwarded = Vec::new();
-        let mut rcpts = prepared.relayed;
+        let mut rcpts = std::mem::take(&mut prepared.relayed);
         if redirect {
-            forwarded = prepared.external;
+            forwarded = std::mem::take(&mut prepared.external);
         } else {
-            push_unique(&mut rcpts, prepared.external);
+            push_unique(&mut rcpts, std::mem::take(&mut prepared.external));
         }
         let mut failed = std::mem::take(&mut prepared.failed);
         // Учётные записи получателей — до правил: пересылка модулей им же письмо не доставляет (петли).
