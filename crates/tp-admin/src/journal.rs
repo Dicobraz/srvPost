@@ -664,7 +664,7 @@ async fn check_scope(
         },
         JournalScope::Mailbox(acc) => match a.d.accounts.get(org, acc).await? {
             Some(_) => Ok(()),
-            None => Err(gone("учётная запись", acc.to_string())),
+            None => Err(gone("учётная запись (ящик)", acc.to_string())),
         },
     }
 }

@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use time::OffsetDateTime;
 use tp_contracts::Error;
-use tp_contracts::ids::{JournalId, TenantId};
+use tp_contracts::ids::{AccountId, GroupId, JournalId, TenantId};
 use tp_contracts::journal::{
     JournalAudit, JournalDirection, JournalQuery, JournalRecord, JournalRule, JournalRuleStore,
     JournalScope, JournalStore, journal_eml,
@@ -201,17 +201,24 @@ pub async fn journal(
 /// задание (замена целиком по идентификатору), выключение, удаление, изоляция организаций и приоритет
 /// наследования областей (ящик > группа > организация). Изменение видно сразу, без перезапуска:
 /// каждое чтение `rules` — то, что конвейер прочитал бы на следующем письме (SMTP-53), и правило из
-/// него действует по [`JournalRule::covers`]. Организация набора — новая.
-pub async fn journal_rules(store: &dyn JournalRuleStore) {
-    let tenant = TenantId::new();
+/// него действует по [`JournalRule::covers`]. Организации и области набора передаёт вызывающий:
+/// `tenant` — организация набора (правил в ней ещё нет), `foreign` — чужая для проверки изоляции
+/// (правил в ней тоже нет), `account` и `group` — существующие ящик и группа организации `tenant`
+/// (правила — данные существующих организаций: у PostgreSQL области под внешним ключом); сами ящик и
+/// группа набор не меняет.
+pub async fn journal_rules(
+    store: &dyn JournalRuleStore,
+    tenant: TenantId,
+    foreign: TenantId,
+    account: AccountId,
+    group: GroupId,
+) {
     assert!(
         store.rules(tenant).await.expect("rules").is_empty(),
         "в новой организации правил нет"
     );
 
-    // Три правила: организация, группа и ящик (существование области проверяет вызывающий — здесь
-    // механика порта).
-    let (account, group) = (tp_contracts::AccountId::new(), tp_contracts::GroupId::new());
+    // Три правила: организация, группа и ящик.
     let org = JournalRule {
         id: "all-mail".to_owned(),
         tenant,
@@ -275,7 +282,6 @@ pub async fn journal_rules(store: &dyn JournalRuleStore) {
     assert!(grp.covers(JournalDirection::In, Some(account), &[], &[account]));
 
     // Изоляция организаций: чужая организация правил не видит, её правило не мешает.
-    let foreign = TenantId::new();
     assert!(store.rules(foreign).await.expect("чужие").is_empty());
     let foreign_rule = JournalRule {
         id: "all-mail".to_owned(),

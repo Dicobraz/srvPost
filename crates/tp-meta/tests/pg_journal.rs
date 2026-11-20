@@ -153,8 +153,10 @@ async fn rules_org_group_mailbox() {
 
     let journal = PgJournal::new(meta.clone(), Arc::new(MemJournalRecords::new()));
     // Общий набор правил (ADM-53): список, замена, приоритет наследования областей, изоляция
-    // организаций — в своей организации набора.
-    suite::journal_rules(&journal).await;
+    // организаций — в своей организации набора. Организации набора — отдельные существующие
+    // (правила — данные существующих организаций: внешний ключ), ящик и группа — существующие.
+    let (suite_tenant, suite_foreign) = (common::tenant(&pool).await, common::tenant(&pool).await);
+    suite::journal_rules(&journal, suite_tenant, suite_foreign, account, group.id).await;
     let org = JournalRule {
         id: "all-mail".to_owned(),
         tenant,

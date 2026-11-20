@@ -336,7 +336,14 @@ mod tests {
             move || journal.drop_index()
         };
         suite::journal(&journal, &tamper, &drop_index).await;
-        suite::journal_rules(&journal).await;
+        suite::journal_rules(
+            &journal,
+            TenantId::new(),
+            TenantId::new(),
+            tp_contracts::AccountId::new(),
+            tp_contracts::GroupId::new(),
+        )
+        .await;
     }
 
     #[tokio::test]
