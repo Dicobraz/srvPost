@@ -308,9 +308,9 @@
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
 | [CTR-61](CTR-61.md) | контракт хранилища сессий Admin API | contracts | B | contracts-43 | done | CTR-41 |
-| [META-64](META-64.md) | сессии Admin API в PostgreSQL | meta | B | meta-40 | ready | CTR-61 |
-| [ADM-28](ADM-28.md) | сессии Admin API через хранилище | admin | A | admin-18 | ready | CTR-61 |
-| [APP-50](APP-50.md) | узел: сессии Admin API в PostgreSQL и их очистка | app | A | app-42 | todo | META-64,ADM-28 |
+| [META-64](META-64.md) | сессии Admin API в PostgreSQL | meta | B | meta-40 | done | CTR-61 |
+| [ADM-28](ADM-28.md) | сессии Admin API через хранилище | admin | A | admin-18 | done | CTR-61 |
+| [APP-50](APP-50.md) | узел: сессии Admin API в PostgreSQL и их очистка | app | A | app-42 | done | META-64,ADM-28 |
 | [DEP-36](DEP-36.md) | эталон: движок PKI OpenBao для внутренних сертификатов | deploy | A | deploy-26 | ready | PLT-26 |
 
 ## Ф1 · Решение 2026-11-04: соответствие функциям Exchange — этап 3, кроме `jmap-14` (этап 2)
@@ -340,7 +340,7 @@
 | Задача | Суть | Полоса | Класс | Волна | Статус | Зависит |
 |---|---|---|---|---|---|---|
 | [CTR-36](CTR-36.md) | точка расширения источников занятости, публикации календарей | contracts | B | contracts-24 | done | CTR-35 |
-| [META-34](META-34.md) | хранение публикаций календарей и шаблонов партнёров | meta | A | meta-16 | ready | CTR-36,META-33 |
+| [META-34](META-34.md) | хранение публикаций календарей и шаблонов партнёров | meta | A | meta-16 | done | CTR-36,META-33 |
 | [JMAP-19](JMAP-19.md) | расширение Availability/get | jmap | A | jmap-09 | done | CTR-36,JMAP-14 |
 | [JMAP-20](JMAP-20.md) | расширение публикации календарей | jmap | A | jmap-09 | done | CTR-36,JMAP-14 |
 
@@ -492,7 +492,7 @@
 | [CTR-49](CTR-49.md) | учётная запись в очереди и учёте BLOB, сигнал ShardsChanged | contracts | B | contracts-36 | done | CTR-35 |
 | [CTR-50](CTR-50.md) | подключение отключённого ящика — опция «оставить» / «удалить» содержимое | contracts | B | contracts-36 | done | CTR-35 |
 | [DEPS-06](DEPS-06.md) | HTTP/2 для межузловых вызовов — фичи axum и reqwest | deps | B | deps-06 | done | CLU-14 |
-| [CLU-15](CLU-15.md) | Rpc — h2 в ALPN | cluster | A | cluster-10 | ready | DEPS-06 |
+| [CLU-15](CLU-15.md) | Rpc — h2 в ALPN | cluster | A | cluster-10 | done | DEPS-06 |
 | [DEP-22](DEP-22.md) | сертификаты узлов с URI thepost:node:<id> | deploy | A | deploy-20 | ready | CLU-14 |
 | [PLT-24](PLT-24.md) | ключи TLS из OpenBao | platform | A | platform-14 | done | PLT-23 |
 | [PLT-26](PLT-26.md) | внутренние сертификаты движком PKI OpenBao | platform | A | platform-16 | done | PLT-24 |
@@ -707,8 +707,8 @@
 | [FIX-19](FIX-19.md) | плоский путь зонда blob (root-прогон не оставляет каталог root:root) |  |  | app-82 | done | — |
 | [FIX-20](FIX-20.md) | loopback SAN (admin login к 127.0.0.1 проходит проверку имени) |  |  | deploy-53 | done | — |
 | [FIX-21](FIX-21.md) | проверки privileges_* по процессу службы, а не CLI |  |  | platform-27 | done | — |
-| [FIX-22](FIX-22.md) | беседы — фоновая привязка ищет сырой `thread_key`, приём пишет канонический `join_key` | meta | A | meta-91 | ready | — |
-| [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | meta-91 | ready | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
+| [FIX-22](FIX-22.md) | беседы — фоновая привязка ищет сырой `thread_key`, приём пишет канонический `join_key` | meta | A | meta-91 | done | — |
+| [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | meta-91 | done | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
 
 ## Ф1 · ACME: короткие сертификаты (ballot SC-081v3, RFC 9773)
 
@@ -806,9 +806,9 @@
 | [ADM-16](ADM-16.md) | Admin API — ресурсы, представители, общий доступ | admin | A | admin-11 | done | CTR-48 |
 | [UI-10](UI-10.md) | ресурсы, представители, общий доступ | console | A | console-04 | done | UI-09,ADM-16 |
 | [UI-11](UI-11.md) | массовые операции — импорт учётных записей из CSV | console | A | console-04 | done | UI-09 |
-| [DAV-20](DAV-20.md) | публикация календаря по ссылке ICS | dav | A | dav-06 | todo | DAV-17,CTR-36,META-34 |
-| [DAV-21](DAV-21.md) | ссылка занятости FBURL | dav | A | dav-06 | todo | DAV-20,DAV-16 |
-| [DAV-22](DAV-22.md) | оргструктура в глобальной адресной книге | dav | A | dav-06 | todo | DAV-12,CTR-35,AUTH-10 |
+| [DAV-20](DAV-20.md) | публикация календаря по ссылке ICS | dav | A | dav-06 | done | DAV-17,CTR-36,META-34 |
+| [DAV-21](DAV-21.md) | ссылка занятости FBURL | dav | A | dav-06 | done | DAV-20,DAV-16 |
+| [DAV-22](DAV-22.md) | оргструктура в глобальной адресной книге | dav | A | dav-06 | done | DAV-12,CTR-35,AUTH-10 |
 | [AUTH-13](AUTH-13.md) | служба SASL `sieve` для ManageSieve | auth | A | auth-08 | done | SIEVE-08 |
 | [DEPS-08](DEPS-08.md) | `serde_yaml_ng` в dev-зависимостях `tp-sieve` | deps | B | deps-08 | done | SIEVE-07 |
 | [SIEVE-10](SIEVE-10.md) | тест чтения секции `sieve` из YAML | sieve | A | sieve-04 | done | DEPS-08,SIEVE-07 |
@@ -956,10 +956,10 @@
 | [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | done | CTR-95 |
 | [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | done | CTR-95,DEPS-19,SIEVE-14 |
 | [SMTP-52](SMTP-52.md) | детекторы каталога признаков и применение балла на smtp-in | smtp | A | smtp-32 | done | CTR-95,DEPS-19,SMTP-51 |
-| [ADM-51](ADM-51.md) | каталог признаков и TI в Admin API — признаки, пороги, пакеты, источники, срабатывания; CLI | admin | B | admin-37 | ready | CTR-95,ADM-44 |
-| [UI-24](UI-24.md) | консоль — экран «Признаки риска»: каталог, пороги, пакеты, источники TI, срабатывания | console | A | console-15 | todo | ADM-51 |
-| [TUI-10](TUI-10.md) | текстовый интерфейс — раздел «Признаки риска»: каталог, пороги, пакеты, источники | tui | A | tui-07 | todo | TUI-09,ADM-51 |
-| [APP-78](APP-78.md) | узел — подписанные пакеты признаков: проверка, установка, обновление, откат, офлайн-импорт | app | A | app-75 | todo | META-87,ADM-51,SMTP-52,SIEVE-15,DEPS-19 |
+| [ADM-51](ADM-51.md) | каталог признаков и TI в Admin API — признаки, пороги, пакеты, источники, срабатывания; CLI | admin | B | admin-37 | done | CTR-95,ADM-44 |
+| [UI-24](UI-24.md) | консоль — экран «Признаки риска»: каталог, пороги, пакеты, источники TI, срабатывания | console | A | console-15 | done | ADM-51 |
+| [TUI-10](TUI-10.md) | текстовый интерфейс — раздел «Признаки риска»: каталог, пороги, пакеты, источники | tui | A | tui-07 | ready | TUI-09,ADM-51 |
+| [APP-78](APP-78.md) | узел — подписанные пакеты признаков: проверка, установка, обновление, откат, офлайн-импорт | app | A | app-75 | ready | META-87,ADM-51,SMTP-52,SIEVE-15,DEPS-19 |
 | [APP-79](APP-79.md) | узел — источники TI: коннекторы «ключ заказчика», импорт txt/CSV/RPZ/MISP/STIX, TAXII 2.1, TTL | app | A | app-76 | todo | APP-78 |
 | [DEP-57](DEP-57.md) | доставка пакета признаков — исходники пакета, ключи, обновление и закрытый контур; фиды через Rspamd и ClamAV | deploy | A | deploy-44 | todo | APP-78,DEP-56 |
 | [DOC-14](DOC-14.md) | ADMIN-GUIDE — раздел «Признаки риска и threat intelligence» с таблицей лицензий фидов | docs | A | docs-14 | todo | APP-79,DEP-57 |
@@ -984,6 +984,8 @@
 | [ADM-52](ADM-52.md) | роль «аудитор журнала» — поиск, просмотр, выгрузка .eml, внешний архив | admin | A | admin-38 | done | CTR-97,META-88 |
 | [APP-82](APP-82.md) | thepost doctor — целостность журнала, прогноз объёма, предупреждение SMB | app | A | app-79 | done | CTR-97,META-88,BLOB-18 |
 | [APP-83](APP-83.md) | конфигурация journal — секция config.yaml, пресеты профилей, JSON Schema | app | A | app-79 | done | CTR-97 |
+| [FIX-25](FIX-25.md) | — | — | — | contracts-69 | done | — |
+| [ADM-51](ADM-51.md) | каталог признаков и TI в Admin API — признаки, пороги, пакеты, источники, срабатывания; CLI | admin | B | contracts-69 | done | CTR-95,ADM-44 |
 | [UI-25](UI-25.md) | консоль — журнал переписки для аудитора журнала | console | A | console-16 | done | ADM-52 |
 | [ADM-53](ADM-53.md) | # ADM-53. Правила журналирования — CRUD в Admin API + CLI (решение #171) |  |  | admin-39 | done | — |
 | [UI-26](UI-26.md) | # UI-26. Консоль — управление правилами журналирования (решение #171) |  |  | console-17 | done | — |
@@ -1014,6 +1016,7 @@
 | [DEPS-21](DEPS-21.md) | фича `time` у `instant-acme` — подсказка окна продления (ARI) | deps | B | PLT-39 |
 | [DOC-07](DOC-07.md) | ожидания APP-28 и CMP-10 по `inbox/`/`outbox/` и ленте уведомлений; значение по умолчанию в INSTALL | docs | A | DAV-36 |
 | [DOC-10](DOC-10.md) | INSTALL — входящая почта через шлюз, доверие к `Authentication-Results` | docs | A | SMTP-47 |
+| [FIX-26](FIX-26.md) | автообновление стенда умерло молча — crontab слетел, стенд сутки сидел на старой бете | deploy | A | — |
 | [META-80](META-80.md) | почтовые контакты в каталоге PostgreSQL (`Directory::contacts_since`) | meta | A | META-65 |
 | [META-89](META-89.md) | история миграций не хранится |  |  | — |
 | [PERF-06](PERF-06.md) | IMAP и JMAP |  |  | — |

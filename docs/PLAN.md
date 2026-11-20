@@ -12,9 +12,9 @@
 | Этап | Содержание | Волны | Карточки | Статус | Критерий завершения |
 |---|---|---|---|---|---|
 | Ф0. Основа | Платформа, хранилище метаданных и BLOB, CI, стенд SMB | 38/38 | 87/87 | ✅ готово | Узел SMB запускается из одного бинарного файла; метаданные и BLOB с тестами; CI ≤ 7 мин; стенд SMB поднимается |
-| Ф1. MVP SMB | SMTP с очередью и Milter, IMAP, JMAP Mail, поиск, LDAP, Kerberos, OAUTHBEARER, корзина, Admin API, CLI | 345/356 | 469/480 | в работе, 98 % карточек | Почта SMB целиком на стенде: приём и отправка, IMAP и JMAP, поиск, вход; проверка клиентами Thunderbird и Postman; нагрузка Д.6 для SMB |
-| Ф2. Совместная работа | CalDAV, CardDAV, JMAP Calendars и Contacts, scheduling, free/busy, Sieve, веб-консоль администратора | 157/166 | 227/238 | в работе, 95 % карточек | Календари, контакты, правила и автоответы проверены клиентами; консоль администратора покрывает Admin API |
-| Ф3. Enterprise | S3, кластерные роли, межузловое взаимодействие, edge, шарды, Legal Hold, экспорт и импорт | 11/11 | 14/14 | ✅ готово | Схемы Enterprise-ВМ и Enterprise-K8s (приложение З) на стенде; переключение СУБД ≤ 30 с; нагрузка Д.6 для Enterprise |
+| Ф1. MVP SMB | SMTP с очередью и Milter, IMAP, JMAP Mail, поиск, LDAP, Kerberos, OAUTHBEARER, корзина, Admin API, CLI | 351/356 | 476/480 | в работе, 99 % карточек | Почта SMB целиком на стенде: приём и отправка, IMAP и JMAP, поиск, вход; проверка клиентами Thunderbird и Postman; нагрузка Д.6 для SMB |
+| Ф2. Совместная работа | CalDAV, CardDAV, JMAP Calendars и Contacts, scheduling, free/busy, Sieve, веб-консоль администратора | 160/166 | 232/238 | в работе, 97 % карточек | Календари, контакты, правила и автоответы проверены клиентами; консоль администратора покрывает Admin API |
+| Ф3. Enterprise | S3, кластерные роли, межузловое взаимодействие, edge, шарды, Legal Hold, экспорт и импорт | 12/12 | 16/16 | ✅ готово | Схемы Enterprise-ВМ и Enterprise-K8s (приложение З) на стенде; переключение СУБД ≤ 30 с; нагрузка Д.6 для Enterprise |
 | Ф4. Выпуск | Стабилизация, аудит безопасности, фаззинг парсеров, документация администратора | 2/2 | 2/2 | ✅ готово | Аудит безопасности без открытых критичных находок; фаззинг парсеров; документация; выпуск 1.0 |
 
 Открытые вопросы владельцу — issue с меткой «решение»; дополнительные модули — раздел в конце.
@@ -353,9 +353,9 @@ Admin API — 500), `smtp-17` (FIX-01) → `app-44` (FIX-02, одобрение 
 | Волна | Карточки | Класс | Ждёт | Поток |
 |---|---|---|---|---|
 | ✅ contracts-43 (ветка `x/contracts-43`) | CTR-61 | B | contracts-29 | 1 |
-| meta-40 (ветка `x/meta-40`) | META-64 | B | contracts-43 | 3 |
-| admin-18 | ADM-28 | A | contracts-43 | 3 |
-| app-42 | APP-50 | A | meta-40, admin-18 | 2 |
+| ✅ meta-40 (ветка `x/meta-40`) | META-64 | B | contracts-43 | 3 |
+| ✅ admin-18 | ADM-28 | A | contracts-43 | 3 |
+| ✅ app-42 | APP-50 | A | meta-40, admin-18 | 2 |
 | deploy-26 | DEP-36 | A | platform-16, deploy-19 | 4 |
 
 ### Решение 2026-11-04: соответствие функциям Exchange — этап 3, кроме `jmap-14` (этап 2)
@@ -378,7 +378,7 @@ Admin API — 500), `smtp-17` (FIX-01) → `app-44` (FIX-02, одобрение 
 | Волна | Карточки | Класс | Ждёт | Поток |
 |---|---|---|---|---|
 | ✅ contracts-24 (ветка `x/contracts-24`) | CTR-36 | B | contracts-23 | 1 |
-| meta-16 | META-34 | A | meta-15, contracts-24 | 3 |
+| ✅ meta-16 | META-34 | A | meta-15, contracts-24 | 3 |
 | ✅ jmap-09 | JMAP-19, JMAP-20 | A | jmap-08, contracts-24 (и JMAP Calendars, Ф2) | 3 |
 
 ### Решение 2026-11-01: «Очистить корзину» — настройка; APPEND без правил доставки (`docs/decisions/2026-11-01-trash-purge.md`)
@@ -521,7 +521,7 @@ Admin API — 500), `smtp-17` (FIX-01) → `app-44` (FIX-02, одобрение 
 | ✅ smtp-11 | SMTP-30 | A | contracts-31, meta-28 | 4 |
 | ✅ contracts-36 (ветка `x/contracts-36`) | CTR-49, CTR-50 | B | contracts-23 | 1 |
 | ✅ deps-06 (ветка `x/deps-06`) | DEPS-06 | B | cluster-09 | 1 |
-| cluster-10 | CLU-15 | A | deps-06 | 4 |
+| ✅ cluster-10 | CLU-15 | A | deps-06 | 4 |
 | deploy-20 | DEP-22 | A | cluster-09 | 4 |
 | ✅ platform-14 | PLT-24 | A | platform-13 | 2 |
 | ✅ platform-16 | PLT-26 | A | platform-14 | 2 |
@@ -819,7 +819,7 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ jmap-19 | JMAP-32, JMAP-33 | A | jmap-18, contracts-35 | 3 |
 | ✅ admin-11 | ADM-16 | A | contracts-35 | 3 |
 | ✅ console-04 | UI-10, UI-11 | A | console-03, admin-11 | 1 |
-| dav-06 | DAV-20, DAV-21, DAV-22 | A | dav-05, contracts-23, contracts-24, meta-16, auth-05 | 4 |
+| ✅ dav-06 | DAV-20, DAV-21, DAV-22 | A | dav-05, contracts-23, contracts-24, meta-16, auth-05 | 4 |
 | ✅ auth-08 | AUTH-13 | A | sieve-03 | 1 |
 | ✅ deps-08 (ветка `x/deps-08`) | DEPS-08 | B | sieve-02 | 1 |
 | ✅ sieve-04 | SIEVE-10, SIEVE-11 | A | deps-08, sieve-03 | 2 |
@@ -937,7 +937,7 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ sieve-08 (#187) | SIEVE-15 | A | contracts-66, deps-19, sieve-07 | 2 |
 | ✅ smtp-32 (#219, рестарт после снятия #193) | SMTP-52 | A | contracts-66, deps-19, smtp-31 | 4 |
 | ✅ admin-37 (#206) | ADM-51 | B | contracts-66, admin-36 | 3 |
-| console-15 | UI-24 | A | console-14, admin-37 | 1 |
+| ✅ console-15 | UI-24 | A | console-14, admin-37 | 1 |
 | tui-07 | TUI-10 | A | tui-06, admin-37 | 1 |
 | app-75 | APP-78 | A | meta-60, admin-37, smtp-32, sieve-08, app-74 | 2 |
 | app-76 | APP-79 | A | app-75 | 2 |
