@@ -3494,11 +3494,6 @@ export interface components {
     parameters: never;
     requestBodies: never;
     headers: never;
-    };
-    responses: never;
-    parameters: never;
-    requestBodies: never;
-    headers: never;
     pathItems: never;
 }
 export type $defs = Record<string, never>;
