@@ -161,7 +161,7 @@ test("пороги: четыре числа с подписями действи
   fireEvent.click(await screen.findByRole("radio", { name: "Установка" }));
   fireEvent.click(await screen.findByRole("tab", { name: "Пороги" }));
   await waitFor(() => expect(sent(calls, "GET", "/api/v1/risk/thresholds")).toHaveLength(1));
-  expect(await screen.findByText(/действует самое строгое/)).toBeTruthy();
+  expect(await screen.findByText(/действует самое строгое/i)).toBeTruthy();
   fireEvent.change(await screen.findByRole("spinbutton", { name: "Порог папки «Спам»" }), { target: { value: "7" } });
   fireEvent.click(screen.getByRole("button", { name: "Сохранить пороги" }));
   await waitFor(() =>
