@@ -413,11 +413,64 @@ pub fn inherited_sockets(
 /// SYS-07); на ядрах с меньшей версией — частично.
 const LANDLOCK_FULL_ABI: i32 = 5;
 
-/// Проверки `thepost doctor` по процессу проверки: `privileges_user`, `privileges_capabilities`,
-/// `privileges_no_new_privs`, `privileges_seccomp`, `privileges_landlock`. Не завершается ошибкой.
+/// Имя systemd-юнита узла ([`deploy/systemd/thepost.service`]): его `MainPID` — процесс службы, чьё
+/// состояние проверяют `privileges_*` (FIX-21, issue #197).
+const SERVICE_UNIT: &str = "thepost";
+
+/// Проверки `thepost doctor`: `privileges_user`, `privileges_capabilities`, `privileges_no_new_privs`,
+/// `privileges_seccomp`, `privileges_landlock`. Состояние процесса — службы `thepost.service` (её `MainPID`
+/// через `systemctl show`); нет systemd или службы — сам процесс doctor с пометкой об этом в сообщениях.
+/// Не завершается ошибкой.
 pub async fn doctor(cfg: &Config) -> DoctorReport {
-    let status = tokio::fs::read_to_string("/proc/self/status").await.ok();
-    doctor_with(cfg, status.as_deref(), tp_sys::landlock_abi())
+    let (status, service_pid) = service_status().await;
+    let mut r = doctor_with(cfg, status.as_deref(), tp_sys::landlock_abi());
+    if status.is_some() {
+        note_process_source(&mut r, service_pid);
+    }
+    r
+}
+
+/// Текст `/proc/<pid>/status` для проверок: `MainPID` юнита [`SERVICE_UNIT`]; нет `systemctl`, юнита или
+/// прав на чтение — `/proc/self/status` (как раньше). `u32` — pid службы (`None` — проверяется сам doctor).
+async fn service_status() -> (Option<String>, Option<u32>) {
+    let pid = tokio::process::Command::new("systemctl")
+        .args(["show", SERVICE_UNIT, "-p", "MainPID", "--value"])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|p| *p > 0);
+    let path = match pid {
+        Some(p) => format!("/proc/{p}/status"),
+        None => "/proc/self/status".to_owned(),
+    };
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => (Some(text), pid),
+        // Служба перезапускается между `systemctl show` и чтением — свой процесс, как раньше
+        Err(_) if pid.is_some() => (
+            tokio::fs::read_to_string("/proc/self/status").await.ok(),
+            None,
+        ),
+        Err(_) => (None, None),
+    }
+}
+
+/// Пометка в сообщениях `privileges_*`, чей процесс проверен: службы (pid) или сам doctor. `privileges_landlock`
+/// не помечается — ABI ядра и режимы секции `confine` от процесса не зависят.
+fn note_process_source(r: &mut DoctorReport, service_pid: Option<u32>) {
+    let note = match service_pid {
+        Some(pid) => format!(" (проверен процесс службы {SERVICE_UNIT}.service, pid {pid})"),
+        None => format!(
+            " (проверен сам процесс doctor, а не служба; состояние службы — systemctl show {SERVICE_UNIT})"
+        ),
+    };
+    for c in r.checks.iter_mut() {
+        if c.id.starts_with("privileges_") && c.id != "privileges_landlock" {
+            c.message += &note;
+        }
+    }
 }
 
 /// Проверки по тексту `/proc/self/status` (`None` — файл недоступен) и версии ABI Landlock ядра
@@ -732,6 +785,34 @@ mod tests {
 
         let r = doctor_with(&cfg, None, None);
         assert!(r.checks.iter().all(|c| c.status == DoctorStatus::Skipped));
+    }
+
+    // FIX-21 (issue #197): в сообщениях `privileges_*` — чей процесс проверен; Landlock не помечается.
+    #[test]
+    fn doctor_notes_process_source() {
+        for pid in [Some(1234), None] {
+            let mut r = doctor_with(&config(""), Some(&status(998, NONE, BIND, 1)), Some(6));
+            note_process_source(&mut r, pid);
+            let nnp = r.get("privileges_no_new_privs").expect("nnp");
+            match pid {
+                Some(p) => assert!(
+                    nnp.message.contains(&format!("pid {p}")),
+                    "процесс службы: {}",
+                    nnp.message
+                ),
+                None => assert!(
+                    nnp.message.contains("сам процесс doctor"),
+                    "fallback: {}",
+                    nnp.message
+                ),
+            }
+            let landlock = r.get("privileges_landlock").expect("landlock");
+            assert!(
+                !landlock.message.contains("проверен"),
+                "ABI ядра не про процесс: {}",
+                landlock.message
+            );
+        }
     }
 
     #[test]
