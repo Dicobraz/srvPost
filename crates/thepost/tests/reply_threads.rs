@@ -711,7 +711,7 @@ async fn reply_marks_threads_and_hold() {
     );
     assert!(mail_from.ends_with(&format!("={login}")), "{mail_from}");
     let sent_rows = || {
-        let meta = meta.clone();
+        let pool = pool.clone();
         let login = peer.to_owned();
         async move {
             let mut tx = tp_meta::schema::begin(&pool, tenant).await.expect("begin");
