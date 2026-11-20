@@ -1393,7 +1393,7 @@ async fn signal_view(
     if let Some(entry) = catalog.get(id) {
         return Ok(SignalView::from(entry));
     }
-    let o = policy.overrides.get(id).ok_or_else(|| Error::NotFound)?;
+    let o = policy.overrides.get(id).ok_or(Error::NotFound)?;
     Ok(orphaned_view(level, id, o))
 }
 
@@ -1991,8 +1991,8 @@ async fn create_source(
     Json(body): Json<NewTiSourceBody>,
 ) -> std::result::Result<Json<TiSourceView>, RefusedResponse> {
     bundled_refused(body.tier)?;
-    let source = body.source().map_err(|e| api(e))?;
-    source.validate().map_err(|e| api(e))?;
+    let source = body.source().map_err(api)?;
+    source.validate().map_err(api)?;
     let stores = risk(&a).map_err(api)?;
     stores.store.put_source(&source).await.map_err(api)?;
     Ok(Json(TiSourceView::from(&source)))
