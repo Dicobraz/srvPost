@@ -134,7 +134,7 @@ export const covered: Record<string, string> = {
   "GET /api/v1/orgs/{org}/journal/{id}": "pages/journal.tsx",
   "GET /api/v1/orgs/{org}/journal/{id}/export": "pages/journal.tsx",
   "GET /api/v1/orgs/{org}/journal/verify": "pages/journal.tsx",
-  // Правила журналирования (ADM-53): вкладка страницы журнала администратора организации (UI-26, console-17).
+  // Правила журналирования (ADM-53): раздел «Правила журналирования» администратора организации (UI-26, console-17).
   "GET /api/v1/orgs/{org}/journal/rules": "pages/journal.tsx",
   "PUT /api/v1/orgs/{org}/journal/rules/{id}": "pages/journal.tsx",
   "DELETE /api/v1/orgs/{org}/journal/rules/{id}": "pages/journal.tsx",
