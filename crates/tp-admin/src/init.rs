@@ -22,8 +22,10 @@
 //! - `POST /api/v1/session` без тела — обмен токена `admin init` (`Authorization: Bearer tpa_…`) на сессию
 //!   (решение 2026-11-11, п. 2): токен гасится первой проверкой; роль — администратор инсталляции. Работает и при
 //!   выключенном входе по паролю: первый вход и вход без ролей в `admin.roles`.
-//! - Сессия — значение `tps_…` со сроком `admin.init.session_ttl`, в памяти узла: после истечения или перезапуска —
-//!   снова вход по паролю (или OIDC). Каждый вход и каждая неудача — в журнал аудита.
+//! - Сессия — значение `tps_…` со сроком `admin.init.session_ttl`; хранит её `AdminSessions` (CTR-61,
+//!   решение 77): общее хранилище ([`Admin::with_sessions`]) — сессия видна всем узлам роли admin и
+//!   переживает перезапуск, без него — память узла и после перезапуска — снова вход по паролю (или OIDC).
+//!   Каждый вход и каждая неудача — в журнал аудита.
 //! - `GET /api/v1/session` — без входа: способы входа консоли — поставщик OIDC ([`OidcLogin`]: издатель — тот, чьи
 //!   токены проверяет узел, `auth.oidc.issuer` ([`crate::Deps::oidc_issuer`]); клиент консоли — `admin.oidc`,
 //!   [`OidcClient`]; не настроен — `null`) и вход по паролю (`password`). Секретов в ответе нет: клиент консоли —
@@ -46,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tp_contracts::admin_audit::AdminAuditRecord;
+use tp_contracts::admin_session::{AdminSession as StoredSession, AdminSessions};
 use tp_contracts::admin_token::{
     LOCAL_ADMIN_TOKEN_PREFIX, LocalAdminToken, LocalAdminTokens, is_local_admin_token,
 };
@@ -83,7 +86,10 @@ pub struct InitConfig {
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]
     pub session_ttl: Duration,
-    /// Наибольшее число действующих сессий на узле; при превышении вытесняется истекающая раньше всех.
+    /// Наибольшее число действующих сессий в памяти узла (когда общее хранилище
+    /// [`Admin::with_sessions`] не подключено); при превышении вытесняется истекающая раньше всех.
+    /// Общее хранилище не ограничивается: истёкшие сессии чистит его `purge_expired` (роль maintenance,
+    /// APP-50).
     pub max_sessions: usize,
     /// Наибольший размер запроса локального сокета, байт.
     pub max_request_bytes: usize,
@@ -203,29 +209,72 @@ impl InitReply {
     }
 }
 
-/// Сессия Admin API.
-struct Session {
-    principal: Principal,
-    roles: BTreeSet<AdminRole>,
-    expires_at: OffsetDateTime,
+/// Сессии Admin API в памяти узла (CTR-61): хранилище по умолчанию, когда общее хранилище
+/// ([`Admin::with_sessions`]) не подключено. В памяти — предел `admin.init.max_sessions`: при
+/// превышении вытесняется истекающая раньше всех (истёкшая — прежде прочих). Клоны разделяют данные.
+#[derive(Debug, Clone)]
+pub(crate) struct MemorySessions {
+    max_sessions: usize,
+    state: Arc<Mutex<HashMap<String, StoredSession>>>,
 }
 
-/// Локальный вход: хранилище токенов и сессии узла (по хэшу значения).
-pub(crate) struct Local {
-    tokens: Arc<dyn LocalAdminTokens>,
-    sessions: Mutex<HashMap<String, Session>>,
-}
-
-impl Local {
-    pub(crate) fn new(tokens: Arc<dyn LocalAdminTokens>) -> Self {
+impl MemorySessions {
+    pub(crate) fn new(max_sessions: usize) -> Self {
         Self {
-            tokens,
-            sessions: Mutex::new(HashMap::new()),
+            max_sessions,
+            state: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
-        self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, StoredSession>> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Число сессий в памяти, включая истёкшие до очистки (тесты).
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.lock().len()
+    }
+}
+
+#[async_trait::async_trait]
+impl AdminSessions for MemorySessions {
+    async fn put(&self, session: StoredSession) -> Result<()> {
+        session.validate()?;
+        let mut st = self.lock();
+        if st.contains_key(&session.hash) {
+            return Err(Error::Conflict);
+        }
+        while st.len() >= self.max_sessions {
+            let Some(oldest) = st
+                .iter()
+                .min_by_key(|(_, s)| s.expires_at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            st.remove(&oldest);
+        }
+        st.insert(session.hash.clone(), session);
+        Ok(())
+    }
+
+    async fn get(&self, hash: &str) -> Result<Option<StoredSession>> {
+        let now = OffsetDateTime::now_utc();
+        let st = self.lock();
+        Ok(st.get(hash).filter(|s| now < s.expires_at).cloned())
+    }
+
+    async fn delete(&self, hash: &str) -> Result<()> {
+        self.lock().remove(hash);
+        Ok(())
+    }
+
+    async fn purge_expired(&self, now: OffsetDateTime) -> Result<u64> {
+        let mut st = self.lock();
+        let was = st.len();
+        st.retain(|_, s| s.expires_at > now);
+        Ok((was - st.len()) as u64)
     }
 }
 
@@ -261,8 +310,19 @@ fn nobody() -> AccountId {
 
 impl Admin {
     /// Подключает локальный вход: хранилище одноразовых токенов (`admin init`, `POST /api/v1/session`).
+    /// Сессии при этом — в памяти узла ([`MemorySessions`]); общее хранилище подключает
+    /// [`Admin::with_sessions`].
     pub fn with_local_tokens(mut self, tokens: Arc<dyn LocalAdminTokens>) -> Self {
-        self.local = Some(Arc::new(Local::new(tokens)));
+        self.local = Some(tokens);
+        self
+    }
+
+    /// Подключает хранилище сессий Admin API (CTR-61, решение 77): сессии видны всем узлам роли `admin`
+    /// и переживают перезапуск узла. Значение, хэш и выпуск ведёт узел; хранилище — чтение, удаление
+    /// (выход) и очистка истёкших (`purge_expired` — шаг роли maintenance, APP-50). Не подключено —
+    /// память узла ([`MemorySessions`]).
+    pub fn with_sessions(mut self, sessions: Arc<dyn AdminSessions>) -> Self {
+        self.sessions = sessions;
         self
     }
 
@@ -289,12 +349,12 @@ impl Admin {
     }
 
     async fn init_inner(&self, req: &InitRequest) -> Result<InitGranted> {
-        let local = self.local.as_ref().ok_or(Error::UNAVAILABLE)?;
+        let tokens = self.local.as_deref().ok_or(Error::UNAVAILABLE)?;
         let transport = self.transport.as_deref().ok_or(Error::UNAVAILABLE)?;
         let tenant = TenantId::DEFAULT;
         let (login, domain_name) = crate::accounts::split_login(&req.email)?;
         let existing = self.d.accounts.by_login(tenant, &login).await?;
-        let issued = !local.tokens.list(tenant).await?.is_empty();
+        let issued = !tokens.list(tenant).await?.is_empty();
         if (existing.is_some() || issued) && !req.force {
             return Err(Error::Conflict);
         }
@@ -372,8 +432,7 @@ impl Admin {
         let now = OffsetDateTime::now_utc();
         let expires_at = now + self.cfg.init.token_ttl;
         let id = random_value("init-")?;
-        local
-            .tokens
+        tokens
             .issue(LocalAdminToken {
                 id: id[..21].to_owned(),
                 tenant,
@@ -421,8 +480,10 @@ impl Admin {
         }
     }
 
-    /// Администратор по значению сессии в момент `now`; не сессия — `None`, нет или истекла — `Forbidden`.
-    pub(crate) fn session_caller(
+    /// Администратор по значению сессии в момент `now`; не сессия — `None`, нет или истекла —
+    /// `Forbidden` (хранилище истёкшую возвращает как отсутствующую, CTR-61). Ошибка хранилища —
+    /// как есть (временная — 503).
+    pub(crate) async fn session_caller(
         &self,
         bearer: &str,
         now: OffsetDateTime,
@@ -430,54 +491,45 @@ impl Admin {
         if !bearer.starts_with(SESSION_PREFIX) {
             return None;
         }
-        let Some(local) = &self.local else {
+        if self.local.is_none() {
             return Some(Err(Error::Forbidden));
+        }
+        let stored = match self.sessions.get(&hash(bearer)).await {
+            Ok(Some(s)) if now < s.expires_at => s,
+            Ok(_) => return Some(Err(Error::Forbidden)),
+            Err(e) => return Some(Err(e)),
         };
-        let mut sessions = local.sessions();
-        let key = hash(bearer);
-        Some(match sessions.get(&key) {
-            Some(s) if now < s.expires_at => Ok(Caller {
-                principal: s.principal.clone(),
-                roles: s.roles.clone(),
-            }),
-            Some(_) => {
-                sessions.remove(&key);
-                Err(Error::Forbidden)
-            }
-            None => Err(Error::Forbidden),
-        })
+        // Неизвестная роль (сессия записана узлом другой версии) прав не расширяет.
+        let roles = stored
+            .roles
+            .iter()
+            .filter_map(|r| r.parse().ok())
+            .collect::<BTreeSet<AdminRole>>();
+        Some(Ok(Caller {
+            principal: stored.principal,
+            roles,
+        }))
     }
 
-    /// Новая сессия субъекта с ролями: значение возвращается один раз.
-    fn open_session(
+    /// Новая сессия субъекта с ролями: значение возвращается один раз, в хранилище — хэш
+    /// (`AdminSessions`, CTR-61); память узла ограничивает `admin.init.max_sessions`
+    /// ([`MemorySessions::put`]).
+    async fn open_session(
         &self,
-        local: &Local,
         principal: Principal,
         roles: BTreeSet<AdminRole>,
         now: OffsetDateTime,
     ) -> Result<(String, OffsetDateTime)> {
         let value = random_value(SESSION_PREFIX)?;
         let expires_at = now + self.cfg.init.session_ttl;
-        let mut sessions = local.sessions();
-        sessions.retain(|_, s| now < s.expires_at);
-        while sessions.len() >= self.cfg.init.max_sessions {
-            let Some(oldest) = sessions
-                .iter()
-                .min_by_key(|(_, s)| s.expires_at)
-                .map(|(k, _)| k.clone())
-            else {
-                break;
-            };
-            sessions.remove(&oldest);
-        }
-        sessions.insert(
-            hash(&value),
-            Session {
+        self.sessions
+            .put(StoredSession {
+                hash: hash(&value),
                 principal,
-                roles,
+                roles: roles.iter().map(|r| r.as_str().to_owned()).collect(),
                 expires_at,
-            },
-        );
+            })
+            .await?;
         Ok((value, expires_at))
     }
 }
@@ -837,9 +889,9 @@ async fn password_login(
         let m = format!("login — от 1 до {MAX_LOGIN_CHARS} символов, password — непустой");
         return Attempt::anonymous(login, Err(Denied::Request(StatusCode::BAD_REQUEST, m)));
     }
-    let Some(local) = a.local.as_deref() else {
+    if a.local.is_none() {
         return Attempt::anonymous(login, Err(Denied::Credentials(Error::UNAVAILABLE)));
-    };
+    }
     let credentials = Credentials::Password {
         login: login.clone(),
         secret: req.password,
@@ -871,7 +923,8 @@ async fn password_login(
         return subject(Err(Denied::NoRole));
     }
     let result = a
-        .open_session(local, principal.clone(), roles.clone(), now)
+        .open_session(principal.clone(), roles.clone(), now)
+        .await
         .map(|(session, expires_at)| {
             tracing::info!(login = %principal.login, "admin: вход по паролю, открыта сессия");
             AdminSession {
@@ -889,10 +942,7 @@ async fn password_login(
 
 /// Обмен токена `admin init` (см. [`create_session`]).
 async fn exchange(a: &Admin, headers: &HeaderMap, now: OffsetDateTime) -> Attempt {
-    let Some(local) = a.local.as_deref() else {
-        return Attempt::anonymous(String::new(), Err(Denied::Credentials(Error::UNAVAILABLE)));
-    };
-    match exchange_inner(a, local, headers, now).await {
+    match exchange_inner(a, headers, now).await {
         Ok(s) => Attempt {
             tenant: TenantId::DEFAULT,
             actor: s.account.parse().unwrap_or_else(|_| nobody()),
@@ -905,15 +955,15 @@ async fn exchange(a: &Admin, headers: &HeaderMap, now: OffsetDateTime) -> Attemp
 
 async fn exchange_inner(
     a: &Admin,
-    local: &Local,
     headers: &HeaderMap,
     now: OffsetDateTime,
 ) -> Result<AdminSession> {
+    let local = a.local.as_deref().ok_or(Error::UNAVAILABLE)?;
     let bearer = crate::server::bearer(headers)?;
     if !is_local_admin_token(bearer) {
         return Err(Error::Forbidden);
     }
-    let token = local.tokens.consume(&hash(bearer), now).await?;
+    let token = local.consume(&hash(bearer), now).await?;
     let account = match a.d.accounts.get(token.tenant, token.account).await? {
         Some(acc) if acc.enabled => acc,
         _ => return Err(Error::Forbidden),
@@ -926,7 +976,7 @@ async fn exchange_inner(
         scopes: None,
     };
     let roles = BTreeSet::from([AdminRole::InstallationAdmin]);
-    let (session, expires_at) = a.open_session(local, principal, roles.clone(), now)?;
+    let (session, expires_at) = a.open_session(principal, roles.clone(), now).await?;
     tracing::info!(login = %account.login, "admin: локальный токен обменян на сессию");
     Ok(AdminSession {
         session,
@@ -944,6 +994,7 @@ mod tests {
     use tp_contracts::auth::Credentials;
     use tp_contracts::meta::AccountStore;
     use tp_contracts::transport::TransportStore;
+    use tp_testkit::{MemAdminSessions, MemLocalAdminTokens, MemTransport, suite};
 
     use super::*;
     use crate::testenv::Env;
@@ -1027,7 +1078,6 @@ mod tests {
         assert!(b.get("session").is_none(), "{b}");
         let log = env.audit.records();
         assert_eq!((log[0].status, log[0].actor), (403, scope.account));
-        assert_eq!(env.admin.local.as_ref().expect("local").sessions().len(), 0);
     }
 
     /// Без OIDC роли `admin.roles` (по имени входа и группе) — через вход по паролю: оператор по имени входа читает
@@ -1567,33 +1617,132 @@ mod tests {
         assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    /// Сессия истекает по сроку; память узла ограничена `admin.init.max_sessions`: при превышении
+    /// вытесняется истекающая раньше всех (CTR-61, поведение памяти узла сохранено).
     #[tokio::test]
     async fn session_expires_and_is_bounded() {
         let env = Env::new();
-        let local = env.admin.local.clone().expect("local");
         let now = OffsetDateTime::now_utc();
         let p = crate::testenv::subject(TenantId::DEFAULT, "boss@example.test", &[]);
         let roles = BTreeSet::from([AdminRole::InstallationAdmin]);
         let (v, exp) = env
             .admin
-            .open_session(&local, p.clone(), roles.clone(), now)
+            .open_session(p.clone(), roles.clone(), now)
+            .await
             .expect("open");
-        assert!(env.admin.session_caller(&v, now).expect("session").is_ok());
-        assert_eq!(
-            env.admin
-                .session_caller(&v, exp)
-                .expect("session")
-                .map(|_| ()),
-            Err(Error::Forbidden)
-        );
+        let caller = env.admin.session_caller(&v, now).await.expect("session");
+        assert!(caller.is_ok());
+        let expired = env.admin.session_caller(&v, exp).await.expect("session");
+        assert_eq!(expired.map(|_| ()), Err(Error::Forbidden));
         assert!(env.admin.session_caller("eyJ.x.y", now).is_none());
-        let max = env.admin.cfg.init.max_sessions;
-        for _ in 0..max + 3 {
-            env.admin
-                .open_session(&local, p.clone(), roles.clone(), now)
-                .expect("open");
+
+        let store = MemorySessions::new(3);
+        for i in 0..4 {
+            store
+                .put(StoredSession {
+                    hash: hash(&format!("v{i}")),
+                    principal: p.clone(),
+                    roles: vec![AdminRole::InstallationAdmin.as_str().to_owned()],
+                    expires_at: now + time::Duration::seconds(60 + i as i64),
+                })
+                .await
+                .expect("put");
         }
-        assert_eq!(local.sessions().len(), max);
+        assert_eq!(store.len(), 3);
+        assert_eq!(
+            store.get(&hash("v0")).await.expect("get"),
+            None,
+            "вытеснена истекающая раньше всех"
+        );
+        for i in 1..4 {
+            let s = store.get(&hash(&format!("v{i}"))).await.expect("get");
+            assert!(s.is_some());
+        }
+    }
+
+    /// Память узла — реализация контракта `AdminSessions` (CTR-61).
+    #[tokio::test]
+    async fn memory_sessions_passes_contract_suite() {
+        suite::admin_sessions(&MemorySessions::new(64)).await;
+    }
+
+    /// Приёмка ADM-28 (CTR-61, решение 77): сессия, созданная одним экземпляром `Admin`, принимается
+    /// другим с тем же хранилищем; выход (`AdminSessions::delete`) удаляет её для обоих.
+    #[tokio::test]
+    async fn session_shared_across_admins_and_logout() {
+        use tower::ServiceExt;
+
+        async fn status(
+            router: &axum::Router,
+            method: &str,
+            path: &str,
+            token: &str,
+        ) -> StatusCode {
+            let req = axum::http::Request::builder()
+                .method(method)
+                .uri(path)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(axum::body::Body::empty())
+                .expect("request");
+            tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .expect("response")
+                .status()
+        }
+
+        let shared = Arc::new(MemAdminSessions::new());
+        let admin = |tokens| {
+            Admin::new(crate::testenv::deps(), crate::testenv::config())
+                .expect("admin")
+                .with_local_tokens(Arc::new(tokens))
+                .with_sessions(shared.clone())
+        };
+        // Первый экземпляр: `admin init` и обмен токена на сессию.
+        let first = admin(MemLocalAdminTokens::new())
+            .with_transport(Arc::new(MemTransport::new()));
+        let first = Arc::new(first);
+        let g = first
+            .init(&req("boss@example.test", false))
+            .await
+            .expect("init");
+        let router_first = first.clone().router();
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri(SESSION_ROUTE)
+            .header(header::AUTHORIZATION, format!("Bearer {}", g.token))
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let resp = router_first.clone().oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::CREATED, "обмен токена");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        let session = body["session"].as_str().expect("session").to_owned();
+        assert!(session.starts_with(SESSION_PREFIX), "{session}");
+
+        // Второй экземпляр с тем же хранилищем (свой локальный токен): принимает сессию первого.
+        let router_second = Arc::new(admin(MemLocalAdminTokens::new())).router();
+        assert_eq!(
+            status(&router_second, "GET", "/api/v1/whoami", &session).await,
+            StatusCode::OK,
+            "второй экземпляр принимает сессию первого"
+        );
+        assert_eq!(
+            status(&router_first, "GET", "/api/v1/whoami", &session).await,
+            StatusCode::OK
+        );
+
+        // Выход удаляет сессию из хранилища: оба экземпляра её больше не принимают.
+        shared.delete(&hash(&session)).await.expect("logout");
+        assert_eq!(
+            status(&router_first, "GET", "/api/v1/whoami", &session).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status(&router_second, "GET", "/api/v1/whoami", &session).await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     /// Локальный сокет: только root; запрос и ответ — строки JSON.
