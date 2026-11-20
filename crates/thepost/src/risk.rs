@@ -1506,7 +1506,7 @@ impl RiskEnviron for NodeEnviron {
             tracing::debug!("risk: память беседы не подключена — детекторы беседы молчат");
             return Ok(ThreadFacts::new());
         };
-        let mut tx = tp_meta::schema::begin(&meta.pool(), tenant).await?;
+        let mut tx = tp_meta::schema::begin(meta.pool(), tenant).await?;
         let thread: Option<uuid::Uuid> = sqlx::query_scalar(
             "SELECT tk.thread_id FROM thread_keys tk
              JOIN threads t ON t.tenant_id = tk.tenant_id AND t.account_id = tk.account_id
