@@ -16,13 +16,21 @@ use uuid::Uuid;
 
 use tp_contracts::admin_session::{AdminSession, AdminSessions};
 use tp_contracts::auth::Principal;
-use tp_contracts::{AccountId, Result, TenantId};
+use tp_contracts::{AccountId, Error, Result, TenantId};
 
 use crate::PgMeta;
 use crate::schema::{begin, begin_system, db_err};
 
 /// Размер порции очистки (`purge_expired`): короткие транзакции, долгих блокировок нет.
 const PURGE_PORTION: i64 = 10_000;
+
+/// Момент с точностью до микросекунды (хранение `timestamptz`): чтение сессии сравнивается с
+/// выпущенной без расхождений на наносекундах.
+fn truncate_micros(at: OffsetDateTime) -> Result<OffsetDateTime> {
+    let micros = at.nanosecond() / 1_000 * 1_000;
+    at.replace_nanosecond(micros)
+        .map_err(|_| Error::invalid("срок сессии вне диапазона"))
+}
 
 #[derive(FromRow)]
 struct Row {
@@ -60,16 +68,18 @@ impl PgMeta {
     async fn purge_expired_portions(&self, now: OffsetDateTime) -> Result<u64> {
         let mut total: u64 = 0;
         loop {
+            let mut tx = begin_system(&self.pool).await?;
             let deleted = sqlx::query(
                 "DELETE FROM admin_sessions WHERE ctid IN (
                      SELECT ctid FROM admin_sessions WHERE expires_at <= $1 LIMIT $2)",
             )
             .bind(now)
             .bind(PURGE_PORTION)
-            .execute(&mut *begin_system(&self.pool).await?)
+            .execute(&mut *tx)
             .await
             .map_err(db_err)?
             .rows_affected();
+            crate::commits::commit(tx).await?;
             total += deleted;
             if (deleted as i64) < PURGE_PORTION {
                 return Ok(total);
@@ -82,6 +92,7 @@ impl PgMeta {
 impl AdminSessions for PgMeta {
     async fn put(&self, session: AdminSession) -> Result<()> {
         session.validate()?;
+        let expires_at = truncate_micros(session.expires_at)?;
         // Повтор применённой вставки ответил бы `Conflict` (хэш занят) — один раз.
         self.once(async move {
             let mut tx = begin(&self.pool, session.principal.tenant).await?;
@@ -97,7 +108,7 @@ impl AdminSessions for PgMeta {
             .bind(Json(&session.principal.groups))
             .bind(session.principal.scopes.as_ref().map(Json))
             .bind(Json(&session.roles))
-            .bind(session.expires_at)
+            .bind(expires_at)
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
