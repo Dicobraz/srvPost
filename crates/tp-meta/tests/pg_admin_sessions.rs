@@ -211,7 +211,7 @@ async fn migration_applies_over_previous_and_is_idempotent() {
         )))
         .await
         .expect("drop");
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 5")
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 6")
         .execute(&mut *common::conn(pool).await)
         .await
         .expect("unapply");
