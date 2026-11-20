@@ -39,7 +39,7 @@ export function Header() {
         <Typography.Text type="secondary">Организация:</Typography.Text>
         {roles?.includes("installation_admin") ? <OrgSelect /> : <Typography.Text>{name(getOrg())}</Typography.Text>}
         <Dropdown menu={{ items }} trigger={["click"]}>
-          <Button type="text" shape="round" icon={<Avatar size="small" icon={<UserOutlined />}} aria-label="Меню пользователя">
+          <Button type="text" shape="round" icon={<Avatar size="small" icon={<UserOutlined />} />} aria-label="Меню пользователя">
             {me?.login}
           </Button>
         </Dropdown>
