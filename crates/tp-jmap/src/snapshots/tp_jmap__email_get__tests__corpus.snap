@@ -7923,13 +7923,13 @@ expression: "Value::Object(out)"
         "name": "Alice Example"
       }
     ],
-    "hasAttachment": true,
+    "hasAttachment": false,
     "htmlBody": [],
     "inReplyTo": null,
     "messageId": [
       "corpus-055@example.com"
     ],
-    "preview": "",
+    "preview": "bottom",
     "references": null,
     "replyTo": null,
     "sender": null,

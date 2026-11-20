@@ -116,8 +116,6 @@ fn find_part<'a>(bp: &'a BodyPart, path: &str) -> Option<&'a BodyPart> {
 
 /// Тело части без кодировки передачи (`base64`, `quoted-printable`); ошибка декодирования — как есть.
 fn decode_transfer(bp: &BodyPart, body: Vec<u8>) -> Vec<u8> {
-    use mail_parser::decoders::base64::base64_decode;
-    use mail_parser::decoders::quoted_printable::quoted_printable_decode;
     let decoded = match bp
         .encoding
         .as_deref()
@@ -129,6 +127,114 @@ fn decode_transfer(bp: &BodyPart, body: Vec<u8>) -> Vec<u8> {
         _ => None,
     };
     decoded.unwrap_or(body)
+}
+
+// mail-parser 1.0: декодеры `decoders::base64` и `decoders::quoted_printable` исключены из публичного
+// API — ниже эквиваленты их семантики 0.11 (как в `tp_imap::fetch`).
+
+/// Base64: пропускает пробельные символы, `=` завершает частичную группу, иной символ вне алфавита — `None`.
+fn base64_decode(bytes: &[u8]) -> Option<Vec<u8>> {
+    fn value(ch: u8) -> Option<u8> {
+        match ch {
+            b'A'..=b'Z' => Some(ch - b'A'),
+            b'a'..=b'z' => Some(ch - b'a' + 26),
+            b'0'..=b'9' => Some(ch - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::with_capacity(bytes.len().div_ceil(4) * 3);
+    let mut chunk = 0u32;
+    let mut count = 0u8;
+    for &ch in bytes {
+        match value(ch) {
+            Some(v) => {
+                chunk = (chunk << 6) | u32::from(v);
+                count += 1;
+                if count == 4 {
+                    out.extend_from_slice(&chunk.to_be_bytes()[1..]);
+                    count = 0;
+                    chunk = 0;
+                }
+            }
+            None if ch == b'=' => {
+                match count {
+                    2 => out.push((chunk >> 4) as u8),
+                    3 => out.extend_from_slice(&[(chunk >> 10) as u8, (chunk >> 2) as u8]),
+                    _ => {}
+                }
+                count = 0;
+                chunk = 0;
+            }
+            None if matches!(ch, b' ' | b'\t' | b'\r' | b'\n') => {}
+            None => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Quoted-printable: мягкие переносы снимаются, битая escape-последовательность — `None`.
+fn quoted_printable_decode(bytes: &[u8]) -> Option<Vec<u8>> {
+    fn hex(ch: u8) -> Option<u8> {
+        match ch {
+            b'0'..=b'9' => Some(ch - b'0'),
+            b'A'..=b'F' => Some(ch - b'A' + 10),
+            b'a'..=b'f' => Some(ch - b'a' + 10),
+            _ => None,
+        }
+    }
+    // Состояние: вне `=`, после `=`, после `=` и одной hex-цифры.
+    #[derive(PartialEq)]
+    enum State {
+        None,
+        Eq,
+        Hex1,
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut state = State::None;
+    let mut hex1 = 0u8;
+    let mut ws = 0usize;
+    let mut crlf: &[u8] = b"\n";
+    for &ch in bytes {
+        match ch {
+            b'=' if state == State::None => state = State::Eq,
+            b'=' => return None,
+            b'\n' => {
+                if state == State::Eq {
+                    state = State::None;
+                } else {
+                    if ws > 0 {
+                        out.truncate(out.len() - ws);
+                    }
+                    out.extend_from_slice(crlf);
+                }
+                ws = 0;
+            }
+            b'\r' => crlf = b"\r\n",
+            _ => match state {
+                State::None => {
+                    ws = if ch.is_ascii_whitespace() { ws + 1 } else { 0 };
+                    out.push(ch);
+                }
+                State::Eq => match hex(ch) {
+                    Some(h) => {
+                        hex1 = h;
+                        state = State::Hex1;
+                    }
+                    None if ch.is_ascii_whitespace() => {}
+                    None => return None,
+                },
+                State::Hex1 => {
+                    let h = hex(ch)?;
+                    out.push((hex1 << 4) | h);
+                    state = State::None;
+                    ws = 0;
+                }
+            },
+        }
+    }
+    Some(out)
 }
 
 /// Читает поток целиком; больше `max` байт — `Error::Invalid`.

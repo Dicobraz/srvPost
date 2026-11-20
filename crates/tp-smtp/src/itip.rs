@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 
-use mail_parser::{HeaderName, MessageParser, MimeHeaders};
+use mail_parser::{HeaderName, MessageParser};
 use tp_contracts::schedule::ItipMethod;
 
 /// Сообщение iTIP из письма, `From` которого совпал с организатором или участником либо с его `SENT-BY`.
@@ -32,7 +32,7 @@ pub(crate) struct Imip {
 /// `Err` — причина, по которой сообщение не применяется (для журнала, без содержимого).
 pub(crate) fn extract(raw: &[u8]) -> Option<Result<Imip, &'static str>> {
     let msg = MessageParser::new().parse(raw)?;
-    let (param, ics) = msg.parts.iter().find_map(|p| {
+    let (param, ics) = msg.root().parts().find_map(|p| {
         let ct = p.content_type()?;
         let calendar = ct.ctype().eq_ignore_ascii_case("text")
             && ct
@@ -41,20 +41,20 @@ pub(crate) fn extract(raw: &[u8]) -> Option<Result<Imip, &'static str>> {
         let method = ct.attribute("method").filter(|_| calendar)?;
         Some((
             method.trim().to_owned(),
-            String::from_utf8_lossy(p.contents()).into_owned(),
+            String::from_utf8_lossy(&p.decoded()).into_owned(),
         ))
     })?;
     Some((|| {
         let method: ItipMethod = param.parse().map_err(|_| "неизвестный метод iTIP")?;
         // Ровно один заголовок `From` (SMTP-48): разбор здесь берёт один из них, а DMARC (mail-auth) — адреса всех,
         // и проверенный DMARC `From` разошёлся бы с применённым.
-        if msg.header_values(HeaderName::From).nth(1).is_some() {
+        if msg.headers().all(HeaderName::From).nth(1).is_some() {
             return Err("у письма не один заголовок From");
         }
         // Ровно один адрес `From`: DMARC и права отправки проверяют один адрес, а не выбор из нескольких.
         let from = msg
             .from()
-            .map(|a| a.iter().filter_map(|x| x.address.as_deref()).collect())
+            .map(|a| a.mailboxes().filter_map(|x| x.address()).collect())
             .unwrap_or_else(Vec::new);
         let [from] = from.as_slice() else {
             return Err("у письма не один адрес From");

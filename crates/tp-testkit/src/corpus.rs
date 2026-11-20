@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use calcard::vcard::VCard;
 use calcard::{Entry, Parser};
-use mail_parser::decoders::charsets::map::charset_decoder;
+use mail_parser::decoders::charsets::charset_decoder;
 use tp_contracts::{Error, Result, TenantId};
 
 /// Письмо корпуса.
@@ -480,7 +480,7 @@ fn base64(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mail_parser::{MessageParser, MimeHeaders};
+    use mail_parser::MessageParser;
 
     #[test]
     fn corpus_parses_without_panic() {
@@ -719,14 +719,15 @@ mod tests {
             .filter_map(|a| a.attachment_name())
             .collect();
         assert_eq!(names, ["a.pdf", "b.docx", "c.xlsx"]);
-        let pdf = msg.attachment(0).expect("pdf");
-        assert!(pdf.contents().starts_with(b"%PDF-"));
+        let pdf = msg.attachments().next().expect("pdf");
+        assert!(pdf.decoded().starts_with(b"%PDF-"));
 
         let nested = parse("rfc822-nested-3");
         let msg = parser.parse(&nested).expect("nested");
         let inner = msg
-            .attachment(0)
-            .and_then(|a| a.message())
+            .attachments()
+            .next()
+            .and_then(|a| a.nested())
             .expect("level 2");
         assert_eq!(inner.subject(), Some("Level 2"));
         assert!(corpus_mail("nope").is_err());
@@ -750,9 +751,9 @@ mod tests {
         let mut bodies = Vec::new();
         for raw in &mails {
             let msg = parser.parse(raw).expect("synthetic");
-            if let Some(a) = msg.attachment(0) {
+            if let Some(a) = msg.attachments().next() {
                 with_att += 1;
-                bodies.push(a.contents().to_vec());
+                bodies.push(a.decoded().to_vec());
             }
         }
         let ratio = f64::from(with_att) / mails.len() as f64;

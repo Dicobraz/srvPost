@@ -464,11 +464,20 @@ async fn auto_reply_to_external_sender_is_queued() {
         .parse(raw.as_ref())
         .expect("parse");
     assert_eq!(
-        msg.header_raw("Auto-Submitted").map(str::trim),
+        msg.headers()
+            .get("Auto-Submitted")
+            .and_then(|h| std::str::from_utf8(h.raw_value()).ok())
+            .map(str::trim),
         Some("auto-replied")
     );
-    assert_eq!(msg.in_reply_to().as_text(), Some("orig-1@example.net"));
-    assert_eq!(msg.references().as_text(), Some("orig-1@example.net"));
+    assert_eq!(
+        msg.in_reply_to().and_then(|l| l.last()),
+        Some("orig-1@example.net")
+    );
+    assert_eq!(
+        msg.references().and_then(|l| l.last()),
+        Some("orig-1@example.net")
+    );
     assert_eq!(msg.subject(), Some("Автоответ: hello"));
     assert_eq!(
         msg.body_text(0).as_deref().map(str::trim),

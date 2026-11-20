@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mail_parser::{Address, MessageParser, MimeHeaders};
+use mail_parser::{AddressList, MessageParser};
 use time::OffsetDateTime;
 use tp_contracts::auth::{
     Authenticator, Credentials, DirAccount, DirAlias, DirChange, DirContact, DirCursor, DirDomain,
@@ -568,9 +568,9 @@ pub struct SearchDoc {
     pub headers: Vec<(String, String)>,
 }
 
-fn addresses(a: Option<&Address<'_>>) -> String {
+fn addresses(a: Option<AddressList<'_>>) -> String {
     a.map(|a| {
-        a.iter()
+        a.mailboxes()
             .map(|x| match (x.name(), x.address()) {
                 (Some(n), Some(e)) => format!("{n} <{e}>"),
                 (n, e) => n.or(e).unwrap_or_default().to_owned(),
@@ -600,7 +600,7 @@ impl SearchDoc {
                     .get(h.offset_start() as usize..h.offset_end() as usize)
                     .map(String::from_utf8_lossy)
                     .unwrap_or_default();
-                (h.name().to_owned(), value.trim().to_owned())
+                (h.name().as_str().to_owned(), value.trim().to_owned())
             })
             .collect();
         let body = (0..)
@@ -611,7 +611,13 @@ impl SearchDoc {
             .attachments()
             .map(|a| {
                 let name = a.attachment_name().unwrap_or_default();
-                match a.text_contents() {
+                // mail-parser 1.0: `text_contents` (текст или тело Binary в UTF-8) заменён на `text`
+                // по текстовым частям с дословным телом Binary как запасным вариантом.
+                let text = a
+                    .text()
+                    .map(|t| t.into_owned())
+                    .or_else(|| std::str::from_utf8(&a.decoded()).ok().map(str::to_owned));
+                match text {
                     Some(t) => format!("{name}\n{t}"),
                     None => name.to_owned(),
                 }

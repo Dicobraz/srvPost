@@ -20,7 +20,7 @@
 
 use std::borrow::Cow;
 
-use mail_parser::{Encoding, HeaderValue, Message, MessageParser, MimeHeaders, PartType};
+use mail_parser::{Encoding, Message, MessageParser, MessagePart, MessageRef, PartKind, TextList};
 use time::{OffsetDateTime, UtcOffset};
 use tp_contracts::meta::{Address, BodyPart, Envelope, MessageMeta};
 use tp_contracts::reply::normalize_recipient;
@@ -49,7 +49,9 @@ pub fn message_meta_with(raw: &[u8], limits: MimeLimits) -> MessageMeta {
 
 /// Разбор письма для приёма: метаданные для протоколов и вход беседы (MS-21, CTR-94) — один разбор.
 pub fn analyze(raw: &[u8], limits: MimeLimits) -> Analyzed {
-    let Some(msg) = MessageParser::default().parse(raw) else {
+    // mail-parser 1.0: пределы разбора задаёт [`MimeLimits`] на обходе дерева (SRS 6.8), как в 0.11 —
+    // глубина парсера не ограничивается, иначе части за встроенным пределом 1.0 выпадают из BODYSTRUCTURE.
+    let Some(msg) = MessageParser::new().max_depth(usize::MAX).parse(raw) else {
         return Analyzed {
             meta: MessageMeta {
                 body: leaf_default(String::new()),
@@ -60,10 +62,10 @@ pub fn analyze(raw: &[u8], limits: MimeLimits) -> Analyzed {
     };
     let meta = MessageMeta {
         envelope: envelope(&msg),
-        body: message_body(&msg, "", 0, &mut Budget { limits, parts: 0 }),
+        body: message_body(msg.root(), "", 0, &mut Budget { limits, parts: 0 }),
         preview: preview(&msg),
         thread_key: thread_key(&msg),
-        has_attachment: msg.attachment_count() > 0,
+        has_attachment: msg.attachments().len() > 0,
     };
     let thread = thread_input(&msg, &meta);
     Analyzed { meta, thread }
@@ -134,13 +136,15 @@ fn attachment_types(part: &BodyPart, out: &mut Vec<String>) {
 /// Домены ссылок письма (`http`/`https` из текстовых частей), канонические, без повторов.
 fn link_domains(msg: &Message<'_>) -> Vec<String> {
     let mut out = Vec::new();
-    for part in &msg.parts {
-        let text = match &part.body {
-            PartType::Text(t) => t.as_ref(),
-            PartType::Html(h) => h.as_ref(),
+    for part in msg.root().parts() {
+        let text = match part.kind() {
+            PartKind::Text | PartKind::Html => match part.text() {
+                Some(text) => text,
+                None => continue,
+            },
             _ => continue,
         };
-        scan_links(text, &mut out);
+        scan_links(&text, &mut out);
         if out.len() >= MAX_LINKS_FOUND {
             break;
         }
@@ -205,9 +209,9 @@ fn scan_links(text: &str, out: &mut Vec<String>) {
 }
 
 fn envelope(msg: &Message<'_>) -> Envelope {
-    let addrs = |a: Option<&mail_parser::Address<'_>>| -> Vec<Address> {
+    let addrs = |a: Option<mail_parser::AddressList<'_>>| -> Vec<Address> {
         a.map(|a| {
-            a.iter()
+            a.mailboxes()
                 .filter_map(|addr| {
                     Some(Address {
                         name: addr.name().map(str::to_owned),
@@ -234,7 +238,7 @@ fn envelope(msg: &Message<'_>) -> Envelope {
 }
 
 /// Дата заголовка со смещением из него; недопустимая — `None`.
-fn datetime(d: &mail_parser::DateTime) -> Option<OffsetDateTime> {
+fn datetime(d: mail_parser::DateTime) -> Option<OffsetDateTime> {
     if !d.is_valid() {
         return None;
     }
@@ -247,12 +251,8 @@ fn datetime(d: &mail_parser::DateTime) -> Option<OffsetDateTime> {
 }
 
 /// Идентификаторы сообщений заголовка (без угловых скобок).
-fn ids<'a>(value: &'a HeaderValue<'_>) -> Vec<&'a str> {
-    match value {
-        HeaderValue::Text(id) => vec![id.as_ref()],
-        HeaderValue::TextList(list) => list.iter().map(|id| id.as_ref()).collect(),
-        _ => Vec::new(),
-    }
+fn ids<'a>(value: Option<TextList<'a>>) -> Vec<&'a str> {
+    value.map(|list| list.iter().collect()).unwrap_or_default()
 }
 
 fn bracketed(ids: &[&str]) -> String {
@@ -269,77 +269,52 @@ struct Budget {
 }
 
 /// Корень письма (верхнего или вложенного с путём `base`).
-fn message_body(msg: &Message<'_>, base: &str, depth: usize, b: &mut Budget) -> BodyPart {
-    let Some(root) = msg.parts.first() else {
-        b.parts += 1;
-        return leaf_default(base.to_owned());
-    };
-    match &root.body {
-        PartType::Multipart(_) => node(msg, 0, base.to_owned(), base, depth, b),
-        _ => {
-            let body = child_path(base, 1);
-            let path = if base.is_empty() {
-                String::new()
-            } else {
-                body.clone()
-            };
-            node(msg, 0, path, &body, depth, b)
-        }
+fn message_body(msg: MessageRef<'_>, base: &str, depth: usize, b: &mut Budget) -> BodyPart {
+    let root = msg.root_part();
+    if root.is_multipart() {
+        node(root, base.to_owned(), base, depth, b)
+    } else {
+        let body = child_path(base, 1);
+        let path = if base.is_empty() {
+            String::new()
+        } else {
+            body.clone()
+        };
+        node(root, path, &body, depth, b)
     }
 }
 
-/// Узел части `id` с путём `path`; `base` — путь, от которого нумеруются дети составной части
+/// Узел части с путём `path`; `base` — путь, от которого нумеруются дети составной части
 /// и части вложенного письма (у корня несоставного письма отличается от `path`, как в split).
-fn node(
-    msg: &Message<'_>,
-    id: usize,
-    path: String,
-    base: &str,
-    depth: usize,
-    b: &mut Budget,
-) -> BodyPart {
+fn node(part: MessagePart<'_>, path: String, base: &str, depth: usize, b: &mut Budget) -> BodyPart {
     b.parts += 1;
-    let Some(part) = msg.parts.get(id) else {
-        return leaf_default(path);
-    };
     let (media_type, subtype, params) = match part.content_type() {
         Some(ct) => (
-            ct.c_type.to_ascii_lowercase(),
-            ct.c_subtype
-                .as_deref()
-                .map_or_else(|| default_subtype(&ct.c_type), str::to_ascii_lowercase),
+            ct.ctype().to_ascii_lowercase(),
+            ct.subtype()
+                .map_or_else(|| default_subtype(ct.ctype()), str::to_ascii_lowercase),
             attributes(ct.attributes()),
         ),
         None => ("text".to_owned(), "plain".to_owned(), Vec::new()),
     };
-    // Смещения частей — в буфере `raw_message` (у вложенного письма без кодирования передачи — буфер
-    // верхнего письма), а `raw_message()` — лишь срез этого письма: по нему строки вложенных частей терялись.
-    let body = msg
-        .raw_message
-        .get(part.offset_body as usize..part.offset_end as usize)
-        .unwrap_or_default();
+    // Тело части в кодировке передачи: у вложенного письма без кодирования передачи — срез исходного
+    // буфера, у закодированного — срез раскодированных байтов (`raw_body` учитывает источник части).
+    let body = part.raw_body();
     let lines = (media_type == "text" || (media_type == "message" && subtype == "rfc822"))
         .then(|| u32::try_from(body.iter().filter(|&&b| b == b'\n').count()).unwrap_or(u32::MAX));
     let mut children = Vec::new();
     if depth < b.limits.max_depth {
-        match &part.body {
-            PartType::Multipart(ids) => {
-                let mut n = 0;
-                for &child in ids {
-                    let child = child as usize;
-                    // Дети идут после родителя; иное — битая структура (защита от циклов, как в split).
-                    if child <= id || child >= msg.parts.len() {
-                        continue;
-                    }
+        match part.kind() {
+            PartKind::Multipart => {
+                for (n, child) in part.children().enumerate() {
                     if b.parts >= b.limits.max_parts {
                         break;
                     }
-                    n += 1;
-                    let p = child_path(base, n);
-                    children.push(node(msg, child, p.clone(), &p, depth + 1, b));
+                    let p = child_path(base, n + 1);
+                    children.push(node(child, p.clone(), &p, depth + 1, b));
                 }
             }
-            PartType::Message(nested) if b.parts < b.limits.max_parts => {
+            PartKind::Message(nested) if b.parts < b.limits.max_parts => {
                 children.push(message_body(nested, base, depth + 1, b));
             }
             _ => {}
@@ -355,23 +330,21 @@ fn node(
         encoding: part.content_transfer_encoding().map(str::to_owned),
         disposition: part
             .content_disposition()
-            .map(|d| (d.c_type.to_ascii_lowercase(), attributes(d.attributes()))),
+            .map(|d| (d.ctype().to_ascii_lowercase(), attributes(d.attributes()))),
         language: ids(part.content_language())
             .into_iter()
             .map(str::to_owned)
             .collect(),
         location: part.content_location().map(str::to_owned),
-        size: u64::from(part.offset_end.saturating_sub(part.offset_body)),
+        size: u64::from(part.offset_end().saturating_sub(part.offset_body())),
         lines,
         children,
     }
 }
 
-fn attributes(attrs: Option<&[mail_parser::Attribute<'_>]>) -> Vec<(String, String)> {
+fn attributes<'m>(attrs: impl Iterator<Item = (&'m str, &'m str)>) -> Vec<(String, String)> {
     attrs
-        .unwrap_or_default()
-        .iter()
-        .map(|a| (a.name.to_ascii_lowercase(), a.value.to_string()))
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.to_owned()))
         .collect()
 }
 
@@ -426,17 +399,15 @@ fn preview(msg: &Message<'_>) -> String {
 /// передачи не декодировалось по метке (есть U+FFFD), но как UTF-8 корректно. Частая ошибка почтовых
 /// клиентов; без проверки превью зависело бы от набора кодировок `mail-parser`.
 fn mislabeled_utf8<'a>(msg: &'a Message<'_>) -> Option<&'a str> {
-    let part = msg.text_part(0)?;
-    let PartType::Text(text) = &part.body else {
-        return None;
-    };
-    if part.encoding != Encoding::None || !text.contains(char::REPLACEMENT_CHARACTER) {
+    let part = msg.text_body().next()?;
+    if !matches!(part.kind(), PartKind::Text) || part.encoding() != Encoding::None {
         return None;
     }
-    let raw = msg
-        .raw_message()
-        .get(part.offset_body as usize..part.offset_end as usize)?;
-    std::str::from_utf8(raw).ok()
+    let text = part.text()?;
+    if !text.contains(char::REPLACEMENT_CHARACTER) {
+        return None;
+    }
+    std::str::from_utf8(part.raw_body()).ok()
 }
 
 fn thread_key(msg: &Message<'_>) -> String {

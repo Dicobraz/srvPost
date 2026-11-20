@@ -334,8 +334,12 @@ mod tests {
         let msg = mail_parser::MessageParser::default()
             .parse(&mail.raw)
             .expect("parse");
-        let nested = msg.attachment(0).and_then(|a| a.message()).expect("nested");
-        let inner = nested.attachment(0).expect("inner attachment");
+        let nested = msg
+            .attachments()
+            .next()
+            .and_then(|a| a.nested())
+            .expect("nested");
+        let inner = nested.attachments().next().expect("inner attachment");
         let (_, skel) = env.store.load(scope, id).await.expect("load");
         let paths: Vec<_> = skel.sections().iter().map(|s| s.path.clone()).collect();
         let path = paths
@@ -346,7 +350,7 @@ mod tests {
         let got = read_all(env.store.fetch_part(scope, id, path).await.expect("part"))
             .await
             .expect("read");
-        let expected = &mail.raw[inner.offset_body as usize..inner.offset_end as usize];
+        let expected = &mail.raw[inner.offset_body() as usize..inner.offset_end() as usize];
         assert!(got.as_ref() == expected, "{path} из {paths:?}");
     }
 

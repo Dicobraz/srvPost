@@ -12,7 +12,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt, stream};
-use mail_parser::{HeaderValue, MessageParser};
+use mail_parser::{MessageParser, TextList};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use time::format_description::well_known::Rfc3339;
@@ -116,7 +116,7 @@ fn date(t: OffsetDateTime) -> Value {
         .map_or(Value::Null, Value::String)
 }
 
-fn mp_date(d: &mail_parser::DateTime) -> Option<OffsetDateTime> {
+fn mp_date(d: mail_parser::DateTime) -> Option<OffsetDateTime> {
     if !d.is_valid() {
         return None;
     }
@@ -154,11 +154,10 @@ fn message_ids(s: Option<&str>) -> Value {
     }
 }
 
-fn header_ids(v: &HeaderValue<'_>) -> Value {
+fn header_ids(v: Option<TextList<'_>>) -> Value {
     match v {
-        HeaderValue::Text(id) => json!([id]),
-        HeaderValue::TextList(list) => json!(list),
-        _ => Value::Null,
+        Some(list) => json!(list.iter().collect::<Vec<_>>()),
+        None => Value::Null,
     }
 }
 
@@ -388,7 +387,7 @@ fn raw_headers(raw: &[u8]) -> Vec<(String, String)> {
                 .map(String::from_utf8_lossy)
                 .unwrap_or_default();
             (
-                h.name().to_owned(),
+                h.name().as_str().to_owned(),
                 v.trim_end_matches(['\r', '\n']).to_owned(),
             )
         })
@@ -403,7 +402,7 @@ fn header_form(form: &str, raw: &str) -> Value {
             .parse_headers(data.as_bytes())
             .map(|m| m.into_owned())
     };
-    let addr = |a: &mail_parser::Addr<'_>| json!({"name": a.name(), "email": a.address().unwrap_or_default()});
+    let addr = |a: mail_parser::Mailbox<'_>| json!({"name": a.name(), "email": a.address().unwrap_or_default()});
     match form {
         "asRaw" => json!(raw),
         "asText" => json!(
@@ -414,21 +413,23 @@ fn header_form(form: &str, raw: &str) -> Value {
         "asAddresses" => {
             let list: Vec<Value> = parse("To")
                 .as_ref()
-                .and_then(|m| m.to().map(|a| a.iter().map(addr).collect()))
+                .and_then(|m| m.to().map(|a| a.mailboxes().map(addr).collect()))
                 .unwrap_or_default();
             json!(list)
         }
         "asGroupedAddresses" => {
-            let groups: Vec<Value> = match parse("To").as_ref().and_then(|m| m.to().cloned()) {
-                Some(mail_parser::Address::Group(gs)) => gs
-                    .iter()
-                    .map(|g| json!({"name": g.name, "addresses": g.addresses.iter().map(addr).collect::<Vec<_>>()}))
-                    .collect(),
-                Some(mail_parser::Address::List(l)) => {
-                    vec![json!({"name": null, "addresses": l.iter().map(addr).collect::<Vec<_>>()})]
-                }
-                None => Vec::new(),
-            };
+            // Группы RFC 5322 и цепочки без группы — как в JMAP `asGroupedAddresses` (`AddressList::groups`).
+            let groups: Vec<Value> = parse("To")
+                .as_ref()
+                .and_then(|m| m.to())
+                .map(|list| {
+                    list.groups()
+                        .map(|(name, run)| {
+                            json!({"name": name, "addresses": run.map(addr).collect::<Vec<_>>()})
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             json!(groups)
         }
         "asMessageIds" => parse("References").map_or(Value::Null, |m| header_ids(m.references())),
@@ -483,7 +484,7 @@ fn decode_text(bp: &BodyPart, body: &[u8]) -> Option<String> {
     .into_bytes();
     data.extend_from_slice(body);
     let msg = MessageParser::default().parse(&data)?;
-    let text = msg.parts.first()?.text_contents()?;
+    let text = msg.root_part().text()?;
     // Тело без кодирования передачи в UTF-8 вопреки метке `charset` — частая ошибка клиентов
     // (как у превью в `tp_mailstore::meta`).
     let plain = matches!(
@@ -496,7 +497,7 @@ fn decode_text(bp: &BodyPart, body: &[u8]) -> Option<String> {
     {
         return Some(utf8.to_owned());
     }
-    Some(text.to_owned())
+    Some(text.into_owned())
 }
 
 async fn body_value(ctx: &Ctx<'_>, m: &Message, bp: &BodyPart, max: u64) -> MethodResult<Value> {
