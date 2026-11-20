@@ -5194,16 +5194,25 @@ mod tests {
         // Пакет версии 1 — файлом; отчёт показывает, что изменится; активация — отдельное действие.
         let dir = tempfile::tempdir().expect("tempdir");
         let package = dir.path().join("package.json");
-        let manifest = serde_json::json!({
-            "format": 1, "version": 1, "created": "2026-11-20T00:00:00Z",
-            "min_node": "0.1.0", "key_id": "vendor",
-            "signals": [{
-                "id": "tp.encrypted_archive", "detector": "encrypted_archive", "weight": 6,
-                "threshold": 0, "action": "none", "mode": "enforce", "origin": "vendor",
-                "since": "2026-11-01T00:00:00Z"
+        let manifest = tp_contracts::risk::PackageManifest {
+            format: tp_contracts::risk::PACKAGE_FORMAT,
+            version: 1,
+            created: time::OffsetDateTime::UNIX_EPOCH,
+            min_node: tp_contracts::risk::Semver::new(0, 1, 0),
+            key_id: "vendor".to_owned(),
+            signals: vec![tp_contracts::risk::Signal {
+                id: tp_contracts::risk::SignalId::new("tp.encrypted_archive").expect("id"),
+                detector: tp_contracts::risk::Detector::EncryptedArchive,
+                weight: 6,
+                threshold: 0,
+                action: tp_contracts::risk::RiskAction::None,
+                mode: tp_contracts::risk::Mode::Enforce,
+                origin: tp_contracts::risk::Origin::Vendor,
+                since: time::OffsetDateTime::UNIX_EPOCH,
             }],
-            "lists": [], "samples": []
-        });
+            lists: Vec::new(),
+            samples: Vec::new(),
+        };
         std::fs::write(&package, serde_json::to_vec(&manifest).expect("json")).expect("write");
         let out = exec(
             &root,
