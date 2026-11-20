@@ -323,7 +323,11 @@ async fn unthreaded_tx(
 }
 
 /// Порция фоновой привязки в открытой транзакции: письма одной цепочки (`thread_key`) — в одну беседу,
-/// в порядке приёма; уже привязанные письма не переносятся.
+/// в порядке приёма; уже привязанные письма не переносятся. Идентификаторы `thread_key` канонизируются
+/// (`join_key`): приём регистрирует ключи канонической формы, а `thread_key` хранит значения заголовков
+/// в угловых скобках — без канонизации фоновая привязка не нашла бы беседу приёма (RFC 5322 msg-id в
+/// `<…>`). Ключи цепочки регистрируются за беседой, как при приёме; письмо без ни одного канонического
+/// идентификатора — новая беседа.
 async fn bind_unthreaded_in_tx(
     tx: &mut PgConnection,
     scope: AccountScope,
@@ -340,22 +344,36 @@ async fn bind_unthreaded_in_tx(
         }
     }
     let mut bound: usize = 0;
-    for (key, messages) in chains {
-        let thread = match earliest_thread_tx(tx, scope, std::slice::from_ref(&key)).await? {
+    for (raw, messages) in chains {
+        let keys = canonical_keys_of(&raw);
+        let thread = match earliest_thread_tx(tx, scope, &keys).await? {
             Some(thread) => thread,
             None => {
                 let thread = ThreadId::new();
                 create_thread_tx(tx, scope, thread).await?;
-                register_keys_tx(tx, scope, &[key], thread).await?;
                 thread
             }
         };
+        // Все ключи цепочки регистрируются за беседой, как при приёме (`bind_in_tx`): ответ по любому
+        // идентификатору `References` находит беседу. Зарегистрированный за другой беседой ключ не
+        // меняется (`ON CONFLICT DO NOTHING`) — беседы задним числом не сливаются.
+        register_keys_tx(tx, scope, &keys, thread).await?;
         for message in messages {
             bind_message_tx(tx, scope, message, thread).await?;
             bound += 1;
         }
     }
     Ok(bound)
+}
+
+/// Канонические ключи присоединения из `thread_key` (значения заголовков в `<…>`, через пробел):
+/// канонизация каждого идентификатора (`join_key`), пустые пропускаются, без повторов.
+fn canonical_keys_of(raw: &str) -> Vec<String> {
+    let mut keys: Vec<String> = raw.split_whitespace().map(join_key).collect();
+    keys.retain(|k| !k.is_empty());
+    keys.sort_unstable();
+    keys.dedup();
+    keys
 }
 
 impl PgMeta {
