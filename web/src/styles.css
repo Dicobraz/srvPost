@@ -89,6 +89,93 @@ body {
   color: var(--c-muted, #5f6b78);
 }
 
+/* Вход (WEB-02) и сообщения об ошибках: inline, без модалок (DESIGN.md Postman). */
+.login {
+  max-width: 24rem;
+  margin: 4rem auto;
+  padding: 1.25rem;
+  background: var(--c-panel, #ffffff);
+  border: 1px solid var(--c-frame, #bac1c6);
+  border-radius: 8px;
+}
+
+.login h1 {
+  margin-top: 0;
+  font-family: var(--font-heading, system-ui, sans-serif);
+  color: var(--c-titleA, #c0106b);
+}
+
+.login form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.login label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--c-text, #161616);
+}
+
+.login input {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--c-frame, #bac1c6);
+  border-radius: 6px;
+  background: var(--c-screen, #e9eef3);
+  color: var(--c-text, #161616);
+}
+
+.login-or,
+.hint {
+  color: var(--c-muted, #5f6b78);
+  text-align: center;
+}
+
+.hint {
+  text-align: left;
+}
+
+.alert {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--c-err, #b3261e);
+  border-radius: 6px;
+  color: var(--c-err, #b3261e);
+}
+
+.button {
+  border: 1px solid var(--c-frame, #bac1c6);
+  background: var(--c-panel, #ffffff);
+  color: var(--c-text, #161616);
+  border-radius: 6px;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+}
+
+.button-primary {
+  background: var(--c-sel, #e3107f);
+  border-color: var(--c-sel, #e3107f);
+  color: var(--c-selFg, #ffffff);
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.account-name {
+  color: var(--c-muted, #5f6b78);
+}
+
 @media (max-width: 640px) {
   .nav {
     order: 3;

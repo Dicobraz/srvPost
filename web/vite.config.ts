@@ -36,6 +36,8 @@ export default defineConfig({
   server: {
     fs: { allow: [repo] },
     proxy: {
+      // Конфигурация входа (WEB-02) — от узла, как и JMAP: у разработчика SPA один источник.
+      "/mail/config.json": { target: process.env.THEPOST_JMAP ?? "https://127.0.0.1:443", secure: true },
       "/jmap": { target: process.env.THEPOST_JMAP ?? "https://127.0.0.1:443", secure: true },
       "/.well-known/jmap": { target: process.env.THEPOST_JMAP ?? "https://127.0.0.1:443", secure: true },
     },

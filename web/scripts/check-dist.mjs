@@ -1,8 +1,9 @@
 // Проверка собранного веб-клиента (приёмка WEB-01): в web/dist нет ссылок на внешние адреса — клиент
 // работает без интернета (решение 119: ресурсы вшиты, CDN не используется нигде). Ищем http(s):// и
 // протокольно-относительные адреса в текстовых файлах dist. Разрешены только строки, которые браузер
-// не загружает: пространства имён XML и подсказки в сообщениях библиотек — ссылки на документацию и
-// исходники (react.dev, react-router, rolldown, github.com, fb.me, MDN).
+// не загружает: пространства имён XML, подсказки в сообщениях библиотек — ссылки на документацию и
+// исходники (react.dev, react-router, rolldown, github.com, fb.me, MDN) и база разбора адресов
+// в oidc-client-ts (127.0.0.1 — только точка отсчёта `new URL(url, base)`, запросов по ней нет).
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,7 @@ const INERT = [
   /^https?:\/\/reactrouter\.com\//, // документация react-router в сообщениях
   /^https?:\/\/(www\.)?github\.com\//, // ссылки на исходники и полифилы в сообщениях (react-router, react-markdown)
   /^https?:\/\/fb\.me\//, // подсказки prop-types в предупреждениях
+  /^https?:\/\/127\.0\.0\.1(:\d+)?\/?$/, // база разбора адресов в oidc-client-ts (запросов нет)
 ];
 const TEXT = /\.(html|js|mjs|css|svg|txt|json|webmanifest)$/;
 
