@@ -6,7 +6,7 @@
   редактора (UndoRedo из StarterKit v3). Обработчики — через ref: замыкание editorProps живёт
   на создании редактора, свежие пропсы читает handlers.current.
 */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -62,6 +62,10 @@ export function ComposeEditor({ initialHtml, onChange, onFiles, onPickFiles }: E
     handlers.current = { onChange, onFiles, onPickFiles };
   });
 
+  // Пикер файлов — через useCallback (замыкание ленивое, react-hooks/refs не считает его
+  // доступом к ref во время рендера).
+  const pickFiles = useCallback(() => handlers.current.onPickFiles(), []);
+
   const editor = useEditor({
     extensions: [
       // Link/Underline входят в StarterKit v3; свой Link — с openOnClick: false (правка, не переход),
@@ -93,7 +97,10 @@ export function ComposeEditor({ initialHtml, onChange, onFiles, onPickFiles }: E
     },
     onUpdate: ({ editor: e }) => handlers.current.onChange(e.getHTML()),
   });
-  editorRef.current = editor;
+
+  useEffect(() => {
+    editorRef.current = editor; // ref правится после рендера, не во время него
+  }, [editor]);
 
   useEffect(() => {
     // Контекст-меню таблиц: правый клик внутри таблицы — операции строк/столбцов.
@@ -186,7 +193,7 @@ export function ComposeEditor({ initialHtml, onChange, onFiles, onPickFiles }: E
           )}
         </span>
         <span className="fs" />
-        {btn("Вложить файл", false, () => handlers.current.onPickFiles(), <Icon name="clip" size={16} />)}
+        {btn("Вложить файл", false, () => pickFiles(), <Icon name="clip" size={16} />)}
       </div>
       <div className="bodyc" ref={bodyRef}>
         <EditorContent editor={editor} className="compose-editor" />

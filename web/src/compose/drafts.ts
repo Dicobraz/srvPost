@@ -3,8 +3,9 @@
   сразу — по команде «Сохранить черновик» и перед отправкой. Источник истины — черновик сервера
   (приёмка карточки: «черновик сохранён при падении вкладки — открывается из Drafts»). Тело
   Email/set не меняется (сервер правит только keywords/mailboxIds), поэтому каждое сохранение —
-  новое письмо + уничтожение предыдущего в одном запросе: сервер исполняет create до destroy,
-  падение создания не теряет прежний черновик.
+  новое письмо + уничтожение предыдущего одним запросом: сервер исполняет create до destroy,
+  падение создания не теряет прежний черновик. Сохранитель — обычный объект (useState), никаких
+  ref: правила react-hooks (React Compiler) запрещают доступ к ref во время рендера.
 */
 
 import { emailSetCreate, emailSetDestroy } from "../api/jmap";
@@ -41,7 +42,11 @@ function toJmapAddress(r: Recipient): { name: string | null; email: string } {
 /** Задержка автосохранения: быстро после правки, но не на каждое нажатие. */
 export const DRAFT_DEBOUNCE_MS = 1_500;
 
-/** Сохранитель черновика: schedule(state) — отложенно, flush() — сейчас, close() — последняя правка. */
+/**
+ * Сохранитель черновика: schedule(state) — отложенно, flush() — сейчас, destroyCurrent() —
+ * удалить. Папку Drafts композер вписывает в draftsMailboxId, когда загрузятся папки; без неё
+ * сохранение честно пишет ошибку.
+ */
 export class DraftSaver {
   private timer: number | null = null;
   private pending: ComposeSnapshot | null = null;
@@ -50,15 +55,16 @@ export class DraftSaver {
   error: string | null = null;
   /** Текущий id черновика сервера (пересоздаётся на каждое сохранение). */
   draftId: string | null = null;
+  /** Папка Drafts учётной записи (роль drafts); появляется с загрузкой папок. */
+  draftsMailboxId: string | null = null;
 
   constructor(
     private readonly env: JmapEnv,
-    private readonly draftsMailboxId: string,
-    /** Пробуждение после каждого сохранения (перерисовать «сохранён HH:MM»). */
-    private readonly onSaved?: (id: string | null) => void,
+    /** Пробуждение после каждой операции (перерисовать «сохранён HH:MM» / ошибку). */
+    private readonly onSaved?: (saver: DraftSaver) => void,
   ) {}
 
-  /** Запланировать автосохранение снимка (перезапускает таймер — печатает дальше). */
+  /** Запланировать автосохранение снимка (перезапускает таймер — пользователь печатает дальше). */
   schedule(state: ComposeSnapshot): void {
     this.pending = state;
     if (this.timer !== null) window.clearTimeout(this.timer);
@@ -74,8 +80,9 @@ export class DraftSaver {
   }
 
   /**
-   * Сохранить немедленно: пустой снимок — черновик сервера уничтожается (пользователь всё
-   * вычистил); непустой — create нового + destroy предыдущего одним запросом.
+   * Сохранить немедленно: нет накопленного снимка — ничего (черновик не трогаем, закрытие
+   * вкладки без правок ничего не удаляет); пустой снимок — черновик уничтожается (пользователь
+   * всё вычистил); непустой — create нового + destroy предыдущего.
    */
   async flush(): Promise<string | null> {
     if (this.timer !== null) {
@@ -84,7 +91,8 @@ export class DraftSaver {
     }
     const state = this.pending;
     this.pending = null;
-    if (!state || !snapshotHasContent(state)) {
+    if (!state) return this.draftId;
+    if (!snapshotHasContent(state)) {
       await this.destroyCurrent();
       return this.draftId;
     }
@@ -101,18 +109,28 @@ export class DraftSaver {
     this.draftId = null;
     this.pending = null;
     if (!id) return;
+    if (!this.draftsMailboxId) {
+      this.error = "Папка «Черновики» недоступна.";
+      this.onSaved?.(this);
+      return;
+    }
     try {
       const result = await emailSetDestroy(this.env.apiUrl, this.env.authorization, this.env.accountId, [id]);
       if (Object.keys(result.notDestroyed).length > 0) this.error = "Удалить черновик не удалось.";
     } catch {
       this.error = "Удалить черновик не удалось.";
     }
-    this.onSaved?.(null);
+    this.onSaved?.(this);
   }
 
   private async saveNow(state: ComposeSnapshot): Promise<string | null> {
     const cid = "d0";
     const previous = this.draftId;
+    if (!this.draftsMailboxId) {
+      this.error = "Папка «Черновики» недоступна — черновик не сохранён.";
+      this.onSaved?.(this);
+      return this.draftId;
+    }
     try {
       const result = await emailSetCreate(this.env.apiUrl, this.env.authorization, this.env.accountId, {
         [cid]: draftCreate(this.draftsMailboxId, state),
@@ -132,16 +150,17 @@ export class DraftSaver {
           () => undefined,
         );
       }
-      this.onSaved?.(this.draftId);
+      this.onSaved?.(this);
       return this.draftId;
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Черновик не сохранён.";
+      this.onSaved?.(this);
       return this.draftId;
     }
   }
 }
 
-/** Разовое сохранение черновика (undo-send возвращает письмо в Drafts; без состояния Debounce). */
+/** Разовое сохранение черновика (undo-send возвращает письмо в Drafts; без состояния debounce). */
 export async function saveDraftOnce(env: JmapEnv, draftsMailboxId: string, state: ComposeSnapshot): Promise<string | null> {
   const result = await emailSetCreate(env.apiUrl, env.authorization, env.accountId, {
     d0: draftCreate(draftsMailboxId, state),

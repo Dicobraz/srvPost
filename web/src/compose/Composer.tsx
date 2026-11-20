@@ -157,8 +157,11 @@ export function ComposerPage() {
     );
   }
 
+  // Ключ — источник письма: смена параметров маршрута пересоздаёт композер (новая вкладка),
+  // иначе начальное содержимое осталось бы от прежнего письма.
   return (
     <Composer
+      key={sourceId ?? draftId ?? kind}
       identity={identity}
       identities={identities.data ?? []}
       kind={kind}
@@ -235,23 +238,24 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
     [from, to, cc, bcc, subject, bodyHtml, attachments],
   );
 
-  // Сохранитель черновика: восстановленный черновик сервера — его же id (пересоздаётся при
-  // следующем сохранении, дублей в Drafts не остаётся).
-  const saverRef = useRef<DraftSaver | null>(null);
-  if (!saverRef.current && draftsMailboxId) {
-    saverRef.current = new DraftSaver(env, draftsMailboxId, () => {
-      setSavedAt(saverRef.current?.draftId ? new Date() : null);
-      setDraftError(saverRef.current?.error ?? null);
-    });
-    if (draft) saverRef.current.draftId = draft.id;
-  }
-  const saver = saverRef.current;
+  // Сохранитель черновика — обычный объект в состоянии (никаких ref: правила react-hooks
+  // запрещают доступ к ref во время рендера); восстановленный черновик сервера — его же id.
+  const [saver] = useState(
+    () =>
+      new DraftSaver(env, (s) => {
+        setSavedAt(s.draftId ? new Date() : null);
+        setDraftError(s.error ?? null);
+      }),
+  );
+  useEffect(() => {
+    saver.draftsMailboxId = draftsMailboxId;
+  }, [saver, draftsMailboxId]);
 
   const scheduleDraft = useCallback(
     (snap: ComposeSnapshot) => {
-      if (saver && snapshotHasContent(snap)) saver.schedule(snap);
+      if (draftsMailboxId && snapshotHasContent(snap)) saver.schedule(snap);
     },
-    [saver],
+    [saver, draftsMailboxId],
   );
 
   // Начальное содержимое — один раз: черновик сервера (источник истины) или ответ/пересылка
@@ -295,10 +299,9 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- сборка начального письма один раз на вкладку
   }, [initialHtml]);
 
-  // Уход со вкладки (Закрыть, смена раздела, закрытие вкладки браузера после debounce) —
-  // непустые правки идут в черновики; пустой снимок черновик уничтожает.
+  // Уход со вкладки (Закрыть, смена раздела) — непустые правки идут в черновики; нет
+  // накопленного снимка — черновик сервера не трогается (закрытие без правок ничего не удаляет).
   useEffect(() => {
-    if (!saver) return;
     return () => {
       void saver.flush().catch(() => undefined);
     };
@@ -370,12 +373,12 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
     }
     setSending(true);
     try {
-      if (saver) await saver.flush();
+      await saver.flush();
       const snapshot = snapshotWith({});
       const result = await sendMessage(env, snapshot, {
         sentMailboxId,
         identityId: from.id,
-        destroyDraftId: saver?.draftId ?? null,
+        destroyDraftId: saver.draftId ?? null,
         undoable: supportsUndoSend(env.session, env.accountId),
         references: source && kind !== "forward" ? replyReferences(source) : undefined,
       });
@@ -403,19 +406,18 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
           }
         : undefined;
       toast.show(label, undo, undo ? UNDO_SEND_SECONDS * 1000 : undefined);
-      if (saver) saver.draftId = null;
+      saver.draftId = null;
       navigate("/");
     } catch (e) {
       // Честная ошибка сервера (forbiddenToSend и пр.) — текст в тост, письмо остаётся открытым.
       toast.show(e instanceof Error ? e.message : "Отправка не выполнена.");
-      if (saver) saver.schedule(snapshotWith({}));
+      saver.schedule(snapshotWith({}));
     } finally {
       setSending(false);
     }
   };
 
   const saveDraftNow = async () => {
-    if (!saver) return;
     saver.schedule(snapshotWith({}));
     await saver.flush();
     if (saver.error) toast.show(saver.error);
@@ -424,7 +426,6 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
   };
 
   const deleteDraft = async () => {
-    if (!saver) return;
     await saver.destroyCurrent();
     void queryClient.invalidateQueries({ queryKey: ["window"] });
     toast.show("Черновик удалён");
@@ -474,7 +475,7 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
           type="button"
           className="btn-q"
           onClick={() => void deleteDraft()}
-          disabled={!saver?.draftId && !draft}
+          disabled={!saver.draftId && !draft}
           title="Черновик сервера удаляется, вкладка закрывается"
         >
           <Icon name="trash" size={16} />
