@@ -768,7 +768,6 @@ async fn reply_marks_threads_and_hold() {
     // Копия отправленного — в «Отправленных» alice (кладёт клиент, IMAP APPEND): фон maintenance привяжет
     // её к беседе по `thread_key` (META-86), ответ адресата присоединится к той же беседе.
     let mut imap = imap_login(addr(&running, "imap"), &login, &app_password).await;
-    imap.cmd("CREATE Sent").await;
     imap.append("Sent", &raw).await;
 
     // 2. Bounce на адрес без метки — `550 5.7.1` (`smtp.batv.mode: enforce`).
