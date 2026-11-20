@@ -115,7 +115,7 @@ blob:
         let cfg = cfg(
             "modules:\n  webmail: { enabled: true, connect_src: [\"http://idp.example.org\"] }\n",
         );
-        let e = merge(axum::Router::new(), &cfg).err().expect("ошибка");
+        let e = merge(axum::Router::new(), &cfg).expect_err("ошибка");
         assert!(
             e.to_string()
                 .contains("modules.webmail: connect_src \"http://idp.example.org\""),
