@@ -1179,7 +1179,7 @@ export interface paths {
             cookie?: never;
         };
         /** Доверенные источники организации и версия снимка кластера. */
-        get: operations["list_ti_sources"];
+        get: operations["list_sources"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3820,146 +3820,167 @@ export interface components {
             /** @description Письма беседы в порядке привязки (до `admin.max_page_size`). */
             messages: string[];
         };
-        /** @description Происхождение признака: поставщик или администратор. */
+        /**
+         * @description Происхождение признака: поставщик или администратор.
+         * @enum {string}
+         */
         OriginSchema: "vendor" | "admin";
-        /** @description Поле письма детектора совпадения со списком TI. */
+        /**
+         * @description Поле письма детектора совпадения со списком TI.
+         * @enum {string}
+         */
         FieldSchema: "sender_ip" | "link_domain" | "link_url" | "from_domain" | "attachment_sha256";
         /** @description Детектор признака — типизированный Rust-код с параметрами (решение 126 г). */
         DetectorSchema: "thread_new_attachment_type" | "encrypted_archive" | "disk_image_or_shortcut" | "thread_new_link_domain" | "reply_to_changed" | {
-            /** Поле письма. */
+            /** @description Поле письма. */
             field: components["schemas"]["FieldSchema"];
-            /** Список. */
+            /** @description Список. */
             list: string;
         };
-        /** @description Собственное действие признака (от мягкого к строгому). */
+        /**
+         * @description Собственное действие признака (от мягкого к строгому).
+         * @enum {string}
+         */
         RiskActionSchema: "none" | "tag" | "junk" | "quarantine" | "reject";
-        /** @description Режим признака: «только отчёт» или «применять». */
+        /**
+         * @description Режим признака: «только отчёт» или «применять».
+         * @enum {string}
+         */
         ModeSchema: "report" | "enforce";
         /** @description Уровень политики справочника: установка → организация. */
         RiskLevelSchema: "installation" | {
-            /** Организация (UUID) — только в сторону строгости. */
+            /** @description Организация (UUID) — только в сторону строгости. */
             org: string;
         };
         /** @description Пороги действий: балл, с которого действует действие (константы контракта — 1, 6, 10, 15). */
         ThresholdsSchema: {
-             /**
+            /**
               * Format: int32
-              * @description В папку «Спам».
+             * @description В папку «Спам».
               */
             junk: number;
-             /**
+            /**
               * Format: int32
-              * @description В карантин.
+             * @description В карантин.
               */
             quarantine: number;
-             /**
+            /**
               * Format: int32
-              * @description Отказ.
+             * @description Отказ.
               */
             reject: number;
-             /**
+            /**
               * Format: int32
-              * @description Пометка письма.
+             * @description Пометка письма.
               */
             tag: number;
         };
         /** @description Несоответствие политики организации базовым значениям: организация смягчила признак. */
         PolicyViolationSchema: {
-            /** Базовое значение (уровней ниже). */
+            /** @description Базовое значение (уровней ниже). */
             base: string;
-            /** Поле: `weight`, `action`, `mode`. */
+            /** @description Поле: `weight`, `action`, `mode`. */
             field: string;
-            /** Признак. */
+            /** @description Признак. */
             signal: string;
-            /** Заданное значение. */
+            /** @description Заданное значение. */
             value: string;
         };
         /** @description Итог обновления пакета: что изменится при активации. */
         UpdateReportSchema: {
-            /** Добавленные признаки (приходят в режиме «только отчёт»). */
+            /** @description Добавленные признаки (приходят в режиме «только отчёт»). */
             added: string[];
-            /** Изменённые пакетом. */
+            /** @description Изменённые пакетом. */
             changed: string[];
-            /** Изменения администратора признаков, которых больше нет в пакете. */
+            /** @description Изменения администратора признаков, которых больше нет в пакете. */
             orphaned_overrides: string[];
-            /** Удалённые из пакета без изменений администратора. */
+            /** @description Удалённые из пакета без изменений администратора. */
             removed: string[];
         };
         /** @description Состояние хранимого пакета. */
         PackageStateSchema: "active" | "previous" | {
-            /** Отчёт проверки (что не так). */
+            /** @description Отчёт проверки (что не так). */
             report: string;
         };
-        /** @description Уровень источника TI (решение 126 е–з). */
+        /**
+         * @description Уровень источника TI (решение 126 е–з).
+         * @enum {string}
+         */
         TierSchema: "bundled" | "customer_key" | "import";
-        /** @description Происхождение данных источника — для журнала и отчётов (решение 126 к). */
+        /**
+         * @description Происхождение данных источника — для журнала и отчётов (решение 126 к).
+         * @enum {string}
+         */
         TiOriginSchema: "vendor" | "gossopka" | "fincert" | "own";
         /** @description Доставка и параметры источника TI. */
         SourceKindSchema: "file" | {
-            /** Фид по HTTP(S). */
+            /** @description Фид по HTTP(S). */
             http: {
-                /** Адрес. */
+                /** @description Адрес. */
                 url: string;
             };
         } | {
-            /** Коллекция TAXII 2.1. */
+            /** @description Коллекция TAXII 2.1. */
             taxii: {
-                /** API root. */
+                /** @description API root. */
                 api_root: string;
-                /** Коллекция. */
+                /** @description Коллекция. */
                 collection: string;
             };
         };
         /** @description Формат фида источника TI. */
         FeedFormatSchema: "txt" | "rpz" | "misp_feed" | "stix21" | {
-            /** CSV; `column` — колонка с индикатором. */
+            /** @description CSV; `column` — колонка с индикатором. */
             csv: {
-                /** Имя колонки. */
+                /** @description Имя колонки. */
                 column: string;
             };
         };
         /** @description Действие при устаревании источника («отключить» нет). */
         StaleActionSchema: "report" | {
-            /** Снизить вес признаков источника на `percent` процентов. */
+            /** @description Снизить вес признаков источника на `percent` процентов. */
             reduce: {
-                /** Процент снижения, 0–100. */
+                /** @description Процент снижения, 0–100. */
                 percent: number;
             };
         };
         /** @description Лицензия источника TI: условия и атрибуция. */
         LicenseSchema: {
-            /** Атрибуция (ссылка, дата, ©); `null` — не требуется. */
+            /** @description Атрибуция (ссылка, дата, ©); `null` — не требуется. */
             attribution?: string | null;
-            /** Коммерческое использование разрешено условиями. */
+            /** @description Коммерческое использование разрешено условиями. */
             commercial: boolean;
-            /** Адрес условий использования. */
+            /** @description Адрес условий использования. */
             terms_url: string;
         };
         /** @description Организации, которым доступен источник. */
         TenantsSchema: "all" | {
-            /** Только перечисленные (UUID). */
+            /** @description Только перечисленные (UUID). */
             only: string[];
         };
         /** @description Ссылка на поле секрета в хранилище (`<путь>#<поле>`); значение ключа API не принимает и не отдаёт. */
         SecretRefSchema: {
-            /** Ссылка `<путь>#<поле>`, например `thepost/db#api_key`. */
+            /** @description Ссылка `<путь>#<поле>`, например `thepost/db#api_key`. */
             secret: string;
         };
         /** @description Авторизация источника TI: секрет — из ссылки `key`. */
         HttpAuthSchema: "none" | "bearer" | "client_cert" | {
-            /** Свой заголовок; имя здесь, значение — секрет. */
+            /** @description Свой заголовок; имя здесь, значение — секрет. */
             header: {
-                /** Имя заголовка (`X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch). */
+                /** @description Имя заголовка (`X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch). */
                 name: string;
             };
         } | {
-            /** Basic; пользователь здесь, пароль — секрет. */
+            /** @description Basic; пользователь здесь, пароль — секрет. */
             basic: {
-                /** Имя пользователя (Kaspersky TAXII: `taxii`). */
+                /** @description Имя пользователя (Kaspersky TAXII: `taxii`). */
                 user: string;
             };
         };
-        /** @description Маркировка TLP версии списка из источника. */
+        /**
+         * @description Маркировка TLP версии списка из источника.
+         * @enum {string}
+         */
         TlpSchema: "clear" | "green" | "amber" | "amber_strict" | "red";
         /**
          * @description Признак действующего каталога: значение и уровень-источник. У «осиротевшего» изменения (признака
@@ -3967,33 +3988,33 @@ export interface components {
          *     само изменение.
          */
         SignalView: {
-            /** Собственное действие. */
+            /** @description Собственное действие. */
             action?: components["schemas"]["RiskActionSchema"] | null;
-            /** Детектор; `null` — осиротевшее изменение. */
+            /** @description Детектор; `null` — осиротевшее изменение. */
             detector?: components["schemas"]["DetectorSchema"] | null;
-            /** Идентификатор: `tp.*` — поставщик, `org.*` — администратор. */
+            /** @description Идентификатор: `tp.*` — поставщик, `org.*` — администратор. */
             id: string;
-            /** Режим: «только отчёт» или «применять». */
+            /** @description Режим: «только отчёт» или «применять». */
             mode?: components["schemas"]["ModeSchema"] | null;
-            /** Происхождение значения: поставщик или администратор. */
+            /** @description Происхождение значения: поставщик или администратор. */
             origin: components["schemas"]["OriginSchema"];
-            /** Осиротевшее изменение: признака нет в действующем пакете (решение 126 в). */
+            /** @description Осиротевшее изменение: признака нет в действующем пакете (решение 126 в). */
             orphaned: boolean;
-             /**
+            /**
               * Format: date-time
-              * @description Дата появления признака (UTC).
+             * @description Дата появления признака (UTC).
               */
             since?: string | null;
-            /** Уровень, давший отличие от пакета; `null` — признак пакета без изменений. */
+            /** @description Уровень, давший отличие от пакета; `null` — признак пакета без изменений. */
             source?: components["schemas"]["RiskLevelSchema"] | null;
-             /**
+            /**
               * Format: int32
-              * @description Порог силы срабатывания детектора, 0–100; `null` — осиротевшее изменение.
+             * @description Порог силы срабатывания детектора, 0–100; `null` — осиротевшее изменение.
               */
             threshold?: number | null;
-             /**
+            /**
               * Format: int32
-              * @description Вес в балле письма, 0–100.
+             * @description Вес в балле письма, 0–100.
               */
             weight?: number | null;
         };
@@ -4003,20 +4024,20 @@ export interface components {
          *     режим обязательны.
          */
         SignalBody: {
-            /** Собственное действие. */
+            /** @description Собственное действие. */
             action?: components["schemas"]["RiskActionSchema"] | null;
-            /** Детектор (только свой признак `org.*`). */
+            /** @description Детектор (только свой признак `org.*`). */
             detector?: components["schemas"]["DetectorSchema"] | null;
-            /** Режим. */
+            /** @description Режим. */
             mode?: components["schemas"]["ModeSchema"] | null;
-             /**
+            /**
               * Format: int32
-              * @description Порог силы срабатывания, 0–100 (только свой признак).
+             * @description Порог силы срабатывания, 0–100 (только свой признак).
               */
             threshold?: number | null;
-             /**
+            /**
               * Format: int32
-              * @description Вес, 0–100.
+             * @description Вес, 0–100.
               */
             weight?: number | null;
         };
@@ -4025,54 +4046,54 @@ export interface components {
          *     списке с признаком `orphaned`.
          */
         SignalsView: {
-            /** Признаки каталога. */
+            /** @description Признаки каталога. */
             signals: components["schemas"]["SignalView"][];
         };
         /** @description Пороги действий уровня целиком: баллы, с которых действуют действия. */
         ThresholdsBody: {
-             /**
+            /**
               * Format: int32
-              * @description Балл перемещения в «Спам».
+             * @description Балл перемещения в «Спам».
               */
             junk: number;
-             /**
+            /**
               * Format: int32
-              * @description Балл карантина.
+             * @description Балл карантина.
               */
             quarantine: number;
-             /**
+            /**
               * Format: int32
-              * @description Балл отказа.
+             * @description Балл отказа.
               */
             reject: number;
-             /**
+            /**
               * Format: int32
-              * @description Балл пометки письма.
+             * @description Балл пометки письма.
               */
             tag: number;
         };
         /** @description Пороги уровня: свои (уровень не задан — `null`), действующие и уровень-источник. */
         ThresholdsView: {
-            /** Действующие пороги. */
+            /** @description Действующие пороги. */
             effective: components["schemas"]["ThresholdsSchema"];
-            /** Пороги уровня; `null` — уровень не задан (действует уровень выше и константы контракта). */
+            /** @description Пороги уровня; `null` — уровень не задан (действует уровень выше и константы контракта). */
             own?: components["schemas"]["ThresholdsSchema"] | null;
-            /** Уровень, давший действующие пороги; `null` — константы контракта. */
+            /** @description Уровень, давший действующие пороги; `null` — константы контракта. */
             source?: components["schemas"]["RiskLevelSchema"] | null;
         };
         /** @description Хранимый пакет: номер и состояние. */
         PackageEntryView: {
-            /** Состояние: активный, прошлый, отклонённый с отчётом. */
+            /** @description Состояние: активный, прошлый, отклонённый с отчётом. */
             state: components["schemas"]["PackageStateSchema"];
-             /**
+            /**
               * Format: int64
-              * @description Номер версии (только растёт).
+             * @description Номер версии (только растёт).
               */
             version: number;
         };
         /** @description Хранимые пакеты: действующий и N прошлых, по убыванию номера (`risk.package.keep`). */
         PackagesView: {
-            /** Пакеты. */
+            /** @description Пакеты. */
             packages: components["schemas"]["PackageEntryView"][];
         };
         /**
@@ -4080,23 +4101,23 @@ export interface components {
          *     активации. Пакет поставлен (202), но не активен.
          */
         PackageReportView: {
-            /** Ключ подписи (подпись Ed25519 проверил узел, APP-78). */
+            /** @description Ключ подписи (подпись Ed25519 проверил узел, APP-78). */
             key_id: string;
-             /**
+            /**
               * Format: int64
-              * @description Прогнано образцов пакета (пробный прогон).
+             * @description Прогнано образцов пакета (пробный прогон).
               */
             samples: number;
-             /**
+            /**
               * Format: int64
-              * @description Признаков в пакете.
+             * @description Признаков в пакете.
               */
             signals: number;
-            /** Что изменится при активации (новые признаки приходят в режиме «только отчёт»). */
+            /** @description Что изменится при активации (новые признаки приходят в режиме «только отчёт»). */
             update: components["schemas"]["UpdateReportSchema"];
-             /**
+            /**
               * Format: int64
-              * @description Номер версии проверенного пакета.
+             * @description Номер версии проверенного пакета.
               */
             version: number;
         };
@@ -4105,153 +4126,153 @@ export interface components {
          *     лицензия, организации, ключ-ссылка и авторизация.
          */
         TiSourceBody: {
-            /** Авторизация (секрет — из `key`). */
+            /** @description Авторизация (секрет — из `key`). */
             auth: components["schemas"]["HttpAuthSchema"];
-            /** Формат. */
+            /** @description Формат. */
             format: components["schemas"]["FeedFormatSchema"];
-            /** Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт. */
+            /** @description Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт. */
             key?: components["schemas"]["SecretRefSchema"] | null;
-            /** Доставка. */
+            /** @description Доставка. */
             kind: components["schemas"]["SourceKindSchema"];
-            /** Лицензия. */
+            /** @description Лицензия. */
             license: components["schemas"]["LicenseSchema"];
-            /** Происхождение — для журнала и отчётов. */
+            /** @description Происхождение — для журнала и отчётов. */
             origin: components["schemas"]["TiOriginSchema"];
-            /** Действие при устаревании («отключить» нет). */
+            /** @description Действие при устаревании («отключить» нет). */
             stale: components["schemas"]["StaleActionSchema"];
-            /** Организации, которым доступен. */
+            /** @description Организации, которым доступен. */
             tenants: components["schemas"]["TenantsSchema"];
-            /** Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
+            /** @description Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
             tier: components["schemas"]["TierSchema"];
-            /** Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`). */
+            /** @description Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`). */
             ttl: string;
         };
         /** @description Новый источник TI (тело `POST`): идентификатор и параметры. */
         NewTiSourceBody: {
-            /** Авторизация (секрет — из `key`). */
+            /** @description Авторизация (секрет — из `key`). */
             auth: components["schemas"]["HttpAuthSchema"];
-            /** Формат. */
+            /** @description Формат. */
             format: components["schemas"]["FeedFormatSchema"];
-            /** Идентификатор: `[a-z0-9._-]`, до 64 символов. */
+            /** @description Идентификатор: `[a-z0-9._-]`, до 64 символов. */
             id: string;
-            /** Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт. */
+            /** @description Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт. */
             key?: components["schemas"]["SecretRefSchema"] | null;
-            /** Доставка. */
+            /** @description Доставка. */
             kind: components["schemas"]["SourceKindSchema"];
-            /** Лицензия. */
+            /** @description Лицензия. */
             license: components["schemas"]["LicenseSchema"];
-            /** Происхождение — для журнала и отчётов. */
+            /** @description Происхождение — для журнала и отчётов. */
             origin: components["schemas"]["TiOriginSchema"];
-            /** Действие при устаревании («отключить» нет). */
+            /** @description Действие при устаревании («отключить» нет). */
             stale: components["schemas"]["StaleActionSchema"];
-            /** Организации, которым доступен. */
+            /** @description Организации, которым доступен. */
             tenants: components["schemas"]["TenantsSchema"];
-            /** Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
+            /** @description Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
             tier: components["schemas"]["TierSchema"];
-            /** Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`). */
+            /** @description Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`). */
             ttl: string;
         };
         /** @description Источник TI в ответе API (ключ — только ссылка, значения не отдаёт). */
         TiSourceView: {
-            /** Авторизация. */
+            /** @description Авторизация. */
             auth: components["schemas"]["HttpAuthSchema"];
-            /** Формат. */
+            /** @description Формат. */
             format: components["schemas"]["FeedFormatSchema"];
-            /** Идентификатор. */
+            /** @description Идентификатор. */
             id: string;
-            /** Ключ — ссылка на хранилище секретов; значение не отдаётся. */
+            /** @description Ключ — ссылка на хранилище секретов; значение не отдаётся. */
             key?: components["schemas"]["SecretRefSchema"] | null;
-            /** Доставка. */
+            /** @description Доставка. */
             kind: components["schemas"]["SourceKindSchema"];
-            /** Лицензия. */
+            /** @description Лицензия. */
             license: components["schemas"]["LicenseSchema"];
-            /** Происхождение. */
+            /** @description Происхождение. */
             origin: components["schemas"]["TiOriginSchema"];
-            /** Действие при устаревании. */
+            /** @description Действие при устаревании. */
             stale: components["schemas"]["StaleActionSchema"];
-            /** Организации, которым доступен. */
+            /** @description Организации, которым доступен. */
             tenants: components["schemas"]["TenantsSchema"];
-            /** Уровень: в поставке, ключ заказчика, импорт. */
+            /** @description Уровень: в поставке, ключ заказчика, импорт. */
             tier: components["schemas"]["TierSchema"];
-            /** Срок жизни данных (TTL). */
+            /** @description Срок жизни данных (TTL). */
             ttl: string;
         };
         /** @description Источники TI по идентификатору. */
         SourcesView: {
-            /** Источники. */
+            /** @description Источники. */
             sources: components["schemas"]["TiSourceView"][];
         };
         /** @description Версия списка TI, ставшая текущей (импорт или обновление). */
         ListVersionView: {
-            /** Ссылка на объект содержимого в BLOB. */
+            /** @description Ссылка на объект содержимого в BLOB. */
             blob: string;
-             /**
+            /**
               * Format: int64
-              * @description Число записей.
+             * @description Число записей.
               */
             entries: number;
-             /**
+            /**
               * Format: date-time
-              * @description Момент загрузки (UTC).
+             * @description Момент загрузки (UTC).
               */
             fetched_at: string;
-            /** Список. */
+            /** @description Список. */
             list: string;
-            /** SHA-256 содержимого (hex). */
+            /** @description SHA-256 содержимого (hex). */
             sha256: string;
-            /** Источник. */
+            /** @description Источник. */
             source: string;
-            /** Маркировка TLP из источника; `null` — маркировки нет. */
+            /** @description Маркировка TLP из источника; `null` — маркировки нет. */
             tlp?: components["schemas"]["TlpSchema"] | null;
         };
         /** @description Учёт источника по организации: суммы обращений и совпадений (MSSP, решение 126 е). */
         UsageTotalView: {
-             /**
+            /**
               * Format: int64
-              * @description Совпадения.
+             * @description Совпадения.
               */
             hits: number;
-             /**
+            /**
               * Format: int64
-              * @description Обращения (проверки полей письма по спискам источника).
+             * @description Обращения (проверки полей письма по спискам источника).
               */
             lookups: number;
-            /** Организация (UUID). */
+            /** @description Организация (UUID). */
             tenant: string;
         };
         /** @description Учёт источника: суммы по организациям с `since`, по возрастанию организации. */
         UsageView: {
-             /**
+            /**
               * Format: date-time
-              * @description Начало периода (UTC).
+             * @description Начало периода (UTC).
               */
             since: string;
-            /** Источник. */
+            /** @description Источник. */
             source: string;
-            /** Суммы по организациям. */
+            /** @description Суммы по организациям. */
             usage: components["schemas"]["UsageTotalView"][];
         };
         /** @description Срабатывание признака в журнале организации. */
         HitView: {
-             /**
+            /**
               * Format: date-time
-              * @description Момент (UTC).
+             * @description Момент (UTC).
               */
             at: string;
-            /** Письмо (SHA-256, hex). */
+            /** @description Письмо (SHA-256, hex). */
             message: string;
-            /** Режим признака при срабатывании: `report` — только журнал. */
+            /** @description Режим признака при срабатывании: `report` — только журнал. */
             mode: components["schemas"]["ModeSchema"];
-            /** Признак. */
+            /** @description Признак. */
             signal: string;
-             /**
+            /**
               * Format: int32
-              * @description Сила срабатывания, 0–100.
+             * @description Сила срабатывания, 0–100.
               */
             strength: number;
-             /**
+            /**
               * Format: int32
-              * @description Вес признака при срабатывании.
+             * @description Вес признака при срабатывании.
               */
             weight: number;
         };
@@ -4260,23 +4281,23 @@ export interface components {
          *     несколько признаков) не разрезаются страницей.
          */
         HitsView: {
-            /** Срабатывания страницы. */
+            /** @description Срабатывания страницы. */
             hits: components["schemas"]["HitView"][];
-            /** Конец интервала следующей страницы (`until`, RFC 3339); `null` — записей больше нет. */
+            /** @description Конец интервала следующей страницы (`until`, RFC 3339); `null` — записей больше нет. */
             next?: string | null;
         };
         /** @description Отказ записи признака: организация мягче установки (RFC 9457 с расширением `errors`). */
         RiskProblem: {
-            /** Несоответствия по-русски, через «; ». */
+            /** @description Несоответствия по-русски, через «; ». */
             detail: string;
-            /** Несоответствия: организация смягчила признак. */
+            /** @description Несоответствия: организация смягчила признак. */
             errors: components["schemas"]["PolicyViolationSchema"][];
-             /**
+            /**
               * Format: int32
-              * @description Код HTTP (422).
+             * @description Код HTTP (422).
               */
             status: number;
-            /** Краткое описание кода. */
+            /** @description Краткое описание кода. */
             title: string;
         };
     };
@@ -9361,7 +9382,7 @@ export interface operations {
             };
         };
     };
-    list_ti_sources: {
+    list_sources: {
         parameters: {
             query?: never;
             header?: never;
@@ -11200,7 +11221,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["SignalsView"];
+                    "application/json": components["schemas"]["SignalsView"];
                 };
             };
             401: {
@@ -11208,7 +11229,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11217,7 +11238,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11225,7 +11246,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11235,7 +11256,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Признак: `tp.*` — поставщика, `org.*` — свой */
+                /** @description Признак: `tp.*` — поставщика, `org.*` — свой */
                 id: string;
             };
             cookie?: never;
@@ -11251,7 +11272,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["SignalView"];
+                    "application/json": components["schemas"]["SignalView"];
                 };
             };
             400: {
@@ -11259,7 +11280,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11267,7 +11288,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11276,7 +11297,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description вес выше предела */
@@ -11285,7 +11306,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["RiskProblem"];
+                    "application/json": components["schemas"]["RiskProblem"];
                 };
             };
             503: {
@@ -11293,7 +11314,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11303,7 +11324,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Признак: `tp.*` — поставщика, `org.*` — свой */
+                /** @description Признак: `tp.*` — поставщика, `org.*` — свой */
                 id: string;
             };
             cookie?: never;
@@ -11315,7 +11336,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["SignalView"];
+                    "application/json": components["schemas"]["SignalView"];
                 };
             };
             400: {
@@ -11323,7 +11344,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11331,7 +11352,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11340,7 +11361,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -11348,7 +11369,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11356,7 +11377,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11375,7 +11396,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["ThresholdsView"];
+                    "application/json": components["schemas"]["ThresholdsView"];
                 };
             };
             401: {
@@ -11383,7 +11404,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11392,7 +11413,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11400,7 +11421,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11423,7 +11444,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["ThresholdsView"];
+                    "application/json": components["schemas"]["ThresholdsView"];
                 };
             };
             400: {
@@ -11431,7 +11452,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11439,7 +11460,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11448,7 +11469,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description пороги не растут с действием */
@@ -11457,7 +11478,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11465,7 +11486,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11484,7 +11505,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["PackagesView"];
+                    "application/json": components["schemas"]["PackagesView"];
                 };
             };
             401: {
@@ -11492,7 +11513,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11501,7 +11522,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11509,7 +11530,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11521,6 +11542,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
+        /** @description Файл пакета поставщика (подпись Ed25519, до admin.risk.max_package_bytes) */
         requestBody: {
             content: {
                 "application/octet-stream": string;
@@ -11533,7 +11555,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["PackageReportView"];
+                    "application/json": components["schemas"]["PackageReportView"];
                 };
             };
             400: {
@@ -11541,7 +11563,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11549,7 +11571,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11558,7 +11580,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description больше admin.risk.max_package_bytes */
@@ -11567,7 +11589,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не application/octet-stream */
@@ -11576,7 +11598,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description чужая подпись, lint или номер не растёт */
@@ -11585,7 +11607,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11593,7 +11615,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11603,7 +11625,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Номер версии поставленного пакета */
+                /** @description Номер версии поставленного пакета */
                 version: number;
             };
             cookie?: never;
@@ -11615,7 +11637,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["PackagesView"];
+                    "application/json": components["schemas"]["PackagesView"];
                 };
             };
             400: {
@@ -11623,7 +11645,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11631,7 +11653,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11640,7 +11662,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -11648,7 +11670,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description номер не растёт */
@@ -11657,7 +11679,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11665,7 +11687,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11675,7 +11697,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Номер версии отката (хранимой) */
+                /** @description Номер версии отката (хранимой) */
                 version: number;
             };
             cookie?: never;
@@ -11687,7 +11709,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["PackagesView"];
+                    "application/json": components["schemas"]["PackagesView"];
                 };
             };
             400: {
@@ -11695,7 +11717,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11703,7 +11725,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11712,7 +11734,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -11720,7 +11742,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11728,7 +11750,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11747,7 +11769,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["SourcesView"];
+                    "application/json": components["schemas"]["SourcesView"];
                 };
             };
             401: {
@@ -11755,7 +11777,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11764,7 +11786,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11772,7 +11794,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11795,7 +11817,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["TiSourceView"];
+                    "application/json": components["schemas"]["TiSourceView"];
                 };
             };
             400: {
@@ -11803,7 +11825,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11811,7 +11833,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11820,7 +11842,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11828,7 +11850,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11838,7 +11860,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Источник TI */
+                /** @description Источник TI */
                 id: string;
             };
             cookie?: never;
@@ -11850,7 +11872,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["TiSourceView"];
+                    "application/json": components["schemas"]["TiSourceView"];
                 };
             };
             400: {
@@ -11858,7 +11880,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11866,7 +11888,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11875,7 +11897,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -11883,7 +11905,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11891,7 +11913,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11901,7 +11923,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Источник TI */
+                /** @description Источник TI */
                 id: string;
             };
             cookie?: never;
@@ -11917,7 +11939,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["TiSourceView"];
+                    "application/json": components["schemas"]["TiSourceView"];
                 };
             };
             400: {
@@ -11925,7 +11947,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11933,7 +11955,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -11942,7 +11964,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -11950,7 +11972,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -11958,7 +11980,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -11968,7 +11990,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Источник TI */
+                /** @description Источник TI */
                 id: string;
             };
             cookie?: never;
@@ -11981,7 +12003,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["TiSourceView"];
+                    "application/json": components["schemas"]["TiSourceView"];
                 };
             };
             400: {
@@ -11989,7 +12011,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -11997,7 +12019,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -12006,7 +12028,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12014,7 +12036,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12022,7 +12044,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12032,11 +12054,12 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Источник TI */
+                /** @description Источник TI */
                 id: string;
             };
             cookie?: never;
         };
+        /** @description Файл списка TI (формат источника, до admin.risk.max_package_bytes) */
         requestBody: {
             content: {
                 "application/octet-stream": string;
@@ -12048,7 +12071,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["ListVersionView"];
+                    "application/json": components["schemas"]["ListVersionView"];
                 };
             };
             400: {
@@ -12056,7 +12079,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -12064,7 +12087,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -12073,7 +12096,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12081,7 +12104,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description больше admin.risk.max_package_bytes */
@@ -12090,7 +12113,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не application/octet-stream */
@@ -12099,7 +12122,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12107,7 +12130,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12117,7 +12140,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Источник TI */
+                /** @description Источник TI */
                 id: string;
             };
             cookie?: never;
@@ -12129,7 +12152,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["ListVersionView"];
+                    "application/json": components["schemas"]["ListVersionView"];
                 };
             };
             400: {
@@ -12137,7 +12160,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -12145,7 +12168,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -12154,7 +12177,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12162,7 +12185,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12170,7 +12193,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12178,12 +12201,12 @@ export interface operations {
     source_usage: {
         parameters: {
             query?: {
-                /** Учёт с этого момента (RFC 3339), включительно; по умолчанию — весь учёт. */
+                /** @description Учёт с этого момента (RFC 3339), включительно; по умолчанию — весь учёт. */
                 since?: string;
             };
             header?: never;
             path: {
-                /** Источник TI */
+                /** @description Источник TI */
                 id: string;
             };
             cookie?: never;
@@ -12195,7 +12218,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["UsageView"];
+                    "application/json": components["schemas"]["UsageView"];
                 };
             };
             400: {
@@ -12203,7 +12226,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             401: {
@@ -12211,7 +12234,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description не администратор установки */
@@ -12220,7 +12243,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12228,7 +12251,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12236,7 +12259,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12246,7 +12269,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Организация (UUID) */
+                /** @description Организация (UUID) */
                 org: string;
             };
             cookie?: never;
@@ -12258,7 +12281,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["SignalsView"];
+                    "application/json": components["schemas"]["SignalsView"];
                 };
             };
             403: {
@@ -12266,7 +12289,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12274,7 +12297,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12282,7 +12305,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12292,9 +12315,9 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Организация (UUID) */
+                /** @description Организация (UUID) */
                 org: string;
-                /** Признак: `tp.*` — поставщика, `org.*` — свой */
+                /** @description Признак: `tp.*` — поставщика, `org.*` — свой */
                 id: string;
             };
             cookie?: never;
@@ -12310,7 +12333,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["SignalView"];
+                    "application/json": components["schemas"]["SignalView"];
                 };
             };
             400: {
@@ -12318,7 +12341,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             403: {
@@ -12326,7 +12349,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12334,7 +12357,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description организация мягче установки */
@@ -12343,7 +12366,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["RiskProblem"];
+                    "application/json": components["schemas"]["RiskProblem"];
                 };
             };
             503: {
@@ -12351,7 +12374,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12361,9 +12384,9 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Организация (UUID) */
+                /** @description Организация (UUID) */
                 org: string;
-                /** Признак: `tp.*` — поставщика, `org.*` — свой */
+                /** @description Признак: `tp.*` — поставщика, `org.*` — свой */
                 id: string;
             };
             cookie?: never;
@@ -12375,7 +12398,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["SignalView"];
+                    "application/json": components["schemas"]["SignalView"];
                 };
             };
             400: {
@@ -12383,7 +12406,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             403: {
@@ -12391,7 +12414,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12399,7 +12422,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12407,7 +12430,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12417,7 +12440,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Организация (UUID) */
+                /** @description Организация (UUID) */
                 org: string;
             };
             cookie?: never;
@@ -12429,7 +12452,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["ThresholdsView"];
+                    "application/json": components["schemas"]["ThresholdsView"];
                 };
             };
             403: {
@@ -12437,7 +12460,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12445,7 +12468,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12453,7 +12476,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12463,7 +12486,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** Организация (UUID) */
+                /** @description Организация (UUID) */
                 org: string;
             };
             cookie?: never;
@@ -12479,7 +12502,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["ThresholdsView"];
+                    "application/json": components["schemas"]["ThresholdsView"];
                 };
             };
             400: {
@@ -12487,7 +12510,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             403: {
@@ -12495,7 +12518,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12503,7 +12526,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description порог выше базового или порядок нарушен */
@@ -12512,7 +12535,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12520,7 +12543,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -12528,20 +12551,20 @@ export interface operations {
     list_risk_hits: {
         parameters: {
             query?: {
-                /** Только этот признак (`tp.*`, `org.*`). */
+                /** @description Только этот признак (`tp.*`, `org.*`). */
                 signal?: string;
-                /** Режим: `report` — только отчёт, `enforce` — применённые. */
+                /** @description Режим: `report` — только отчёт, `enforce` — применённые. */
                 mode?: string;
-                /** Начало интервала (RFC 3339), включительно. */
+                /** @description Начало интервала (RFC 3339), включительно. */
                 since?: string;
-                /** Конец интервала (RFC 3339), не включительно; продолжение страницы — её `next`. */
+                /** @description Конец интервала (RFC 3339), не включительно; продолжение страницы — её `next`. */
                 until?: string;
-                /** Размер страницы (по умолчанию и наибольший — из конфигурации). */
+                /** @description Размер страницы (по умолчанию и наибольший — из конфигурации). */
                 limit?: number;
             };
             header?: never;
             path: {
-                /** Организация (UUID) */
+                /** @description Организация (UUID) */
                 org: string;
             };
             cookie?: never;
@@ -12553,7 +12576,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["HitsView"];
+                    "application/json": components["schemas"]["HitsView"];
                 };
             };
             400: {
@@ -12561,7 +12584,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             403: {
@@ -12569,7 +12592,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             404: {
@@ -12577,7 +12600,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             503: {
@@ -12585,7 +12608,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                "application/json": components["schemas"]["Problem"];
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

@@ -1176,7 +1176,7 @@ pub(crate) fn routes(r: Router<Arc<Admin>>, max_bytes: usize) -> Router<Arc<Admi
         .route(RISK_PACKAGE_ROLLBACK_ROUTE, post(rollback_package))
         .route(
             RISK_SOURCES_ROUTE,
-            get(list_sources)
+            get(list_ti_sources)
                 .post(create_source)
                 .layer(DefaultBodyLimit::max(max_bytes)),
         )
