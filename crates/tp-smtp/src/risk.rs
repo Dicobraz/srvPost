@@ -192,11 +192,11 @@ pub fn scan_message(raw: &[u8], limits: &RiskConfig) -> Findings {
         return out;
     };
     // Адрес и домен `From` (первый адрес) и `Reply-To` — из заголовков письма.
-    if let Some(a) = msg.from().and_then(|a| a.first()).and_then(|a| a.address()) {
-        if let Ok(a) = normalize_recipient(a) {
-            out.from = Some(a.clone());
-            out.from_domain = a.rsplit_once('@').map(|(_, d)| d.to_ascii_lowercase());
-        }
+    if let Some(a) = msg.from().and_then(|a| a.first()).and_then(|a| a.address())
+        && let Ok(a) = normalize_recipient(a)
+    {
+        out.from = Some(a.clone());
+        out.from_domain = a.rsplit_once('@').map(|(_, d)| d.to_ascii_lowercase());
     }
     if let Some(list) = msg.reply_to() {
         for a in list.iter().filter_map(|a| a.address()) {
@@ -439,7 +439,7 @@ fn scan_links(text: &[u8], out: &mut Findings, budget: &mut usize) {
             out.link_urls.push(url.to_owned());
         }
         if let Some(host) = url_host(url)
-            && !out.link_hosts.iter().any(|x| *x == host)
+            && !out.link_hosts.contains(&host)
         {
             out.link_hosts.push(host);
         }
@@ -520,11 +520,6 @@ impl Scan {
             .filter(|(_, o)| o.verdict.action >= RiskAction::Reject)
             .map(|(t, _)| *t)
             .collect()
-    }
-
-    /// Организация `tenant` под действием `reject`.
-    pub(crate) fn org_rejects(&self, tenant: TenantId) -> bool {
-        self.reject_orgs_set().contains(&tenant)
     }
 
     /// Проверки не было (нет организаций-получателей — каталог не прочитан, письма не было): событий
@@ -738,10 +733,10 @@ impl Risk {
             self.metrics_of(&verdict);
             // Срабатывания — в журнал каталога (`Enforce` и «только отчёт», CTR-95 `record_hits`);
             // сбой журнала письмо не останавливает.
-            if !verdict.hits.is_empty() || !verdict.report_only.is_empty() {
-                if let Err(e) = self.store.record_hits(tenant, message, &verdict).await {
-                    tracing::warn!(error = %e, "smtp: срабатывания каталога не записаны");
-                }
+            if (!verdict.hits.is_empty() || !verdict.report_only.is_empty())
+                && let Err(e) = self.store.record_hits(tenant, message, &verdict).await
+            {
+                tracing::warn!(error = %e, "smtp: срабатывания каталога не записаны");
             }
             orgs.insert(tenant, OrgVerdict { catalog, verdict });
         }

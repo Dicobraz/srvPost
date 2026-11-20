@@ -12,8 +12,8 @@ use tp_contracts::delivery::{DeliveryDecision, DeliveryEventKind};
 use tp_contracts::ids::{AccountId, TenantId};
 use tp_contracts::membership::NodeId;
 use tp_contracts::risk::{
-    Detector, Field, ListId, Mode, Origin, PACKAGE_FORMAT, PackageManifest, RiskAction, RiskStore,
-    Semver, Signal, SignalId,
+    Detector, ListId, Mode, Origin, PACKAGE_FORMAT, PackageManifest, RiskAction, RiskStore, Semver,
+    Signal, SignalId,
 };
 use tp_contracts::secrets::SecretRef;
 use tp_contracts::sieve::{RulesInput, RulesOutcome};

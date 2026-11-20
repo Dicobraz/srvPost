@@ -2288,11 +2288,11 @@ impl Delivery {
             }
             full = out.message;
             // Вердикт Rspamd — действие для каталога (карантин фильтра; отказ и отброс выше — сессия).
-            milter_action = out
-                .quarantine
-                .is_some()
-                .then_some(RiskAction::Quarantine)
-                .unwrap_or(RiskAction::None);
+            milter_action = if out.quarantine.is_some() {
+                RiskAction::Quarantine
+            } else {
+                RiskAction::None
+            };
         }
         // Действия каталога (SMTP-52): самое строгое из балла, действий признаков и Rspamd
         // ([`tp_contracts::risk::Verdict::combine`]). `reject` — `550 5.7.1` в сессии всем; при
