@@ -23,6 +23,13 @@ const ENV: JmapEnv = {
   selfAddress: "user@example.org",
 };
 
+/** Сохранитель с папкой Drafts (в тестах папка известна сразу). */
+function newSaver(): DraftSaver {
+  const saver = new DraftSaver(ENV);
+  saver.draftsMailboxId = "mb-drafts";
+  return saver;
+}
+
 const SNAPSHOT = {
   from: { name: "Анна Антропова", email: "user@example.org" },
   to: [{ name: "Ольга", email: "o@vektor.example" }],
@@ -45,7 +52,7 @@ afterEach(() => {
 describe("DraftSaver debounce", () => {
   test("правки в окне debounce перезапускают таймер — один запрос на паузу", async () => {
     mockedCreate.mockResolvedValue({ created: { d0: { id: "m1" } }, errors: {}, destroyed: [] });
-    const saver = new DraftSaver(ENV, "mb-drafts");
+    const saver = newSaver();
     saver.schedule(SNAPSHOT);
     vi.advanceTimersByTime(DRAFT_DEBOUNCE_MS - 200);
     saver.schedule({ ...SNAPSHOT, subject: "Договор поставки — протокол разногласий" });
@@ -65,7 +72,7 @@ describe("DraftSaver debounce", () => {
     mockedCreate
       .mockResolvedValueOnce({ created: { d0: { id: "m1" } }, errors: {}, destroyed: [] })
       .mockResolvedValueOnce({ created: { d0: { id: "m2" } }, errors: {}, destroyed: [] });
-    const saver = new DraftSaver(ENV, "mb-drafts");
+    const saver = newSaver();
     saver.schedule(SNAPSHOT);
     await vi.advanceTimersByTimeAsync(DRAFT_DEBOUNCE_MS);
     saver.schedule({ ...SNAPSHOT, subject: "Уточнение" });
@@ -77,7 +84,7 @@ describe("DraftSaver debounce", () => {
 
   test("падение создания — прежний черновик жив (destroy не вызван), ошибка в error", async () => {
     mockedCreate.mockResolvedValue({ created: {}, errors: { d0: { type: "invalidProperties" } }, destroyed: [] });
-    const saver = new DraftSaver(ENV, "mb-drafts");
+    const saver = newSaver();
     saver.schedule(SNAPSHOT);
     await vi.advanceTimersByTimeAsync(DRAFT_DEBOUNCE_MS);
     await vi.waitFor(() => expect(mockedCreate).toHaveBeenCalled());
@@ -88,7 +95,7 @@ describe("DraftSaver debounce", () => {
 
   test("пустой снимок (всё вычистено) — черновик уничтожается, новый не создаётся", async () => {
     mockedDestroy.mockResolvedValue({ destroyed: ["m1"], notDestroyed: {} });
-    const saver = new DraftSaver(ENV, "mb-drafts");
+    const saver = newSaver();
     saver.draftId = "m1";
     saver.schedule({ ...SNAPSHOT, to: [], subject: "", bodyHtml: "" });
     await vi.advanceTimersByTimeAsync(DRAFT_DEBOUNCE_MS);
@@ -99,7 +106,7 @@ describe("DraftSaver debounce", () => {
 
   test("flush сохраняет сразу, без ожидания таймера («Сохранить черновик»)", async () => {
     mockedCreate.mockResolvedValue({ created: { d0: { id: "m9" } }, errors: {}, destroyed: [] });
-    const saver = new DraftSaver(ENV, "mb-drafts");
+    const saver = newSaver();
     saver.schedule(SNAPSHOT);
     await saver.flush();
     expect(mockedCreate).toHaveBeenCalledTimes(1);
@@ -108,7 +115,7 @@ describe("DraftSaver debounce", () => {
 
   test("destroyCurrent: «Удалить черновик» — Email/set destroy", async () => {
     mockedDestroy.mockResolvedValue({ destroyed: ["m3"], notDestroyed: {} });
-    const saver = new DraftSaver(ENV, "mb-drafts");
+    const saver = newSaver();
     saver.draftId = "m3";
     await saver.destroyCurrent();
     expect(mockedDestroy).toHaveBeenCalledWith(ENV.apiUrl, ENV.authorization, ENV.accountId, ["m3"]);
