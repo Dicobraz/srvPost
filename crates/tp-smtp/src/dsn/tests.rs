@@ -1,6 +1,6 @@
 //! Снимки уведомлений (insta) и разбор их `mail-parser`: структура `multipart/report`, поля DSN.
 
-use mail_parser::{MessageParser, MimeHeaders, PartType};
+use mail_parser::{MessageParser, PartKind};
 
 use super::*;
 
@@ -40,14 +40,14 @@ fn parts(raw: &[u8]) -> (Vec<String>, String) {
     assert_eq!(root.attribute("report-type"), Some("delivery-status"));
     let mut types = Vec::new();
     let mut status = String::new();
-    for part in msg.parts.iter().skip(1) {
+    for part in msg.root().parts().skip(1) {
         let ct = part.content_type().expect("part content-type");
         let t = format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or_default());
         if t == "message/delivery-status" {
-            status = match &part.body {
-                PartType::Text(t) => t.to_string(),
-                PartType::Binary(b) | PartType::InlineBinary(b) => {
-                    String::from_utf8_lossy(b).into_owned()
+            status = match part.kind() {
+                PartKind::Text => part.text().map(|t| t.into_owned()).unwrap_or_default(),
+                PartKind::Binary | PartKind::InlineBinary => {
+                    String::from_utf8_lossy(&part.decoded()).into_owned()
                 }
                 _ => String::new(),
             };
@@ -76,7 +76,10 @@ fn failure_report() {
     let msg = MessageParser::default().parse(&raw).expect("parse");
     assert_eq!(msg.subject(), Some("Undelivered Mail Returned to Sender"));
     assert_eq!(
-        msg.header_raw("Auto-Submitted").map(str::trim),
+        msg.headers()
+            .get("Auto-Submitted")
+            .and_then(|h| std::str::from_utf8(h.raw_value()).ok())
+            .map(str::trim),
         Some("auto-replied")
     );
     let (types, status) = parts(&raw);
@@ -125,10 +128,9 @@ fn success_report_with_full_message() {
     assert!(!status.contains("Last-Attempt-Date"));
     let msg = MessageParser::default().parse(&raw).expect("parse");
     let inner = msg
-        .parts
-        .iter()
-        .find_map(|p| match &p.body {
-            PartType::Message(m) => Some(m),
+        .parts()
+        .find_map(|p| match p.kind() {
+            PartKind::Message(m) => Some(m),
             _ => None,
         })
         .expect("message/rfc822");

@@ -36,7 +36,7 @@ use calcard::icalendar::{
     ICalendar, ICalendarComponentType, ICalendarParameter, ICalendarParameterName,
     ICalendarParticipationStatus, ICalendarProperty,
 };
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::MessageParser;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::str::FromStr;
@@ -113,7 +113,7 @@ struct Invitation {
 /// `None`/`Err` — письмо не приглашение (причина — в описании ошибки).
 fn extract(raw: &[u8]) -> Option<Result<(Invitation, itip::Meeting), String>> {
     let msg = MessageParser::new().parse(raw)?;
-    let (method, ics) = msg.parts.iter().find_map(|p| {
+    let (method, ics) = msg.root().parts().find_map(|p| {
         let ct = p.content_type()?;
         let calendar = ct.ctype().eq_ignore_ascii_case("text")
             && ct
@@ -124,7 +124,7 @@ fn extract(raw: &[u8]) -> Option<Result<(Invitation, itip::Meeting), String>> {
             .filter(|_| calendar)?
             .trim()
             .to_owned();
-        Some((method, String::from_utf8_lossy(p.contents()).into_owned()))
+        Some((method, String::from_utf8_lossy(p.decoded()).into_owned()))
     })?;
     Some((|| {
         let not = "письмо не приглашение: часть text/calendar без method=REQUEST";
@@ -133,7 +133,8 @@ fn extract(raw: &[u8]) -> Option<Result<(Invitation, itip::Meeting), String>> {
         }
         // Один заголовок `From` и один адрес — как у приёма iMIP (SMTP-48): с несколькими не применять.
         if msg
-            .header_values(mail_parser::HeaderName::From)
+            .headers()
+            .all(mail_parser::HeaderName::From)
             .nth(1)
             .is_some()
         {
@@ -141,7 +142,7 @@ fn extract(raw: &[u8]) -> Option<Result<(Invitation, itip::Meeting), String>> {
         }
         let from = msg
             .from()
-            .map(|a| a.iter().filter_map(|x| x.address.as_deref()).collect())
+            .map(|a| a.mailboxes().filter_map(|x| x.address()).collect())
             .unwrap_or_else(Vec::new);
         let [from] = from.as_slice() else {
             return Err("письмо не приглашение: не один адрес From".into());

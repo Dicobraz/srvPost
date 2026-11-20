@@ -4475,16 +4475,16 @@ fn sender_fields(raw: &[u8]) -> Vec<(&'static str, Vec<String>)> {
     };
     msg.headers()
         .iter()
-        .filter_map(|h| match h.name {
-            HeaderName::From => Some(("From", &h.value)),
-            HeaderName::Sender => Some(("Sender", &h.value)),
+        .filter_map(|h| match h.name() {
+            HeaderName::From => Some(("From", h.value())),
+            HeaderName::Sender => Some(("Sender", h.value())),
             _ => None,
         })
         .map(|(name, value)| {
             let addrs = value
                 .as_address()
                 .map(|a| {
-                    a.iter()
+                    a.mailboxes()
                         .filter_map(|a| a.address())
                         .map(str::to_owned)
                         .collect()
@@ -4514,11 +4514,11 @@ fn referenced_ids(raw: &[u8]) -> Vec<String> {
     };
     let mut ids = Vec::new();
     for name in [HeaderName::InReplyTo, HeaderName::References] {
-        for value in msg.header_values(name) {
+        for value in msg.headers().all(name).map(|h| h.value()) {
             // `Message-Id`-заголовок — строка или список строк (скобки снимаются).
             let list = match value {
-                HeaderValue::Text(id) => vec![id.as_ref()],
-                HeaderValue::TextList(list) => list.iter().map(|id| id.as_ref()).collect(),
+                HeaderValue::Text(id) => vec![id],
+                HeaderValue::TextList(list) => list.iter().collect(),
                 _ => Vec::new(),
             };
             for id in list {

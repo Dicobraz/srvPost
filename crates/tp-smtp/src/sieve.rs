@@ -89,8 +89,8 @@ pub(crate) fn chain(raw: &[u8]) -> Vec<String> {
     };
     msg.headers()
         .iter()
-        .filter(|h| h.name.as_str().eq_ignore_ascii_case(CHAIN_HEADER))
-        .filter_map(|h| raw.get(h.offset_start as usize..h.offset_end as usize))
+        .filter(|h| h.name().as_str().eq_ignore_ascii_case(CHAIN_HEADER))
+        .filter_map(|h| raw.get(h.offset_start() as usize..h.offset_end() as usize))
         .map(|v| String::from_utf8_lossy(v).trim().to_ascii_lowercase())
         .collect()
 }
@@ -279,9 +279,9 @@ pub fn suppressed(mail_from: &str, raw: &[u8], reply: &AutoReply) -> Option<&'st
     }
     let msg = mail_parser::MessageParser::new().parse_headers(raw)?;
     for h in msg.headers() {
-        let name = h.name.as_str();
+        let name = h.name().as_str();
         let value = raw
-            .get(h.offset_start as usize..h.offset_end as usize)
+            .get(h.offset_start() as usize..h.offset_end() as usize)
             .map(|v| String::from_utf8_lossy(v).trim().to_ascii_lowercase())
             .unwrap_or_default();
         if name.eq_ignore_ascii_case("Auto-Submitted") {
@@ -407,12 +407,19 @@ mod tests {
             .parse(&raw)
             .expect("parse");
         assert_eq!(
-            msg.header_raw("Auto-Submitted").map(str::trim),
+            msg.headers()
+                .get("Auto-Submitted")
+                .and_then(|h| std::str::from_utf8(h.raw_value()).ok())
+                .map(str::trim),
             Some("auto-replied")
         );
-        assert_eq!(msg.in_reply_to().as_text(), Some("orig-1@example.net"));
         assert_eq!(
-            msg.references().as_text_list().map(|l| l.to_vec()),
+            msg.in_reply_to().and_then(|l| l.last()),
+            Some("orig-1@example.net")
+        );
+        assert_eq!(
+            msg.references()
+                .map(|l| l.iter().map(str::to_owned).collect::<Vec<_>>()),
             Some(vec!["root@example.net".into(), "orig-1@example.net".into()])
         );
         assert_eq!(msg.message_id(), Some("vacation-t1@mx.example.org"));

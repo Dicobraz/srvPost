@@ -8,7 +8,6 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
 use calcard::icalendar::ICalendar;
-use mail_parser::MimeHeaders;
 use time::OffsetDateTime;
 use tp_contracts::auth::Principal;
 use tp_contracts::dav::{CollectionKind, DavObject, DavStore};
@@ -584,15 +583,14 @@ fn mail(m: &itip::Message, from: &str, tenant: TenantId) -> String {
         .parse(&raw)
         .expect("mail-parser");
     let cal = parsed
-        .parts
-        .iter()
+        .parts()
         .find(|p| {
             p.content_type().is_some_and(|c| {
                 c.subtype() == Some("calendar") && c.attribute("method") == Some(m.method.as_str())
             })
         })
         .expect("часть text/calendar с method");
-    let it = itip::parse(cal.text_contents().expect("текст")).expect("calcard");
+    let it = itip::parse(&cal.text().expect("текст")).expect("calcard");
     assert_eq!(it.method, m.method);
     assert!(
         parsed

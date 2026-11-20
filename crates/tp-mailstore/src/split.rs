@@ -29,7 +29,7 @@
 use std::ops::Range;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use mail_parser::{Encoding, Message, MessageParser, PartType};
+use mail_parser::{Encoding, MessageParser, MessagePart, MessageRef, PartKind};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -108,11 +108,10 @@ impl Split {
             cuts: Vec::new(),
             sections: Vec::new(),
         };
-        if let Some(msg) = MessageParser::default().parse(raw.as_ref())
-            && let Some(root) = msg.parts.first()
-        {
-            walk.section("", root.offset_body, root.offset_end);
-            walk.message(&msg, "", 0);
+        if let Some(msg) = MessageParser::default().parse(raw.as_ref()) {
+            let root = msg.root_part();
+            walk.section("", root.offset_body(), root.offset_end());
+            walk.message(msg.root(), "", 0);
         }
         let Walk { cuts, sections, .. } = walk;
         let cuts = normalize(cuts)
@@ -431,57 +430,39 @@ impl Walk {
 
     /// Письмо (верхнее или вложенное `message/rfc822` с путём `base`): дети составного корня —
     /// `base.1`, `base.2`, ...; тело несоставного корня — `base.1`.
-    fn message(&mut self, msg: &Message<'_>, base: &str, depth: usize) {
+    fn message(&mut self, msg: MessageRef<'_>, base: &str, depth: usize) {
         if depth > self.limits.max_depth {
             return;
         }
-        let Some(root) = msg.parts.first() else {
-            return;
-        };
-        match &root.body {
-            PartType::Multipart(children) => self.children(msg, 0, children, base, depth),
-            _ => self.part(msg, 0, &child_path(base, 1), depth),
+        let root = msg.root_part();
+        if root.is_multipart() {
+            self.children(root, base, depth);
+        } else {
+            self.part(root, &child_path(base, 1), depth);
         }
     }
 
-    fn children(
-        &mut self,
-        msg: &Message<'_>,
-        parent: usize,
-        children: &[u32],
-        base: &str,
-        depth: usize,
-    ) {
-        let mut n = 0;
-        for &id in children {
-            let id = id as usize;
-            // Дети идут после родителя; иное — битая структура, не обходим (защита от циклов).
-            if id <= parent || id >= msg.parts.len() {
-                continue;
-            }
-            n += 1;
-            self.part(msg, id, &child_path(base, n), depth + 1);
+    fn children(&mut self, parent: MessagePart<'_>, base: &str, depth: usize) {
+        for (n, child) in parent.children().enumerate() {
+            self.part(child, &child_path(base, n + 1), depth + 1);
         }
     }
 
-    fn part(&mut self, msg: &Message<'_>, id: usize, path: &str, depth: usize) {
+    fn part(&mut self, part: MessagePart<'_>, path: &str, depth: usize) {
         if depth > self.limits.max_depth || self.parts >= self.limits.max_parts {
             return;
         }
         self.parts += 1;
-        let Some(part) = msg.parts.get(id) else {
-            return;
-        };
-        self.section(path, part.offset_body, part.offset_end);
-        match &part.body {
-            PartType::Multipart(children) => self.children(msg, id, children, path, depth),
+        self.section(path, part.offset_body(), part.offset_end());
+        match part.kind() {
+            PartKind::Multipart => self.children(part, path, depth),
             // Незакодированное вложенное письмо разобрано по тем же байтам: смещения его частей — в исходном
             // письме. Закодированное (base64/qp) разобрано из декодированных байтов — хранится одной частью.
-            PartType::Message(nested) if part.encoding == Encoding::None => {
+            PartKind::Message(nested) if part.encoding() == Encoding::None => {
                 self.message(nested, path, depth + 1);
             }
             _ => {
-                if let Some(range) = self.range(part.offset_body, part.offset_end)
+                if let Some(range) = self.range(part.offset_body(), part.offset_end())
                     && !range.is_empty()
                 {
                     self.cuts.push((path.to_owned(), range));

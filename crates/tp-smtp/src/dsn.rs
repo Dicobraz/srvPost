@@ -23,7 +23,6 @@ use mail_builder::headers::content_type::ContentType;
 use mail_builder::headers::date::Date;
 use mail_builder::headers::raw::Raw;
 use mail_builder::mime::MimePart;
-use mail_parser::MimeHeaders;
 use time::OffsetDateTime;
 use tp_contracts::queue::DsnRet;
 use tp_contracts::{Result, TenantId};

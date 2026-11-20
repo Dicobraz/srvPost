@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::MessageParser;
 use tp_contracts::auth::{Authenticator, Authorizer, Credentials, Directory, Principal};
 use tp_contracts::blob::{BlobIndex, BlobStore};
 use tp_contracts::bus::EventBus;
@@ -1187,8 +1187,13 @@ fn parse(raw: &[u8]) -> Parsed {
         i += 1;
     }
     let headers = msg
-        .headers_raw()
-        .map(|(n, v)| (n.to_owned(), v.trim().to_owned()))
+        .headers()
+        .iter()
+        .filter_map(|h| {
+            std::str::from_utf8(h.raw_value())
+                .ok()
+                .map(|v| (h.name().as_str().to_owned(), v.trim().to_owned()))
+        })
         .collect();
     let attachments = msg
         .attachments()
@@ -1201,7 +1206,7 @@ fn parse(raw: &[u8]) -> Parsed {
                     None => c.ctype().to_owned(),
                 })
                 .unwrap_or_default(),
-            data: a.contents().to_vec(),
+            data: a.decoded().to_vec(),
         })
         .collect();
     Parsed {

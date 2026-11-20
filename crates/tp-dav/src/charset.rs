@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 
-use mail_parser::decoders::charsets::map::charset_decoder;
+use mail_parser::decoders::charsets::charset_decoder;
 
 /// Текст vCard в UTF-8: тело как есть или перекод по `CHARSET` (см. описание модуля). Тело не в UTF-8 без
 /// `CHARSET` или с неизвестной кодировкой — `None`.

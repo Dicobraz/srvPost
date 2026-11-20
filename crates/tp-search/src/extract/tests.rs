@@ -2,7 +2,7 @@
 
 use std::io::{Cursor, Write};
 
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::MessageParser;
 use tp_testkit::corpus;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -73,7 +73,7 @@ fn corpus_attachments() -> Vec<(String, String, Vec<u8>)> {
                 })
                 .unwrap_or_default();
             let name = a.attachment_name().unwrap_or_default().to_owned();
-            out.push((ct, name, a.contents().to_vec()));
+            out.push((ct, name, a.decoded().to_vec()));
         }
     }
     out

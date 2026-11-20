@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 
 use mail_parser::decoders::html::html_to_text;
 use mail_parser::{
-    Address, HeaderName, HeaderValue, Message, MessageParser, MimeHeaders, PartType,
+    HeaderForm, HeaderName, HeaderValue, Message, MessageParser, MessageRef, PartKind,
 };
 use serde::{Deserialize, Serialize};
 use tp_contracts::risk::SignalId;
@@ -585,7 +585,7 @@ impl Exec<'_> {
                 Transform::Content(types) => Some(types.as_slice()),
                 _ => None,
             };
-            collect(msg, types, &mut scan);
+            collect(msg.root(), types, &mut scan);
         }
         Ok(scan.out)
     }
@@ -848,8 +848,8 @@ fn wanted(types: &[String], ty: &str, sub: &str) -> bool {
 }
 
 /// Собирает значения частей письма и вложенных писем: `types = None` — `:text`, иначе `:content`.
-fn collect(msg: &Message<'_>, types: Option<&[String]>, scan: &mut Scan) {
-    for part in &msg.parts {
+fn collect(msg: MessageRef<'_>, types: Option<&[String]>, scan: &mut Scan) {
+    for part in msg.parts() {
         if scan.left == 0 {
             return;
         }
@@ -860,28 +860,29 @@ fn collect(msg: &Message<'_>, types: Option<&[String]>, scan: &mut Scan) {
             None => ty.eq_ignore_ascii_case("text"),
             Some(types) => wanted(types, ty, sub),
         };
-        match &part.body {
-            PartType::Text(s) if hit => scan.push(s),
-            PartType::Html(s) if hit && types.is_none() => scan.push(&html_to_text(s)),
-            PartType::Html(s) if hit => scan.push(s),
-            PartType::Binary(b) | PartType::InlineBinary(b) if hit && types.is_some() => {
-                scan.push(&String::from_utf8_lossy(b));
+        match part.kind() {
+            PartKind::Text if hit => {
+                if let Some(s) = part.text() {
+                    scan.push(&s);
+                }
             }
-            PartType::Message(inner) => {
+            PartKind::Html if hit && types.is_none() => {
+                if let Some(s) = part.text() {
+                    scan.push(&html_to_text(&s));
+                }
+            }
+            PartKind::Html if hit => {
+                if let Some(s) = part.text() {
+                    scan.push(&s);
+                }
+            }
+            PartKind::Binary | PartKind::InlineBinary if hit && types.is_some() => {
+                scan.push(&String::from_utf8_lossy(&part.decoded()));
+            }
+            PartKind::Message(inner) => {
                 // Вложенное письмо: по `message/rfc822` — его заголовки, части — как у внешнего.
                 if hit && types.is_some() {
-                    // Границы заголовков — по корневой части: вложенное письмо без перекодирования делит
-                    // буфер с внешним.
-                    let head = inner
-                        .parts
-                        .first()
-                        .and_then(|p| {
-                            inner
-                                .raw_message
-                                .get(p.offset_header as usize..p.offset_body as usize)
-                        })
-                        .unwrap_or_default();
-                    scan.push(&String::from_utf8_lossy(head));
+                    scan.push(&String::from_utf8_lossy(inner.root_part().raw_headers()));
                 }
                 collect(inner, types, scan);
             }
@@ -894,16 +895,16 @@ fn collect(msg: &Message<'_>, types: Option<&[String]>, scan: &mut Scan) {
 pub(crate) fn parse_headers(raw: &[u8]) -> Vec<Hdr> {
     // Непустая карта заголовков включает разбор «по умолчанию» для всех остальных — как текст с RFC 2047.
     let parser = MessageParser::new()
-        .header_text(HeaderName::Subject)
-        .default_header_text();
+        .header(HeaderName::Subject, HeaderForm::Text)
+        .unknown_headers(HeaderForm::Text);
     let Some(msg) = parser.parse_headers(raw) else {
         return Vec::new();
     };
     msg.headers()
         .iter()
         .map(|h| Hdr {
-            name: h.name().to_owned(),
-            value: header_text(h.value()),
+            name: h.name().as_str().to_owned(),
+            value: header_text(&h.value()),
             start: h.offset_start() as usize,
             end: h.offset_end() as usize,
         })
@@ -913,7 +914,7 @@ pub(crate) fn parse_headers(raw: &[u8]) -> Vec<Hdr> {
 fn header_text(v: &HeaderValue<'_>) -> String {
     match v {
         HeaderValue::Text(s) => s.trim().to_owned(),
-        HeaderValue::TextList(l) => l.join(", "),
+        HeaderValue::TextList(l) => l.iter().collect::<Vec<_>>().join(", "),
         _ => String::new(),
     }
 }
@@ -924,20 +925,18 @@ pub(crate) fn parse_addresses(raw: &[u8]) -> Vec<String> {
     buf.extend_from_slice(b"From:");
     buf.extend_from_slice(raw);
     buf.extend_from_slice(b"\r\n\r\n");
-    let parser = MessageParser::new().header_address(HeaderName::From);
+    let parser = MessageParser::new().header(HeaderName::From, HeaderForm::Addresses);
     let Some(msg) = parser.parse_headers(&buf) else {
         return Vec::new();
     };
-    let addrs: Vec<&mail_parser::Addr<'_>> = match msg.from() {
-        Some(Address::List(list)) => list.iter().collect(),
-        Some(Address::Group(groups)) => groups.iter().flat_map(|g| g.addresses.iter()).collect(),
-        None => Vec::new(),
-    };
-    addrs
-        .into_iter()
-        .filter_map(|a| a.address.as_deref())
-        .map(str::to_owned)
-        .collect()
+    msg.from()
+        .map(|list| {
+            list.mailboxes()
+                .filter_map(|mailbox| mailbox.address())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub(crate) fn strip_angle(s: &str) -> &str {

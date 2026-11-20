@@ -18,7 +18,7 @@ use std::ops::Range;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use futures::StreamExt;
-use mail_parser::{MessageParser, MimeHeaders, PartType};
+use mail_parser::{MessageParser, MessagePart, PartKind};
 use tp_contracts::audit::AuditAction;
 use tp_contracts::auth::Rights;
 use tp_contracts::blob::ByteStream;
@@ -324,53 +324,44 @@ fn part_path(nums: &[NonZeroU32]) -> String {
 /// Сущность MIME в разобранном письме с байтами, к которым относятся её смещения.
 ///
 /// У вложенного `message/rfc822` без кодировки передачи `mail-parser` даёт смещения частей относительно
-/// верхнего письма, у закодированного (base64) — относительно раскодированных байтов вложения.
+/// верхнего письма, у закодированного (base64) — относительно раскодированных байтов вложения; буфер
+/// смещений письма даёт `MessageRef::source_bytes`.
 #[derive(Clone, Copy)]
-struct Ent<'m, 'x> {
-    m: &'m mail_parser::Message<'x>,
+struct Ent<'m> {
+    /// Корневая часть письма (для `part = None` — его заголовок и тело).
+    root: MessagePart<'m>,
     /// Часть; `None` — само письмо.
-    part: Option<usize>,
+    part: Option<MessagePart<'m>>,
+    /// Буфер, к которому относятся смещения.
     raw: &'m [u8],
     /// Письмо верхнего уровня (тело — до конца байтов).
     top: bool,
 }
 
-impl<'m, 'x> Ent<'m, 'x> {
-    fn top(m: &'m mail_parser::Message<'x>) -> Self {
+impl<'m> Ent<'m> {
+    fn top(m: &'m mail_parser::Message<'_>) -> Self {
         Ent {
-            m,
+            root: m.root_part(),
             part: None,
-            raw: m.raw_message(),
+            raw: m.raw(),
             top: true,
         }
     }
 
-    fn at(self, part: usize) -> Self {
+    fn at(self, part: MessagePart<'m>) -> Self {
         Ent {
             part: Some(part),
             ..self
         }
     }
 
-    fn get(&self) -> Option<&'m mail_parser::MessagePart<'x>> {
-        self.m.parts.get(self.part?)
-    }
-
     /// Вложенное письмо части `message/rfc822`.
     fn nested(self) -> Option<Self> {
-        let PartType::Message(nested) = &self.get()?.body else {
-            return None;
-        };
-        let root = nested.parts.first()?;
-        let absolute = root.offset_end as usize > nested.raw_message().len();
+        let nested = self.part?.nested()?;
         Some(Ent {
-            m: nested,
+            root: nested.root_part(),
             part: None,
-            raw: if absolute {
-                self.raw
-            } else {
-                nested.raw_message()
-            },
+            raw: nested.source_bytes(),
             top: false,
         })
     }
@@ -383,56 +374,42 @@ impl<'m, 'x> Ent<'m, 'x> {
 
     /// Заголовок и тело письма (`part = None`).
     fn header_and_text(&self) -> (Vec<u8>, Vec<u8>) {
-        match self.m.parts.first() {
-            Some(root) => {
-                let end = if self.top {
-                    u32::try_from(self.raw.len()).unwrap_or(u32::MAX)
-                } else {
-                    root.offset_end
-                };
-                (
-                    self.bytes(root.offset_header..root.offset_body),
-                    self.bytes(root.offset_body..end),
-                )
-            }
-            None => (Vec::new(), self.raw.to_vec()),
-        }
+        let end = if self.top {
+            u32::try_from(self.raw.len()).unwrap_or(u32::MAX)
+        } else {
+            self.root.offset_end()
+        };
+        (
+            self.bytes(self.root.offset_header()..self.root.offset_body()),
+            self.bytes(self.root.offset_body()..end),
+        )
     }
 }
 
 /// `n`-я часть (с 1) внутри сущности, нумерация — как у MS-07 и split.
-fn step<'m, 'x>(e: Ent<'m, 'x>, n: usize) -> Option<Ent<'m, 'x>> {
+fn step<'m>(e: Ent<'m>, n: usize) -> Option<Ent<'m>> {
     let (e, parent) = match e.part {
-        None => (e, 0),
-        Some(i) => match &e.get()?.body {
-            PartType::Multipart(_) => (e, i),
-            PartType::Message(_) => return step(e.nested()?, n),
+        None => (e, e.root),
+        Some(p) => match p.kind() {
+            PartKind::Multipart => (e, p),
+            PartKind::Message(_) => return step(e.nested()?, n),
             _ => return None,
         },
     };
-    match &e.m.parts.get(parent)?.body {
-        // Дети после родителя (защита от циклов битой структуры).
-        PartType::Multipart(ids) => ids
-            .iter()
-            .map(|&c| c as usize)
-            .filter(|&c| c > parent && c < e.m.parts.len())
-            .nth(n.checked_sub(1)?)
-            .map(|c| e.at(c)),
-        _ if e.part.is_none() => (n == 1).then(|| e.at(0)),
+    match parent.kind() {
+        PartKind::Multipart => parent.children().nth(n.checked_sub(1)?).map(|c| e.at(c)),
+        _ if e.part.is_none() => (n == 1).then(|| e.at(parent)),
         _ => None,
     }
 }
 
-fn walk<'m, 'x>(msg: &'m mail_parser::Message<'x>, path: &[NonZeroU32]) -> Option<Ent<'m, 'x>> {
+fn walk<'m>(msg: &'m mail_parser::Message<'_>, path: &[NonZeroU32]) -> Option<Ent<'m>> {
     path.iter()
         .try_fold(Ent::top(msg), |e, n| step(e, n.get() as usize))
 }
 
 /// Письмо раздела: верхнее или вложенное `message/rfc822` части `part`.
-fn message_at<'m, 'x>(
-    msg: &'m mail_parser::Message<'x>,
-    part: Option<&Part>,
-) -> Option<Ent<'m, 'x>> {
+fn message_at<'m>(msg: &'m mail_parser::Message<'_>, part: Option<&Part>) -> Option<Ent<'m>> {
     match part {
         None => Some(Ent::top(msg)),
         Some(part) => walk(msg, part.0.as_ref())?.nested(),
@@ -501,13 +478,13 @@ fn section_bytes(msg: &mail_parser::Message<'_>, section: &Section<'_>) -> Optio
     Some(match section {
         Section::Part(part) => {
             let e = walk(msg, part.0.as_ref())?;
-            let p = e.get()?;
-            e.bytes(p.offset_body..p.offset_end)
+            let p = e.part?;
+            e.bytes(p.offset_body()..p.offset_end())
         }
         Section::Mime(part) => {
             let e = walk(msg, part.0.as_ref())?;
-            let p = e.get()?;
-            e.bytes(p.offset_header..p.offset_body)
+            let p = e.part?;
+            e.bytes(p.offset_header()..p.offset_body())
         }
         Section::Header(part) => message_at(msg, part.as_ref())?.header_and_text().0,
         Section::Text(part) => message_at(msg, part.as_ref())?.header_and_text().1,
@@ -530,11 +507,11 @@ fn decode_part(
     let Some(e) = walk(msg, path) else {
         return Ok(Vec::new());
     };
-    let Some(p) = e.get() else {
+    let Some(p) = e.part else {
         return Ok(Vec::new());
     };
-    let body = e.bytes(p.offset_body..p.offset_end);
-    if matches!(p.body, PartType::Multipart(_) | PartType::Message(_)) {
+    let body = e.bytes(p.offset_body()..p.offset_end());
+    if matches!(p.kind(), PartKind::Multipart | PartKind::Message(_)) {
         return Ok(body);
     }
     decode_cte(p.content_transfer_encoding(), &body)
@@ -544,15 +521,122 @@ fn decode_cte(cte: Option<&str>, body: &[u8]) -> std::result::Result<Vec<u8>, ()
     match cte.map(str::to_ascii_lowercase).as_deref() {
         None | Some("7bit" | "8bit" | "binary") => Ok(body.to_vec()),
         // Битые данные известной кодировки — как есть: UNKNOWN-CTE только для неизвестной (RFC 3516).
-        Some("base64") => {
-            Ok(mail_parser::decoders::base64::base64_decode(body).unwrap_or_else(|| body.to_vec()))
+        Some("base64") => Ok(base64_decode(body).unwrap_or_else(|| body.to_vec())),
+        Some("quoted-printable") => {
+            Ok(quoted_printable_decode(body).unwrap_or_else(|| body.to_vec()))
         }
-        Some("quoted-printable") => Ok(
-            mail_parser::decoders::quoted_printable::quoted_printable_decode(body)
-                .unwrap_or_else(|| body.to_vec()),
-        ),
         Some(_) => Err(()),
     }
+}
+
+// mail-parser 1.0: декодеры `decoders::base64` и `decoders::quoted_printable` исключены из публичного
+// API — ниже эквиваленты их семантики 0.11 (пробелы пропускаются, битые данные — `None`).
+
+/// Base64: пропускает пробельные символы, `=` завершает частичную группу, иной символ вне алфавита — `None`.
+fn base64_decode(bytes: &[u8]) -> Option<Vec<u8>> {
+    fn value(ch: u8) -> Option<u8> {
+        match ch {
+            b'A'..=b'Z' => Some(ch - b'A'),
+            b'a'..=b'z' => Some(ch - b'a' + 26),
+            b'0'..=b'9' => Some(ch - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::with_capacity(bytes.len().div_ceil(4) * 3);
+    let mut chunk = 0u32;
+    let mut count = 0u8;
+    for &ch in bytes {
+        match value(ch) {
+            Some(v) => {
+                chunk = (chunk << 6) | u32::from(v);
+                count += 1;
+                if count == 4 {
+                    out.extend_from_slice(&chunk.to_be_bytes()[1..]);
+                    count = 0;
+                    chunk = 0;
+                }
+            }
+            None if ch == b'=' => {
+                match count {
+                    2 => out.push((chunk >> 4) as u8),
+                    3 => out.extend_from_slice(&[(chunk >> 10) as u8, (chunk >> 2) as u8]),
+                    _ => {}
+                }
+                count = 0;
+                chunk = 0;
+            }
+            None if matches!(ch, b' ' | b'\t' | b'\r' | b'\n') => {}
+            None => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Quoted-printable: мягкие переносы (`=` в конце строки) снимаются, пробелы в конце строки — тоже,
+/// битая escape-последовательность — `None`.
+fn quoted_printable_decode(bytes: &[u8]) -> Option<Vec<u8>> {
+    fn hex(ch: u8) -> Option<u8> {
+        match ch {
+            b'0'..=b'9' => Some(ch - b'0'),
+            b'A'..=b'F' => Some(ch - b'A' + 10),
+            b'a'..=b'f' => Some(ch - b'a' + 10),
+            _ => None,
+        }
+    }
+    // Состояние: вне `=`, после `=`, после `=` и одной hex-цифры.
+    enum State {
+        None,
+        Eq,
+        Hex1,
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut state = State::None;
+    let mut hex1 = 0u8;
+    let mut ws = 0usize;
+    let mut crlf: &[u8] = b"\n";
+    for &ch in bytes {
+        match ch {
+            b'=' if state == State::None => state = State::Eq,
+            b'=' => return None,
+            b'\n' => {
+                if state == State::Eq {
+                    state = State::None;
+                } else {
+                    if ws > 0 {
+                        out.truncate(out.len() - ws);
+                    }
+                    out.extend_from_slice(crlf);
+                }
+                ws = 0;
+            }
+            b'\r' => crlf = b"\r\n",
+            _ => match state {
+                State::None => {
+                    ws = if ch.is_ascii_whitespace() { ws + 1 } else { 0 };
+                    out.push(ch);
+                }
+                State::Eq => match hex(ch) {
+                    Some(h) => {
+                        hex1 = h;
+                        state = State::Hex1;
+                    }
+                    None if ch.is_ascii_whitespace() => {}
+                    None => return None,
+                },
+                State::Hex1 => match hex(ch) {
+                    Some(h) => {
+                        out.push((hex1 << 4) | h);
+                        state = State::None;
+                        ws = 0;
+                    }
+                    None => return None,
+                },
+            },
+        }
+    }
+    Some(out)
 }
 
 fn partial(data: Vec<u8>, partial: Option<(u32, NonZeroU32)>) -> Vec<u8> {
