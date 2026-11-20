@@ -7,13 +7,13 @@
 /* Макет mod-webmail, мобильное чтение (WEB-08): письмо «страницей» с возвратом,
    нижняя панель действий. Правила DESIGN.md: внешние картинки скрыты, подменённая
    ссылка — красная полоса (красный только безопасность), карточка приглашения с ответом.
-   Цвета — токены srvPost design/tokens.toml (перенос вручную) + таблица DESIGN.md. */
+   Цвета — токены srvPost design/tokens.toml (перенос вручную) + таблица DESIGN.md. Акцент — синий #0067C0 (решение владельца 20.11). */
 :root{
   --screen:#E9EEF3; --panel:#FFFFFF; --hover:#EDF2F6; --fill:#E4EAF0; --quiet:#F6F6F6;
   --div:#DCE3E8; --stroke:#BAC1C6;
   --t1:#161616; --t2:#5F6B78;
-  --acc:#C0106B; --accbtn:#E3107F; --tint:#FCE4EF; --tinttext:#8C0B4E;
-  --selrow:#F9E2EE;
+  --acc:#0067C0; --accbtn:#0067C0; --tint:#DFF0FF; --tinttext:#234E82;
+  --selrow:#D1E4F4;
   --ok:#0E8483; --warn:#9A6F00; --err:#C62828;
   --threatbg:#FFE6E3; --threattx:#7A3430;
   --duebg:#F8DEA8; --duetx:#664700;
@@ -84,7 +84,7 @@ body{
 .nowline::after{content:"13:20";position:absolute;left:30px;top:-7px;font-size:9px;color:var(--accbtn);background:var(--panel);padding-right:2px;line-height:1}
 .ev{position:absolute;left:40px;right:6px;border-radius:3px;font-size:10px;line-height:1.3;padding:0 5px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .ev.own{background:var(--own);color:var(--t1)}
-.ev.invite{background:rgba(227,16,127,.16);border:1px dashed var(--accbtn);color:var(--acc);font-weight:600}
+.ev.invite{background:rgba(0,103,192,.15);border:1px dashed var(--accbtn);color:var(--acc);font-weight:600}
 .invacts{display:flex;align-items:center;gap:6px}
 .ibtn{height:30px;flex:1;border-radius:5px;display:flex;align-items:center;justify-content:center;gap:5px;font-weight:600;font-size:12px}
 .ibtn.acc{background:var(--accbtn);color:#fff}

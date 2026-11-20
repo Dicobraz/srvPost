@@ -6,17 +6,19 @@
 <style>
 /* Макет mod-webmail: мобильный список в тёмной теме, два экрана на одном холсте —
    плотность «Обычная» (аватар и превью) и «Компактная» (без аватара и превью, как в DESIGN.md).
-   Цвета — тёмные режимы токенов srvPost design/tokens.toml (перенос вручную) + таблица DESIGN.md. */
+   Цвета — тёмные режимы токенов srvPost design/tokens.toml (перенос вручную) + таблица DESIGN.md. Акцент — #2B6CA8/#7CC4F0 (решение 20.11);
+   плотность по умолчанию — обычная с превью. */
 :root{
   --screen:#0F1317; --panel:#141A20; --hover:#1B2229; --fill:#232B33;
   --div:#262F38; --stroke:#3A4652;
   --t1:#D8E7F4; --t2:#7E8A96;
-  --acc:#FB5FB0; --accbtn:#C0106B; --tint:#3A1A2A; --tinttext:#F0A8CA;
-  --selrow:#3A1A2A; --selbar:#D2569A;
+  --acc:#7CC4F0; --accbtn:#2B6CA8; --tint:#23364F; --tinttext:#BFDDFF;
+  --selrow:#2B3E50; --selbar:#7CC4F0;
   --ok:#2EBCBA; --warn:#E7B512; --err:#FF5C5C;
   --duebg:#6C5005; --duetx:#F7E2B8;
   --catblue-bg:#23364F; --catblue-tx:#BFDDFF;
   --catgreen-bg:#2A3B20; --catgreen-tx:#BAD9AB;
+  --catblue:#689BDB; --catpur:#B681C2; --catpur-bg:#332A4A; --catpur-tx:#D7CBF5;
   --iblue:#74A6E0; --ipink:#E68AB5; --igreen:#7DC08F; --iamber:#D9AE55;
 }
 *{box-sizing:border-box;margin:0}
@@ -101,8 +103,8 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
  </defs>
 </svg>
 
-<div class="cap cap1">Обычная плотность — аватар и превью</div>
-<div class="cap cap2">Компактная плотность — без аватара и превью</div>
+<div class="cap cap1">Обычная плотность — по умолчанию</div>
+<div class="cap cap2">Компактная — переключается в настройках</div>
 
 <!-- Телефон 1: обычная плотность -->
 <div class="phone p1">
@@ -149,7 +151,7 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
         <span class="ava">АЛ</span>
         <span class="mid">
           <span class="l1"><span class="from">Анна Лебедева</span><span class="duelbl"><svg class="i xs"><use href="#i-clock"/></svg>До ср</span><span class="time">Вчера</span></span>
-          <span class="l2"><span class="thm">Тендер: вопросы по заявке</span><span class="ends"><span class="chip" style="--cchip-bg:var(--tint);--cchip-tx:var(--tinttext)">Тендеры</span></span></span>
+          <span class="l2"><span class="thm">Тендер: вопросы по заявке</span><span class="ends"><span class="chip" style="--cchip-bg:var(--catpur-bg);--cchip-tx:var(--catpur-tx)">Тендеры</span></span></span>
           <span class="l3">Ответы по двум позициям нужны до среды</span>
         </span>
       </div>
@@ -221,7 +223,7 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
       <div class="msg unread">
         <span class="mid">
           <span class="l1"><span class="from">Ольга Смирнова</span><span class="st">3 письма</span><span class="time">вт 10:15</span></span>
-          <span class="l2"><span class="subj">Договор поставки</span><span class="catdot" style="background:var(--iblue)"></span></span>
+          <span class="l2"><span class="subj">Договор поставки</span><span class="catdot" style="background:var(--catblue)"></span></span>
         </span>
       </div>
       <div class="msg">
@@ -233,7 +235,7 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
       <div class="msg">
         <span class="mid">
           <span class="l1"><span class="from">Анна Лебедева</span><span class="duelbl"><svg class="i xs"><use href="#i-clock"/></svg>До ср</span><span class="time">Вчера</span></span>
-          <span class="l2"><span class="subj">Тендер: вопросы по заявке</span><span class="catdot" style="background:var(--ipink)"></span></span>
+          <span class="l2"><span class="subj">Тендер: вопросы по заявке</span><span class="catdot" style="background:var(--catpur)"></span></span>
         </span>
       </div>
       <div class="msg unread">
@@ -263,7 +265,7 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
       <div class="msg">
         <span class="mid">
           <span class="l1"><span class="from">ООО «Вектор»</span><span class="chip due">Просрочено 1 д</span><span class="time">пн 14:05</span></span>
-          <span class="l2"><span class="subj">Счёт № 402: напоминание</span><span class="catdot" style="background:var(--iblue)"></span></span>
+          <span class="l2"><span class="subj">Счёт № 402: напоминание</span><span class="catdot" style="background:var(--catblue)"></span></span>
         </span>
       </div>
     </div>
@@ -276,6 +278,6 @@ body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple
   </div>
 </div>
 
-<div class="hint">Тёмная тема: окно (#0F1317) темнее карточек (#141A20) — T1-D, вариант D1. Плотность по умолчанию — вопрос владельца.</div>
+<div class="hint">Тёмная тема: окно (#0F1317) темнее карточек (#141A20) — T1-D, вариант D1. Плотность по умолчанию — обычная с превью (решение 20.11).</div>
 </body>
 </html>

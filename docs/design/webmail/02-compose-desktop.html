@@ -5,13 +5,13 @@
 <title>WEB-02 · Новое письмо — десктоп, светлая тема</title>
 <style>
 /* Макет mod-webmail: композер. Структура — docs/DESIGN.md Postman (вкладка, не окно; без модалок).
-   Цвета — токены srvPost design/tokens.toml (перенос вручную) + таблица DESIGN.md. */
+   Цвета — токены srvPost design/tokens.toml (перенос вручную) + таблица DESIGN.md. Акцент — синий #0067C0 (решение владельца 20.11). */
 :root{
   --screen:#E9EEF3; --panel:#FFFFFF; --hover:#EDF2F6; --fill:#E4EAF0; --quiet:#F6F6F6;
   --div:#DCE3E8; --stroke:#BAC1C6;
   --t1:#161616; --t2:#5F6B78;
-  --acc:#C0106B; --accbtn:#E3107F; --tint:#FCE4EF; --tinttext:#8C0B4E;
-  --selrow:#F9E2EE; --selbar:#E3107F;
+  --acc:#0067C0; --accbtn:#0067C0; --tint:#DFF0FF; --tinttext:#234E82;
+  --selrow:#D1E4F4; --selbar:#0067C0;
   --framea:#177CAA;
   --ok:#0E8483; --warn:#9A6F00; --err:#C62828;
   --iblue:#2F6DB5; --ipink:#C2477F;
@@ -150,7 +150,7 @@ table.spec tr.total td{font-weight:600;background:var(--quiet)}
 
 <!-- Заголовок окна: вкладки — открытые объекты; композер — вкладка, не окно -->
 <div class="title">
-  <svg class="logo" viewBox="0 0 22 22"><rect x="1" y="3" width="20" height="4.2" rx="2.1" fill="#E4107F"/><rect x="1" y="9" width="20" height="4.2" rx="2.1" fill="#177CAA"/><rect x="1" y="15" width="13" height="4.2" rx="2.1" fill="#E4107F"/></svg>
+  <svg class="logo" viewBox="0 0 22 22"><rect x="1" y="3" width="20" height="4.2" rx="2.1" fill="#0067C0"/><rect x="1" y="9" width="20" height="4.2" rx="2.1" fill="#177CAA"/><rect x="1" y="15" width="13" height="4.2" rx="2.1" fill="#E4107F"/></svg>
   <div class="secs">
     <div class="sbtn" title="Почта (Ctrl+1)"><svg class="i"><use href="#i-mail"/></svg></div>
     <div class="sbtn c-cal" title="Календарь (Ctrl+2)"><svg class="i"><use href="#i-cal"/></svg></div>
