@@ -750,6 +750,7 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ app-82 | FIX-19 (doctor: плоский путь зонда blob — root-прогон не оставляет каталог `doctor/` root:root), PR #199 | A | — | 2 |
 | ✅ deploy-53 | FIX-20 (internal-сертификат: loopback SAN `localhost`/`127.0.0.1`/`::1` — admin login к `https://127.0.0.1:8443` проходит проверку имени), PR #200 | A | — | 2 |
 | ✅ platform-27 | FIX-21 (doctor: `privileges_*` — состояние процесса службы `thepost.service` (MainPID), а не CLI; без службы — пометка в сообщении), PR #201 | A | — | 2 |
+| meta-91 | FIX-22 (беседы: фоновая привязка ищет сырой `thread_key`, приём пишет канонический `join_key` — копия в «Отправленных» попадает в отдельную беседу; находка APP-77/#203) | A | — | 3 |
 
 ### ACME: короткие сертификаты (ballot SC-081v3, RFC 9773)
 
@@ -924,7 +925,7 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ jmap-31 | JMAP-48 | A | contracts-65, mailstore-15 | 3 |
 | ✅ jmap-33 | JMAP-49 | A | contracts-35, jmap-19 (после волны закрыть issue #46) | 3 |
 | ✅ admin-36 (#186) | ADM-50 | B | contracts-65, admin-30 | 3 |
-| app-74 | APP-77 | A | meta-59, mailstore-15, smtp-31, jmap-31, admin-36 | 2 |
+| ✅ app-74 (#203) | APP-77 | A | meta-59, mailstore-15, smtp-31, jmap-31, admin-36 | 2 |
 | ✅ deploy-43 (#190) | DEP-56 | A | smtp-31 | 1 |
 | docs-13 | DOC-13 | A | app-74, deploy-43 | 1 |
 | ✅ deps-19 (ветка `x/deps-19`) | DEPS-19 | B | — | 1 |
