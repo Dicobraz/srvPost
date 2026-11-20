@@ -8,9 +8,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
+use futures::StreamExt as _;
 use ring::rand::SystemRandom;
 use ring::signature::Ed25519KeyPair as KeyPair;
+use ring::signature::KeyPair as _;
 use time::OffsetDateTime;
+use tp_admin::risk::RiskNode as _;
 use tp_contracts::blob::BlobStore;
 use tp_contracts::bus::EventBus;
 use tp_contracts::lease::LeaseStore;
@@ -20,6 +23,7 @@ use tp_contracts::risk::{
     SignalOverride, SourceId, TiSource, Verdict,
 };
 use tp_contracts::{Error, TenantId};
+use tp_smtp::risk::RiskEnviron as _;
 use tp_testkit::{Clock, ManualClock, MemBlobStore, MemEventBus, MemLease, MemRisk};
 
 use super::{
@@ -164,7 +168,10 @@ fn build_package(
         manifest.samples.push(sample);
     }
     manifest.signals = signals;
-    let signature = key.sign(&canonical_manifest(&manifest)).as_ref().to_vec();
+    let signature = key
+        .sign(&canonical_manifest(&manifest).expect("канонический json"))
+        .as_ref()
+        .to_vec();
     let verified = super::Verified {
         manifest,
         signature: Some(signature),
@@ -481,7 +488,10 @@ fn repack_with_list_bytes(key: &KeyPair, version: u64, list_bytes: &[u8]) -> Vec
         lists: vec![list],
         samples: Vec::new(),
     };
-    let signature = key.sign(&canonical_manifest(&manifest)).as_ref().to_vec();
+    let signature = key
+        .sign(&canonical_manifest(&manifest).expect("канонический json"))
+        .as_ref()
+        .to_vec();
     let verified = super::Verified {
         manifest,
         signature: Some(signature),
@@ -577,7 +587,9 @@ async fn min_node_and_format_are_checked() {
     // Неверный формат манифеста — отсекается схемой (`PackageManifest::validate`).
     let mut bad = package_plain(&key, 1);
     rewrite_manifest_field(&mut bad, |manifest| manifest.format = 99);
-    let err = verifier(&key).verify(&bad, None).expect_err("формат");
+    let err = Verifier::with_key(VENDOR, public(&key))
+        .verify(&bad, None)
+        .expect_err("формат");
     assert!(err.to_string().contains("формата пакета"), "{err}");
 }
 
@@ -709,7 +721,7 @@ async fn offline_dir_update_installs_and_rejects_bad_packages() {
     let update = RiskUpdate::new(
         section,
         Arc::new(verifier(&key)),
-        installer(cache.clone(), &blob),
+        Arc::new(installer(cache.clone(), &blob)),
         cache.clone(),
         Arc::new(leases.clone()) as Arc<dyn LeaseStore>,
         "node-a".to_owned(),

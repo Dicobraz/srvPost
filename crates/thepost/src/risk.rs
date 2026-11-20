@@ -567,7 +567,7 @@ fn expected(sample: &SampleFile) -> Vec<SignalId> {
 
 /// Служебные и заявленные файлы пакета.
 fn zip_entry<R: std::io::Read + std::io::Seek>(
-    zip: &zip::ZipArchive<R>,
+    zip: &mut zip::ZipArchive<R>,
     name: &str,
 ) -> Result<Vec<u8>> {
     zip_entry_opt(zip, name)?
@@ -599,12 +599,15 @@ pub fn parse_list(kind: ListKind, bytes: &[u8]) -> Result<u64> {
             continue;
         }
         match kind {
-            ListKind::Ip => value
-                .parse::<ipnet::IpNet>()
-                .or_else(|_| value.parse::<std::net::IpAddr>().map(ipnet::IpNet::from))
-                .map_err(|_| {
-                    Error::invalid(format!("risk: запись списка не IP/подсеть: {value:?}"))
-                })?,
+            ListKind::Ip => {
+                let net = value
+                    .parse::<ipnet::IpNet>()
+                    .or_else(|_| value.parse::<std::net::IpAddr>().map(ipnet::IpNet::from))
+                    .map_err(|_| {
+                        Error::invalid(format!("risk: запись списка не IP/подсеть: {value:?}"))
+                    })?;
+                let _ = net;
+            }
             ListKind::Domain => {
                 if !valid_domain(value) {
                     return Err(Error::invalid(format!(
@@ -2379,7 +2382,7 @@ pub fn verify_report_text(verified: &Verified) -> String {
 
 fn ids(list: &[SignalId]) -> String {
     list.iter()
-        .map(String::as_str)
+        .map(|id| id.as_str())
         .collect::<Vec<_>>()
         .join(", ")
 }

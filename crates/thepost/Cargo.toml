@@ -70,6 +70,7 @@ zip.workspace = true
 
 [dev-dependencies]
 tp-testkit.workspace = true
+serde_yaml_ng.workspace = true
 tempfile.workspace = true
 # Записи журнала переписки в тестах CLI (`journal_commands_against_admin_api`, ADM-52).
 time.workspace = true
