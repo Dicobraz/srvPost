@@ -303,7 +303,7 @@ pub enum RiskAction {
     Source {
         /// Действие.
         #[command(subcommand)]
-        action: Box<SourceAction>,
+        action: Box<RiskSourceAction>,
     },
     /// Журнал срабатываний организации (применённые и «только отчёт»).
     Hits(HitsArgs),
@@ -1052,7 +1052,7 @@ pub enum DomainAction {
 
 /// Действия с доверенными источниками организации.
 #[derive(Debug, Clone, Subcommand)]
-pub enum SourceAction {
+pub enum RiskSourceAction {
     /// Доверенные источники организации.
     List,
     /// Создание или замена источника: откуда (сети или сертификат клиента) и кто (шлюз или приложение).
@@ -2686,6 +2686,7 @@ async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> Cl
                             )
                         ),
                     ]),
+                    r.version,
                     r.version
                 );
                 out(args, &r, text)
@@ -2705,7 +2706,7 @@ async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> Cl
             }
         },
         RiskAction::Source { action } => match *action {
-            SourceAction::List => {
+            RiskSourceAction::List => {
                 let v: SourcesView = client.call(RISK_SOURCES_LIST, &[], &[], NO_BODY).await?;
                 let rows: Vec<Vec<String>> = v
                     .sources
@@ -2730,7 +2731,7 @@ async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> Cl
                     ),
                 )
             }
-            SourceAction::Add { file } => {
+            RiskSourceAction::Add { file } => {
                 let text = input_text(file).await?;
                 let body: NewTiSourceBody =
                     serde_json::from_str(&text).map_err(|e| format!("источник TI (JSON): {e}"))?;
@@ -2745,7 +2746,7 @@ async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> Cl
                     })?;
                 out(args, &v, source_record(&v))
             }
-            SourceAction::Set { id, file } => {
+            RiskSourceAction::Set { id, file } => {
                 let text = input_text(file).await?;
                 let body: TiSourceBody =
                     serde_json::from_str(&text).map_err(|e| format!("источник TI (JSON): {e}"))?;
@@ -2754,25 +2755,25 @@ async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> Cl
                     .await?;
                 out(args, &v, source_record(&v))
             }
-            SourceAction::Rm { id } => {
+            RiskSourceAction::Rm { id } => {
                 let v: TiSourceView = client
                     .call(RISK_SOURCE_DELETE, &[&id], &[], NO_BODY)
                     .await?;
                 out(args, &v, format!("Источник {id} удалён.\n"))
             }
-            SourceAction::Import { id, file } => {
+            RiskSourceAction::Import { id, file } => {
                 let bytes = input_bytes(file).await?;
                 let v: ListVersionView =
                     client.call_octet(RISK_SOURCE_IMPORT, &[&id], bytes).await?;
                 out(args, &v, list_version_record(&v))
             }
-            SourceAction::Refresh { id } => {
+            RiskSourceAction::Refresh { id } => {
                 let v: ListVersionView = client
                     .call(RISK_SOURCE_REFRESH, &[&id], &[], NO_BODY)
                     .await?;
                 out(args, &v, list_version_record(&v))
             }
-            SourceAction::Usage { id, since } => {
+            RiskSourceAction::Usage { id, since } => {
                 let query = since
                     .as_deref()
                     .map(|sv| vec![("since".to_owned(), sv.to_owned())])
