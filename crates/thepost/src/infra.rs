@@ -181,7 +181,7 @@ impl std::fmt::Debug for Bus {
 }
 
 /// Шина LISTEN/NOTIFY для метрик СУБД: основной БД или по шардам справочника (APP-47).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum SignalBus {
     /// Основная БД.
     Main(PgSignalBus),

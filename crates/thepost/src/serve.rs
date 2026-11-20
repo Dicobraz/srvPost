@@ -1099,9 +1099,11 @@ async fn feed_cache_disk(
 /// системы (заполнение кэша живёт на этом же диске). `max_bytes: 0` — только файловая система.
 fn cache_disk_load(usage: FsUsage, used: u64, max_bytes: u64) -> (u64, u64) {
     let fs_used = usage.total.saturating_sub(usage.available);
-    let by_limit = (max_bytes > 0)
-        .then(|| (used.min(max_bytes) as f64 / max_bytes as f64 * usage.total as f64) as u64)
-        .unwrap_or(0);
+    let by_limit = if max_bytes > 0 {
+        (used.min(max_bytes) as f64 / max_bytes as f64 * usage.total as f64) as u64
+    } else {
+        0
+    };
     let used = fs_used.max(by_limit.min(usage.total));
     (usage.total - used, usage.total)
 }
@@ -1363,10 +1365,9 @@ async fn shard_buses_follow(
                 tp_contracts::bus::EventKind::ShardsChanged
                     | tp_contracts::bus::EventKind::ConfigReloaded
                     | tp_contracts::bus::EventKind::Resync
-            ) {
-                if let Err(e) = bus.refresh().await {
-                    tracing::warn!(error = %e, "cluster: шины новых шардов не подключены");
-                }
+            ) && let Err(e) = bus.refresh().await
+            {
+                tracing::warn!(error = %e, "cluster: шины новых шардов не подключены");
             }
         }
         // Поток подписки закончился (ошибка шины): переподписка.

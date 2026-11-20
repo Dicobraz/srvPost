@@ -47,6 +47,7 @@ pub struct SearchQueryRequest {
 /// Обработчик `search/query`: поиск по индексам ящиков этого узла (`Search` узла, SRS 2.8 — «поиск по
 /// индексу на узле-владельце»). Ответ — JSON-массив идентификаторов писем; письма, которых уже нет,
 /// вызывающий отбрасывает (индекс может отставать).
+#[derive(Debug)]
 pub struct SearchQuery {
     search: Arc<Search>,
 }
@@ -112,6 +113,14 @@ pub struct NodeState {
     node: NodeId,
     health: Health,
     load: Arc<dyn LoadMonitor>,
+}
+
+impl std::fmt::Debug for NodeState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeState")
+            .field("node", &self.node)
+            .finish_non_exhaustive()
+    }
 }
 
 impl NodeState {
