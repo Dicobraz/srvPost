@@ -2535,7 +2535,7 @@ async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> Cl
             let level = risk_level(args)?;
             match *action {
                 SignalsAction::List => {
-                    let (op, params) = signal_ops(&level);
+                    let (op, _, params) = signal_ops(&level);
                     let p = params.iter().map(String::as_str).collect::<Vec<_>>();
                     let v: SignalsView = client.call(op, &p, &[], NO_BODY).await?;
                     let rows: Vec<Vec<String>> = v
@@ -2584,7 +2584,7 @@ async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> Cl
                         detector: detector.as_deref().map(detector_arg).transpose()?,
                         threshold,
                     };
-                    let (op, mut params) = signal_ops(&level);
+                    let (_, op, mut params) = signal_ops(&level);
                     params.push(id.clone());
                     let p = params.iter().map(String::as_str).collect::<Vec<_>>();
                     let v: SignalView =
@@ -2597,7 +2597,7 @@ async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> Cl
                     out(args, &v, signal_record(&v))
                 }
                 SignalsAction::Reset { id } => {
-                    let (_, mut params) = signal_ops(&level);
+                    let (_, _, mut params) = signal_ops(&level);
                     params.push(id.clone());
                     let p = params.iter().map(String::as_str).collect::<Vec<_>>();
                     let op = match &level {
@@ -2869,11 +2869,11 @@ impl RiskLevel {
 }
 
 /// Операции признака уровня: `PUT` и параметры пути (`DELETE` — рядом).
-fn signal_ops(level: &RiskLevel) -> (Op, Vec<String>) {
+fn signal_ops(level: &RiskLevel) -> (Op, Op, Vec<String>) {
     let params = level.params();
     match level {
-        RiskLevel::Installation => (RISK_SIGNAL_PUT, params),
-        RiskLevel::Org(_) => (ORG_RISK_SIGNAL_PUT, params),
+        RiskLevel::Installation => (RISK_SIGNALS_LIST, RISK_SIGNAL_PUT, params),
+        RiskLevel::Org(_) => (ORG_RISK_SIGNALS_LIST, ORG_RISK_SIGNAL_PUT, params),
     }
 }
 
