@@ -751,7 +751,7 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ app-82 | FIX-19 (doctor: плоский путь зонда blob — root-прогон не оставляет каталог `doctor/` root:root), PR #199 | A | — | 2 |
 | ✅ deploy-53 | FIX-20 (internal-сертификат: loopback SAN `localhost`/`127.0.0.1`/`::1` — admin login к `https://127.0.0.1:8443` проходит проверку имени), PR #200 | A | — | 2 |
 | ✅ platform-27 | FIX-21 (doctor: `privileges_*` — состояние процесса службы `thepost.service` (MainPID), а не CLI; без службы — пометка в сообщении), PR #201 | A | — | 2 |
-| meta-91 | FIX-22 (беседы: фоновая привязка ищет сырой `thread_key`, приём пишет канонический `join_key` — копия в «Отправленных» попадает в отдельную беседу; находка APP-77/#203) | A | — | 3 |
+| ✅ meta-91 (#213) | FIX-22 (беседы: фоновая привязка ищет сырой `thread_key`, приём пишет канонический `join_key` — копия в «Отправленных» попадает в отдельную беседу; находка APP-77/#203) | A | — | 3 |
 
 ### ACME: короткие сертификаты (ballot SC-081v3, RFC 9773)
 
@@ -936,7 +936,7 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ meta-60 (#184) | META-87 | A | contracts-66 | 3 |
 | ✅ sieve-08 (#187) | SIEVE-15 | A | contracts-66, deps-19, sieve-07 | 2 |
 | ✅ smtp-32 (#219, рестарт после снятия #193) | SMTP-52 | A | contracts-66, deps-19, smtp-31 | 4 |
-| admin-37 (ветка `x/admin-37`) | ADM-51 | B | contracts-66, admin-36 | 3 |
+| ✅ admin-37 (#206) | ADM-51 | B | contracts-66, admin-36 | 3 |
 | console-15 | UI-24 | A | console-14, admin-37 | 1 |
 | tui-07 | TUI-10 | A | tui-06, admin-37 | 1 |
 | app-75 | APP-78 | A | meta-60, admin-37, smtp-32, sieve-08, app-74 | 2 |
@@ -971,6 +971,7 @@ PR 10–12.11 (#293, #443, #449). Строки от `contracts-41` до `smtp-16
 | ✅ smtp-33 (#153) | SMTP-53, SMTP-54 | A | contracts-67, meta-61, blob-11 | 4 |
 | ✅ admin-38 | ADM-52 | A | contracts-67, meta-61 | 4 |
 | ✅ app-79 (#145) | APP-82, APP-83 | A | contracts-67, meta-61, blob-11 | 4 |
+| ✅ contracts-69 (#233) | FIX-25 (манифест пакета признаков: created/since в RFC 3339 — JSON пакета читаем снаружи; находка ADM-51/#206) | A | — | 1 |
 | ✅ console-16 | UI-25 | A | admin-38 | 4 |
 | ✅ admin-39 (#185) | ADM-53 | B | admin-38 (решение #171: CRUD правил журналирования) | 4 |
 | ✅ console-17 (#192) | UI-26 | A | admin-39 (решение #171: вкладка правил) | 4 |
