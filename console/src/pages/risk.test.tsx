@@ -57,7 +57,7 @@ test("организация не может выбрать вес ниже ус
   // Вес ниже уровня установки — подсказка у поля, кнопка сохранения недоступна, записи нет.
   fireEvent.change(weight, { target: { value: "3" } });
   expect(screen.getByText("не ниже уровня установки: 8")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Сохранить" }).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(true);
   expect(sent(calls, "PUT", PUT_URL)).toBeUndefined();
 
   // Строгое значение принимается: вес, действие и режим — уровнем выше текущего каталога.

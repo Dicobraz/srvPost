@@ -68,13 +68,16 @@ const actionLabel = (a?: Schemas["RiskAction"] | null) => (a ? (ACTIONS.find((x)
 const MODE_LABELS: Record<Schemas["Mode"], string> = { report: "только отчёт", enforce: "применять" };
 const MODE_OPTIONS = (Object.keys(MODE_LABELS) as Schemas["Mode"][]).map((m) => ({ value: m, label: MODE_LABELS[m] }));
 
-const DETECTOR_LABELS: Record<string, string> = {
-  thread_new_attachment_type: "новый тип вложения в переписке",
-  encrypted_archive: "шифрованный архив",
-  disk_image_or_shortcut: "образ диска или ярлык",
-  thread_new_link_domain: "новый домен ссылки в переписке",
-  reply_to_changed: "сменился Reply-To",
-};
+/** Встроенные детекторы (без детектора по списку TI) — значения контракта. */
+type NamedDetector = Exclude<Schemas["Detector"], { list_match: { field: Schemas["Field"]; list: string } }>;
+const NAMED_DETECTORS: { value: NamedDetector; label: string }[] = [
+  { value: "thread_new_attachment_type", label: "новый тип вложения в переписке" },
+  { value: "encrypted_archive", label: "шифрованный архив" },
+  { value: "disk_image_or_shortcut", label: "образ диска или ярлык" },
+  { value: "thread_new_link_domain", label: "новый домен ссылки в переписке" },
+  { value: "reply_to_changed", label: "сменился Reply-To" },
+];
+const DETECTOR_LABELS: Record<string, string> = Object.fromEntries(NAMED_DETECTORS.map((d) => [d.value, d.label]));
 const FIELD_LABELS: Record<string, string> = {
   sender_ip: "IP отправителя",
   link_domain: "домен ссылки",
@@ -90,7 +93,7 @@ const originText = (o: Signal["origin"]) => (o === "vendor" ? "поставщи�
 /** Уровень-источник действующего значения: нет отличия от пакета — пакет поставщика. */
 const sourceText = (s?: Signal["source"]) => (s == null ? "пакет" : typeof s === "string" ? "установка" : "организация");
 
-const DETECTORS_OF_FORM = Object.entries(DETECTOR_LABELS).map(([value, label]) => ({ value, label }));
+const DETECTORS_OF_FORM = NAMED_DETECTORS;
 const FIELDS_OF_FORM = Object.entries(FIELD_LABELS).map(([value, label]) => ({ value: value as Schemas["Field"], label }));
 
 /** Тело `PUT` из правки в строке: признак поставщика — вес, действие, режим; свой `org.*` — целиком. */
@@ -169,7 +172,9 @@ function NewSignalModal(p: { open: boolean; url: string; onClose: () => void; on
   };
   const save = (v: NewSignalForm) => {
     const detector: Schemas["Detector"] =
-      v.detector_kind === "list" ? { list_match: { field: v.field ?? "from_domain", list: v.list ?? "" } } : (v.detector ?? "reply_to_changed");
+      v.detector_kind === "list"
+        ? { list_match: { field: v.field ?? "from_domain", list: v.list ?? "" } }
+        : (NAMED_DETECTORS.find((d) => d.value === v.detector)?.value ?? "reply_to_changed");
     mutate(
       {
         url: `${p.url}/${encodeURIComponent((v.id ?? "").trim())}`,
@@ -241,12 +246,13 @@ function NewSignalModal(p: { open: boolean; url: string; onClose: () => void; on
 /** Вкладка «Каталог»: таблица действующего каталога уровня с правкой в строке и осиротевшими изменениями. */
 function CatalogTab(p: { level: "installation" | "org"; editable: boolean; instAdmin: boolean }) {
   const url = p.level === "installation" ? INST_SIGNALS : ORG_SIGNALS;
-  const { result, query, refetch } = useCustom<Schemas["SignalsView"]>({
+  const { result, query } = useCustom<Schemas["SignalsView"]>({
     url,
     method: "get",
     errorNotification: false,
     queryOptions: { retry: false },
   });
+  const refetch = () => query.refetch();
   const base = useBaseSignals(p.level === "org" && p.instAdmin);
   const signals = query.isSuccess ? result.data.signals : undefined;
   const fresh = (signals ?? []).filter((s) => !s.orphaned);
@@ -535,7 +541,7 @@ const THRESHOLD_FIELDS: { key: keyof Schemas["Thresholds"]; label: string }[] = 
 /** Вкладка «Пороги»: четыре числа с подписями действий; у организации — не выше уровня установки. */
 function ThresholdsTab(p: { level: "installation" | "org"; editable: boolean; instAdmin: boolean }) {
   const url = p.level === "installation" ? INST_THRESHOLDS : ORG_THRESHOLDS;
-  const { result, query, refetch } = useCustom<Schemas["ThresholdsView"]>({
+  const { result, query } = useCustom<Schemas["ThresholdsView"]>({
     url,
     method: "get",
     errorNotification: false,
@@ -547,7 +553,9 @@ function ThresholdsTab(p: { level: "installation" | "org"; editable: boolean; in
     errorNotification: false,
     queryOptions: { enabled: p.level === "org" && p.instAdmin, retry: false },
   });
-  const base = p.level === "org" && p.instAdmin && baseQuery.isSuccess ? baseQuery.result.data.effective : undefined;
+  const refetch = () => query.refetch();
+  const base =
+    p.level === "org" && p.instAdmin && baseQuery.query.isSuccess ? baseQuery.result.data.effective : undefined;
   const view = query.isSuccess ? result.data : undefined;
   const [values, setValues] = useState<Schemas["Thresholds"] | null>(null);
   const [error, setError] = useState<string>();
@@ -696,15 +704,16 @@ function PackageReport(p: { report: Schemas["PackageReportView"]; onClose: () =>
 function PackagesTab() {
   const { message } = AntdApp.useApp();
   const readOnly = useReadOnly("risk");
-  const { result, query, refetch } = useCustom<Schemas["PackagesView"]>({
+  const { result, query } = useCustom<Schemas["PackagesView"]>({
     url: PACKAGES_URL,
     method: "get",
     errorNotification: false,
     queryOptions: { retry: false },
   });
+  const refetch = () => query.refetch();
   const [report, setReport] = useState<Schemas["PackageReportView"] | null>(null);
   const [error, setError] = useState<string>();
-  const { mutate, mutation } = useCustomMutation<Schemas["PackagesView"], HttpError, undefined>();
+  const { mutate } = useCustomMutation<Schemas["PackagesView"], HttpError, undefined>();
   const packages = query.isSuccess ? result.data.packages : undefined;
 
   /** Загрузка файла пакета (закрытый контур): проверка узла, 202 — поставлен и не активен. */
@@ -1113,12 +1122,13 @@ function UsageDrawer(p: { source: string | null; onClose: () => void }) {
 function SourcesTab() {
   const { message } = AntdApp.useApp();
   const readOnly = useReadOnly("risk");
-  const { result, query, refetch } = useCustom<Schemas["SourcesView"]>({
+  const { result, query } = useCustom<Schemas["SourcesView"]>({
     url: SOURCES_URL,
     method: "get",
     errorNotification: false,
     queryOptions: { retry: false },
   });
+  const refetch = () => query.refetch();
   const sources = query.isSuccess ? result.data.sources : undefined;
   // Версии списков — из ответов импорта и обновления: свежесть и число записей видны после загрузки.
   const [versions, setVersions] = useState<Record<string, Schemas["ListVersionView"]>>({});
