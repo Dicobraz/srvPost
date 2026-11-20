@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# Признак ответа узла The Post (SMTP-51, DEP-56): узел ставит {{ rspamd_reply_header }} ({{ rspamd_reply_symbol }},
+# балл — как REPLY модуля replies) до Milter и удаляет такой же заголовок, пришедший извне. Модуль replies не
+# включаем: признак ставит узел, второй таблицы Message-ID в Redis нет. Карта — значение заголовка, которое
+# ставит узел; другое значение или отсутствие заголовка — срабатывания нет.
+{{ rspamd_reply_symbol }} {
+  type = "header";
+  header = "{{ rspamd_reply_header }}";
+  map = "{{ rspamd_reply_map_file }}";
+  symbol = "{{ rspamd_reply_symbol }}";
+  score = {{ rspamd_reply_score }};
+  description = "Ответ на письмо узла The Post ({{ rspamd_reply_header }})";
+}

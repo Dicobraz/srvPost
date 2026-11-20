@@ -53,3 +53,9 @@ all:
         #       access_key_id: { secret: "thepost/s3#access_key_id" }
         #       secret_access_key: { secret: "thepost/s3#secret_access_key" }
         #     tls: { ca_file: /etc/thepost/pki/ca.pem }
+        # Ключи метки ответа (SMTP-51): по умолчанию [k1] — роль создаёт thepost/reply#k1 (случайные 32 байта)
+        # при установке. Ротация: новый id в начале списка — прогон создаёт его и делает активным (первым);
+        # прежний оставить для проверки старых меток, убрать после thepost_reply_max_age. BATV (метка MAIL FROM)
+        # — те же ключи; режим log по умолчанию (только журнал), enforce — после просмотра журнала отказов:
+        # thepost_reply_keys: [k2, k1]
+        # thepost_batv_mode: enforce
