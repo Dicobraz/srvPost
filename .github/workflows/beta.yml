@@ -12,6 +12,9 @@
 # CI-05 (решение 2026-11-01): архивы и образ проверяются на интерпретаторы и сценарии (.github/interp_check.py)
 # до публикации; нарушение — красный build (беты нет) или image (бета без образа).
 # CI-06: build и repro собирают console/dist (.github/actions/console) до cross build (фича `console` крейта thepost).
+# WEB-01 (полоса mod-webmail): build и repro собирают web/dist (.github/actions/webmail) до cross build
+# (фича `webmail` крейта thepost); build проверяет GET /mail/ (.github/actions/webmail-check, пока только
+# бинарным файлом — образ без веб-клиента, см. deploy).
 # CI-08: образ — с консолью (deploy/docker/Dockerfile, CONSOLE=1 по умолчанию, DEP-35); build (x86_64) и image
 # проверяют, что thepost отвечает на GET /console/ страницей консоли (.github/actions/console-check).
 # CI-10 (решение 68): архив веб-консоли thepost-console-<тег>.tar.gz (и .sha256) — console/dist сборки x86_64, что
@@ -105,6 +108,12 @@ jobs:
         with:
           binary: ${{ steps.build.outputs.binary }}
           index: console/dist/index.html
+      # Веб-клиент /mail/ (WEB-01): вшит в этот бинарь (release-build собирает web/dist до cross build).
+      # Образ пока без веб-клиента (deploy/docker/Dockerfile — полоса deploy) — проверка образом осталась
+      # за карточкой полосы deploy.
+      - uses: ./.github/actions/webmail-check
+        with:
+          binary: ${{ steps.build.outputs.binary }}
       - name: Архив
         shell: bash
         run: |
