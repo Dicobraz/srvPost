@@ -41,7 +41,7 @@ pub(crate) fn extract(raw: &[u8]) -> Option<Result<Imip, &'static str>> {
         let method = ct.attribute("method").filter(|_| calendar)?;
         Some((
             method.trim().to_owned(),
-            String::from_utf8_lossy(p.decoded()).into_owned(),
+            String::from_utf8_lossy(&p.decoded()).into_owned(),
         ))
     })?;
     Some((|| {

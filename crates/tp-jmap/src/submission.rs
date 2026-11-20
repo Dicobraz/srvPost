@@ -954,7 +954,11 @@ async fn submit_one(
             .into_iter()
             .flatten()
         {
-            rcpts.extend(list.iter().filter_map(|a| a.address()).map(str::to_owned));
+            rcpts.extend(
+                list.mailboxes()
+                    .filter_map(|a| a.address())
+                    .map(str::to_owned),
+            );
         }
         message_id = parsed.message_id().and_then(crate::audit::detail);
         (from, sender, rcpts)

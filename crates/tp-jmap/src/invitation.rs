@@ -124,7 +124,7 @@ fn extract(raw: &[u8]) -> Option<Result<(Invitation, itip::Meeting), String>> {
             .filter(|_| calendar)?
             .trim()
             .to_owned();
-        Some((method, String::from_utf8_lossy(p.decoded()).into_owned()))
+        Some((method, String::from_utf8_lossy(&p.decoded()).into_owned()))
     })?;
     Some((|| {
         let not = "письмо не приглашение: часть text/calendar без method=REQUEST";

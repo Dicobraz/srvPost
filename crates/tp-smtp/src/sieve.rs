@@ -279,7 +279,9 @@ pub fn suppressed(mail_from: &str, raw: &[u8], reply: &AutoReply) -> Option<&'st
     }
     let msg = mail_parser::MessageParser::new().parse_headers(raw)?;
     for h in msg.headers() {
-        let name = h.name().as_str();
+        let name = h.name();
+        // `HeaderName` — временный `Cow`: живёт в переменной, `as_str` — его заём.
+        let name = name.as_str();
         let value = raw
             .get(h.offset_start() as usize..h.offset_end() as usize)
             .map(|v| String::from_utf8_lossy(v).trim().to_ascii_lowercase())
