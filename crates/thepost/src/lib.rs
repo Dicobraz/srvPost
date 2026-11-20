@@ -26,5 +26,10 @@ pub mod startup;
 pub mod trust;
 pub mod verify;
 
+/// Веб-клиент под `/mail/` (полоса mod-webmail, решение 2026-11-20): wiring раздачи статики на слушателе
+/// JMAP. Файл правит полоса mod-webmail (lanes.toml), остальные файлы крейта — полоса app.
+#[cfg(feature = "webmail")]
+pub mod webmail;
+
 #[cfg(test)]
 mod testutil;

@@ -834,6 +834,12 @@ impl RoleSetup<'_> {
                 if self.cfg.roles().contains(Role::Dav) && http.dav.is_none() {
                     router = router.merge(self.services.dav(self.dav_config()?, &smtp, false)?);
                 }
+                // Веб-клиент `/mail/*` (WEB-01, полоса mod-webmail): тот же порт с JMAP — SPA same-origin
+                // (решение 2026-11-20); выключенный модуль `modules.webmail` маршрутов не добавляет.
+                #[cfg(feature = "webmail")]
+                {
+                    router = crate::webmail::merge(router, self.cfg)?;
+                }
                 let service = HttpRole::new(
                     role,
                     router,

@@ -60,6 +60,11 @@ paths = ["crates/tp-admin/*", "crates/tp-admin-client/*", "crates/thepost/src/ad
 
 [lane.tui]
 paths = ["crates/tp-tui/*"]
+[lane.mod-webmail]
+# Веб-клиент (SRS 1.3, решение 2026-11-20): SPA web/ поверх JMAP, сборка web/dist вшивается в бинарный файл
+# (фича `webmail` крейта thepost). Секция выше [lane.app]: первое совпадение — mod-webmail, иначе правка
+# wiring-файла была бы PR на две полосы (класс B). Остальные файлы крейта thepost — полоса app.
+paths = ["web/*", "crates/tp-webmail/*", "crates/thepost/src/webmail*.rs"]
 [lane.app]
 paths = ["crates/thepost/*"]
 

@@ -44,11 +44,14 @@ runs:
         tool: cross
     - id: console
       uses: ./.github/actions/console
+    # Веб-клиент (WEB-01): web/dist собирается до cross build — rust-embed вшивает её в бинарный файл (фича webmail).
+    - id: webmail
+      uses: ./.github/actions/webmail
     - name: cross build
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
-        ARGS: ${{ steps.console.outputs.cargo-args }}
+        ARGS: ${{ steps.console.outputs.cargo-args }} ${{ steps.webmail.outputs.cargo-args }}
         RUSTFLAGS: ''
         CROSS_CONFIG: ${{ github.action_path }}/Cross.toml
       run: cross build --release --locked -p thepost --target "$TARGET" --features gssapi $ARGS

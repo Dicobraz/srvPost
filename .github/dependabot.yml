@@ -3,7 +3,7 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directories: ["/", "/.github/actions/console"]
+    directories: ["/", "/.github/actions/console", "/.github/actions/webmail"]
     schedule: { interval: weekly, day: monday }
     groups:
       actions: { patterns: ["*"] }
@@ -25,6 +25,14 @@ updates:
     ignore:
       - dependency-name: react-router
         update-types: [version-update:semver-major]
+    open-pull-requests-limit: 2
+    commit-message: { prefix: build, include: scope }
+  # Веб-клиент (WEB-01, полоса mod-webmail): та же цепочка Node, что у консоли.
+  - package-ecosystem: npm
+    directory: /web
+    schedule: { interval: weekly, day: monday }
+    groups:
+      npm: { patterns: ["*"], update-types: [minor, patch] }
     open-pull-requests-limit: 2
     commit-message: { prefix: build, include: scope }
   - package-ecosystem: docker

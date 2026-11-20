@@ -1,0 +1,99 @@
+/*
+  Оболочка на CSS-переменных темы (web/src/theme.ts из design/tokens.toml). Цвета только через var(--c-*):
+  своих цветов в коде клиента нет (решение 119). Узкий экран — навигация внизу (mobile Outlook, ADR 2026-11-20).
+*/
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--c-screen, #e9eef3);
+  color: var(--c-text, #161616);
+  font-family: var(--font-text, system-ui, sans-serif);
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  background: var(--c-panel, #ffffff);
+  border-bottom: 1px solid var(--c-frame, #bac1c6);
+}
+
+.product {
+  font-family: var(--font-heading, system-ui, sans-serif);
+  font-size: 1.25rem;
+}
+
+.theme-button {
+  border: 1px solid var(--c-frame, #bac1c6);
+  background: var(--c-panel, #ffffff);
+  color: var(--c-text, #161616);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+
+.nav {
+  display: flex;
+  flex-direction: row;
+  gap: 0.25rem;
+  padding: 0.25rem 1rem;
+  background: var(--c-panel, #ffffff);
+  border-bottom: 1px solid var(--c-frame, #bac1c6);
+}
+
+.nav-item {
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  color: var(--c-muted, #5f6b78);
+  text-decoration: none;
+}
+
+.nav-item:hover {
+  background: var(--c-selI, #d7e2ea);
+  color: var(--c-text, #161616);
+}
+
+.nav-item.active {
+  background: var(--c-sel, #e3107f);
+  color: var(--c-selFg, #ffffff);
+}
+
+/* Шов «Каналы»: пункт виден (место под будущий веб-чат), но недоступен. */
+.nav-seam {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.content {
+  flex: 1;
+  padding: 1rem;
+}
+
+.stub h1 {
+  margin-top: 0;
+  font-family: var(--font-heading, system-ui, sans-serif);
+  color: var(--c-titleA, #c0106b);
+}
+
+.stub p {
+  color: var(--c-muted, #5f6b78);
+}
+
+@media (max-width: 640px) {
+  .nav {
+    order: 3;
+    border-bottom: none;
+    border-top: 1px solid var(--c-frame, #bac1c6);
+    justify-content: space-around;
+  }
+}
