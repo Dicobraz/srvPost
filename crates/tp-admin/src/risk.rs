@@ -2939,7 +2939,8 @@ mod tests {
         assert_eq!(s, StatusCode::OK, "{b}");
         let hits = b["hits"].as_array().expect("hits");
         assert_eq!(hits.len(), 2, "по записи на вердикт: {b}");
-        assert_eq!(hits[0]["mode"], json!("enforce"), "свежие первыми");
+        assert_eq!(hits[0]["mode"], json!("report"), "свежие первыми");
+        assert_eq!(hits[1]["mode"], json!("enforce"));
         assert_eq!(b["next"], Value::Null, "всё влезло");
         // Фильтры: признак и режим; страница с продолжением.
         let url = format!("{}?signal=tp.report", org_path("hits"));
