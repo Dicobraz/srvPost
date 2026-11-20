@@ -1591,11 +1591,7 @@ mod tests {
             "токен, истёкший раньше срока хранения, удалён; остальные на месте"
         );
         assert_eq!(tombstones().await, 1, "свежее надгробие на месте");
-        assert_eq!(
-            sessions().await,
-            1,
-            "истёкшая сессия Admin API удалена, действующая на месте"
-        );
+        assert_eq!(sessions().await, 1, "истёкшая сессия Admin API удалена, действующая на месте");
         assert!(
             meta.seen(scope, "fresh@example.net", "", day)
                 .await

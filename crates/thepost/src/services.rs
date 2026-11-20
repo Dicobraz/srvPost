@@ -2644,9 +2644,7 @@ mod tests {
         // Два узла роли admin над одной БД: у каждого свой Admin API и локальный вход (как в `serve`),
         // хранилище сессий — общее `PgMeta` (`Services::admin`).
         let node_a = Arc::new(crate::local_admin::attach(
-            services
-                .admin(&ext, admin_cfg.clone(), &smtp)
-                .expect("admin a"),
+            services.admin(&ext, admin_cfg.clone(), &smtp).expect("admin a"),
             &services,
         ));
         let node_b = Arc::new(crate::local_admin::attach(
@@ -2724,8 +2722,7 @@ mod tests {
                     scopes: None,
                 },
                 roles: vec!["installation_admin".into()],
-                expires_at: time::OffsetDateTime::now_utc()
-                    - std::time::Duration::from_secs(3600),
+                expires_at: time::OffsetDateTime::now_utc() - std::time::Duration::from_secs(3600),
             },
         )
         .await
@@ -2739,11 +2736,7 @@ mod tests {
             itip: None,
         };
         let done = purge.step().await;
-        assert_eq!(
-            done.admin_sessions.expect("шаг сессий"),
-            1,
-            "истёкшая сессия удалена: {done:?}"
-        );
+        assert_eq!(done.admin_sessions.expect("шаг сессий"), 1, "истёкшая сессия удалена: {done:?}");
         let mut tx = tp_meta::schema::begin(&pool, TenantId::DEFAULT)
             .await
             .expect("begin");
