@@ -93,6 +93,7 @@ pub async fn calendar_publications(
         !token.is_empty() && !token.chars().any(char::is_control),
         "{token}"
     );
+    let a = CalendarPublication { token: None, ..a };
     let listed = publ.list(owner).await.expect("list");
     assert_eq!(
         listed,
@@ -149,6 +150,7 @@ pub async fn calendar_publications(
         .await
         .expect("create limited");
     assert_eq!(c.detail, Detail::Limited);
+    let c = CalendarPublication { token: None, ..c };
     assert_eq!(
         publ.create(owner, calendar, Detail::All, None).await,
         Err(Error::Forbidden)
