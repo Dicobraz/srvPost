@@ -46,6 +46,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use mail_parser::MessageParser;
+use tp_contracts::admin_session::AdminSessions;
 use tp_contracts::auth::{Authenticator, Authorizer, Credentials, Directory, Principal};
 use tp_contracts::blob::{BlobIndex, BlobStore};
 use tp_contracts::bus::EventBus;
@@ -977,7 +978,11 @@ impl Services {
             .with_branding(Arc::new(self.meta.clone()), self.blob.clone())
             // Беседы учётных записей (APP-77, ADM-50): беседа письма, удержание целиком и выгрузка —
             // `ThreadStore` `PgMeta` (META-86), тот же, что у приёма и JMAP; без этого маршруты — 503.
-            .with_threads(Arc::new(self.meta.clone()) as Arc<dyn ThreadStore>);
+            .with_threads(Arc::new(self.meta.clone()) as Arc<dyn ThreadStore>)
+            // Сессии Admin API — в основной БД (APP-50, CTR-61, решение 77): сессия видна всем узлам
+            // роли admin и переживает перезапуск узла; истёкшие удаляет шаг очистки роли maintenance
+            // (`crate::roles::Purge`). Без него — память узла.
+            .with_sessions(Arc::new(self.meta.clone()) as Arc<dyn AdminSessions>);
         // Журнал переписки (ADM-52): хранилище узла — тот же индекс с бакетом, что у этапа конвейера
         // доставки (APP-84); секция `journal` выключена — журнал не подключён, маршруты отвечают 503.
         Ok(match &self.journal {
@@ -2590,6 +2595,170 @@ mod tests {
 
         jmap.shutdown();
         drop((services, jmap, meta));
+        crate::testutil::drop_database(&url, &db_name).await;
+    }
+
+    /// APP-50 (CTR-61, решение 77): сессии Admin API — в основной БД. Вход на одном узле роли admin,
+    /// запрос с той же сессией — на другом (у каждого своя память, хранилище общее — `PgMeta`);
+    /// истёкшие сессии из общей БД удаляет шаг очистки роли maintenance, действующая остаётся.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admin_sessions_in_postgres_shared_across_nodes() {
+        use tp_contracts::admin_session::AdminSession;
+
+        let Some(url) = tp_testkit::pg_url() else {
+            eprintln!("TEST_DATABASE_URL не задан — тест пропущен");
+            return;
+        };
+        let url = crate::testutil::dev_url(&url);
+        let (db_name, url_db) = crate::testutil::create_database(&url).await;
+        let pool = crate::testutil::db_pool(&url_db).await;
+        tp_meta::schema::migrate(&pool).await.expect("migrate");
+        let bus: Arc<dyn EventBus> = Arc::new(tp_cluster::LocalBus::default());
+        let meta = PgMeta::new(pool.clone(), tp_meta::MetaConfig::default()).with_bus(bus.clone());
+        let cfg = crate::sections::registry_of(crate::modules::BUILTIN)
+            .expect("registry")
+            .parse(
+                "domain: example.org\nprofile: dev\nservice_http:\n  allow_plaintext: true\n\
+                 database:\n  url: postgres://thepost@localhost/thepost?sslmode=disable\n  tls: { allow_plaintext: true }\n\
+                 blob:\n  url: file:///var/lib/thepost/blob\n",
+                Vec::new(),
+            )
+            .expect("config");
+        let ext = Registry::default();
+        let metrics = tp_platform::Metrics::default();
+        let services = Services::build(Base {
+            cfg: &cfg,
+            meta: meta.clone(),
+            blob: Arc::new(tp_testkit::MemBlobStore::default()),
+            bus: bus.clone(),
+            secrets: Arc::new(tp_testkit::MemSecretStore::default()),
+            ext: &ext,
+            metrics: &metrics,
+            node: NodeId::new("app-50").expect("node"),
+        })
+        .await
+        .expect("services");
+        let smtp = cfg.section::<SmtpConfig>(SMTP).expect("smtp");
+        let admin_cfg = cfg.section::<AdminSection>(ADMIN).expect("admin").0.clone();
+
+        // Два узла роли admin над одной БД: у каждого свой Admin API и локальный вход (как в `serve`),
+        // хранилище сессий — общее `PgMeta` (`Services::admin`).
+        let node_a = Arc::new(crate::local_admin::attach(
+            services
+                .admin(&ext, admin_cfg.clone(), &smtp)
+                .expect("admin a"),
+            &services,
+        ));
+        let node_b = Arc::new(crate::local_admin::attach(
+            services.admin(&ext, admin_cfg, &smtp).expect("admin b"),
+            &services,
+        ));
+        let granted = node_a
+            .init(&tp_admin::InitRequest {
+                email: "admin@example.org".into(),
+                display_name: None,
+                force: false,
+            })
+            .await
+            .expect("admin init");
+        let (l_a, l_b) = (
+            tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind a"),
+            tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind b"),
+        );
+        let (base_a, base_b) = (
+            format!("http://{}", l_a.local_addr().expect("addr a")),
+            format!("http://{}", l_b.local_addr().expect("addr b")),
+        );
+        let server_a = tokio::spawn(async move { axum::serve(l_a, node_a.router()).await });
+        let server_b = tokio::spawn(async move { axum::serve(l_b, node_b.router()).await });
+        let http = reqwest::Client::new();
+
+        // Вход на первом узле: одноразовый токен `admin init` — на сессию.
+        let r = http
+            .post(format!("{base_a}/api/v1/session"))
+            .bearer_auth(&granted.token)
+            .send()
+            .await
+            .expect("session");
+        assert_eq!(r.status(), reqwest::StatusCode::CREATED);
+        let body: serde_json::Value =
+            serde_json::from_slice(&r.bytes().await.expect("body")).expect("json");
+        let session = body["session"].as_str().expect("session").to_owned();
+
+        // Тот же `tps_…` — на втором узле: сессия в основной БД, видна всем узлам роли admin.
+        let whoami = |base: String| {
+            let http = http.clone();
+            let session = session.clone();
+            async move {
+                let r = http
+                    .get(format!("{base}/api/v1/whoami"))
+                    .bearer_auth(&session)
+                    .send()
+                    .await
+                    .expect("whoami");
+                let body: serde_json::Value =
+                    serde_json::from_slice(&r.bytes().await.expect("body")).expect("json");
+                (r.status(), body)
+            }
+        };
+        let (s, b) = whoami(base_b.clone()).await;
+        assert_eq!(s, reqwest::StatusCode::OK, "{b}");
+        assert_eq!(b["login"], "admin@example.org");
+        assert_eq!(b["roles"], serde_json::json!(["installation_admin"]));
+
+        // Истёкшая сессия в общей БД: шаг очистки роли maintenance удаляет её, действующая остаётся
+        // и работает на другом узле.
+        AdminSessions::put(
+            &meta,
+            AdminSession {
+                hash: "a".repeat(64),
+                principal: tp_contracts::auth::Principal {
+                    tenant: TenantId::DEFAULT,
+                    account: granted.account,
+                    login: granted.login.clone(),
+                    groups: BTreeSet::new(),
+                    scopes: None,
+                },
+                roles: vec!["installation_admin".into()],
+                expires_at: time::OffsetDateTime::now_utc()
+                    - std::time::Duration::from_secs(3600),
+            },
+        )
+        .await
+        .expect("put истёкшей сессии");
+        let purge = crate::roles::Purge {
+            meta: meta.clone(),
+            interval: std::time::Duration::from_secs(3600),
+            admin_token_retention: std::time::Duration::from_secs(3600),
+            sent_max_age: std::time::Duration::from_secs(3600),
+            probe: crate::roles::PurgeProbe::new(),
+            itip: None,
+        };
+        let done = purge.step().await;
+        assert_eq!(
+            done.admin_sessions.expect("шаг сессий"),
+            1,
+            "истёкшая сессия удалена: {done:?}"
+        );
+        let mut tx = tp_meta::schema::begin(&pool, TenantId::DEFAULT)
+            .await
+            .expect("begin");
+        let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM admin_sessions")
+            .fetch_one(&mut *tx)
+            .await
+            .expect("count");
+        tx.commit().await.expect("commit");
+        assert_eq!(n, 1, "в общей БД осталась только действующая сессия");
+        let (s, b) = whoami(base_a).await;
+        assert_eq!(s, reqwest::StatusCode::OK, "{b}");
+
+        server_a.abort();
+        server_b.abort();
+        drop((services, meta));
         crate::testutil::drop_database(&url, &db_name).await;
     }
 
