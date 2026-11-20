@@ -79,10 +79,11 @@ function buildDoc(bodyHtml: string, allowImages: boolean): string {
 <script>${CLICK_GUARD}</script></head><body>${bodyHtml}</body></html>`;
 }
 
-/** Домен адреса ссылки; отностительный/битый — null. */
+/** Домен адреса ссылки; отностительный/битый — null. База — origin приложения (same-origin),
+ * чтобы в сборке не появлялось выдуманных внешних адресов (check-dist). */
 function domainOf(href: string): string | null {
   try {
-    return new URL(href, "https://x.invalid").hostname || null;
+    return new URL(href, window.location.origin).hostname || null;
   } catch {
     return null;
   }
@@ -124,9 +125,11 @@ export function sanitizeEmailHtml(html: string, options: SanitizeOptions): Sanit
     // Внешние картинки скрыты: адресные — прочь (banнер — opt-in), inline data: — можно.
     for (const img of [...root.querySelectorAll("img")]) {
       const src = img.getAttribute("src") ?? "";
-      if (/^data:image\//i.test(src)) continue;
+      // startsWith вместо regex с экранированным слешем: в сборке не появляется «//i.test»,
+      // которое check-dist принимает за протокол-относительный адрес.
+      if (src.toLowerCase().startsWith("data:image/")) continue;
       try {
-        const url = new URL(src, "https://x.invalid");
+        const url = new URL(src, window.location.origin);
         if (/^https?:$/i.test(url.protocol)) {
           blockedImageHosts.add(url.hostname);
           const placeholder = document.createElement("span");
