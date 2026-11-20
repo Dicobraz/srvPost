@@ -60,11 +60,11 @@ describe("DraftSaver debounce", () => {
     expect(mockedCreate).not.toHaveBeenCalled();
     vi.advanceTimersByTime(100);
     await vi.waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
-    const args = mockedCreate.mock.calls[0][3] as { create: Record<string, Record<string, unknown>> };
-    expect(args.create.d0.subject).toBe("Договор поставки — протокол разногласий");
-    expect(args.create.d0.mailboxIds).toEqual({ "mb-drafts": true });
-    expect(args.create.d0.keywords).toEqual({ $draft: true, $seen: true });
-    expect(args.create.d0.htmlBody).toEqual([{ partId: "body", type: "text/html" }]);
+    const args = mockedCreate.mock.calls[0][3] as { d0: Record<string, unknown> };
+    expect(args.d0.subject).toBe("Договор поставки — протокол разногласий");
+    expect(args.d0.mailboxIds).toEqual({ "mb-drafts": true });
+    expect(args.d0.keywords).toEqual({ $draft: true, $seen: true });
+    expect(args.d0.htmlBody).toEqual([{ partId: "body", type: "text/html" }]);
     expect(saver.draftId).toBe("m1");
   });
 

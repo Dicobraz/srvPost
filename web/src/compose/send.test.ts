@@ -2,7 +2,7 @@
 // sendAt на окно undo при поддержке сервера, отмена update {undoStatus: canceled}, честные
 // ошибки (forbiddenToSend, cannotUnsend — как SetError), запись истории получателей.
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { jmapCall } from "../api/jmap";
+import { callMethod, jmapCall } from "../api/jmap";
 import type { JmapSession } from "../api/jmap";
 import type { JmapEnv } from "../mail/types";
 import type { ComposeSnapshot } from "./model";
@@ -11,10 +11,12 @@ import { rememberSent } from "./send-history";
 
 vi.mock("../api/jmap", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/jmap")>();
-  return { ...actual, jmapCall: vi.fn() };
+  // jmapCall — запросы sendMessage; callMethod — внутри настоящих submissionSet/identitiesGet.
+  return { ...actual, jmapCall: vi.fn(), callMethod: vi.fn() };
 });
 
 const mocked = vi.mocked(jmapCall);
+const mockedCallMethod = vi.mocked(callMethod);
 
 const ENV: JmapEnv = {
   session: {} as JmapSession,
@@ -57,6 +59,7 @@ function okResponses(submissionId = "s1") {
 
 beforeEach(() => {
   mocked.mockReset();
+  mockedCallMethod.mockReset();
   localStorage.clear();
 });
 
@@ -158,20 +161,12 @@ describe("undo-send", () => {
   });
 
   test("cancelSend: update undoStatus=canceled; успех — true, cannotUnsend — false", async () => {
-    mocked
-      .mockResolvedValueOnce({
-        methodResponses: [["EmailSubmission/set", { updated: { s1: null } }, "s"]],
-        sessionState: "1",
-      } as unknown as Awaited<ReturnType<typeof jmapCall>>)
-      .mockResolvedValueOnce({
-        methodResponses: [
-          ["EmailSubmission/set", { notUpdated: { s1: { type: "cannotUnsend", description: "письмо уже ушло" } } }, "s"],
-        ],
-        sessionState: "1",
-      } as unknown as Awaited<ReturnType<typeof jmapCall>>);
+    mockedCallMethod
+      .mockResolvedValueOnce({ updated: { s1: null } })
+      .mockResolvedValueOnce({ notUpdated: { s1: { type: "cannotUnsend", description: "письмо уже ушло" } } });
     await expect(cancelSend(ENV, "s1")).resolves.toBe(true);
-    const methodCalls = mocked.mock.calls[0][3] as Array<[string, Record<string, Record<string, unknown>>, string]>;
-    expect(methodCalls[0][1].update).toEqual({ s1: { undoStatus: "canceled" } });
+    expect(mockedCallMethod.mock.calls[0][2]).toBe("EmailSubmission/set");
+    expect(mockedCallMethod.mock.calls[0][3].update).toEqual({ s1: { undoStatus: "canceled" } });
     await expect(cancelSend(ENV, "s1")).resolves.toBe(false);
   });
 

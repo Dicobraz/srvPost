@@ -38,7 +38,7 @@ export function rememberSent(recipients: Array<{ name: string | null; email: str
   const seen = new Set<string>();
   const fresh = recipients
     .filter((r) => r.email.includes("@"))
-    .map((r) => ({ email: r.email, name: r.name, at: now }))
+    .map((r) => ({ email: r.email.toLowerCase(), name: r.name, at: now }))
     .filter((r) => {
       const key = r.email.toLowerCase();
       if (seen.has(key)) return false;

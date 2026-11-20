@@ -23,8 +23,8 @@ test("maxSizeUpload из сессии; нет свойства — null (не п
 });
 
 test("файл больше лимита — честная ошибка с числом, не больше лимита — null", () => {
-  const big = new File([new ArrayBuffer(30)], "большой.pdf");
-  const small = new File([new ArrayBuffer(10)], "небольшой.pdf");
+  const big = new File([new Uint8Array(30)], "большой.pdf");
+  const small = new File([new Uint8Array(10)], "небольшой.pdf");
   const err = fileError(big, 25_000_000);
   expect(err).toContain("большой.pdf");
   expect(err).toContain("23,8 МБ");
@@ -98,7 +98,7 @@ function vi_fetch(cards: Array<Record<string, unknown>>, calls: unknown[]): type
     const [method] = body.methodCalls[0];
     const result =
       method === "ContactCard/query"
-        ? { list: cards.map((_, i) => `c${i + 1}`), notFound: [] }
+        ? { ids: cards.map((_, i) => `c${i + 1}`), notFound: [] }
         : { list: cards, notFound: [] };
     return new Response(JSON.stringify({ methodResponses: [[method, result, "c0"]] }), {
       status: 200,

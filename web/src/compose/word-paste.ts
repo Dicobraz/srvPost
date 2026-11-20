@@ -162,9 +162,14 @@ export function sanitizeComposeHtml(html: string, options: { word?: boolean } = 
   return cleanDom(root, word);
 }
 
-/** Текст из HTML (для предупреждения «прилагаю» и поиска по черновику). */
+/** Текст из HTML (для предупреждения «прилагаю» и поиска по черновику): блоки — с переносом. */
 export function htmlToText(html: string): string {
   const root = document.createElement("div");
   root.innerHTML = html;
+  // Абзацы и строки таблиц в textContent идут вплотную — разделяем переносом.
+  for (const el of [...root.querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote")]) {
+    el.before(document.createTextNode("
+"));
+  }
   return (root.textContent ?? "").replace(/\s+/g, " ").trim();
 }
