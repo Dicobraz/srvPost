@@ -44,6 +44,8 @@ reqwest.workspace = true
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 # Выгрузка беседы: письма `.eml` в архиве ZIP (ADM-50); та же версия и фичи, что у tp-search и thepost.
 zip.workspace = true
+# SHA-256 содержимого списка TI в памяти проверки узла (ADM-51); та же версия, что у tp-blob.
+sha2.workspace = true
 
 [dev-dependencies]
 tp-testkit.workspace = true

@@ -56,10 +56,10 @@ use tp_contracts::config::duration;
 use tp_contracts::ids::BlobHash;
 use tp_contracts::risk::{
     ADMIN_PREFIX, Catalog, Detector, EffectiveCatalog, FeedFormat, HitRecord, HttpAuth, License,
-    ListId, ListVersion, Mode, Origin, PackageEntry, PackageManifest, PackageState,
+    ListId, ListVersion, MAX_WEIGHT, Mode, Origin, PackageEntry, PackageManifest, PackageState,
     PolicyViolation, RiskAction, RiskLevel, RiskPolicy, RiskStore, Signal, SignalId,
-    SignalOverride, SourceId, SourceKind, StaleAction, Tenants, Thresholds, Tier, TiOrigin,
-    TiSource, UpdateReport, UsageEntry, VENDOR_PREFIX, MAX_WEIGHT,
+    SignalOverride, SourceId, SourceKind, StaleAction, Tenants, Thresholds, TiOrigin, TiSource,
+    Tier, UpdateReport, UsageEntry, VENDOR_PREFIX,
 };
 use tp_contracts::secrets::SecretRef;
 use tp_contracts::{Error, Result, TenantId};
@@ -1028,7 +1028,8 @@ impl MemRiskNode {
     /// Версия списка из байтов: записи — непустые строки, SHA-256 содержимого.
     fn version(source: &TiSource, bytes: &[u8], fetched_at: OffsetDateTime) -> ListVersion {
         ListVersion {
-            list: ListId::new(source.id.as_str()).unwrap_or_else(|_| ListId::new("list").expect("id")),
+            list: ListId::new(source.id.as_str())
+                .unwrap_or_else(|_| ListId::new("list").expect("id")),
             source: source.id.clone(),
             sha256: BlobHash(Sha256::digest(bytes).into()),
             blob: format!("mem/risk/{}", source.id),
@@ -1090,10 +1091,7 @@ impl ThresholdLevels {
 
     /// Заменяет пороги уровня целиком.
     pub fn set(&self, level: RiskLevel, thresholds: Thresholds) {
-        self.0
-            .lock()
-            .expect("пороги")
-            .insert(level, thresholds);
+        self.0.lock().expect("пороги").insert(level, thresholds);
     }
 }
 
@@ -1395,10 +1393,7 @@ async fn signal_view(
     if let Some(entry) = catalog.get(id) {
         return Ok(SignalView::from(entry));
     }
-    let o = policy
-        .overrides
-        .get(id)
-        .ok_or_else(|| Error::NotFound)?;
+    let o = policy.overrides.get(id).ok_or_else(|| Error::NotFound)?;
     Ok(orphaned_view(level, id, o))
 }
 
@@ -1444,8 +1439,11 @@ fn violations(policy: &RiskPolicy, base: &EffectiveCatalog) -> Vec<PolicyViolati
 
 /// Идентификатор признака из пути: `[a-z0-9._-]`, до 64 символов; недопустимый — пояснение для 400.
 fn signal_id(raw: &str) -> std::result::Result<SignalId, String> {
-    SignalId::new(raw)
-        .map_err(|_| format!("признак {raw:?}: идентификатор — [a-z0-9._-], до 64 символов, с префиксом tp. или org."))
+    SignalId::new(raw).map_err(|_| {
+        format!(
+            "признак {raw:?}: идентификатор — [a-z0-9._-], до 64 символов, с префиксом tp. или org."
+        )
+    })
 }
 
 /// Идентификатор источника из пути; недопустимый — пояснение для 400.
@@ -1463,7 +1461,12 @@ async fn put_signal(
     body: SignalBody,
 ) -> std::result::Result<Response, RefusedResponse> {
     let stores = risk(a).map_err(api)?;
-    let mut policy = stores.store.policy(level).await.map_err(api)?.unwrap_or_default();
+    let mut policy = stores
+        .store
+        .policy(level)
+        .await
+        .map_err(api)?
+        .unwrap_or_default();
     let text = id.as_str();
     if text.starts_with(VENDOR_PREFIX) {
         if body.detector.is_some() || body.threshold.is_some() {
@@ -1563,7 +1566,12 @@ async fn reset_signal(
     id: SignalId,
 ) -> std::result::Result<Response, RefusedResponse> {
     let stores = risk(a).map_err(api)?;
-    let mut policy = stores.store.policy(level).await.map_err(api)?.unwrap_or_default();
+    let mut policy = stores
+        .store
+        .policy(level)
+        .await
+        .map_err(api)?
+        .unwrap_or_default();
     if id.as_str().starts_with(ADMIN_PREFIX) {
         let Some(at) = policy
             .signals
@@ -1658,7 +1666,11 @@ async fn source_of(a: &Admin, id: &SourceId) -> std::result::Result<TiSource, Er
 }
 
 /// Загруженный файл (пакет, список): тип — 415, размер — 413 (`admin.risk.max_package_bytes`).
-fn file_body(a: &Admin, headers: &HeaderMap, body: &Bytes) -> std::result::Result<(), RefusedResponse> {
+fn file_body(
+    a: &Admin,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> std::result::Result<(), RefusedResponse> {
     let ct = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -1929,10 +1941,7 @@ async fn activate_package(
     Path(version): Path<u64>,
 ) -> std::result::Result<Json<PackagesView>, RefusedResponse> {
     let store = risk(&a).map_err(api)?.store.clone();
-    store
-        .activate(version)
-        .await
-        .map_err(invalid_422)?;
+    store.activate(version).await.map_err(invalid_422)?;
     packages_view(&a).await
 }
 
@@ -1948,10 +1957,7 @@ async fn rollback_package(
     Path(version): Path<u64>,
 ) -> std::result::Result<Json<PackagesView>, RefusedResponse> {
     let store = risk(&a).map_err(api)?.store.clone();
-    store
-        .rollback(version)
-        .await
-        .map_err(invalid_422)?;
+    store.rollback(version).await.map_err(invalid_422)?;
     packages_view(&a).await
 }
 
@@ -2002,7 +2008,9 @@ async fn get_source(
     Path(id): Path<String>,
 ) -> std::result::Result<Json<TiSourceView>, RefusedResponse> {
     let id = source_id(&id).map_err(|d| problem(StatusCode::BAD_REQUEST, &d))?;
-    Ok(Json(TiSourceView::from(&source_of(&a, &id).await.map_err(api)?)))
+    Ok(Json(TiSourceView::from(
+        &source_of(&a, &id).await.map_err(api)?,
+    )))
 }
 
 /// Замена источника целиком (без идентификатора — он в пути). Источник «в поставке» меняет только
@@ -2102,11 +2110,7 @@ async fn import_source(
     let source = source_of(&a, &id).await.map_err(api)?;
     file_body(&a, &headers, &body)?;
     let stores = risk(&a).map_err(api)?;
-    let version = stores
-        .node
-        .import_list(&source, &body)
-        .await
-        .map_err(api)?;
+    let version = stores.node.import_list(&source, &body).await.map_err(api)?;
     stores.store.put_list_version(&version).await.map_err(api)?;
     Ok(Json(version.into()))
 }
@@ -2125,11 +2129,7 @@ async fn refresh_source(
     let id = source_id(&id).map_err(|d| problem(StatusCode::BAD_REQUEST, &d))?;
     let source = source_of(&a, &id).await.map_err(api)?;
     let stores = risk(&a).map_err(api)?;
-    let version = stores
-        .node
-        .refresh_source(&source)
-        .await
-        .map_err(api)?;
+    let version = stores.node.refresh_source(&source).await.map_err(api)?;
     stores.store.put_list_version(&version).await.map_err(api)?;
     Ok(Json(version.into()))
 }
@@ -2146,8 +2146,7 @@ async fn source_usage(
     Path(id): Path<String>,
     Query(q): Query<UsageParams>,
 ) -> std::result::Result<Json<UsageView>, Refused> {
-    let id =
-        source_id(&id).map_err(|d| Refused::Problem(StatusCode::BAD_REQUEST, d))?;
+    let id = source_id(&id).map_err(|d| Refused::Problem(StatusCode::BAD_REQUEST, d))?;
     source_of(&a, &id).await?;
     let stores = risk(a)?;
     let since = q.since.unwrap_or(OffsetDateTime::UNIX_EPOCH);
@@ -2173,20 +2172,6 @@ async fn source_usage(
     }))
 }
 
-/// Пояснение problem-ответа (для перевода в [`Refused`]).
-fn detail_of(resp: &Response) -> String {
-    resp.extensions()
-        .get::<Problem>
-        .map(|p| p.detail.clone().unwrap_or_default())
-        .unwrap_or_default()
-}
-
-/// Ошибка контракта из problem-ответа.
-fn error_of(resp: &Response) -> Error {
-    let _ = resp;
-    Error::NotFound
-}
-
 // ---------- Маршруты: срабатывания ----------
 
 /// Журнал срабатываний организации (свежие первыми, постранично): применённые и «только отчёт»
@@ -2205,14 +2190,12 @@ async fn list_risk_hits(
     let stores = risk(a)?;
     let signal = match q.signal.as_deref() {
         None | Some("") => None,
-        Some(raw) => Some(
-            SignalId::new(raw).map_err(|_| {
-                Refused::Problem(
-                    StatusCode::BAD_REQUEST,
-                    format!("signal {raw:?}: идентификатор — [a-z0-9._-], до 64 символов"),
-                )
-            })?,
-        ),
+        Some(raw) => Some(SignalId::new(raw).map_err(|_| {
+            Refused::Problem(
+                StatusCode::BAD_REQUEST,
+                format!("signal {raw:?}: идентификатор — [a-z0-9._-], до 64 символов"),
+            )
+        })?),
     };
     let mode = match q.mode.as_deref() {
         None | Some("") => None,
@@ -2256,10 +2239,10 @@ async fn list_risk_hits(
         }
     }
     let next = if page.len() < matching.len() || may_have_more {
-        page.last()
-            .map(|r| r.at)
-            .or(oldest)
-            .and_then(|at| at.format(&time::format_description::well_known::Rfc3339).ok())
+        page.last().map(|r| r.at).or(oldest).and_then(|at| {
+            at.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
     } else {
         None
     };
