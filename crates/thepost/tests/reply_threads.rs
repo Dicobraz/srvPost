@@ -27,7 +27,6 @@ use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{self, ClientConfig, RootCertStore};
 use tp_contracts::TenantId;
-use tp_contracts::blob::BlobStore;
 use tp_contracts::meta::{
     AccountKind, AccountScope, AccountStore, AccountUpsert, MailboxStore, MessageQuery,
     MessageStore, SpecialUse,
@@ -126,7 +125,7 @@ meta:
   events:
     node_ttl: 3s
 cluster:
-  node_id: app77-{{pid}}
+  node_id: app77-{pid}
 runtime:
   drain_deadline: 5s
 smtp:
@@ -558,7 +557,7 @@ async fn submit_letter(
 async fn jmap_call(
     web: std::net::SocketAddr,
     auth: &str,
-    account: &str,
+    _account: &str,
     method: &str,
     args: Value,
 ) -> Value {
@@ -629,7 +628,10 @@ async fn reply_marks_threads_and_hold() {
 
     // Учётная запись alice с паролем приложения; шлюз кластера для 127.0.0.1 — DMARC pass входящих ответов
     // по его `Authentication-Results`.
-    let pool = sqlx::PgPool::connect(&url_db).await.expect("pool");
+    let pool = tp_meta::pool::DbPool::new(
+        sqlx::PgPool::connect(&url_db).await.expect("pool"),
+        Arc::new(tp_meta::pool::NoAcquireObserver),
+    );
     let meta = PgMeta::new(pool.clone(), MetaConfig::default());
     let tenant = TenantId::DEFAULT;
     let domain_id = accept_domain(&meta, tenant, &domain).await;
