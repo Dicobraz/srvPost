@@ -495,9 +495,13 @@ fn base32_roundtrip() {
     }
     // Чужие символы и лишние биты.
     assert_eq!(base32_decode("abc1"), None, "1 вне алфавита");
-    assert_eq!(base32_decode("A"), None, "хвостовые биты не нули");
-    assert_eq!(base32_decode("B"), None);
-    assert_eq!(base32_decode("E"), Some(vec![4]));
+    assert_eq!(
+        base32_decode("A"),
+        None,
+        "одиночный символ — не каноническая запись (пустые данные — пустая строка)"
+    );
+    assert_eq!(base32_decode("B"), None, "хвостовые биты не нули");
+    assert_eq!(base32_decode("E"), None, "хвостовые биты не нули");
 }
 
 #[test]
