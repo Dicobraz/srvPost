@@ -12,8 +12,9 @@
 //! в состав групп) отдаёт `contacts_since` (META-80); скрытый из GAL (`MailContact::hidden_from_gal`) в каталог не
 //! попадает и в участниках групп не значится — у `DirContact` признака нет, как у групп.
 //!
-//! Курсор — версия выгрузки: `md5` строк каталога организации (всё, что отдаёт каталог), снятая в начале полной
-//! выгрузки. В выгрузке — `p:<версия>:<последний id>` (порции по возрастанию id), после неё — `v:<версия>`.
+//! Курсор — версия выгрузки: версия книги организации (META-90), монотонно растущий счётчик `gal_versions`,
+//! поднимаемый триггерами изменений строк книги; снимается в начале полной выгрузки. В выгрузке —
+//! `p:<версия>:<последний id>` (порции по возрастанию id), после неё — `v:<версия>`.
 //! Запрос с `v:` при неизменной версии — пустая порция с прежним курсором; каталог изменился (создание, изменение,
 //! удаление строк, в том числе во время выгрузки) — `Conflict`: повторить полную выгрузку. Журнала удалений у
 //! таблиц нет, поэтому удалённую запись другим способом не узнать. Нераспознанный курсор (чужой каталог) —
@@ -144,8 +145,13 @@ enum Position {
     Done(String),
 }
 
+/// Версия книги каталога (META-90): счётчик организации в `gal_versions`, поднимаемый триггерами изменений
+/// строк книги; строки нет (каталог ещё не менялся) — `0`.
+const VERSION_SQL: &str =
+    "SELECT coalesce((SELECT version FROM gal_versions WHERE tenant_id = $1), 0)";
+
 fn is_version(v: &str) -> bool {
-    v.len() == 32 && v.bytes().all(|b| b.is_ascii_hexdigit())
+    v.parse::<i64>().is_ok()
 }
 
 /// Курсор → позиция; нераспознанный — `Conflict` (полная выгрузка).
@@ -188,23 +194,21 @@ impl PgMeta {
         let limit = limit.max(1);
         let fetch = to_i64(limit as u64 + 1)?;
         let (column, key_of) = key;
-        let version_sql = format!(
-            "SELECT md5(coalesce(string_agg(d::text, E'\\n' ORDER BY d.{column}), '')) FROM ({rows}) d"
-        );
         let page_sql =
             format!("SELECT * FROM ({rows}) d WHERE d.{column} > $2 ORDER BY d.{column} LIMIT $3");
-        let (position, version_sql, page_sql) = (&position, &version_sql, &page_sql);
+        let (position, page_sql) = (&position, &page_sql);
         self.idempotent(|| async move {
             let mut tx = begin(&self.read_pool(ShardId::MAIN).await?, tenant).await?;
             // Версия снимается до чтения строк: изменение после неё даст другую версию у следующего запроса.
             let (version, after) = match position {
                 Position::After { version, last } => (version.clone(), *last),
                 Position::Start | Position::Done(_) => {
-                    let current: String = sqlx::query_scalar(AssertSqlSafe(version_sql.as_str()))
+                    let current: i64 = sqlx::query_scalar(AssertSqlSafe(VERSION_SQL))
                         .bind(tenant.as_uuid())
                         .fetch_one(&mut *tx)
                         .await
                         .map_err(db_err)?;
+                    let current = current.to_string();
                     if let Position::Done(seen) = position {
                         crate::commits::commit(tx).await?;
                         return if *seen == current {
@@ -395,6 +399,23 @@ impl Directory for PgMeta {
         })
         .await
     }
+
+    /// Версия книги организации (META-90): счётчик `gal_versions`, поднимаемый триггерами изменений
+    /// строк книги; строки нет — `None` (книга этой организации ещё не менялась).
+    async fn gal_version(&self, tenant: TenantId) -> Result<Option<i64>> {
+        self.idempotent(|| async move {
+            let mut tx = begin(&self.read_pool(ShardId::MAIN).await?, tenant).await?;
+            let version: Option<i64> =
+                sqlx::query_scalar("SELECT version FROM gal_versions WHERE tenant_id = $1")
+                    .bind(tenant.as_uuid())
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            crate::commits::commit(tx).await?;
+            Ok(version)
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -403,7 +424,7 @@ mod tests {
 
     #[test]
     fn cursor_positions() {
-        let v = "0123456789abcdef0123456789abcdef";
+        let v = "42";
         assert!(matches!(parse(None), Ok(Position::Start)));
         assert!(
             matches!(parse(Some(&DirCursor(format!("v:{v}")))), Ok(Position::Done(x)) if x == v)
@@ -413,7 +434,15 @@ mod tests {
             parse(Some(&DirCursor(format!("p:{v}:{last}")))),
             Ok(Position::After { version, last: l }) if version == v && l == last
         ));
-        for bad in ["", "v:", "v:xyz", "p:{v}", "p:{v}:not-a-uuid", "cookie"] {
+        for bad in [
+            "",
+            "v:",
+            "v:xyz",
+            "v:0123456789abcdef0123456789abcdef",
+            "p:{v}",
+            "p:{v}:not-a-uuid",
+            "cookie",
+        ] {
             assert!(
                 matches!(
                     parse(Some(&DirCursor(bad.replace("{v}", v)))),

@@ -417,6 +417,9 @@ CTR-35: `DirAccount::org: DirOrg { department (external_id подразделе�
 `contacts_since(tenant, cursor, limit) -> DirPage<DirContact { external_id, display_name, email, attributes }>` (класс и ветка — настройка;
 без реализации по умолчанию, CTR-87: контакты отдают все каталоги — LDAP, `PgMeta`, `FakeDirectory`), `units(tenant) -> Vec<DirUnit { external_id, name, parent }>` (по умолчанию — пусто);
 `DirGroup::members` — также `external_id` контактов. In-memory — `FakeDirectory` (`upsert_contact`, `remove_contact`, `set_units`).
+Версия книги организации (META-90): `gal_version(tenant) -> Option<i64>` — монотонно растёт при любом изменении строк книги
+(учётные записи, оргатрибуты, группы рассылки, почтовые контакты); контроль книги — сравнение версий вместо полной выгрузки.
+`None` (по умолчанию, LDAP) — каталог версии не ведёт, книга собирается полной выгрузкой на каждый цикл.
 Порог массового удаления: `exceeds_removal_threshold(removed, total, percent)`, `MASS_REMOVAL_PERCENT` = 5; `SyncGate` — остановка
 синхронизации до подтверждения: `hold_sync(tenant, removed, total, at) -> MassRemoval { removed, total, detected_at, approved }` (подтверждение
 сохраняется, если `removed` не выросло), `pending_sync`, `approve_sync` (нет — `NotFound`; Admin API), `clear_sync` (синхронизация после
