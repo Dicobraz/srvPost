@@ -928,9 +928,9 @@ pub async fn journal_volume(
 
 /// Порт хранилища записей журнала (CTR-97) над реализацией tp-blob (BLOB-18) для проверок doctor
 /// (APP-82): `scan` — конверты по цепочке хранилища (сверка числа записей с индексом), ссылка — путь
-/// объекта записи. Запись и чтение по порту doctor не нужны (записывает этап конвейера журналирования,
-/// письма doctor читает напрямую, с известной организацией) и не реализуются — полная проводка порта
-/// для конвейера и выгрузки отдельной волной; здесь порт нужен конструкции `PgJournal` (проверка
+/// объекта записи. Запись и чтение по порту doctor не нужны (записывает этап конвейера журналирования —
+/// полная проводка порта у узла, [`crate::journal::NodeRecords`], APP-84; письма doctor читает напрямую,
+/// с известной организацией) и не реализуются; здесь порт нужен конструкции `PgJournal` (проверка
 /// `verify_chain` индекса в хранилище не заглядывает).
 struct StorageRecords(Arc<tp_blob::JournalRecords>);
 
@@ -954,22 +954,13 @@ impl JournalRecords for StorageRecords {
     }
 
     async fn scan(&self, tenant: TenantId) -> Result<Vec<(JournalId, JournalRecord, String)>> {
-        let prefix = self.0.config().prefix.clone();
-        Ok(self
-            .0
+        let records = self.0.clone();
+        Ok(records
             .chain(tenant)
             .await?
             .into_iter()
             .map(|s| {
-                let at = s.record.at;
-                let storage = format!(
-                    "{prefix}/t/{}/{:02}{:02}{:02}/{}",
-                    tenant,
-                    at.year().rem_euclid(100),
-                    u8::from(at.month()),
-                    at.day(),
-                    s.id
-                );
+                let storage = records.record_path(tenant, s.record.at, s.id);
                 (s.id, s.record, storage)
             })
             .collect())
