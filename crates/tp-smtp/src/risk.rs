@@ -192,13 +192,13 @@ pub fn scan_message(raw: &[u8], limits: &RiskConfig) -> Findings {
         return out;
     };
     // Адрес и домен `From` (первый адрес) и `Reply-To` — из заголовков письма.
-    if let Some(a) = msg.from().first().and_then(|a| a.address()) {
+    if let Some(a) = msg.from().and_then(|a| a.first()).and_then(|a| a.address()) {
         if let Ok(a) = normalize_recipient(a) {
             out.from = Some(a.clone());
             out.from_domain = a.rsplit_once('@').map(|(_, d)| d.to_ascii_lowercase());
         }
     }
-    if let Some(list) = msg.reply_to().as_address() {
+    if let Some(list) = msg.reply_to() {
         for a in list.iter().filter_map(|a| a.address()) {
             if let Ok(a) = normalize_recipient(a)
                 && !out.reply_to.contains(&a)
@@ -227,7 +227,7 @@ fn walk_parts(
     for part in &msg.parts {
         match &part.body {
             // Текст и HTML — для ссылок (память беседы сканирует их так же, `tp-mailstore` MS-21).
-            PartType::Text(t) | PartType::Html(t) => scan_links(t, out, budget),
+            PartType::Text(t) | PartType::Html(t) => scan_links(t.as_bytes(), out, budget),
             PartType::Message(nested) => walk_parts(nested, depth + 1, out, budget, limits),
             _ => {}
         }
@@ -239,7 +239,9 @@ fn walk_parts(
             continue;
         }
         let decoded: &[u8] = match &part.body {
-            PartType::Text(t) | PartType::Html(t) | PartType::Binary(t) => t,
+            PartType::Text(t) => t.as_bytes(),
+            PartType::Html(t) => t.as_bytes(),
+            PartType::Binary(t) => t,
             _ => continue,
         };
         let Some(ct) = part.content_type() else {
@@ -410,7 +412,9 @@ fn rar5_encrypted(decoded: &[u8]) -> bool {
     };
     // CRC32 записи, размер заголовка, тип заголовка: 5 — шифрование архива (HEAD_ENCRYPT).
     i += 4;
-    let _size = next(decoded, &mut i)?;
+    let Some(_size) = next(decoded, &mut i) else {
+        return false;
+    };
     next(decoded, &mut i) == Some(5)
 }
 
@@ -834,7 +838,7 @@ impl Risk {
     ) -> Option<(Signal, u8)> {
         let mut signal = signal.clone();
         let mut reduce = 0u8;
-        if let Some((source, stale)) = self.stale_source(tenant, list).await {
+        if let Some((source, stale)) = self.stale_source(list).await {
             match stale {
                 StaleAction::Reduce { percent } => reduce = percent,
                 StaleAction::Report => signal.mode = Mode::Report,
@@ -922,20 +926,16 @@ impl Risk {
 
     /// Источник списка и факт устаревания: версия списка старше `TTL` источника. `None` — списка,
     /// версии или источника нет, либо чтение не удалось.
-    async fn stale_source(
-        &self,
-        tenant: TenantId,
-        list: &ListId,
-    ) -> Option<(SourceId, StaleAction)> {
-        let version = match self.store.list_current(tenant, list).await {
+    async fn stale_source(&self, list: &ListId) -> Option<(SourceId, StaleAction)> {
+        let version = match self.store.list_current(list).await {
             Ok(Some(v)) => v,
             _ => return None,
         };
         let sources = self.store.sources().await.ok()?;
         let source = sources.iter().find(|s| s.id == version.source)?;
         let ttl = time::Duration::try_from(source.ttl).unwrap_or_default();
-        ((version.fetched_at + ttl <= OffsetDateTime::now_utc())
-            .then(|| (source.id.clone(), source.stale)))
+        (version.fetched_at + ttl <= OffsetDateTime::now_utc())
+            .then(|| (source.id.clone(), source.stale))
     }
 
     /// Метрики срабатываний вердикта: по признаку и режиму ([`Mode`]).

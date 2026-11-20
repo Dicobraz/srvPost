@@ -2537,7 +2537,7 @@ impl Delivery {
         } else {
             push_unique(&mut rcpts, prepared.external);
         }
-        let mut failed = prepared.failed;
+        let mut failed = std::mem::take(&mut prepared.failed);
         // Учётные записи получателей — до правил: пересылка модулей им же письмо не доставляет (петли).
         let delivered = accounts_of(&prepared.deliveries);
         let mut forward = Vec::new();

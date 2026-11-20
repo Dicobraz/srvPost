@@ -30,6 +30,9 @@ use crate::server::Mode;
 
 type Labels1 = [(&'static str, &'static str); 1];
 type Labels2 = [(&'static str, &'static str); 2];
+/// Метки с динамическим значением (признак каталога, источник TI) — значение метки владеющее.
+type DynLabels1 = [(&'static str, String); 1];
+type DynLabels2 = [(&'static str, String); 2];
 
 /// Метрики SMTP узла. Клоны разделяют значения.
 #[derive(Clone)]
@@ -46,9 +49,9 @@ pub struct SmtpMetrics {
     delivery: Histogram,
     reply: Family<Labels1, Counter>,
     batv: Family<Labels1, Counter>,
-    risk_signals: Family<Labels2, Counter>,
+    risk_signals: Family<DynLabels2, Counter>,
     risk_detector: Histogram,
-    risk_stale: Family<Labels1, Counter>,
+    risk_stale: Family<DynLabels1, Counter>,
 }
 
 impl Default for SmtpMetrics {
@@ -265,7 +268,7 @@ impl SmtpMetrics {
     /// действие, `report` — только журнал срабатываний).
     pub fn risk_signal(&self, signal: &str, mode: &str) {
         self.risk_signals
-            .get_or_create(&[("signal", signal), ("mode", mode)])
+            .get_or_create(&[("signal", signal.to_string()), ("mode", mode.to_string())])
             .inc();
     }
 
@@ -277,7 +280,9 @@ impl SmtpMetrics {
     /// Срабатывание признака устаревшего источника TI (SMTP-52, [`tp_contracts::risk::StaleAction`]):
     /// предупреждение — вес снижен или признак «только отчёт».
     pub fn risk_stale(&self, source: &str) {
-        self.risk_stale.get_or_create(&[("source", source)]).inc();
+        self.risk_stale
+            .get_or_create(&[("source", source.to_string())])
+            .inc();
     }
 }
 
