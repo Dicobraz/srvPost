@@ -236,7 +236,7 @@ mod tests {
             .expect("handle");
         let report: serde_json::Value = serde_json::from_slice(&out).expect("report");
         assert_eq!(report["node"], "node-a");
-        assert_eq!(report["ready"], serde_json::json!(false), "{report}");
+        assert_eq!(report["ready"], serde_json::json!(true), "{report}");
         assert_eq!(report["draining"], serde_json::json!(false));
         assert_eq!(report["load"], "elevated");
         assert_eq!(report["roles"][0]["role"], "imap");

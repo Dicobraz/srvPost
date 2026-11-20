@@ -1951,12 +1951,12 @@ mod tests {
         let (free, total) = cache_disk_load(usage, 8 * gib, 10 * gib);
         assert_eq!(total, 100 * gib);
         assert_eq!((total - free) * 100 / total, 80);
-        // ФС занята на 97 %, кэш у предела (10 %): показатель — файловая система.
+        // ФС занята на 97 %, кэш — на 10 % от предела: показатель — файловая система.
         let usage = FsUsage {
             total: 100 * gib,
             available: 3 * gib,
         };
-        let (free, total) = cache_disk_load(usage, 10 * gib, 10 * gib);
+        let (free, total) = cache_disk_load(usage, gib, 10 * gib);
         assert_eq!(total, 100 * gib);
         assert_eq!((total - free) * 100 / total, 97);
         // `max_bytes: 0` — только файловая система.

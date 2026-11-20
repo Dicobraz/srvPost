@@ -349,40 +349,9 @@ async fn two_shards_delivery_idle_and_replica_reads() {
         id
     };
     let login = format!("bob@{domain}");
-    let account = meta
-        .upsert(
-            tenant,
-            AccountUpsert {
-                domain: domain_id,
-                login: login.clone(),
-                display_name: "Bob".into(),
-                external_id: None,
-                enabled: true,
-                aliases: Vec::new(),
-                kind: AccountKind::User,
-                hidden_from_gal: false,
-                resource_type: None,
-            },
-        )
-        .await
-        .expect("account");
-    let scope = tp_contracts::meta::AccountScope {
-        tenant,
-        account: account.id,
-    };
-    // Учётная запись — на втором шарде.
-    assert_eq!(
-        dir.shard_of(scope).await.expect("shard of account"),
-        tp_contracts::ids::ShardId(1),
-        "учётная запись размещена на втором шарде"
-    );
-    let apps =
-        tp_auth::AppPasswords::new(Arc::new(meta.clone()), tp_auth::PasswordConfig::default())
-            .expect("app passwords");
-    let (_, secret) = apps.issue(scope, "e2e").await.expect("issue");
-    let app_password = secret.expose().to_owned();
 
-    // Узел: миграции основной БД применены тестом, шарда — узлом (`migrate_on_start`).
+    // Узел: миграции основной БД применены тестом, шарда — узлом (`migrate_on_start`); учётную запись
+    // тест создаёт после готовности узла — схема шарда уже на месте.
     let dir_node = tempfile::tempdir().expect("tempdir");
     let path = dir_node.path().join("config.yaml");
     std::fs::write(
@@ -418,7 +387,40 @@ async fn two_shards_delivery_idle_and_replica_reads() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // Схему шарда применил узел: таблица ящиков на шарде существует, ящик учётной записи на месте.
+    // Учётная запись — размещается на шарде с `accepts_new` (второй шард).
+    let account = meta
+        .upsert(
+            tenant,
+            AccountUpsert {
+                domain: domain_id,
+                login: login.clone(),
+                display_name: "Bob".into(),
+                external_id: None,
+                enabled: true,
+                aliases: Vec::new(),
+                kind: AccountKind::User,
+                hidden_from_gal: false,
+                resource_type: None,
+            },
+        )
+        .await
+        .expect("account");
+    let scope = tp_contracts::meta::AccountScope {
+        tenant,
+        account: account.id,
+    };
+    assert_eq!(
+        dir.shard_of(scope).await.expect("shard of account"),
+        tp_contracts::ids::ShardId(1),
+        "учётная запись размещена на втором шарде"
+    );
+    let apps =
+        tp_auth::AppPasswords::new(Arc::new(meta.clone()), tp_auth::PasswordConfig::default())
+            .expect("app passwords");
+    let (_, secret) = apps.issue(scope, "e2e").await.expect("issue");
+    let app_password = secret.expose().to_owned();
+
+    // Системные папки учётной записи — на шарде.
     let shard_pool = connect_db(&url_shard).await;
     let boxes: i64 = sqlx::query_scalar("SELECT count(*) FROM mailboxes")
         .fetch_one(&mut *shard_pool.acquire().await.expect("conn"))
