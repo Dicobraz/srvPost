@@ -43,7 +43,8 @@ test("Enter добавляет чип; невалидный адрес — inlin
 
   fireEvent.change(input, { target: { value: "не адрес" } });
   fireEvent.keyDown(input, { key: "Enter" });
-  expect(await p.findByRole("alert")).toHaveTextContent("не похоже на адрес");
+  const alert = await p.findByRole("alert");
+  expect(alert.textContent).toContain("не похоже на адрес");
 });
 
 test("чипы без дублей: повтор не добавляется", () => {

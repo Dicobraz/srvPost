@@ -18,6 +18,8 @@ export interface Attachment {
   /** Прогресс 0…1 — только для uploading. */
   progress: number;
   blobId?: string;
+  /** Текст ошибки (честная причина в чипе: лимит узла, сеть). */
+  error?: string;
   /** Отмена загрузки (AbortController вложенного XHR). */
   abort?: () => void;
 }

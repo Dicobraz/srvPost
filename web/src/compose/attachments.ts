@@ -39,7 +39,12 @@ export function uploadAttachment(
   env: JmapEnv,
   file: File,
   id: string,
-  callbacks: { onProgress?: (loaded: number) => void; onReady?: (a: Attachment) => void; onError?: (message: string) => void },
+  callbacks: {
+    onProgress?: (loaded: number) => void;
+    onReady?: (a: Attachment) => void;
+    /** Ошибка: сообщение, null — отмена пользователем (чип убирается). */
+    onError?: (message: string | null) => void;
+  },
 ): Attachment {
   const limit = maxSizeUpload(env.session);
   const oversize = tooLargeError(file, limit);
@@ -79,7 +84,7 @@ export function uploadAttachment(
         callbacks.onError?.(null);
       } else {
         item.error = e instanceof Error ? e.message : "Загрузка не выполнена.";
-        callbacks.onError?.(item.error);
+        callbacks.onError?.(item.error ?? "Загрузка не выполнена.");
       }
     });
   return item;

@@ -53,7 +53,7 @@ describe("DraftSaver debounce", () => {
     expect(mockedCreate).not.toHaveBeenCalled();
     vi.advanceTimersByTime(100);
     await vi.waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
-    const [, , , args] = mockedCreate.mock.calls[0];
+    const args = mockedCreate.mock.calls[0][3] as { create: Record<string, Record<string, unknown>> };
     expect(args.create.d0.subject).toBe("Договор поставки — протокол разногласий");
     expect(args.create.d0.mailboxIds).toEqual({ "mb-drafts": true });
     expect(args.create.d0.keywords).toEqual({ $draft: true, $seen: true });
@@ -76,7 +76,7 @@ describe("DraftSaver debounce", () => {
   });
 
   test("падение создания — прежний черновик жив (destroy не вызван), ошибка в error", async () => {
-    mockedCreate.mockResolvedValue({ created: {}, errors: { d0: { type: "invalidProperties" } } });
+    mockedCreate.mockResolvedValue({ created: {}, errors: { d0: { type: "invalidProperties" } }, destroyed: [] });
     const saver = new DraftSaver(ENV, "mb-drafts");
     saver.schedule(SNAPSHOT);
     await vi.advanceTimersByTimeAsync(DRAFT_DEBOUNCE_MS);

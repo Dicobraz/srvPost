@@ -1,7 +1,7 @@
 // Вложения (WEB-04): лимит узла maxSizeUpload — честная ошибка до запроса (приёмка: гигабайт
 // не выедает память вкладки — File API стримит браузер, превышение отсекается сразу);
 // формат размера — как в чипах макета; распознавание почты и имени в JSContact.
-import { beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import type { JmapSession } from "../api/jmap";
 
 import { fileError, formatSize, maxSizeUpload } from "./attachments";
@@ -91,7 +91,7 @@ test("домены контактов — внешними не считаютс
 });
 
 /** fetch подменяется: JMAP-ответы на два вызова ContactCard; прочие — ошибка теста. */
-function vi_fetch(cards: unknown, calls: unknown[]): typeof fetch {
+function vi_fetch(cards: Array<Record<string, unknown>>, calls: unknown[]): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push(input);
     const body = JSON.parse(String(init?.body)) as { methodCalls: Array<[string, unknown]> };
