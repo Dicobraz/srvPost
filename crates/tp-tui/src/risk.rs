@@ -1032,7 +1032,7 @@ pub fn report_lines(report: &Value) -> Vec<String> {
     };
     let mut out = vec![
         format!(
-            "Пакет версии {} проверен и поставлен, не активен",
+            "Пакет версии {} проверен, поставлен, не активен",
             report.get("version").and_then(Value::as_u64).unwrap_or(0)
         ),
         format!(
@@ -1803,9 +1803,9 @@ pub(crate) mod tests {
         let row = &t.rows()[3];
         assert!(orphaned(row));
         assert_eq!(catalog_cells(row)[0], "⊘tp.removed_signal");
-        // Строка CLI и пояснение курсора.
+        // Строка CLI и пояснение курсора (первая строка каталога — свой признак).
         assert!(!command(t).is_empty(), "строка CLI не пуста");
-        assert!(status(t).contains("tp.encrypted_archive"));
+        assert!(status(t).contains("org.bad_sender"), "{}", status(t));
     }
 
     /// Строка состояния каталога: «только отчёт» и «осиротевшее» — с пояснением; строки умещаются
@@ -1859,10 +1859,16 @@ pub(crate) mod tests {
             panic!("нет формы признака");
         };
         let names: Vec<&str> = form.fields.iter().map(|f| f.field.name.as_str()).collect();
-        assert_eq!(names, ["weight", "action", "mode"]);
+        assert_eq!(
+            names,
+            ["action", "mode", "weight"],
+            "поля схемы по алфавиту"
+        );
         assert_eq!(form.value("weight"), Some("30"));
         assert_eq!(form.value("action"), Some("quarantine"));
-        // Вес ниже установки: 20 вместо 30.
+        // Вес ниже установки: 20 вместо 30 (курсор на поле веса — последнее).
+        app.on_key(key(KeyCode::Down));
+        app.on_key(key(KeyCode::Down));
         app.on_key(key(KeyCode::Backspace));
         app.on_key(key(KeyCode::Backspace));
         for c in "20".chars() {
@@ -1944,7 +1950,7 @@ pub(crate) mod tests {
         let names: Vec<&str> = form.fields.iter().map(|f| f.field.name.as_str()).collect();
         assert_eq!(
             names,
-            ["detector", "weight", "threshold", "action", "mode"],
+            ["action", "detector", "mode", "threshold", "weight"],
             "свой признак задаётся целиком"
         );
         assert!(
@@ -2347,17 +2353,17 @@ pub(crate) mod tests {
         };
         assert_eq!(req.op.id, "source_usage");
         assert_eq!(req.param("id"), Some("own_list"));
-        assert_eq!(
-            app.command_line(),
-            "thepost admin risk source usage own_list",
-            "строка CLI — команда учёта"
-        );
         app.on_result(
             *id,
             ok(
                 json!({"source": "own_list", "since": "2026-11-01T00:00:00Z",
                       "usage": [{"tenant": ORG, "lookups": 120, "hits": 7}]}),
             ),
+        );
+        assert_eq!(
+            app.command_line(),
+            "thepost admin risk source usage own_list",
+            "строка CLI — команда учёта"
         );
         let t = risk_of(&app);
         assert!(t.usage.is_some());
@@ -2453,29 +2459,22 @@ pub(crate) mod tests {
         let id = call(&fx, "get_org_thresholds");
         app.on_result(id, ok(thresholds_json()));
         assert!(app.on_key(key(KeyCode::F(4))).is_empty());
-        // Курсор на поле junk и значение выше базового: 12 вместо 6.
-        let junk = {
-            let Stage::Main(m) = &app.stage else {
-                panic!("не основной экран");
-            };
-            let Some(Overlay::RiskThresholds { form }) = &m.overlay else {
-                panic!("нет формы порогов");
-            };
-            let names: Vec<&str> = form.fields.iter().map(|f| f.field.name.as_str()).collect();
-            assert_eq!(names, ["tag", "junk", "quarantine", "reject"]);
-            assert_eq!(form.value("tag"), Some("1"), "предзаполнено действующими");
-            assert_eq!(form.value("junk"), Some("6"));
-            form.fields.iter().position(|f| f.field.name == "junk")
+        let Stage::Main(m) = &app.stage else {
+            panic!("не основной экран");
         };
-        if let Some(junk) = junk {
-            let Stage::Main(m) = &mut app.stage else {
-                panic!("не основной экран");
-            };
-            let Some(Overlay::RiskThresholds { form }) = &mut m.overlay else {
-                panic!("нет формы порогов");
-            };
-            form.focus = junk;
-        }
+        let Some(Overlay::RiskThresholds { form }) = &m.overlay else {
+            panic!("нет формы порогов");
+        };
+        let names: Vec<&str> = form.fields.iter().map(|f| f.field.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["junk", "quarantine", "reject", "tag"],
+            "по алфавиту"
+        );
+        assert_eq!(form.value("tag"), Some("1"), "предзаполнено действующими");
+        assert_eq!(form.value("junk"), Some("6"));
+        assert_eq!(form.focus, 0, "курсор на поле junk");
+        // Значение выше базового: 12 вместо 6.
         app.on_key(key(KeyCode::Backspace));
         for c in "12".chars() {
             app.on_key(key(KeyCode::Char(c)));
@@ -2512,7 +2511,7 @@ pub(crate) mod tests {
             .iter()
             .find(|f| f.field.name == "junk")
             .expect("junk");
-        assert_eq!(form.focus, 1, "курсор у поля с отказом");
+        assert_eq!(form.focus, 0, "курсор у поля с отказом");
         assert!(
             junk.error
                 .as_deref()

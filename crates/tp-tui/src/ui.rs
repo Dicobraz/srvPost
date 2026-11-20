@@ -1043,8 +1043,8 @@ impl Painter<'_> {
         let own = v.get("own").filter(|o| o.is_object());
         let eff = &v["effective"];
         for (i, (label, name)) in [
-            ("пометка письма", "tag"),
-            ("в папку «Спам»", "junk"),
+            ("пометка", "tag"),
+            ("в «Спам»", "junk"),
             ("карантин", "quarantine"),
             ("отказ", "reject"),
         ]
@@ -2558,7 +2558,7 @@ mod tests {
         assert!(rows[19].contains("F4 — вес и действие"), "{}", rows[19]);
         assert!(rows[21].contains("источник: организация"), "{}", rows[21]);
         assert!(
-            rows[22].contains("$ thepost admin risk signals set tp.encrypted_archive"),
+            rows[22].contains("$ thepost admin risk signals set org.bad_sender"),
             "{}",
             rows[22]
         );
@@ -2593,7 +2593,7 @@ mod tests {
             "{}",
             rows[3]
         );
-        assert!(rows[4].contains("пометка письма"), "{}", rows[4]);
+        assert!(rows[4].contains("пометка"), "{}", rows[4]);
         assert!(
             rows[4].contains("1") && rows[7].contains("15"),
             "{}",
@@ -2755,6 +2755,8 @@ mod tests {
         );
         let id = call(&fx, "list_ti_sources");
         app.on_result(id, ok(crate::risk::tests::sources_json()));
+        // Клавиша сбрасывает сообщение строки состояния — покажется пояснение курсора.
+        assert!(app.on_key(key(KeyCode::Down)).is_empty());
         let (rows, buf) = screen(&app);
         // Знак ▲ без цвета (монохром).
         assert!(rows[5].contains("▲устарел"), "{}", rows[5]);
@@ -2779,6 +2781,8 @@ mod tests {
         let fx = app.on_key(key(KeyCode::Right));
         let id = call(&fx, "list_risk_hits");
         app.on_result(id, ok(crate::risk::tests::hits_json()));
+        // Клавиша сбрасывает сообщение о закрытых вкладках — покажется пояснение курсора.
+        assert!(app.on_key(key(KeyCode::Down)).is_empty());
         let (rows, _) = screen(&app);
         assert!(rows[2].contains("Срабатывания"), "{}", rows[2]);
         assert!(
@@ -2788,7 +2792,8 @@ mod tests {
         );
         assert!(rows[4].contains("2026-11-19 12:00"), "{}", rows[4]);
         assert!(rows[5].contains("▲"), "{}", rows[5]);
-        assert!(rows[21].contains("сила 80 · вес 30"), "{}", rows[21]);
+        assert!(rows[21].contains("сила 55 · вес 20"), "{}", rows[21]);
+        assert!(rows[21].contains("только отчёт"), "{}", rows[21]);
         assert!(
             rows[22].contains("$ thepost admin risk hits"),
             "{}",
