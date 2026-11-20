@@ -69,6 +69,12 @@
 //!     mode: log
 //!     valid_for: 7d
 //!     exempt: ["newsletter@example.org", "lists.example.net"]
+//!   risk:
+//!     enabled: true
+//!     max_depth: 5
+//!     max_scan_bytes: 153600
+//!     detector_timeout: 5s
+//!     sieve_max_weight: 10
 //! ```
 //!
 //! Слушатели (`inbound`, `submission`) применяются при запуске роли; лимиты и таймауты — к новым сессиям
@@ -123,6 +129,8 @@ pub struct SmtpConfig {
     pub reply: ReplyConfig,
     /// BATV (SMTP-51, решение 125 г): подпись `MAIL FROM` исходящих и проверка адресов bounce.
     pub batv: BatvConfig,
+    /// Справочник аномалий на smtp-in (SMTP-52, решение 126): детекторы, балл и действия.
+    pub risk: RiskConfig,
 }
 
 impl Default for SmtpConfig {
@@ -144,6 +152,7 @@ impl Default for SmtpConfig {
             forward: ForwardConfig::default(),
             reply: ReplyConfig::default(),
             batv: BatvConfig::default(),
+            risk: RiskConfig::default(),
         }
     }
 }
@@ -264,6 +273,44 @@ impl Default for BatvConfig {
 /// Срок метки BATV по умолчанию: 7 дней (draft-levine-smtp-batv-01).
 pub(crate) fn default_batv_valid_for() -> Duration {
     Duration::from_secs(7 * 24 * 3600)
+}
+
+/// Справочник аномалий на smtp-in (SMTP-52, решение 126; [`crate::risk`]): детекторы каталога
+/// ([`tp_contracts::risk::Detector`]) по письму после `DATA`, до Milter и Sieve, балл по действующему
+/// каталогу организации получателя ([`tp_contracts::risk::EffectiveCatalog`], из `RiskStore` — APP-78)
+/// и действия каталога (пометить, «Спам», карантин, отказ). Без [`Delivery::with_risk`](crate::Delivery::with_risk)
+/// и без `enabled` проверки нет: письмо проходит как раньше.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RiskConfig {
+    /// Проверка включена (детекторы и балл на входящих; сам каталог — в `RiskStore` приложения).
+    pub enabled: bool,
+    /// Глубина вложенности при разборе вложений (архивы в архивах), уровней.
+    pub max_depth: usize,
+    /// Байт содержимого на разбор одного вложения (тип по содержимому, хэш, ссылки; практика Exchange —
+    /// первые 150 КБ). Полный хэш вложения — для списков TI (SHA-256) считается по всему вложению, оно
+    /// уже в памяти узла.
+    pub max_scan_bytes: usize,
+    /// Таймаут одной проверки письма детекторами и каталогом (чтение памяти бесед, списков TI);
+    /// позже — письмо проходит без срабатываний этой проверки.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub detector_timeout: Duration,
+    /// Предел веса одного признака от команды `signal` скрипта организации (SIEVE-15,
+    /// `sieve.risk.max_weight`); предел проверки скрипта — в `tp-sieve`, здесь тот же потолок.
+    pub sieve_max_weight: u16,
+}
+
+impl Default for RiskConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_depth: 5,
+            max_scan_bytes: 150 * 1024,
+            detector_timeout: Duration::from_secs(5),
+            sieve_max_weight: 10,
+        }
+    }
 }
 
 /// Режим проверки адресов bounce (`smtp.batv.mode`).
@@ -1012,5 +1059,27 @@ mod tests {
         assert_eq!(smtp.reply.max_age, Duration::from_secs(30 * 24 * 3600));
         assert_eq!(smtp.batv, BatvConfig::default());
         assert_eq!(smtp.batv.mode, BatvMode::Log);
+    }
+
+    /// SMTP-52: секция `smtp.risk` читается; без неё — проверка выключена (безопасное умолчание).
+    #[test]
+    fn risk_section() {
+        let src = format!(
+            "{BASE}smtp:\n  risk:\n    enabled: true\n    max_depth: 3\n    max_scan_bytes: 4096\n    detector_timeout: 2s\n    sieve_max_weight: 5\n"
+        );
+        let cfg = registry().parse(&src, Vec::new()).expect("parse");
+        let smtp = cfg.section::<SmtpConfig>("smtp").expect("smtp");
+        assert!(smtp.risk.enabled);
+        assert_eq!(smtp.risk.max_depth, 3);
+        assert_eq!(smtp.risk.max_scan_bytes, 4096);
+        assert_eq!(smtp.risk.detector_timeout, Duration::from_secs(2));
+        assert_eq!(smtp.risk.sieve_max_weight, 5);
+        // Умолчания: проверка выключена, пределы разбора и таймаут детекторов заданы.
+        let base = registry().parse(BASE, Vec::new()).expect("parse");
+        let smtp = base.section::<SmtpConfig>("smtp").expect("smtp");
+        assert_eq!(smtp.risk, RiskConfig::default());
+        assert!(!smtp.risk.enabled);
+        assert_eq!(smtp.risk.max_scan_bytes, 150 * 1024);
+        assert_eq!(smtp.risk.max_depth, 5);
     }
 }

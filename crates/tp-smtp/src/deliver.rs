@@ -30,6 +30,11 @@
 //! - фильтры Milter ([`crate::milter`]) двух направлений: приём — smtp-in; исходящая почта — submission и
 //!   [`Delivery::submit`] (JMAP EmailSubmission, SMTP-27), до правил потока: отказ фильтра — отказ отправки,
 //!   изменённые заголовки — дальше по ним;
+//! - справочник аномалий ([`Delivery::with_risk`], [`crate::risk`], SMTP-52): после `DATA`, до Milter и
+//!   Sieve — детекторы каталога признаков по письму и памяти бесед, балл по каталогу организации
+//!   получателя и действия: `tag` — заголовок `X-ThePost-Risk`, `junk`/`quarantine` — «Спам» узла,
+//!   `reject` — `550 5.7.1` в сессии (при расхождении организаций — карантин отказавшим); признак
+//!   беседы снимает признак ответа, сработавшие — в журнал срабатываний каталога и метрики;
 //! - правила потока почты ([`Delivery::with_mail_flow`], `MailFlow`, SMTP-22) — один раз на письмо: smtp-in после
 //!   Milter, submission и [`Delivery::submit`] — до точек принятия решений и очереди; `Reject` — `550 5.7.1`,
 //!   `Drop` — `250` без доставки, изменённые конверт и тело — дальше по ним, `matched` — в журнал доставки;
@@ -120,6 +125,7 @@ use tp_contracts::pipeline::{ActionSet, OrgPolicy, PipelinePoint, StageRegistry}
 use tp_contracts::queue::{DsnRet, Outbound, SubmitStatus, Submitted};
 use tp_contracts::reply::{ReplyEvidence, SentLog, age_since};
 use tp_contracts::retention::Quota;
+use tp_contracts::risk::RiskAction;
 use tp_contracts::schedule::{ItipDelivery, ItipMessage, ItipMethod};
 use tp_contracts::senders::{SenderLists, SenderVerdict};
 use tp_contracts::sharing::DelegateStore;
@@ -146,6 +152,7 @@ use crate::limits::{self, SendLimits};
 use crate::metrics::{BatvOutcome, SmtpMetrics};
 use crate::milter::{self, Milters, Verdict};
 use crate::reply::{self, BatvAddress, ReplyMarks};
+use crate::risk::{self, Risk};
 use crate::routes::Routes;
 use crate::server::{Envelope, Handler, Mode, Reply, is_positive, reply};
 use crate::sieve::{self, Hop, Sieved, VacationRate};
@@ -320,6 +327,8 @@ pub struct Delivery {
     reply: Option<Arc<ReplyMarks>>,
     /// Запись об отправленном (SMTP-51, CTR-94): поиск исходного письма для признака ответа.
     sent: Option<Arc<dyn SentLog>>,
+    /// Справочник аномалий на smtp-in (SMTP-52, решение 126): детекторы каталога, балл и действия.
+    risk: Option<Arc<Risk>>,
     /// Метрики (SMTP-51: признак ответа и BATV).
     metrics: Option<Arc<SmtpMetrics>>,
     /// `smtp.reply.max_age`.
@@ -427,6 +436,8 @@ struct Prepared {
     queued: Vec<String>,
     /// Модерируемые группы: исходный адрес получателя и группа (по одной записи на группу).
     held: Vec<(String, DistributionGroup)>,
+    /// Организации доставок (карантин каталога признаков — по организациям, SMTP-52).
+    orgs: Vec<(AccountId, TenantId)>,
     /// Получатели, которым письмо не доставлено после приёма (уведомление отправителю).
     failed: Vec<dsn::Recipient>,
 }
@@ -463,6 +474,7 @@ impl Delivery {
             org_policy: OrgPolicy::default(),
             reply: None,
             sent: None,
+            risk: None,
             metrics: None,
             reply_max_age: cfg.reply.max_age,
         }
@@ -481,6 +493,18 @@ impl Delivery {
     /// `tp-meta` (META-86), in-memory — `MemSentLog`; пишет очередь при постановке письма с адресатами.
     pub fn with_sent_log(mut self, sent: Arc<dyn SentLog>) -> Self {
         self.sent = Some(sent);
+        self
+    }
+
+    /// Справочник аномалий на smtp-in (SMTP-52, решение 126; [`crate::risk`]): после `DATA`, до Milter
+    /// и Sieve — детекторы каталога признаков по разобранному письму, балл по действующему каталогу
+    /// организации получателя ([`tp_contracts::risk::RiskStore::effective`]) и действия каталога.
+    /// Признак беседы снимает признак ответа SMTP-51
+    /// ([`tp_contracts::risk::Detector::drops_reply`]); заголовок [`risk::RISK_HEADER`] входящего
+    /// удаляется до проверок, свой ставится при действии `tag`; сработавшие — в журнал срабатываний
+    /// ([`tp_contracts::risk::RiskStore::record_hits`]) и метрики. Без подключения проверок нет.
+    pub fn with_risk(mut self, risk: Arc<Risk>) -> Self {
+        self.risk = Some(risk);
         self
     }
 
@@ -1585,6 +1609,7 @@ impl Delivery {
             relayed: Vec::new(),
             queued: Vec::new(),
             held: Vec::new(),
+            orgs: Vec::new(),
             failed: Vec::new(),
         };
         for rcpt in rcpts {
@@ -1714,6 +1739,7 @@ impl Delivery {
             out.junk.insert(acc.id);
         }
         let mailbox = self.mailbox(scope, junk).await?;
+        out.orgs.push((acc.id, acc.tenant));
         out.deliveries.push((
             rcpt.to_owned(),
             MailDelivery {
@@ -1965,6 +1991,9 @@ impl Delivery {
                 if copies.junk.contains(&d.account) {
                     prepared.junk.insert(d.account);
                 }
+                if let Some((_, tenant)) = copies.orgs.iter().find(|(a, _)| *a == d.account) {
+                    prepared.orgs.push((d.account, *tenant));
+                }
                 prepared.deliveries.push((String::new(), d));
             }
         }
@@ -2123,9 +2152,10 @@ impl Delivery {
     async fn accept(&self, env: &Envelope, raw: Bytes, trail: &mut Trail) -> Result<Option<Reply>> {
         let received_at = OffsetDateTime::now_utc();
         // Признак «ответ на наше письмо» из заголовка извне не принимается (SMTP-51): удаляется до проверок,
-        // свой узел ставит после проверок — до Milter.
+        // свой узел ставит после проверок — до Milter. Заголовок балла каталога (SMTP-52) — так же.
         let mut raw = if env.mode == Mode::Inbound {
-            reply::strip_header(&raw, reply::REPLY_HEADER)
+            let raw = reply::strip_header(&raw, reply::REPLY_HEADER);
+            reply::strip_header(&raw, risk::RISK_HEADER)
         } else {
             raw
         };
@@ -2207,9 +2237,16 @@ impl Delivery {
         // хэш Message-ID найден в записи об отправленном; отправитель `From` — среди адресатов записи, DMARC
         // pass с выравниванием и возраст ≤ `smtp.reply.max_age` — всё сразу. Своей меткой — до Milter
         // (Rspamd снижает балл, DEP-56); проверки признак не отменяет (антивирус, URL, DMARC — как всем).
-        let flagged = self
+        let mut flagged = self
             .detect_reply(env, &full, check.as_ref().is_some_and(|c| c.dmarc_pass))
             .await;
+        // Каталог признаков (SMTP-52, решение 126): детекторы после `DATA`, до Milter и Sieve — по
+        // разобранному письму и памяти бесед получателей. Детектор беседы снимает признак ответа
+        // (решение 126 г); заголовка `X-ThePost-Reply-Anomaly` нет — вместо него [`risk::RISK_HEADER`].
+        let mut risk_scan = self.risk_scan(env, &full).await;
+        if risk_scan.as_ref().is_some_and(|s| s.drops_reply) {
+            flagged = false;
+        }
         if flagged {
             let mut marked = Vec::with_capacity(full.len() + reply::REPLY_HEADER.len() + 8);
             marked.extend_from_slice(format!("{}: yes\r\n", reply::REPLY_HEADER).as_bytes());
@@ -2217,6 +2254,9 @@ impl Delivery {
             full = Bytes::from(marked);
         }
         let mail = milter::Mail::of(env);
+        // Действие Rspamd (фильтр Milter) для каталога признаков (SMTP-52): отказ и отброс фильтра —
+        // ответ в сессии, карантин — в балл ([`tp_contracts::risk::Verdict::combine`]).
+        let mut milter_action = RiskAction::None;
         if let Some(m) = self
             .deps
             .milter
@@ -2247,6 +2287,32 @@ impl Delivery {
                 }
             }
             full = out.message;
+            // Вердикт Rspamd — действие для каталога (карантин фильтра; отказ и отброс выше — сессия).
+            milter_action = if out.quarantine.is_some() {
+                RiskAction::Quarantine
+            } else {
+                RiskAction::None
+            };
+        }
+        // Действия каталога (SMTP-52): самое строгое из балла, действий признаков и Rspamd
+        // ([`tp_contracts::risk::Verdict::combine`]). `reject` — `550 5.7.1` в сессии всем; при
+        // расхождении организаций — карантин отказавшим после приёма (письмом не отказываем —
+        // backscatter); `junk`/`quarantine` — «Спам» узла; сработавшие — уже в журнале каталога.
+        let mut risk_reject_orgs = Vec::new();
+        if let (Some(r), Some(scan)) = (self.risk.as_ref(), risk_scan.as_mut()) {
+            r.combine_rspamd(scan, milter_action);
+            if scan.all_reject() {
+                tracing::info!(id = %env.id, reason = %scan.event_reason(), "smtp: письмо отклонено каталогом признаков");
+                trail.steps.push(
+                    Step::new(Ek::Reject, Dd::Reject, env.rcpts.clone())
+                        .reason(scan.event_reason()),
+                );
+                return Ok(Some(reply(550, [5, 7, 1], risk::REJECT_TEXT)));
+            }
+            risk_reject_orgs = scan.reject_orgs();
+            if scan.action() >= RiskAction::Junk {
+                junk = true;
+            }
         }
         // Точка Data конвейера (SMTP-54): модульные этапы — условия по содержимому, отказ всему письму
         // (Milter ядра уже отработал; правила потока — ниже).
@@ -2421,6 +2487,11 @@ impl Delivery {
         }
         self.add_copies(&env.id, &mut prepared, &copy_to, filing, &mut trail.steps)
             .await?;
+        // Каталог признаков (SMTP-52): организации под действием `reject` при расхождении с другими —
+        // карантин их доставок (отказ после приёма невозможен — backscatter).
+        if !risk_reject_orgs.is_empty() {
+            self.quarantine_orgs(&mut prepared, &risk_reject_orgs).await;
+        }
         // Этап журналирования ядра (SMTP-53, CTR-96: первый этап точки BeforeMailboxSieve) — до модульных
         // этапов и Sieve ящика: запись не зависит от ящика, `discard`/`stop` скрипта получателя её не
         // отменяют. Служебные письма (DSN, MDN) — `SystemMessage`: не журналируются.
@@ -2460,13 +2531,13 @@ impl Delivery {
         // Внешние получатели smtp-in от обычного клиента — только перенаправления правил потока: пересылка.
         let redirect = env.mode == Mode::Inbound && !app;
         let mut forwarded = Vec::new();
-        let mut rcpts = prepared.relayed;
+        let mut rcpts = std::mem::take(&mut prepared.relayed);
         if redirect {
-            forwarded = prepared.external;
+            forwarded = std::mem::take(&mut prepared.external);
         } else {
-            push_unique(&mut rcpts, prepared.external);
+            push_unique(&mut rcpts, std::mem::take(&mut prepared.external));
         }
-        let mut failed = prepared.failed;
+        let mut failed = std::mem::take(&mut prepared.failed);
         // Учётные записи получателей — до правил: пересылка модулей им же письмо не доставляет (петли).
         let delivered = accounts_of(&prepared.deliveries);
         let mut forward = Vec::new();
@@ -2476,6 +2547,7 @@ impl Delivery {
             steps: mut sieve_steps,
             org_failed,
             actions,
+            signals,
         } = self
             .apply_rules(
                 &env.id,
@@ -2485,6 +2557,7 @@ impl Delivery {
                 &RuleContext::new(peer, flagged, &prepared.junk, &prepared.group),
                 false,
                 true,
+                risk_scan.as_ref(),
             )
             .await?;
         if !org_failed.is_empty() {
@@ -2494,6 +2567,16 @@ impl Delivery {
                 [4, 3, 0],
                 "Sieve organization script failed, try again later",
             )));
+        }
+        // Признаки команды `signal` скрипта организации (SIEVE-15, CTR-95) — после Sieve, с пределом
+        // веса (SMTP-52): балл и действие пересчитаны; `reject` после приёма — карантин отказавшим
+        // организациям (письмом не отказываем — backscatter), `junk` — так же в «Спам» узла.
+        if let (Some(r), Some(scan)) = (self.risk.as_ref(), risk_scan.as_mut()) {
+            r.apply_sieve(scan, &signals).await;
+            if scan.action() >= RiskAction::Junk {
+                let orgs = scan.junk_orgs();
+                self.quarantine_orgs(&mut prepared, &orgs).await;
+            }
         }
         // Точки после Sieve и итоговый контроль действий (SMTP-54): итоговый набор действий получателя —
         // перенаправления скрипта ящика, копии и адресаты. Запрет внешней пересылки организации
@@ -2538,6 +2621,27 @@ impl Delivery {
             if let Some(reason) = reason {
                 tracing::info!(id = %env.id, %rcpt, %reason, "smtp: письмо отклонено после Sieve");
                 return Ok(Some(stage_reject(trail, vec![rcpt.clone()], &reason)));
+            }
+        }
+        // Каталог признаков (SMTP-52): итоговый вердикт письма — заголовок [`risk::RISK_HEADER`] с
+        // баллом и признаками при действии `tag` и строже, событие журнала доставки с баллом,
+        // признаками и действием (`thepost admin delivery show` его показывает). Правила письма
+        // заголовок не видят — факты им отдают контекст (CTR-95 `RulesInput::risk`).
+        if let Some(scan) = risk_scan.as_ref() {
+            if scan.action() >= RiskAction::Tag {
+                let value = scan.header_value();
+                let mut marked =
+                    Vec::with_capacity(full.len() + risk::RISK_HEADER.len() + value.len() + 8);
+                marked
+                    .extend_from_slice(format!("{}: {}\r\n", risk::RISK_HEADER, value).as_bytes());
+                marked.extend_from_slice(&full);
+                full = Bytes::from(marked);
+            }
+            if !scan.empty() && scan.has_findings() {
+                trail.steps.push(
+                    Step::new(Ek::Receive, Dd::Accept, env.rcpts.clone())
+                        .reason(scan.event_reason()),
+                );
             }
         }
         // Очередь модерации — до доставки: её сбой — временный отказ без частичной доставки (после проверки
@@ -2796,6 +2900,55 @@ impl Delivery {
             m.reply_flag(flagged);
         }
         flagged
+    }
+
+    /// Проверка письма каталогом признаков (SMTP-52): только smtp-in с подключённым и включённым
+    /// каталогом ([`Risk::enabled`]). Локальные получатели и их организации — из каталога узла
+    /// ([`Delivery::resolve`]); письмо разбирается один раз, вердикт — по каждой организации. Без
+    /// каталога или вне smtp-in — `None` (проверки нет).
+    async fn risk_scan(&self, env: &Envelope, raw: &Bytes) -> Option<risk::Scan> {
+        let r = self
+            .risk
+            .as_ref()
+            .filter(|r| r.enabled() && env.mode == Mode::Inbound)?;
+        let mut locals: Vec<(AccountId, TenantId)> = Vec::new();
+        for rcpt in &env.rcpts {
+            let Ok(Resolved::Local(accounts)) = self.resolve(rcpt).await else {
+                continue;
+            };
+            for acc in accounts {
+                if !locals.iter().any(|(a, _)| *a == acc.id) {
+                    locals.push((acc.id, acc.tenant));
+                }
+            }
+        }
+        Some(r.scan(env.conn.client.ip(), raw, &locals).await)
+    }
+
+    /// Карантин доставкам организаций `orgs` (каталог признаков SMTP-52: `reject` при расхождении
+    /// организаций или итог после Sieve): письма — в «Спам» узла, событие — `Quarantine`. Отказ после
+    /// приёма невозможен (backscatter), письмом не отказываем.
+    async fn quarantine_orgs(&self, prepared: &mut Prepared, orgs: &[TenantId]) {
+        for (account, tenant) in &prepared.orgs {
+            if !orgs.contains(tenant) {
+                continue;
+            }
+            let scope = AccountScope {
+                tenant: *tenant,
+                account: *account,
+            };
+            let Ok(junk) = self.mailbox(scope, true).await else {
+                continue;
+            };
+            for (_, d) in prepared
+                .deliveries
+                .iter_mut()
+                .filter(|(_, d)| d.account == *account)
+            {
+                d.mailbox = junk;
+            }
+            prepared.junk.insert(*account);
+        }
     }
 
     /// BATV (SMTP-51): валидная метка адреса-получателя снимается — доставка без метки в адресе. `None` —
@@ -3140,6 +3293,7 @@ impl Delivery {
             steps: mut sieve_steps,
             org_failed,
             actions,
+            ..
         } = self
             .apply_rules(
                 id,
@@ -3149,6 +3303,7 @@ impl Delivery {
                 &RuleContext::new(peer, false, &prepared.junk, &prepared.group),
                 false,
                 true,
+                None,
             )
             .await?;
         // Сбой скрипта организации (SIEVE-14): доставка в обход скрипта невозможна — `SubmitStatus::Failed` с
@@ -3468,6 +3623,7 @@ impl Delivery {
     /// `delivery.redirect_hops` или исчерпан `delivery.redirect_total` (`over`) — правила ящика не применяются,
     /// письмо — в папку по умолчанию, запись в журнал доставки.
     #[allow(clippy::too_many_arguments)] // конвенция репо (как у `forward`)
+    #[allow(clippy::too_many_arguments)] // вердикт каталога признаков письма (SMTP-52); конвенция репо
     async fn apply_rules(
         &self,
         id: &str,
@@ -3477,6 +3633,7 @@ impl Delivery {
         ctx: &RuleContext<'_>,
         over: bool,
         session: bool,
+        risk_scan: Option<&risk::Scan>,
     ) -> Result<Sieved> {
         let mut out = Sieved::default();
         let Some(rules) = &self.rules else {
@@ -3541,10 +3698,14 @@ impl Delivery {
                     reply: ctx.reply,
                 },
                 matrix: self.matrix_for(scope).await,
-                // Вердикт справочника аномалий до Sieve и факт доверенной беседы (CTR-95, решение 126 д)
-                // считает SMTP-52 по действующему каталогу и памяти беседы; до него — без срабатываний.
-                risk: tp_contracts::risk::Verdict::default(),
-                thread_trusted: false,
+                // Вердикт справочника аномалий до Sieve и факт доверенной беседы (CTR-95, решение 126 д):
+                // детекторы и балл — SMTP-52 по действующему каталогу организации и памяти беседы
+                // ([`crate::risk`]); вне smtp-in — без срабатываний. Беседа доверенная — у получателя
+                // есть письма в беседе (память непуста); признак ответа — [`PeerContext::reply`].
+                risk: risk_scan
+                    .map(|s| s.verdict_for(scope.tenant))
+                    .unwrap_or_default(),
+                thread_trusted: risk_scan.is_some_and(|s| s.trusted.contains(&d.account)),
             };
             let mut notes = Vec::new();
             let outcome = match rules.evaluate(&input).await {
@@ -3558,6 +3719,13 @@ impl Delivery {
             if !outcome.errors.is_empty() {
                 tracing::info!(%id, account = %d.account, count = outcome.errors.len(), "smtp: ошибки выполнения правил Sieve");
                 notes.push(format!("errors: {}", outcome.errors.join("; ")));
+            }
+            // Признаки `signal` скрипта организации (SIEVE-15) — каталогу письма (SMTP-52): без повторов
+            // (скрипт организации один на получателей).
+            for s in outcome.signals {
+                if !out.signals.iter().any(|(id, _)| id == &s.0) {
+                    out.signals.push(s);
+                }
             }
             // Сбой скрипта организации (SIEVE-14): в обход скрипта доставка невозможна — временный отказ (SMTP-50).
             if outcome
@@ -3731,6 +3899,7 @@ impl Delivery {
                     &RuleContext::new(peer, false, &p.junk, &p.group),
                     over,
                     false,
+                    None,
                 )
                 .await?;
             if !p.deliveries.is_empty() {

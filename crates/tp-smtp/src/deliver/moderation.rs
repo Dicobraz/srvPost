@@ -174,6 +174,7 @@ impl Delivery {
             relayed: Vec::new(),
             queued: Vec::new(),
             held: Vec::new(),
+            orgs: Vec::new(),
             failed: Vec::new(),
         };
         let members = groups.members(self.deps.tenant, group).await?;
@@ -326,6 +327,7 @@ impl Moderation for Delivery {
                 // Письмо уже одобрено модератором: сбой скрипта организации — во «Входящие», как у скрипта
                 // пользователя (SMTP-50: `451` — только в сессии приёма).
                 false,
+                None,
             )
             .await?;
         let local = local_rcpts(&prepared.deliveries);
