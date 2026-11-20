@@ -98,14 +98,10 @@ async fn events_of_both_shards_are_handled() {
         let report = consumer.poll(&sink).await.expect("poll");
         assert!(report.failed.is_empty(), "{report:?}");
         assert!(report.handled > 0, "шард {shard}");
-        // Лизы разделов шарда — под ключом подписчика шарда.
+        // Лизы разделов шарда — под ключом подписчика шарда (основной шард — `seen@0`).
         let held = consumer.held("seen");
         assert!(!held.is_empty());
-        let expected = if shard == ShardId::MAIN {
-            "events/seen/".to_owned()
-        } else {
-            format!("events/seen@{shard}/")
-        };
+        let expected = format!("events/seen@{shard}/");
         assert!(
             consumer
                 .shard_lease_name("seen", held[0])

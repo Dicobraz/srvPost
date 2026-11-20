@@ -137,15 +137,10 @@ impl fmt::Display for ShardPartition {
     }
 }
 
-/// Ключ подписчика `subscriber` на шарде `shard`: для [`ShardId::MAIN`] — само имя (прежние ключи назначения
-/// и лизы `events/{subscriber}/{index}`), для остальных — `"{subscriber}@{shard}"`. Ключ передаётся в
-/// [`PartitionAssigner::assigned`] и в имя лизы раздела: `events/{ключ}/{index}`.
+/// Ключ подписчика `subscriber` на шарде `shard` — `"{subscriber}@{shard}"` (основной шард — `"{subscriber}@0"`).
+/// Ключ передаётся в [`PartitionAssigner::assigned`] и в имя лизы раздела: `events/{ключ}/{index}`.
 pub fn shard_subscriber(subscriber: &str, shard: ShardId) -> Cow<'_, str> {
-    if shard == ShardId::MAIN {
-        Cow::Borrowed(subscriber)
-    } else {
-        Cow::Owned(format!("{subscriber}@{shard}"))
-    }
+    Cow::Owned(format!("{subscriber}@{shard}"))
 }
 
 /// Позиция события в разделе: строго возрастает. `EventPos(0)` — до первого события.
@@ -270,8 +265,7 @@ pub trait PartitionAssigner: Send + Sync + 'static {
 
     /// Пары (шард, раздел) подписчика, назначенные узлу (CTR-34), по возрастанию; повторы в `shards` не важны.
     /// Раздел шарда назначается по ключу [`shard_subscriber`]: каждый раздел каждого шарда — ровно одному узлу
-    /// состава, для [`ShardId::MAIN`] — как [`PartitionAssigner::assigned`]. Смена справочника шардов
-    /// не переносит разделы прежних шардов.
+    /// состава. Смена справочника шардов не переносит разделы прежних шардов.
     fn assigned_sharded(
         &self,
         subscriber: &str,
@@ -386,15 +380,6 @@ mod tests {
             .flat_map(|s| (0..5).map(move |p| ShardPartition::new(ShardId(s), Partition(p))))
             .collect();
         assert_eq!(all, expected);
-        // Один шард — прежнее назначение.
-        for n in &members {
-            let main: Vec<Partition> = a
-                .assigned_sharded("indexer", n, &[ShardId::MAIN], 5)
-                .into_iter()
-                .map(|p| p.index)
-                .collect();
-            assert_eq!(main, a.assigned("indexer", n, 5));
-        }
         let outsider = NodeId::new("n9").expect("n9");
         assert!(
             a.assigned_sharded("indexer", &outsider, &shards, 5)
@@ -404,7 +389,7 @@ mod tests {
 
     #[test]
     fn shard_keys() {
-        assert_eq!(shard_subscriber("indexer", ShardId::MAIN), "indexer");
+        assert_eq!(shard_subscriber("indexer", ShardId::MAIN), "indexer@0");
         assert_eq!(shard_subscriber("indexer", ShardId(3)), "indexer@3");
         let a = AccountId::from_uuid(uuid::Uuid::from_u128(0x0123_4567_89ab_cdef));
         let p = ShardPartition::of(ShardId(3), a, 1024);
