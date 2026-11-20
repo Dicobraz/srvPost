@@ -441,11 +441,7 @@ jobs:
 
   # Единственный required check: зелёный, если всё нужное прошло или было пропущено.
   gate:
-<<<<<<< HEAD
-    needs: [changes, fmt, clippy, test, interp, deny, console, design, clients]
-=======
-    needs: [changes, fmt, clippy, test, interp, deny, console, webmail, design]
->>>>>>> 195f04e0 (WEB-01: CI полосы mod-webmail — сборка web/dist и проверки)
+    needs: [changes, fmt, clippy, test, interp, deny, console, webmail, design, clients]
     if: always()
     runs-on: ubuntu-latest
     steps:
