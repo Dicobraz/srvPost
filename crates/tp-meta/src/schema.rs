@@ -14,11 +14,18 @@ use tp_contracts::{Error, Result, TenantId};
 use crate::pool::DbPool;
 
 /// Миграции ядра: (версия, описание, SQL). Версии только добавляются; применённые не меняются.
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "base schema 1.0",
-    include_str!("../migrations/0001_base.sql"),
-)];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "base schema 1.0",
+        include_str!("../migrations/0001_base.sql"),
+    ),
+    (
+        2,
+        "sent log and threads (META-86)",
+        include_str!("../migrations/0002_sent_threads.sql"),
+    ),
+];
 
 /// Мигратор схемы ядра.
 pub fn migrator() -> Migrator {

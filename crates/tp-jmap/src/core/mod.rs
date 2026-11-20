@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use futures::{StreamExt, stream};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
@@ -31,9 +32,10 @@ use tp_contracts::search::SearchIndex;
 use tp_contracts::senders::SenderLists;
 use tp_contracts::sieve::SieveStore;
 use tp_contracts::submission::SubmissionStore;
+use tp_contracts::thread::ThreadStore;
 use tp_contracts::transport::MailFlow;
 use tp_contracts::trust::{Effective, TrustMatrix, TrustStore, effective};
-use tp_contracts::{AccountId, Error, MailboxId, ModSeq, Result, TenantId};
+use tp_contracts::{AccountId, Error, MailboxId, MessageId, ModSeq, Result, TenantId, ThreadId};
 
 use crate::autoconfig::sign::ProfileSigner;
 use crate::sharing::{Access, SharingDeps};
@@ -63,6 +65,10 @@ pub const SETTINGS: &str = "urn:thepost:params:jmap:settings";
 /// Capability принятия встречи из письма The Post (JMAP-50, решение #134 — вариант 3): `Invitation/respond` —
 /// кнопка «Принять/Отклонить» веб-почты; доступна при подключённых [`Jmap::with_schedule`] и [`Jmap::with_dav`].
 pub const THEPOST_ITIP: &str = "urn:thepost:params:jmap:itip";
+/// Capability действий по беседе The Post (JMAP-48, решение 125 е): `ThreadRule/get|set|changes` — объект
+/// «действие по беседе» (`alwaysMove`, `ignore`, `alwaysKeyword`, как EWS `ApplyConversationAction`);
+/// доступна при подключённом [`Jmap::with_threads`].
+pub const THEPOST_THREAD: &str = "urn:thepost:params:jmap:thread";
 
 /// Capability автоответа (RFC 8621 §8); доступна при подключённом [`Jmap::with_sieve`].
 pub const VACATION: &str = "urn:ietf:params:jmap:vacationresponse";
@@ -96,7 +102,7 @@ pub const ORG_CHART: &str = "urn:thepost:orgchart";
 /// Встроенные capability.
 const BUILTIN: [&str; 5] = [CORE, MAIL, SUBMISSION, WEBSOCKET, SETTINGS];
 /// Встроенные capability, доступные при подключённом хранилище (URI заняты всегда).
-const OPTIONAL: [&str; 12] = [
+const OPTIONAL: [&str; 13] = [
     SENDER_LISTS,
     ORG_CHART,
     VACATION,
@@ -109,6 +115,7 @@ const OPTIONAL: [&str; 12] = [
     PRINCIPALS_OWNER,
     AVAILABILITY,
     THEPOST_ITIP,
+    THEPOST_THREAD,
 ];
 
 /// Зависимости сервера JMAP: реализации контрактов, выбранные приложением.
@@ -206,6 +213,10 @@ pub struct Jmap {
     /// ACL папок почты (CONTRACTS.md#Auth): делегированный доступ к чужим ящикам (JMAP-49); `None` —
     /// чужие ящики недоступны.
     pub(crate) acl: Option<Arc<dyn AclStore>>,
+    /// Беседы учётных записей (CTR-94): `Email.threadId`, `Thread/get|changes` — по привязке беседы,
+    /// действия по беседе — `ThreadRule/get|set|changes` (JMAP-48); `None` — `threadId` и цепочки по
+    /// ключу цепочки из метаданных, методы действий — `unknownMethod`.
+    pub(crate) threads: Option<Arc<dyn ThreadStore>>,
     /// Кэш списков идентификаторов `Email/query` и ответов `Email/get` (PERF-02).
     pub(crate) caches: Mutex<query_cache::Caches>,
     stop: watch::Sender<bool>,
@@ -227,6 +238,7 @@ impl fmt::Debug for Jmap {
             .field("sharing", &self.sharing.is_some())
             .field("trust", &self.trust.is_some())
             .field("acl", &self.acl.is_some())
+            .field("threads", &self.threads.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -389,6 +401,7 @@ impl Jmap {
             sharing: None,
             trust: None,
             acl: None,
+            threads: None,
             stop: watch::channel(false).0,
             push: crate::disable::Sessions::default(),
         })
@@ -534,6 +547,25 @@ impl Jmap {
         self
     }
 
+    /// Подключает беседы учётных записей (CONTRACTS.md#Thread, JMAP-48): то же хранилище, которым пользуется
+    /// приём `MailStore::ingest` (MS-21), — `Email.threadId` и `Thread/get|changes` выдаются по привязке беседы
+    /// (неизменяемой, CTR-94), действия по беседе — методы `ThreadRule/get|set|changes` capability
+    /// `urn:thepost:params:jmap:thread` (`alwaysMove`/`ignore`/`alwaysKeyword` применяются приёмом к будущим
+    /// письмам беседы, `applyToExisting` — к прежним). `None` — `threadId` и цепочки по ключу цепочки из
+    /// метаданных, методы действий — `unknownMethod`.
+    #[must_use]
+    pub fn with_threads(mut self, threads: Option<Arc<dyn ThreadStore>>) -> Self {
+        self.threads = threads;
+        self
+    }
+
+    /// Беседы для метода; не подключены — `unknownMethod`.
+    pub(crate) fn threads_store(&self) -> MethodResult<&Arc<dyn ThreadStore>> {
+        self.threads
+            .as_ref()
+            .ok_or(MethodError::new("unknownMethod"))
+    }
+
     /// Списки отправителей для метода; не подключены — `unknownMethod`.
     pub(crate) fn sender_lists_store(&self) -> MethodResult<&Arc<dyn SenderLists>> {
         self.sender_lists
@@ -560,6 +592,7 @@ impl Jmap {
             CONTACTS | CALENDARS | TASKS | PRINCIPALS | PRINCIPALS_OWNER => self.dav.is_some(),
             AVAILABILITY => self.dav.is_some() && self.freebusy.is_some(),
             THEPOST_ITIP => self.dav.is_some() && self.schedule.is_some(),
+            THEPOST_THREAD => self.threads.is_some(),
             _ => false,
         }
     }
@@ -711,6 +744,15 @@ impl Jmap {
             caps.insert(THEPOST_ITIP.into(), json!({}));
             account_caps.insert(THEPOST_ITIP.into(), json!({}));
             primary.insert(THEPOST_ITIP.into(), json!(account));
+        }
+        // Действия по беседе (JMAP-48): то же хранилище бесед, которым пользуется приём (MS-21).
+        if self.threads.is_some() {
+            caps.insert(THEPOST_THREAD.into(), json!({}));
+            account_caps.insert(
+                THEPOST_THREAD.into(),
+                crate::thread_rule::account_capability(),
+            );
+            primary.insert(THEPOST_THREAD.into(), json!(account));
         }
         for cap in &self.d.capabilities {
             caps.insert(cap.uri().into(), cap.session_object());
@@ -956,6 +998,46 @@ impl Jmap {
         }
         Ok(out)
     }
+
+    /// Беседы писем учётной записи (JMAP-48): письмо → идентификатор беседы. С подключённым
+    /// [`ThreadStore`] — привязка (неизменяема, CTR-94): `T` + `ThreadId` ([`bound_thread_id`]);
+    /// письмо без привязки (кладёт клиент черновиком или импортом — привязывает доставка, MS-21) и
+    /// хранилище без бесед — ключ цепочки из метаданных ([`thread_id`]). Привязки читаются параллельно,
+    /// как точные чтения `Email/get`.
+    pub(crate) async fn thread_ids(
+        &self,
+        scope: AccountScope,
+        msgs: &[Message],
+    ) -> Result<HashMap<MessageId, String>> {
+        let mut out: HashMap<MessageId, String> =
+            msgs.iter().map(|m| (m.id, thread_id(m))).collect();
+        let Some(threads) = self.threads.clone() else {
+            return Ok(out);
+        };
+        if msgs.is_empty() {
+            return Ok(out);
+        }
+        let n = self.cfg.query_cache.max_parallel_get.max(1).min(msgs.len());
+        let ids: Vec<MessageId> = msgs.iter().map(|m| m.id).collect();
+        let got: Vec<Result<(MessageId, Option<ThreadId>)>> = stream::iter(ids)
+            .map(|id| {
+                let threads = threads.clone();
+                async move {
+                    let t = threads.thread_of(scope, id).await?;
+                    Ok((id, t))
+                }
+            })
+            .buffer_unordered(n)
+            .collect()
+            .await;
+        for r in got {
+            let (id, thread) = r?;
+            if let Some(t) = thread {
+                out.insert(id, bound_thread_id(t));
+            }
+        }
+        Ok(out)
+    }
 }
 
 fn slot<'a>(slots: &'a Slots, p: &Principal, max: u32) -> Option<Inflight<'a>> {
@@ -970,6 +1052,10 @@ fn slot<'a>(slots: &'a Slots, p: &Principal, max: u32) -> Option<Inflight<'a>> {
 }
 
 /// Идентификатор цепочки письма (`threadId`): по ключу цепочки из метаданных; письмо без ключа — своя цепочка.
+///
+/// Запасной расчёт без привязки беседы: письма, которые кладёт клиент (черновик, импорт), привязки не
+/// имеют (привязывает доставка, MS-21), и хранилищ без бесед (метаданные до CTR-94). Привязку хранит
+/// [`ThreadStore`] — идентификатор привязанной беседы даёт [`Jmap::thread_ids`] (JMAP-48).
 pub(crate) fn thread_id(m: &Message) -> String {
     if m.meta.thread_key.is_empty() {
         lone_thread_id(m.id)
@@ -981,6 +1067,18 @@ pub(crate) fn thread_id(m: &Message) -> String {
 /// Цепочка из одного письма `id`: письмо без ключа цепочки или уже удалённое.
 pub(crate) fn lone_thread_id(id: tp_contracts::MessageId) -> String {
     format!("T{}", digest(format!("id:{id}").as_bytes()))
+}
+
+/// Идентификатор беседы привязки в JMAP: `T` + `ThreadId` (UUID). Форма не совпадает с запасным расчётом
+/// по ключу цепочки ([`thread_id`], 12 знаков hex), разбор однозначен.
+pub(crate) fn bound_thread_id(t: ThreadId) -> String {
+    format!("T{t}")
+}
+
+/// Беседа привязки из идентификатора JMAP (`T` + `ThreadId`); иначе — `None` (запасной расчёт по ключу
+/// цепочки, чужая строка).
+pub(crate) fn parse_thread_id(id: &str) -> Option<ThreadId> {
+    id.strip_prefix('T').and_then(|s| s.parse().ok())
 }
 
 /// Первые 12 байт SHA-256 в hex.

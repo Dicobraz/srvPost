@@ -367,8 +367,9 @@ impl JournalRecords {
         &self.cfg
     }
 
-    /// Путь объекта записи: `{prefix}/t/{tenant}/{YYMMDD}/{id}` (день — момент письма).
-    fn record_path(&self, tenant: TenantId, at: OffsetDateTime, id: JournalId) -> String {
+    /// Путь объекта записи: `{prefix}/t/{tenant}/{YYMMDD}/{id}` (день — момент письма). Ссылка записи в
+    /// индексе (META-88) и диагностика (thepost doctor) собирают тот же путь.
+    pub fn record_path(&self, tenant: TenantId, at: OffsetDateTime, id: JournalId) -> String {
         format!(
             "{}/t/{}/{:02}{:02}{:02}/{}",
             self.cfg.prefix,
@@ -493,6 +494,19 @@ impl JournalRecords {
     pub async fn message(&self, tenant: TenantId, id: JournalId) -> Result<Bytes> {
         let stored = self.stored(tenant, id).await?;
         self.assemble(&stored).await
+    }
+
+    /// Запись и её письмо по идентификатору без известной организации (порт индекса META-88 —
+    /// `JournalRecords::read`, выгрузка записи): идентификатор записи глобально уникален, организация
+    /// выводится из объекта записи (поиск по всему журналу). Нет записи — `NotFound`.
+    pub async fn read_any(&self, id: JournalId) -> Result<(JournalRecord, Bytes)> {
+        let path = self.find_record_path_any(id).await?;
+        let stored = self.read_record(&path).await?;
+        if stored.id != id {
+            return Err(Error::NotFound);
+        }
+        let message = self.assemble(&stored).await?;
+        Ok((stored.record, message))
     }
 
     /// Записи организации в порядке цепи — порядке добавления: порядок восстанавливается по

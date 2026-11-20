@@ -31,6 +31,9 @@ fn input(mail: &str, mail_from: &str, recipient: &str) -> RulesInput {
         mailboxes: Vec::new(),
         peer: PeerContext::new(PeerKind::Own),
         matrix: TrustMatrix::default(),
+        // Справочник аномалий до Sieve — SMTP-52 (CTR-95); в тестах автоответа — без срабатываний.
+        risk: tp_contracts::risk::Verdict::default(),
+        thread_trusted: false,
     }
 }
 

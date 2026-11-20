@@ -3541,6 +3541,10 @@ impl Delivery {
                     reply: ctx.reply,
                 },
                 matrix: self.matrix_for(scope).await,
+                // Вердикт справочника аномалий до Sieve и факт доверенной беседы (CTR-95, решение 126 д)
+                // считает SMTP-52 по действующему каталогу и памяти беседы; до него — без срабатываний.
+                risk: tp_contracts::risk::Verdict::default(),
+                thread_trusted: false,
             };
             let mut notes = Vec::new();
             let outcome = match rules.evaluate(&input).await {
@@ -4543,7 +4547,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-mod journal;
+pub mod journal;
 mod moderation;
 mod pipeline;
 mod scheduled;

@@ -53,6 +53,9 @@ impl Fixture {
             mailboxes: mailboxes(),
             peer: PeerContext::new(PeerKind::Own),
             matrix: TrustMatrix::default(),
+            // Справочник аномалий до Sieve — SMTP-52 (CTR-95); в тестах правил — без срабатываний.
+            risk: tp_contracts::risk::Verdict::default(),
+            thread_trusted: false,
         };
         Self {
             store,

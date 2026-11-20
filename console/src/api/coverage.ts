@@ -128,10 +128,10 @@ export const covered: Record<string, string> = {
   "PUT /api/v1/orgs/{org}/groups/{group}/trust": "pages/trust.tsx",
   "DELETE /api/v1/orgs/{org}/groups/{group}/trust": "pages/trust.tsx",
   "GET /api/v1/orgs/{org}/accounts/{account}/trust": "pages/accounts.tsx",
-  // Журнал переписки (ADM-52, UI-25): раздел «Журнал» аудитора журнала — до него операции числятся за
-  // экраном организации.
-  "GET /api/v1/orgs/{org}/journal": "pages/organization.tsx",
-  "GET /api/v1/orgs/{org}/journal/{id}": "pages/organization.tsx",
-  "GET /api/v1/orgs/{org}/journal/{id}/export": "pages/organization.tsx",
-  "GET /api/v1/orgs/{org}/journal/verify": "pages/organization.tsx",
+  // Журнал переписки (ADM-52, UI-25): раздел «Журнал переписки» аудитора журнала — поиск, конверт,
+  // выгрузка `.eml`, целостность цепочки.
+  "GET /api/v1/orgs/{org}/journal": "pages/journal.tsx",
+  "GET /api/v1/orgs/{org}/journal/{id}": "pages/journal.tsx",
+  "GET /api/v1/orgs/{org}/journal/{id}/export": "pages/journal.tsx",
+  "GET /api/v1/orgs/{org}/journal/verify": "pages/journal.tsx",
 };

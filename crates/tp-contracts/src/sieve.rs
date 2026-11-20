@@ -7,9 +7,15 @@
 //!
 //! Порядок при доставке (реализация `tp-sieve`): скрипт организации ([`SieveStore::org_script`]), автоответ
 //! ([`Vacation`]), активный скрипт пользователя. Контекст правил включает тип абонента отправителя
-//! ([`RulesInput::peer`]) и действующую матрицу доверия получателя ([`RulesInput::matrix`], решение 124): админский
-//! Sieve сужает внутри потолка, `processcalendar` (RFC 9671) вносит приглашения не шире матрицы, автоответ чужим —
-//! только внешним текстом [`Vacation`].
+//! ([`RulesInput::peer`]), действующую матрицу доверия получателя ([`RulesInput::matrix`], решение 124) и вердикт
+//! справочника аномалий до Sieve ([`RulesInput::risk`], решение 126 д): админский Sieve сужает внутри потолка,
+//! `processcalendar` (RFC 9671) вносит приглашения не шире матрицы, автоответ чужим — только внешним текстом
+//! [`Vacation`]. Расширение `vnd.thepost.risk` (решение 126 д, SIEVE-15): команда `signal "<id>" [:weight N]`
+//! добавляет признак к баллу письма — вес неотрицательный и не выше предела конфигурации (скрипт может только
+//! повысить риск, «только сужать»), итог — [`RulesOutcome::signals`]; факты, которые считает Rust (текущий балл,
+//! сработавшие признаки, признак ответа, доверенная беседа), скрипт читает через `environment "vnd.thepost.*"`
+//! (RFC 5183), списки TI — через `:list` (RFC 6134). Расширение доступно только скрипту администратора этапа
+//! before; регулярные выражения — крейт `regex` с `size_limit` (без ReDoS).
 
 use std::time::Duration;
 
@@ -22,6 +28,7 @@ use crate::bus::{Event, EventKind};
 use crate::error::{Error, Result};
 use crate::ids::{MailboxId, TenantId};
 use crate::meta::{AccountScope, Flags, Mailbox};
+use crate::risk::{SignalId, Verdict};
 use crate::trust::{PeerContext, TrustMatrix};
 
 /// Наибольшая длина имени скрипта, символов.
@@ -259,6 +266,16 @@ pub struct RulesInput {
     /// хранилища — [`TrustMatrix::default`]). Ограничивает `processcalendar`, автоответ и `redirect` чужим
     /// (шире матрицы действия не выполняются).
     pub matrix: TrustMatrix,
+    /// Вердикт справочника аномалий до Sieve (CTR-95, решение 126 д: скрипт администратора этапа before
+    /// читает балл, действие и сработавшие признаки через `environment "vnd.thepost.risk"` и может добавить
+    /// свои признаки командой `signal` расширения `vnd.thepost.risk` — итог в [`RulesOutcome::signals`]).
+    /// Считает вызывающий (`tp-smtp`, SMTP-52) до правил; до него — без срабатываний
+    /// ([`Verdict::default`]).
+    pub risk: Verdict,
+    /// Беседа с отправителем доверенная: у получателя есть переписка с отправителем в этой беседе
+    /// (считает вызывающий по памяти беседы `crate::thread::ThreadFacts`, решение 126; `environment
+    /// "vnd.thepost.thread" "trusted"`). Признак ответа — [`PeerContext::reply`].
+    pub thread_trusted: bool,
 }
 
 /// Папка доставки.
@@ -359,6 +376,12 @@ pub struct RulesOutcome {
     /// [`RulesInput::matrix`] — применяет вызывающий.
     #[serde(default)]
     pub calendar: Option<ProcessCalendar>,
+    /// Признаки от команды `signal "<id>" [:weight N]` расширения `vnd.thepost.risk` (решение 126 д:
+    /// скрипт администратора может только повысить риск): идентификатор признака и необязательный вес
+    /// (`None` — вес признака каталога). Добавляет к вердикту вызывающий (`tp-smtp`, SMTP-52): вес
+    /// неотрицательный и не выше предела конфигурации.
+    #[serde(default)]
+    pub signals: Vec<(SignalId, Option<u16>)>,
     /// Ошибки выполнения (без содержимого письма) для журнала; при ошибке правила делают implicit keep.
     pub errors: Vec<String>,
 }
@@ -540,6 +563,36 @@ mod tests {
             .expect("parse")
             .calendar,
             None
+        );
+        // Сигналы команды `signal` (vnd.thepost.risk): кортеж идентификатор—вес, в старом JSON — пусто.
+        let outcome = RulesOutcome {
+            signals: vec![
+                (
+                    crate::risk::SignalId::new("tp.sieve_custom").expect("id"),
+                    Some(3),
+                ),
+                (
+                    crate::risk::SignalId::new("tp.no_weight").expect("id"),
+                    None,
+                ),
+            ],
+            ..RulesOutcome::implicit_keep()
+        };
+        let s = serde_json::to_string(&outcome).expect("json");
+        assert!(s.contains("[\"tp.sieve_custom\",3]"), "{s}");
+        assert!(s.contains("[\"tp.no_weight\",null]"), "{s}");
+        assert_eq!(
+            serde_json::from_str::<RulesOutcome>(&s).expect("parse"),
+            outcome
+        );
+        assert_eq!(
+            serde_json::from_str::<RulesOutcome>(
+                &serde_json::to_string(&RulesOutcome::implicit_keep()).expect("json")
+            )
+            .expect("parse")
+            .signals,
+            Vec::<(crate::risk::SignalId, Option<u16>)>::new(),
+            "отсутствие signals в старом JSON — пусто"
         );
     }
 }
