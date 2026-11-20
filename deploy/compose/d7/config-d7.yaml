@@ -1,0 +1,131 @@
+# Пресет all — профиль SMB: все роли в одном процессе на одной ВМ (SRS 1.2). Единственная конфигурация эталона SMB
+# (решение 105): Ansible (deploy/ansible/roles/thepost, шаблон config.yaml.j2) и compose (deploy/compose/dev.yml,
+# профиль smb) берут этот файл и подставляют только значения своей установки — домен, адреса СУБД и OpenBao, имя
+# узла; в compose — переменными THEPOST_*. Полный перечень секций: thepost config schema. Файл: /etc/thepost/config.yaml.
+
+domain: example.ru
+
+# Узел входит ролью thepost (член thepost_app, без SUPERUSER и BYPASSRLS, не владелец схемы); миграции — от владельца
+# схемы thepost_owner (DEP-08, deploy/README.md). Пароли — только ссылки на секреты в OpenBao. Внутренние каналы —
+# только TLS с проверкой имени: CA — роль thepost_pki (/etc/thepost/pki).
+database:
+  url: postgres://thepost@localhost:5432/thepost?sslmode=verify-full&sslrootcert=/etc/thepost/pki/ca.pem
+  password: { secret: "thepost/db#password" }
+  owner:
+    user: thepost_owner
+    password: { secret: "thepost/db-owner#password" }
+
+# Локальная POSIX-директория; шина событий и кэш — в процессе.
+blob:
+  url: file:///var/lib/thepost/blob
+
+# Журналирование переписки (SRS 4.9): по умолчанию выключено — включается явно (journal.enabled).
+# Профиль SMB — локальный каталог: неизменяемость обеспечивает только сервер (записи лишь добавляются),
+# от администратора ОС защиты нет — thepost doctor предупреждает (APP-82); для требований неизменяемости —
+# S3 с Object Lock (journal.s3). Правила журналирования — данные организации (Admin API), не файл узла.
+journal:
+  enabled: false
+  local:
+    dir: /var/lib/thepost/journal
+
+roles: [all]
+
+# Сертификат клиентских протоколов (SMTP, IMAP, ManageSieve, JMAP): цепочка — файл, ключ — только в OpenBao (секрет
+# thepost/tls#key, решение 100; на диске его нет). Пару узел перечитывает без перезапуска (tls.reload_interval).
+tls:
+  cert_file: /etc/thepost/tls/fullchain.pem
+  key: { secret: "thepost/tls#key" }
+
+# Слушатели — на все адреса: порты ниже 1024 под systemd слушают юниты thepost-*.socket (ListenStream=<порт>),
+# узел берёт сокет по порту (решение 102). Admin API — только внутренний адрес (SRS 6.8). Календари и контакты
+# (роль dav: /dav/, /.well-known/caldav, /.well-known/carddav) — на слушателе jmap, один порт 443 с JMAP; отдельный
+# адрес — http.dav.
+http:
+  jmap: { listen: "0.0.0.0:443" }
+  admin: { listen: "127.0.0.1:8443" }
+  # dav: { listen: "0.0.0.0:9443" }
+imap:
+  listeners:
+    - listen: "0.0.0.0:143"
+    - listen: "0.0.0.0:993"
+      implicit_tls: true
+# ManageSieve (RFC 5804): STARTTLS на 4190, сертификат — секция tls.
+sieve:
+  managesieve:
+    listen:
+      - listen: "0.0.0.0:4190"
+smtp:
+  hostname: mail.example.ru
+  inbound:
+    - listen: "0.0.0.0:25"
+  submission:
+    - listen: "0.0.0.0:587"
+    - listen: "0.0.0.0:465"
+      implicit_tls: true
+  # Диагностика Д.7: генератор нагрузки — без проверок SMTP-экрана (FIX-18, доверенный, как на эталоне).
+  screen:
+    exempt: ["172.16.0.0/12"]
+
+# Кэш списков писем папок (PERF-06): один на узел, общий для IMAP и JMAP — повторные SELECT и
+# Email/query обслуживаются из памяти, свежесть — по журналу изменений; показатели — /metrics
+# (tp_list_cache_*). 0 — выключить.
+mailstore:
+  list_cache:
+    max_bytes: 67108864   # 64 МБ
+
+# Роль maintenance (входит в пресет): раз в purge_interval — очистка по сроку надгробий DAV, журнала автоответов,
+# журнала доставки и токенов `thepost admin init`; сроки хранения — в meta. Проверка целостности BLOB — verify.
+# Значения ниже — умолчания узла.
+maintenance:
+  purge_interval: 1h
+  # Срок хранения токенов `thepost admin init` после их истечения (аудит); 0s — удалять сразу.
+  admin_token_retention: 30d
+  # Проверка целостности BLOB по расписанию — `thepost verify` без --fix: итог — журнал узла и /metrics
+  # (tp_blob_verify_*), исправление — только вручную (`thepost verify --fix`). Время — UTC, ЧЧ:ММ.
+  verify:
+    enabled: true
+    at: "03:00"
+    interval: 24h
+    lease_name: blob-verify
+    lease_ttl: 2m   # продлевается во время прохода; покрывает расхождение часов узлов
+# Сроки очистки — секция meta (по умолчанию):
+#   meta:
+#     dav: { tombstone_ttl: 90d }        # надгробия DAV; старше — клиенту полная синхронизация
+#     sieve: { vacation_log_ttl: 90d }   # журнал автоответов
+#     delivery: { retention: 30d }       # журнал доставки
+
+# Вход администратора `thepost admin login --oidc` с устройства без браузера (RFC 8628) у поставщика auth.oidc.
+# client_id — открытый клиент (public client) с Device Authorization Grant, его токен — с получателем из
+# auth.oidc.audience; не задан — вход с устройства выключен.
+cli:
+  oidc:
+    # client_id: thepost-cli
+    scope: openid
+    poll_interval: 5s      # пауза опроса токена, если поставщик не задал interval
+    slow_down_step: 5s     # прибавка к паузе на ответ slow_down
+    max_wait: 15m          # наибольшее ожидание подтверждения
+
+# Календари и контакты (роль dav): лимиты CalDAV и CardDAV; полный перечень — thepost config schema.
+dav:
+  max_request_size: 1048576
+  max_object_size: 1048576
+  expand_horizon: 730d
+
+# Секреты — только из хранилища (OpenBao или Vault), канал — TLS. Вход AppRole: secret_id — учётные данные
+# systemd (LoadCredential в thepost.service). Поля секции — по PLT-12.
+secrets:
+  url: https://localhost:8200
+  tls:
+    ca_file: /etc/thepost/pki/ca.pem
+  auth:
+    approle:
+      role_id_file: /etc/thepost/openbao/role_id
+      secret_id_file: /run/credentials/thepost.service/openbao-secret-id
+
+# --- Диагностика Д.7 на ноутбуке (w/laptop-d7, DEP-13) — поверх пресета all ---
+# Генератор нагрузки — доверенный (как stand_common на эталоне): вся нагрузка и зонды идут с одного адреса
+# генератора в сети compose (172.18.0.0/16, покрыт 172.16.0.0/12). Без этого лимит соединений ratelimit.ip
+# (burst 60, умолчания) блокирует генератор на 15 мин. Лимит учётной записи и auth.abuse — действуют.
+# SMTP-экран — smtp.screen.exempt в секции smtp выше (FIX-18).
+ratelimit:
+  trusted: ["172.16.0.0/12"]

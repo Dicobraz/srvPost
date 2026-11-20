@@ -1,0 +1,14 @@
+# Диагностика Д.7 на ноутбуке владельца (w/laptop-d7, DEP-13) — дополнение к dev.yml (профиль smb).
+# Узел: конфигурация с доверием генератору нагрузки (./config-d7.yaml — копия пресета all + ratelimit.trusted
+# и smtp.screen.exempt для сети compose, как stand_common/FIX-18 на эталоне) и общий том d7stand
+# (срезы smb-sampler узла; отчёты генератора). Стек поднимается как в NOTES-d7.md (чекпоинт 1), затем:
+#   THEPOST_IMAGE=thepost:beta5 docker compose -f deploy/compose/dev.yml -f deploy/compose/d7/dev-d7-node.yml \
+#     --profile smb up -d --no-deps thepost
+# Прогон B добавляет ещё -f deploy/compose/d7/dev-d7-b.yml (pg_wal на отдельном томе).
+services:
+  thepost:
+    volumes:
+      - ./d7/config-d7.yaml:/etc/thepost/config.yaml:ro
+      - d7stand:/stand
+volumes:
+  d7stand:

@@ -4,3 +4,7 @@
 junit.xml
 /console/dist
 /console/node_modules
+
+# Диагностика Д.7: рабочие артефакты (не в репозитории)
+d7/work/
+d7/inbox/

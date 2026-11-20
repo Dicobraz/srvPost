@@ -1,0 +1,15 @@
+#!/bin/bash
+# Обёртка podman → docker для run-scenario.sh (на эталоне imaptest запускается podman'ом на генераторе):
+# docker через сокет Docker Desktop, --network host → сеть compose thepost_default (imaptest должен видеть
+# узел по имени thepost; «host» внутри Docker Desktop в сеть compose не ведёт). Имя образа — без префикса
+# docker.io/ (задаётся в stand.env). Тома: каталог d7stand смонтирован в контейнере генератора по тому же
+# пути, что видит демон Docker, поэтому -v пути переписывать не нужно.
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --network) shift 2; continue ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+exec docker run --rm --network thepost_default ${args[@]+"${args[@]}"}
