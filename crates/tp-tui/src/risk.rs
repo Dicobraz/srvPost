@@ -94,7 +94,7 @@ pub enum ImportWhat {
 
 /// Ответы в пути для раздела «Признаки риска» ([`crate::app::Pending::Risk`]).
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Pending {
+pub enum Pending {
     /// `GET` каталога признаков.
     Catalog,
     /// `GET` порогов.
@@ -2414,9 +2414,8 @@ pub(crate) mod tests {
             let Some(Overlay::RiskFilter { form }) = &m.overlay else {
                 panic!("нет формы фильтра");
             };
-            let ok = form.fields.iter().any(|f| f.field.name == "signal")
-                && form.fields.iter().any(|f| f.field.name == "mode");
-            ok
+            form.fields.iter().any(|f| f.field.name == "signal")
+                && form.fields.iter().any(|f| f.field.name == "mode")
         };
         assert!(has_fields, "поля фильтра из схемы");
         {
@@ -2454,19 +2453,20 @@ pub(crate) mod tests {
         let id = call(&fx, "get_org_thresholds");
         app.on_result(id, ok(thresholds_json()));
         assert!(app.on_key(key(KeyCode::F(4))).is_empty());
-        let Stage::Main(m) = &app.stage else {
-            panic!("не основной экран");
-        };
-        let Some(Overlay::RiskThresholds { form }) = &m.overlay else {
-            panic!("нет формы порогов");
-        };
-        let names: Vec<&str> = form.fields.iter().map(|f| f.field.name.as_str()).collect();
-        assert_eq!(names, ["tag", "junk", "quarantine", "reject"]);
-        assert_eq!(form.value("tag"), Some("1"), "предзаполнено действующими");
-        assert_eq!(form.value("junk"), Some("6"));
         // Курсор на поле junk и значение выше базового: 12 вместо 6.
-        let junk = form.fields.iter().position(|f| f.field.name == "junk");
-        drop(&m);
+        let junk = {
+            let Stage::Main(m) = &app.stage else {
+                panic!("не основной экран");
+            };
+            let Some(Overlay::RiskThresholds { form }) = &m.overlay else {
+                panic!("нет формы порогов");
+            };
+            let names: Vec<&str> = form.fields.iter().map(|f| f.field.name.as_str()).collect();
+            assert_eq!(names, ["tag", "junk", "quarantine", "reject"]);
+            assert_eq!(form.value("tag"), Some("1"), "предзаполнено действующими");
+            assert_eq!(form.value("junk"), Some("6"));
+            form.fields.iter().position(|f| f.field.name == "junk")
+        };
         if let Some(junk) = junk {
             let Stage::Main(m) = &mut app.stage else {
                 panic!("не основной экран");
