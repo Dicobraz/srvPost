@@ -244,6 +244,147 @@ jobs:
       - run: python3 scripts/design_contrast.py --self-test
       - run: python3 scripts/design_contrast.py design/tokens.toml
 
+  # Покрытие Admin API тремя клиентами (CI-16, решение 118): одна проверка — каждая операция openapi_spec()
+  # есть в консоли (coverage.ts), в CLI (operations_match_openapi) и в текстовом интерфейсе (движок TUI-02
+  # строит экраны всех операций из openapi_spec(); экраны проверяет тест every_operation_has_a_screen в
+  # задаче test). Отчёт — непокрытые операции по клиентам. Операция, новая относительно базы PR, без команды
+  # CLI роняет проверку (приёмка CI-16); прежние пробелы тонкого CLI — команды по карточкам ADM-* — только
+  # в отчёте. Схема — копия консоли console/src/api/openapi.json: её сходство с openapi_spec() сверяет
+  # задача test (CI-11), отдельной сборки не нужно. Задача лёгкая — идёт со всеми правками Rust, включая сам
+  # ci.yml (самопроверка чекера).
+  clients:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Непокрытые операции по клиентам
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys
+
+          spec_path = "console/src/api/openapi.json"
+          cov_path = "console/src/api/coverage.ts"
+          ops_path = "crates/tp-admin-client/src/ops.rs"
+          tui_path = "crates/tp-tui/src/schema.rs"
+          METHODS = ("get", "post", "put", "patch", "delete")
+
+          def fail(msg):
+              print(f"::error::{msg}")
+
+          def ops_of(spec):
+              out = set()
+              for path, item in (spec.get("paths") or {}).items():
+                  for m in METHODS:
+                      if m in item:
+                          out.add(m.upper() + " " + path)
+              return out
+
+          # Схема — копия консоли: её сходство с openapi_spec() сверяет задача test (CI-11).
+          try:
+              with open(spec_path, encoding="utf-8") as f:
+                  spec = json.load(f)
+          except (OSError, ValueError) as e:
+              fail(f"{spec_path}: не читается: {e}")
+              sys.exit(1)
+          ops = ops_of(spec)
+
+          # Клиент «консоль»: экраны — coverage.ts (UI-02).
+          with open(cov_path, encoding="utf-8") as f:
+              ts = f.read()
+          covered = set(re.findall(r'"((?:GET|POST|PUT|PATCH|DELETE) [^"]+)"\s*:', ts))
+          uncovered_console = sorted(ops - covered)
+          stale_console = sorted(covered - ops)
+
+          # Клиент «CLI»: список OPERATIONS в tp-admin-client (operations_match_openapi).
+          with open(ops_path, encoding="utf-8") as f:
+              rs = f.read()
+          consts = {}
+          for m in re.finditer(r'pub const (\w+): Op = Op \{\s*method: "(\w+)",\s*path: "([^"]+)",\s*\};', rs):
+              consts[m.group(1)] = m.group(2) + " " + m.group(3)
+          body = re.search(r"pub const OPERATIONS: &\[Op\] = &\[(.*?)\];", rs, re.S)
+          names = re.findall(r"\b([A-Z][A-Z0-9_]+)\b", body.group(1)) if body else []
+          dups = sorted({n for n in names if names.count(n) > 1})
+          undefined = sorted({n for n in names if n not in consts})
+          cli = {consts[n] for n in names if n in consts}
+          phantom_cli = sorted(cli - ops)
+          uncovered_cli = sorted(ops - cli)
+
+          # Операции, новые относительно базы PR: команде CLI нужны сразу (приёмка CI-16). HEAD — пробный
+          # мерж: первый родитель — тот main, с которым сливаем (как в задаче changes).
+          new_ops = set()
+          base = os.environ.get("BASE", "")
+          if os.environ.get("EVENT") == "pull_request" and subprocess.run(
+              ["git", "rev-parse", "-q", "--verify", "HEAD^2"], capture_output=True
+          ).returncode == 0:
+              base = subprocess.run(["git", "rev-parse", "HEAD^1"], capture_output=True, text=True).stdout.strip()
+          if base:
+              shown = subprocess.run(["git", "show", f"{base}:{spec_path}"], capture_output=True)
+              try:
+                  new_ops = ops - ops_of(json.loads(shown.stdout.decode("utf-8")))
+              except ValueError:
+                  print(f"::warning::схемы нет в базе {base[:12]} — проверка новых операций CLI пропущена")
+          new_cli = sorted(new_ops - cli)
+
+          # Клиент «текстовый интерфейс»: движок TUI-02 строит экраны всех операций из openapi_spec()
+          # по построению (tp-tui/src/schema.rs); экраны проверяет тест every_operation_has_a_screen
+          # в задаче test.
+          with open(tui_path, encoding="utf-8") as f:
+              tui = f.read()
+          tui_from_spec = "tp_admin::server::openapi_spec" in tui
+
+          # Отчёт — непокрытые операции по клиентам.
+          print(f"схема Admin API: {len(ops)} операций")
+          print(f"консоль (coverage.ts): покрыто {len(ops & covered)}/{len(ops)}")
+          print(f"CLI (operations_match_openapi): команд {len(cli)}/{len(ops)}")
+          for o in uncovered_cli:
+              print(f"  без команды CLI (карточки ADM-*): {o}")
+          print(
+              "текстовый интерфейс (движок TUI-02): экраны из openapi_spec() — "
+              + ("да" if tui_from_spec else "НЕТ")
+              + ", тест every_operation_has_a_screen — в задаче test"
+          )
+          if new_ops:
+              print(f"новых относительно базы PR: {len(new_ops)}, из них без команды CLI: {len(new_cli)}")
+
+          bad = False
+          for o in uncovered_console:
+              fail(f"{o}: операции нет в console/src/api/coverage.ts — добавить экран консоли")
+              bad = True
+          for o in stale_console:
+              fail(f"{o}: есть в coverage.ts, но нет в схеме — убрать запись")
+              bad = True
+          for o in phantom_cli:
+              fail(f"{o}: операции CLI нет в схеме Admin API (operations_match_openapi)")
+              bad = True
+          if dups:
+              fail(f"OPERATIONS: повторы: {', '.join(dups)}")
+              bad = True
+          if undefined:
+              fail(f"OPERATIONS: констант нет в ops.rs: {', '.join(undefined)}")
+              bad = True
+          for o in new_cli:
+              fail(f"{o}: новая операция без команды CLI — добавить Op и команду thepost admin")
+              bad = True
+          if not tui_from_spec:
+              fail(f"{tui_path}: каталог операций больше не строится из openapi_spec()")
+              bad = True
+          if not body:
+              fail(f"{ops_path}: список OPERATIONS не найден")
+              bad = True
+          if bad:
+              fail("покрытие Admin API клиентами неполное — отчёт выше")
+              sys.exit(1)
+          print("покрытие клиентами полное: консоль — все операции, CLI — новые с командами, TUI — по построению")
+          PY
+
   # Только main, бета и ручной запуск: release-сборка и артефакт (решение 116, CI-14) — тем же путём, что выпуск
   # в beta.yml (.github/actions/release-build: cross, запуск на qemu Nehalem). В PR не выполняется.
   release:
@@ -277,7 +418,7 @@ jobs:
 
   # Единственный required check: зелёный, если всё нужное прошло или было пропущено.
   gate:
-    needs: [changes, fmt, clippy, test, interp, deny, console, design]
+    needs: [changes, fmt, clippy, test, interp, deny, console, design, clients]
     if: always()
     runs-on: ubuntu-latest
     steps:
