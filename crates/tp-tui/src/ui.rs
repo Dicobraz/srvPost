@@ -2602,7 +2602,7 @@ mod tests {
         assert!(rows[10].contains("не заданы"), "{}", rows[10]);
         assert!(rows[19].contains("F4 — заменить пороги"), "{}", rows[19]);
         assert!(
-            rows[22].contains("$ thepost admin risk thresholds show"),
+            rows[22].contains("$ thepost admin risk thresholds set"),
             "{}",
             rows[22]
         );
