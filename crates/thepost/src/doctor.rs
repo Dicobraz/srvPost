@@ -1416,11 +1416,15 @@ fn unix_seconds(t: SystemTime) -> f64 {
 }
 
 /// Пробный объект: запись, чтение со сверкой содержимого, удаление.
+///
+/// Путь плоский, без подкаталога (FIX-19, issue #195): `LocalStore` удаляет только сам объект, каталог
+/// `doctor/` остался бы с владельцем запустившего (root:root при прогоне от root) — следующий прогон от
+/// `thepost` падал бы на `blob.write` с `Permission denied`.
 pub async fn probe_blob(store: &dyn BlobStore, doctor: &DoctorSection, report: &mut Report) {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let path = format!("doctor/probe-{}-{nanos}", std::process::id());
+    let path = format!("probe-doctor-{}-{nanos}", std::process::id());
     let data = Bytes::from(format!("thepost doctor {nanos}"));
     let limit = doctor.blob_timeout;
     let timed = |what: &'static str| {
@@ -1794,6 +1798,11 @@ mod tests {
             assert_eq!(report.get(id).map(|c| c.status), Some(Status::Ok), "{id}");
         }
         assert!(store.paths().is_empty(), "пробный объект удалён");
+        // FIX-19 (issue #195): путь без подкаталога — root-прогон не оставляет каталог `doctor/` root:root
+        assert!(
+            !report.get("blob.write").unwrap().value.contains('/'),
+            "плоский путь зонда"
+        );
         assert_eq!(report.exit_code(), 0);
 
         store.fail_next(BlobOp::PutRaw, Error::UNAVAILABLE);
