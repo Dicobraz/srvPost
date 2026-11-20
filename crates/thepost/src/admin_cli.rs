@@ -5433,7 +5433,8 @@ mod tests {
         )
         .await
         .expect("source import");
-        assert!(out.contains("Записей: 2"), "{out}");
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Записей: 2"), "{out}");
         let out = exec(
             &root,
             false,
