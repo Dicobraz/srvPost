@@ -12,10 +12,12 @@ use tokio::net::TcpListener;
 use tp_contracts::config::duration::HumanDuration;
 use tp_contracts::queue::{DsnNotify, QueueClaim, QueueStore};
 use tp_contracts::role::CancellationToken;
+use tp_contracts::secrets::SecretRef;
 use tp_contracts::transport::{DestinationPolicy, TlsRequirement, TransportStore};
 use tp_contracts::{BlobKey, TenantId};
 use tp_testkit::{
-    Clock, ManualClock, MemBlobIndex, MemBlobStore, MemEventBus, MemQueue, MemTransport,
+    Clock, ManualClock, MemBlobIndex, MemBlobStore, MemEventBus, MemQueue, MemSecretStore,
+    MemSentLog, MemTransport, SystemClock,
 };
 
 use super::send::MxTransport;
@@ -1361,4 +1363,204 @@ async fn smtp_out_runs_on_signal_and_due_time() {
     assert!(OffsetDateTime::now_utc() >= release, "не раньше срока");
     shutdown.cancel();
     role.await.expect("join").expect("run");
+}
+
+// ---------- Метка ответа (SMTP-51) ----------
+
+/// Метка с ключом `k1` из хранилища секретов.
+fn marks() -> ReplyMarks {
+    let store = MemSecretStore::new(Arc::new(SystemClock));
+    store.set(
+        &SecretRef::new("thepost/reply", "k1").expect("ref"),
+        "a".repeat(32),
+    );
+    ReplyMarks::new(
+        Arc::new(store),
+        crate::config::ReplyConfig {
+            keys: vec![crate::config::ReplyKeyConfig {
+                id: "k1".into(),
+                secret: SecretRef::new("thepost/reply", "k1").expect("ref"),
+                active: true,
+            }],
+            ..crate::config::ReplyConfig::default()
+        },
+    )
+}
+
+/// Письмо очереди по фрагменту содержимого (порядок записей MemQueue не определён).
+async fn stored_with(env: &Env, needle: &str) -> Bytes {
+    for blob in env.queue.blobs() {
+        let chunks: Vec<Bytes> = env
+            .blobs
+            .get(&blob, None)
+            .await
+            .expect("get")
+            .try_collect()
+            .await
+            .expect("collect");
+        let raw: Bytes = chunks.concat().into();
+        if String::from_utf8_lossy(&raw).contains(needle) {
+            return raw;
+        }
+    }
+    panic!("в очереди нет письма с {needle:?}");
+}
+
+/// Письмо в очередь: Message-ID без метки — ставится метка узла, запись об отправленном — с меткой,
+/// хэшем и адресатами; письмо с Message-ID клиента — без замены (решение 125 в), запись по хэшу.
+#[tokio::test]
+async fn message_id_marked_and_sent_recorded() {
+    let env = Env::new();
+    let marks = Arc::new(marks());
+    let sent = Arc::new(MemSentLog::new());
+    let q = Queue::new(env.deps.clone()).with_reply(
+        marks.clone(),
+        Some(sent.clone() as Arc<dyn SentLog>),
+        "mx.example.org",
+    );
+
+    // Письмо узла без Message-ID — метка в заголовке, запись об отправленном создана.
+    q.enqueue(
+        TenantId::DEFAULT,
+        None,
+        "alice@example.org",
+        &["x@example.net".into(), "X@Example.net".into()],
+        Bytes::from_static(MAIL),
+    )
+    .await
+    .expect("enqueue");
+    let stored = stored_with(&env, "Subject: hi").await;
+    let id = ReplyMarks::current_id(&stored).expect("marked id");
+    assert!(id.starts_with("tp1.k1."), "{id}");
+    assert!(
+        String::from_utf8_lossy(&stored).contains("From: alice@example.org"),
+        "исходные заголовки на месте"
+    );
+    let records = sent.records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].recipients,
+        vec!["x@example.net".to_owned()],
+        "адресаты в канонической форме, без повтора"
+    );
+    assert_eq!(records[0].message_id_hash, ReplyMarks::hash_of(&id));
+    let opened = marks
+        .open(&id, OffsetDateTime::now_utc())
+        .await
+        .expect("open")
+        .expect("our mark");
+    assert_eq!(
+        opened.tag, records[0].tag,
+        "случайное значение метки — ключ записи"
+    );
+
+    // Письмо с Message-ID клиента — не заменяется, запись по хэшу.
+    let client = Bytes::from_static(
+        b"Message-ID: <client-1@mail.example.net>\r\nFrom: alice@example.org\r\nTo: y@example.net\r\nSubject: forward\r\n\r\nbody\r\n",
+    );
+    q.enqueue(
+        TenantId::DEFAULT,
+        None,
+        "alice@example.org",
+        &["y@example.net".into()],
+        client,
+    )
+    .await
+    .expect("enqueue");
+    let stored = stored_with(&env, "Subject: forward").await;
+    assert_eq!(
+        ReplyMarks::current_id(&stored).as_deref(),
+        Some("client-1@mail.example.net"),
+        "Message-ID клиента не заменяется"
+    );
+    let records = sent.records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[1].message_id_hash,
+        ReplyMarks::hash_of("client-1@mail.example.net")
+    );
+
+    // DSN узла: прежний Message-ID заменяется меткой, записи об отправленном нет (конверт `<>`).
+    let dsn_raw = Bytes::from_static(
+        b"Message-ID: <dsn.1@mx.example.org>\r\nFrom: MAILER-DAEMON@mx.example.org\r\nTo: bob@example.org\r\n\r\nreport\r\n",
+    );
+    q.send_dsn(TenantId::DEFAULT, "bob@example.org", dsn_raw)
+        .await
+        .expect("dsn");
+    let stored = stored_with(&env, "MAILER-DAEMON").await;
+    let id = ReplyMarks::current_id(&stored).expect("marked id");
+    assert!(id.starts_with("tp1.k1."), "{id}");
+    assert!(
+        !String::from_utf8_lossy(&stored).contains("dsn.1@mx.example.org"),
+        "{}",
+        String::from_utf8_lossy(&stored)
+    );
+    assert_eq!(
+        sent.records().len(),
+        2,
+        "DSN в запись об отправленном не пишется"
+    );
+}
+
+/// BATV: `MAIL FROM` исходящих наружу подписан (`prvs=…`), метка одна и та же в повторах одного письма;
+/// exempt-адрес и пустой отправитель (DSN) — без метки.
+#[tokio::test]
+async fn batv_marks_envelope_sender_once() {
+    let env = Env::new();
+    let marks = Arc::new(marks().with_batv(&crate::config::BatvConfig {
+        exempt: vec!["lists.example.net".into()],
+        ..crate::config::BatvConfig::default()
+    }));
+    let sent = Arc::new(MemSentLog::new());
+    let q = Queue::new(env.deps.clone()).with_reply(
+        marks.clone(),
+        Some(sent.clone() as Arc<dyn SentLog>),
+        "mx.example.org",
+    );
+    let t = Arc::new(Scripted::default());
+    let worker = QueueWorker::new(env.deps.clone(), t.clone(), "mx.example.org");
+
+    // Первая попытка x@example.net не удаётся, повтор — та же метка.
+    t.push(RcptResult::Temporary("451 4.3.0 busy".into()));
+    q.enqueue(
+        TenantId::DEFAULT,
+        None,
+        "alice@example.org",
+        &["x@example.net".into()],
+        Bytes::from_static(MAIL),
+    )
+    .await
+    .expect("enqueue");
+    let cfg = cfg();
+    assert_eq!(worker.run_once(&cfg).await.expect("run"), 1);
+    env.clock.advance(Duration::from_secs(16 * 60));
+    assert_eq!(worker.run_once(&cfg).await.expect("run"), 1);
+    let calls = t.calls.lock().expect("lock").clone();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].0.starts_with("prvs="), "{}", calls[0].0);
+    assert!(calls[0].0.ends_with("=alice@example.org"), "{}", calls[0].0);
+    assert_eq!(calls[0].0, calls[1].0, "повтор доставки видит ту же метку");
+    assert_eq!(calls[0].2, calls[1].2, "и тот же Message-ID");
+    assert_eq!(sent.records().len(), 1, "повтор постановки — та же запись");
+
+    // exempt-адрес и пустой отправитель — без метки (конверт виден в вызовах отправки).
+    q.enqueue(
+        TenantId::DEFAULT,
+        None,
+        "news@lists.example.net",
+        &["y@example.net".into()],
+        Bytes::from_static(MAIL),
+    )
+    .await
+    .expect("enqueue");
+    assert_eq!(worker.run_once(&cfg).await.expect("run"), 1);
+    let calls = t.calls.lock().expect("lock").clone();
+    assert_eq!(calls[2].0, "news@lists.example.net", "exempt — без метки");
+
+    q.send_dsn(TenantId::DEFAULT, "z@example.net", Bytes::from_static(MAIL))
+        .await
+        .expect("dsn");
+    assert_eq!(worker.run_once(&cfg).await.expect("run"), 1);
+    let calls = t.calls.lock().expect("lock").clone();
+    assert_eq!(calls[3].0, "", "DSN — пустой отправитель без метки");
 }

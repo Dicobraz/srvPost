@@ -25,6 +25,7 @@
 //! - [`screen`] — экран соединений smtp-in (postscreen): задержка приветствия, конвейер, частота, кэш по IP;
 //! - [`queue`] — очередь исходящей почты и роль smtp-out (отправка на MX через `mail-send`);
 //! - [`srs`] — адреса SRS (Sender Rewriting Scheme) пересылки и их обратное преобразование;
+//! - [`reply`] — метка ответа в Message-ID исходящих, BATV (`prvs=…`) и признак «ответ на наше письмо»;
 //! - [`tracking`] — журнал доставки (message tracking);
 //! - [`config`] — секция `smtp` config.yaml.
 
@@ -45,6 +46,7 @@ pub mod metrics;
 pub mod milter;
 pub mod policy;
 pub mod queue;
+pub mod reply;
 pub mod routes;
 pub mod screen;
 pub mod server;

@@ -8,7 +8,11 @@
 //! - `tp_smtp_send_limited_total{kind}` — отказы по лимиту отправки (`messages`, `recipients`);
 //! - `tp_smtp_queue_claimed_total`, `tp_smtp_queue_inflight` — захваченные и обрабатываемые записи очереди;
 //! - `tp_smtp_queue_recipients_total{result}` — итоги попыток по получателям: `delivered`, `deferred`, `failed`;
-//! - `tp_smtp_queue_delivery_seconds` — время от постановки в очередь до доставки.
+//! - `tp_smtp_queue_delivery_seconds` — время от постановки в очередь до доставки;
+//! - `tp_smtp_reply_flag_total{result}` — признак «ответ на наше письмо» (SMTP-51): `flagged` — признак
+//!   поставлен, `checked` — проверялся и не подтверждён;
+//! - `tp_smtp_batv_bounces_total{outcome}` — адреса bounce (SMTP-51): `valid` — метка валидна, `missing` —
+//!   метки нет, `invalid` — не сходится (в `enforce` оба последних — отказ `550 5.7.1`).
 
 use std::fmt;
 
@@ -35,6 +39,8 @@ pub struct SmtpMetrics {
     inflight: Gauge,
     rcpts: Family<Labels1, Counter>,
     delivery: Histogram,
+    reply: Family<Labels1, Counter>,
+    batv: Family<Labels1, Counter>,
 }
 
 impl Default for SmtpMetrics {
@@ -51,6 +57,8 @@ impl Default for SmtpMetrics {
             rcpts: Family::default(),
             // 1 с … ~4,5 сут.
             delivery: Histogram::new(exponential_buckets(1.0, 4.0, 10)),
+            reply: Family::default(),
+            batv: Family::default(),
         }
     }
 }
@@ -138,6 +146,16 @@ impl SmtpMetrics {
             "Время от постановки в очередь до доставки",
             self.delivery.clone(),
         );
+        registry.register(
+            "tp_smtp_reply_flag",
+            "Признак «ответ на наше письмо» (SMTP-51)",
+            self.reply.clone(),
+        );
+        registry.register(
+            "tp_smtp_batv_bounces",
+            "Проверки BATV адресов bounce (SMTP-51)",
+            self.batv.clone(),
+        );
     }
 
     /// Начало сессии роли `mode`.
@@ -196,4 +214,34 @@ impl SmtpMetrics {
             self.delivery.observe(queued_secs.max(0.0));
         }
     }
+
+    /// Признак «ответ на наше письмо» (SMTP-51): `flagged` — поставлен, `checked` — проверялся и не
+    /// подтверждён (без ссылок на наше письмо признак не проверяется).
+    pub fn reply_flag(&self, flagged: bool) {
+        let result = if flagged { "flagged" } else { "checked" };
+        self.reply.get_or_create(&[("result", result)]).inc();
+    }
+
+    /// Итог проверки адреса bounce по BATV (SMTP-51): метка валидна (`valid`), метки нет (`missing`) или не
+    /// сходится (`invalid`); в режиме `enforce` два последних — отказ `550 5.7.1`, в `log` — только эта метрика
+    /// и журнал.
+    pub fn batv_bounce(&self, outcome: BatvOutcome) {
+        let result = match outcome {
+            BatvOutcome::Valid => "valid",
+            BatvOutcome::Missing => "missing",
+            BatvOutcome::Invalid => "invalid",
+        };
+        self.batv.get_or_create(&[("result", result)]).inc();
+    }
+}
+
+/// Итог проверки адреса bounce по BATV (SMTP-51).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatvOutcome {
+    /// Метка валидна: адрес без метки, доставка.
+    Valid,
+    /// Метки нет (bounce на локальный адрес без `prvs=`).
+    Missing,
+    /// Метка не сходится (чужой ключ, просрочена, подделка).
+    Invalid,
 }
