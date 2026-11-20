@@ -61,6 +61,18 @@ pub enum JournalScope {
     Mailbox(AccountId),
 }
 
+impl JournalScope {
+    /// Приоритет области при наследовании правил (SRS 4.9, решение #171): ящик (`0`) > группа (`1`) >
+    /// организация (`2`) — меньше значение, выше приоритет; в списках Admin API правила идут по нему.
+    pub fn priority(self) -> u8 {
+        match self {
+            JournalScope::Mailbox(_) => 0,
+            JournalScope::Group(_) => 1,
+            JournalScope::Org => 2,
+        }
+    }
+}
+
 /// Правило журналирования (SRS 4.9): задаётся на организацию, группу или ящик с направлением.
 /// Хранение и Admin API — волны полос; этап ядра подбирает правила по конверту и направлению.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,6 +380,28 @@ pub trait JournalStore: Send + Sync + 'static {
     async fn restore_index(&self, tenant: TenantId) -> Result<u64>;
 }
 
+/// Правила журналирования организации (ADM-53, решение #171): CRUD для Admin API поверх таблицы
+/// `journal.rules` (META-88). Реализация — `tp-meta` `PgJournal` (схема `journal`), in-memory —
+/// `tp-testkit::MemJournal`. Право управления — только роль администратора организации (проверяет
+/// Admin API, SRS 5.2): аудитор журнала читает записи журнала, правила не видит. Конвейер читает
+/// правила на каждом письме (SMTP-53) — изменения действуют сразу, без перезапуска узла; записи
+/// журнала правила не трогают (журнал неизменяем). Существование группы и ящика области проверяет
+/// вызывающий (Admin API — до записи; PostgreSQL — внешний ключ), повторность цели — тоже: порт
+/// хранит правила как есть.
+#[async_trait]
+pub trait JournalRuleStore: Send + Sync + 'static {
+    /// Правила организации по возрастанию идентификаторов; пусто — журналирование выключено.
+    async fn rules(&self, tenant: TenantId) -> Result<Vec<JournalRule>>;
+
+    /// Задаёт (или заменяет целиком по идентификатору) правило: повтор после обрыва во время COMMIT —
+    /// то же состояние. Недопустимый идентификатор — `Error::Invalid`.
+    async fn set_rule(&self, rule: &JournalRule) -> Result<()>;
+
+    /// Удаляет правило; нет правила — не ошибка. Записи журнала не трогает: изменение действует на
+    /// будущие письма.
+    async fn delete_rule(&self, tenant: TenantId, id: &str) -> Result<()>;
+}
+
 /// Хранилище записей журнала (SRS 4.9) — порт индекса (META-88): письмо целиком с конвертом в отдельном
 /// от BLOB ящиков бакете журнала с дедупликацией внутри журнала и блокировкой объектов (режим и срок —
 /// настройка установки). Контракт бэкенда не знает: реализация — полоса blob (BLOB-18, S3 с Object Lock
@@ -455,6 +489,11 @@ mod tests {
             &[bob],
             &[AccountId::new()]
         ));
+        // Приоритет наследования: ящик > группа > организация.
+        assert!(
+            JournalScope::Mailbox(anna).priority() < JournalScope::Group(GroupId::new()).priority()
+        );
+        assert!(JournalScope::Group(GroupId::new()).priority() < JournalScope::Org.priority());
     }
 
     #[test]

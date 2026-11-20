@@ -20,6 +20,7 @@ use time::OffsetDateTime;
 
 use crate::error::{Error, Result};
 use crate::ids::{AccountId, TenantId};
+use crate::journal::JournalRule;
 use crate::trust::TrustPolicy;
 
 /// Запись журнала аудита Admin API.
@@ -69,6 +70,14 @@ pub enum AuditDetails {
         from: Option<TrustPolicy>,
         /// Новая политика уровня; `None` — сброс к умолчаниям уровня выше.
         to: Option<TrustPolicy>,
+    },
+    /// Правило журналирования (ADM-53, решение #171): прежнее и новое правило целиком — кто какое
+    /// правило записал и что в нём было и стало.
+    JournalRule {
+        /// Прежнее правило; `None` — не было (создание).
+        from: Option<JournalRule>,
+        /// Новое правило; `None` — удаление.
+        to: Option<JournalRule>,
     },
 }
 
@@ -359,5 +368,30 @@ mod tests {
         let back: AdminAuditRecord =
             serde_json::from_value(serde_json::to_value(&record).expect("ser")).expect("de");
         assert_eq!(back, record);
+
+        // Правило журналирования: тег `journal_rule`, пара «старое → новое» (ADM-53).
+        let rule = crate::journal::JournalRule {
+            id: "all-mail".into(),
+            tenant: TenantId::DEFAULT,
+            scope: crate::journal::JournalScope::Org,
+            direction: crate::journal::JournalDirection::Both,
+            enabled: true,
+        };
+        let d = AuditDetails::JournalRule {
+            from: None,
+            to: Some(rule.clone()),
+        };
+        let v = serde_json::to_value(&d).expect("ser");
+        assert_eq!(v["what"], "journal_rule");
+        assert_eq!(v["to"]["id"], "all-mail");
+        let back: AuditDetails = serde_json::from_value(v).expect("de");
+        assert_eq!(back, d);
+        let d = AuditDetails::JournalRule {
+            from: Some(rule),
+            to: None,
+        };
+        let back: AuditDetails =
+            serde_json::from_value(serde_json::to_value(&d).expect("ser")).expect("de");
+        assert_eq!(back, d);
     }
 }

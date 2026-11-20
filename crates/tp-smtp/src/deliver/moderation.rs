@@ -321,7 +321,7 @@ impl Moderation for Delivery {
                 mail_from,
                 &raw,
                 &mut prepared.deliveries,
-                &RuleContext::new(peer, &prepared.junk, &prepared.group),
+                &RuleContext::new(peer, false, &prepared.junk, &prepared.group),
                 false,
                 // Письмо уже одобрено модератором: сбой скрипта организации — во «Входящие», как у скрипта
                 // пользователя (SMTP-50: `451` — только в сессии приёма).

@@ -348,6 +348,7 @@ proptest! {
                 envelope_to: "c+d@e.example",
                 mailboxes: &[],
                 peer: PeerKind::Own,
+                ..crate::Context::default()
             };
             let _ = crate::run(&program, &ctx, &Limits::default());
         }

@@ -300,6 +300,43 @@
               "what"
             ],
             "type": "object"
+          },
+          {
+            "description": "Правило журналирования (ADM-53): прежнее и новое правило целиком — кто какое правило записал и\nчто в нём было и стало.",
+            "properties": {
+              "from": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/JournalRule",
+                    "description": "Прежнее правило; `null` — не было (создание)."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "to": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/JournalRule",
+                    "description": "Новое правило; `null` — удаление."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "what": {
+                "enum": [
+                  "journal_rule"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "what"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -4586,6 +4623,158 @@
           "rule"
         ],
         "type": "object"
+      },
+      "JournalDirection": {
+        "description": "Направление правила: `\"in\"` — доставляемое, `\"out\"` — отправляемое, `\"both\"` — оба.",
+        "enum": [
+          "in",
+          "out",
+          "both"
+        ],
+        "type": "string"
+      },
+      "JournalRule": {
+        "description": "Правило журналирования контракта ([`tp_contracts::journal::JournalRule`]) — для деталей записи\nаудита ([`crate::audit::AuditDetailsSchema`]).",
+        "properties": {
+          "id": {
+            "description": "Идентификатор.",
+            "type": "string"
+          },
+          "tenant": {
+            "description": "Организация (UUID).",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/JournalScope",
+            "description": "Область."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/JournalDirection",
+            "description": "Направление."
+          },
+          "enabled": {
+            "description": "Включено.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "tenant",
+          "scope",
+          "direction",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "JournalRuleBody": {
+        "additionalProperties": false,
+        "description": "Правило журналирования: создание или замена целиком (идентификатор — в пути).",
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/JournalScope",
+            "description": "Область: `\"org\"`, `{\"group\": \"<uuid>\"}` или `{\"mailbox\": \"<uuid>\"}`."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/JournalDirection",
+            "description": "Направление: `in`, `out`, `both`."
+          },
+          "enabled": {
+            "description": "Включено (по умолчанию — включено).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scope",
+          "direction"
+        ],
+        "type": "object"
+      },
+      "JournalRuleView": {
+        "description": "Правило журналирования в ответе API ([`tp_contracts::journal::JournalRule`]; обе стороны serde — ADM-13).",
+        "properties": {
+          "id": {
+            "description": "Идентификатор (1–64 байта без пробелов и управляющих).",
+            "type": "string"
+          },
+          "tenant": {
+            "description": "Организация (UUID).",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/JournalScope",
+            "description": "Область: организация, группа или ящик."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/JournalDirection",
+            "description": "Направление: `in`, `out`, `both`."
+          },
+          "enabled": {
+            "description": "Включено (выключенное правило писем не касается).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "tenant",
+          "scope",
+          "direction",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "JournalRulesView": {
+        "description": "Правила журналирования организации в порядке наследования: ящик > группа > организация\n([`JournalScope::priority`]), внутри области — по идентификаторам.",
+        "properties": {
+          "rules": {
+            "description": "Правила; пусто — журналирование выключено.",
+            "items": {
+              "$ref": "#/components/schemas/JournalRuleView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "type": "object"
+      },
+      "JournalScope": {
+        "description": "Область правила журналирования: `\"org\"` — организация, `{\"group\": \"<uuid>\"}` — группа рассылки,\n`{\"mailbox\": \"<uuid>\"}` — ящик.",
+        "oneOf": [
+          {
+            "description": "Организация целиком.",
+            "enum": [
+              "org"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Группа рассылки (UUID): отправитель или получатель — член группы.",
+            "properties": {
+              "group": {
+                "description": "Группа рассылки (UUID): отправитель или получатель — член группы.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "group"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Ящик (учётная запись, UUID).",
+            "properties": {
+              "mailbox": {
+                "description": "Ящик (учётная запись, UUID).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mailbox"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "ThreadHoldBody": {
         "additionalProperties": false,
@@ -13583,6 +13772,253 @@
           }
         },
         "summary": "Отчёт целостности хеш-цепочки индекса организации (`hash = SHA-256(prev_hash ‖ canonical)`).",
+        "tags": [
+          "journal"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/journal/rules": {
+      "get": {
+        "operationId": "list_rules",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalRulesView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Правила журналирования организации (ADM-53): порядок наследования ящик > группа > организация,\nвнутри области — по идентификаторам. Право — администратор организации; аудитор журнала содержимое\nчитает, правила не видит (403). Хранилище правил не подключено — 503.",
+        "tags": [
+          "journal"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/journal/rules/{id}": {
+      "delete": {
+        "operationId": "delete_rule",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Идентификатор правила",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalRuleView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Удаляет правило журналирования; нет правила — 404. Записи журнала правило не трогает: изменение\nдействует на будущие письма, конвейер подхватывает его без перезапуска (SMTP-53). Удаление — в\nжурнал аудита с парой «было → стало».",
+        "tags": [
+          "journal"
+        ]
+      },
+      "put": {
+        "operationId": "put_rule",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Идентификатор правила (1–64 байта без пробелов)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JournalRuleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalRuleView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "та же цель с тем же направлением уже журналируется"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "группа или ящик области не существуют"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Создаёт или заменяет правило журналирования (замена целиком по идентификатору). Группа и ящик\nобласти должны существовать (422), та же цель с тем же направлением у другого правила — 409 с\nподсказкой; конвейер подхватывает изменение без перезапуска (SMTP-53). Изменение — в журнал аудита\nс парой «было → стало».",
         "tags": [
           "journal"
         ]

@@ -13,8 +13,9 @@ use tp_contracts::trust::{InviteMode, PeerContext, PeerKind, TrustMatrix};
 use tp_contracts::{AccountId, TenantId};
 use tp_testkit::{ManualClock, MemSieve, MemVacationLog};
 
+use super::admin::MemLists;
 use super::mailboxes;
-use crate::{CacheConfig, Rules, SieveConfig, fuzz};
+use crate::{CacheConfig, ExternalLists, Rules, SieveConfig, fuzz};
 
 const MAIL: &str = "Received: from mx.example.com ([192.0.2.1])\r\n\tby mail.example.org (The Post) with ESMTPS id 1\r\n\
                     From: Alice <alice@example.com>\r\nTo: Bob <bob@example.org>\r\nSubject: Report\r\n\
@@ -34,13 +35,25 @@ impl Fixture {
     }
 
     fn with(config: SieveConfig) -> Self {
+        Self::build(config, None)
+    }
+
+    /// Фикстура с внешними списками `extlists` (SIEVE-15): интерфейс узла — память.
+    fn with_lists(config: SieveConfig, lists: Arc<dyn ExternalLists>) -> Self {
+        Self::build(config, Some(lists))
+    }
+
+    fn build(config: SieveConfig, lists: Option<Arc<dyn ExternalLists>>) -> Self {
         let store = MemSieve::new();
         let clock = ManualClock::new(OffsetDateTime::UNIX_EPOCH + time::Duration::days(20_000));
         let log = MemVacationLog::new(clock.shared());
         let shared = clock.shared();
-        let rules = Rules::new(Arc::new(store.clone()), Arc::new(log), config)
+        let mut rules = Rules::new(Arc::new(store.clone()), Arc::new(log), config)
             .with_node("mail.example.org")
             .with_clock(move || shared.now());
+        if let Some(lists) = lists {
+            rules = rules.with_lists(lists);
+        }
         let scope = AccountScope {
             tenant: TenantId::new(),
             account: AccountId::new(),
@@ -580,4 +593,94 @@ fn config_defaults() {
     assert!(c.vacation.min_days <= c.vacation.default_days);
     assert!(c.vacation.default_days <= c.vacation.max_days);
     assert!(c.managesieve.max_literal >= c.max_script_size);
+}
+
+/// Скрипт организации (SIEVE-15): факты `environment` из контекста правил, признаки `signal` — в итог
+/// (`RulesOutcome::signals`); пользовательский скрипт расширения получить не может.
+#[tokio::test]
+async fn org_script_signals_and_environment() {
+    let mut f = Fixture::new();
+    f.org(
+        "require [\"vnd.thepost.risk\", \"environment\", \"relational\", \"comparator-i;ascii-numeric\"];\n\
+             if environment \"vnd.thepost.risk.score\" :value \"ge\" :comparator \"i;ascii-numeric\" \"6\" { signal \"org.high\" :weight 5; }\n\
+             if environment \"vnd.thepost.thread\" \"trusted\" { signal \"org.thread_known\"; }\n\
+             if environment \"phase\" \"before\" { signal \"org.stage\"; }",
+    )
+    .await;
+    // Заголовок X-ThePost-Thread в письме не делает беседу доверенной — только контекст.
+    f.input.message = "X-ThePost-Thread: trusted\r\n\
+                       From: Alice <alice@example.com>\r\nTo: Bob <bob@example.org>\r\nSubject: Report\r\n\
+                       Message-ID: <m1@example.com>\r\n\r\nThe quick brown fox"
+        .as_bytes()
+        .to_vec()
+        .into();
+    f.input.risk = tp_contracts::risk::Verdict {
+        score: 7,
+        ..tp_contracts::risk::Verdict::default()
+    };
+    let o = f.eval().await;
+    let id = |s: &str| tp_contracts::risk::SignalId::new(s).expect("id");
+    assert_eq!(
+        o.signals,
+        [
+            (id("org.high"), Some(5)),
+            (id("org.stage"), None) // скрипт организации — этап before
+        ],
+        "{:?}",
+        o.signals
+    );
+    assert_eq!(
+        f.folders().await,
+        ["INBOX"],
+        "signal не отменяет implicit keep"
+    );
+
+    // Доверенная беседа и порог не достигнут — свои признаки, чужих нет.
+    f.input.thread_trusted = true;
+    f.input.risk.score = 3;
+    let o = f.eval().await;
+    assert_eq!(
+        o.signals,
+        [(id("org.thread_known"), None), (id("org.stage"), None)]
+    );
+
+    // Пользовательский скрипт с расширением админского профиля не компилируется: письмо во «Входящих»,
+    // причина — в ошибках правил.
+    f.user("require \"vnd.thepost.risk\"; signal \"org.x\";")
+        .await;
+    let o = f.eval().await;
+    assert_eq!(f.folders().await, ["INBOX"]);
+    assert!(
+        o.errors
+            .iter()
+            .any(|e| e.contains("доступно только скрипту организации")),
+        "{:?}",
+        o.errors
+    );
+}
+
+/// Скрипт организации со списками TI (SIEVE-15): `:list` через интерфейс узла (`Rules::with_lists`).
+#[tokio::test]
+async fn org_script_extlists() {
+    const TI: &str = "tag:node.example,2026-11-14:ti/feodo";
+    let lists: Arc<dyn ExternalLists> = Arc::new(MemLists::new(&[(TI, &["example.com"])]));
+    let f = Fixture::with_lists(SieveConfig::default(), lists);
+    f.org(
+        "require [\"extlists\", \"vnd.thepost.risk\"];\n\
+             if address :list :domain \"From\" \"tag:node.example,2026-11-14:ti/feodo\" { signal \"org.ti_from_domain\" :weight 4; }\n\
+             if valid_ext_list \"tag:node.example,2026-11-14:ti/none\" { signal \"org.no\"; }",
+    )
+    .await;
+    let o = f.eval().await;
+    let id = |s: &str| tp_contracts::risk::SignalId::new(s).expect("id");
+    assert_eq!(o.signals, [(id("org.ti_from_domain"), Some(4))]);
+    // Без интерфейса (Rules без with_lists) тот же скрипт не находит список: письмо доставляется, признака нет.
+    let bare = Fixture::new();
+    bare.org(
+        "require [\"extlists\", \"vnd.thepost.risk\"];\n\
+             if address :list :domain \"From\" \"tag:node.example,2026-11-14:ti/feodo\" { signal \"org.ti_from_domain\" :weight 4; }",
+    )
+    .await;
+    let o = bare.eval().await;
+    assert!(o.signals.is_empty(), "{:?}", o.signals);
 }

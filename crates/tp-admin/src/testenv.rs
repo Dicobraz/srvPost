@@ -646,7 +646,9 @@ impl Env {
         let admin = admin.with_trust(Arc::new(trust.clone()));
         let journal = MemJournal::new();
         let admin = if with_journal {
-            admin.with_journal(Arc::new(journal.clone()))
+            admin
+                .with_journal(Arc::new(journal.clone()))
+                .with_journal_rules(Arc::new(journal.clone()))
         } else {
             admin
         };

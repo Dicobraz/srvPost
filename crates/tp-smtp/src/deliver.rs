@@ -118,6 +118,7 @@ use tp_contracts::meta::{
 };
 use tp_contracts::pipeline::{ActionSet, OrgPolicy, PipelinePoint, StageRegistry};
 use tp_contracts::queue::{DsnRet, Outbound, SubmitStatus, Submitted};
+use tp_contracts::reply::{ReplyEvidence, SentLog, age_since};
 use tp_contracts::retention::Quota;
 use tp_contracts::schedule::{ItipDelivery, ItipMessage, ItipMethod};
 use tp_contracts::senders::{SenderLists, SenderVerdict};
@@ -142,7 +143,9 @@ use crate::forward::Forwarding;
 use crate::groups::{Groups, Hold};
 use crate::itip;
 use crate::limits::{self, SendLimits};
+use crate::metrics::{BatvOutcome, SmtpMetrics};
 use crate::milter::{self, Milters, Verdict};
+use crate::reply::{self, BatvAddress, ReplyMarks};
 use crate::routes::Routes;
 use crate::server::{Envelope, Handler, Mode, Reply, is_positive, reply};
 use crate::sieve::{self, Hop, Sieved, VacationRate};
@@ -313,6 +316,14 @@ pub struct Delivery {
     pipeline: StageRegistry,
     /// Политика организации для итогового контроля действий (SMTP-54); по умолчанию выключена.
     org_policy: OrgPolicy,
+    /// Метка ответа (SMTP-51): признак «ответ на наше письмо» по записи об отправленном, метки Message-ID.
+    reply: Option<Arc<ReplyMarks>>,
+    /// Запись об отправленном (SMTP-51, CTR-94): поиск исходного письма для признака ответа.
+    sent: Option<Arc<dyn SentLog>>,
+    /// Метрики (SMTP-51: признак ответа и BATV).
+    metrics: Option<Arc<SmtpMetrics>>,
+    /// `smtp.reply.max_age`.
+    reply_max_age: std::time::Duration,
 }
 
 impl fmt::Debug for Delivery {
@@ -372,17 +383,30 @@ impl Filing {
     }
 }
 
-/// Контекст правил одного письма (SMTP-50): тип абонента отправителя, ящики-«Спам» и участники групп рассылки
-/// (без автоответа) — общий для всех получателей письма.
+/// Контекст правил одного письма (SMTP-50, SMTP-51): тип абонента отправителя, признак «ответ на наше
+/// письмо», ящики-«Спам» и участники групп рассылки (без автоответа) — общий для всех получателей письма.
 struct RuleContext<'a> {
     peer: PeerKind,
+    /// Признак «ответ на наше письмо» (SMTP-51): [`PeerContext::reply`] для клеток `ReplyOnly` матрицы
+    /// (автоответ, MDN) и правил.
+    reply: bool,
     junk: &'a HashSet<AccountId>,
     group: &'a HashSet<AccountId>,
 }
 
 impl<'a> RuleContext<'a> {
-    fn new(peer: PeerKind, junk: &'a HashSet<AccountId>, group: &'a HashSet<AccountId>) -> Self {
-        Self { peer, junk, group }
+    fn new(
+        peer: PeerKind,
+        reply: bool,
+        junk: &'a HashSet<AccountId>,
+        group: &'a HashSet<AccountId>,
+    ) -> Self {
+        Self {
+            peer,
+            reply,
+            junk,
+            group,
+        }
     }
 }
 
@@ -437,7 +461,33 @@ impl Delivery {
             journal: None,
             pipeline: pipeline::core_registry(),
             org_policy: OrgPolicy::default(),
+            reply: None,
+            sent: None,
+            metrics: None,
+            reply_max_age: cfg.reply.max_age,
         }
+    }
+
+    /// Метка ответа (SMTP-51): признак «ответ на наше письмо» — метка Message-ID расшифрована или хэш найден
+    /// в записи об отправленном, отправитель `From` — среди адресатов, DMARC pass и возраст ≤
+    /// `smtp.reply.max_age` ([`Delivery::with_sent_log`]); заголовок [`reply::REPLY_HEADER`] своего ставится
+    /// до Milter, пришедший извне удаляется. Антивирус, URL и DMARC признак ничего не пропускает.
+    pub fn with_reply_marks(mut self, reply: Arc<ReplyMarks>) -> Self {
+        self.reply = Some(reply);
+        self
+    }
+
+    /// Запись об отправленном (SMTP-51, CTR-94): поиск исходного письма для признака ответа. Реализация —
+    /// `tp-meta` (META-86), in-memory — `MemSentLog`; пишет очередь при постановке письма с адресатами.
+    pub fn with_sent_log(mut self, sent: Arc<dyn SentLog>) -> Self {
+        self.sent = Some(sent);
+        self
+    }
+
+    /// Метрики сессий и очереди (SMTP-11, SMTP-51: признак ответа и BATV).
+    pub fn with_metrics(mut self, metrics: Arc<SmtpMetrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Лимиты отправки в час (SMTP-43) для [`Delivery::submit`] и отложенной отправки (JMAP): писем —
@@ -2072,6 +2122,34 @@ impl Delivery {
     /// Принимает письмо: проверки, фильтры, доставка и очередь. Ответ фильтра (отказ, отброс) — `Ok(Some)`.
     async fn accept(&self, env: &Envelope, raw: Bytes, trail: &mut Trail) -> Result<Option<Reply>> {
         let received_at = OffsetDateTime::now_utc();
+        // Признак «ответ на наше письмо» из заголовка извне не принимается (SMTP-51): удаляется до проверок,
+        // свой узел ставит после проверок — до Milter.
+        let mut raw = if env.mode == Mode::Inbound {
+            reply::strip_header(&raw, reply::REPLY_HEADER)
+        } else {
+            raw
+        };
+        // BATV (SMTP-51): валидная метка bounce-адреса снимается (доставка без метки в адресе).
+        let env_owned;
+        let env = if env.mode == Mode::Inbound {
+            match self.batv_strip_rcpts(env).await? {
+                Some(rcpts) => {
+                    env_owned = Envelope {
+                        rcpts,
+                        ..env.clone()
+                    };
+                    &env_owned
+                }
+                None => env,
+            }
+        } else {
+            env
+        };
+        // Message-ID письма submission без него задаёт сервер — меткой ответа (SMTP-51); Message-ID клиента
+        // не заменяется (решение 125 в).
+        if env.mode == Mode::Submission {
+            raw = self.ensure_mark(env, raw).await;
+        }
         trail.message_id = tracking::message_id(&raw);
         // Адреса отправителя в заголовках — до проверок и фильтров: письмо от чужого имени дальше не идёт.
         let sender_header = match self.check_headers(env, &raw).await? {
@@ -2125,6 +2203,19 @@ impl Delivery {
         full.extend_from_slice(headers.as_bytes());
         full.extend_from_slice(&raw);
         let mut full = Bytes::from(full);
+        // Признак «ответ на наше письмо» (SMTP-51): `In-Reply-To`, затем `References` — метка расшифрована или
+        // хэш Message-ID найден в записи об отправленном; отправитель `From` — среди адресатов записи, DMARC
+        // pass с выравниванием и возраст ≤ `smtp.reply.max_age` — всё сразу. Своей меткой — до Milter
+        // (Rspamd снижает балл, DEP-56); проверки признак не отменяет (антивирус, URL, DMARC — как всем).
+        let flagged = self
+            .detect_reply(env, &full, check.as_ref().is_some_and(|c| c.dmarc_pass))
+            .await;
+        if flagged {
+            let mut marked = Vec::with_capacity(full.len() + reply::REPLY_HEADER.len() + 8);
+            marked.extend_from_slice(format!("{}: yes\r\n", reply::REPLY_HEADER).as_bytes());
+            marked.extend_from_slice(&full);
+            full = Bytes::from(marked);
+        }
         let mail = milter::Mail::of(env);
         if let Some(m) = self
             .deps
@@ -2391,7 +2482,7 @@ impl Delivery {
                 &env.mail_from,
                 &full,
                 &mut prepared.deliveries,
-                &RuleContext::new(peer, &prepared.junk, &prepared.group),
+                &RuleContext::new(peer, flagged, &prepared.junk, &prepared.group),
                 false,
                 true,
             )
@@ -2602,6 +2693,208 @@ impl Delivery {
                 PeerKind::External
             }
         }
+    }
+
+    /// Message-ID письма submission без него — меткой ответа (SMTP-51, решение 125 в): домен метки — домен
+    /// `From`, иначе имя узла. Сбой метки — только в журнал (письмо уходит с тем, что есть).
+    async fn ensure_mark(&self, env: &Envelope, raw: Bytes) -> Bytes {
+        let Some(marks) = &self.reply else {
+            return raw;
+        };
+        let domain = from_address(&raw)
+            .and_then(|a| a.rsplit_once('@').map(|(_, d)| d.to_lowercase()))
+            .unwrap_or_else(|| self.hostname.clone());
+        match marks
+            .ensure_message_id(raw.clone(), &domain, OffsetDateTime::now_utc())
+            .await
+        {
+            Ok((raw, _, _)) => raw,
+            Err(e) => {
+                tracing::warn!(id = %env.id, error = %e, "smtp: метка Message-ID не поставлена");
+                raw
+            }
+        }
+    }
+
+    /// Признак «ответ на наше письмо» (SMTP-51, решение 125 а) — только smtp-in с проверками отправителя:
+    /// `In-Reply-To`, затем `References` — метка расшифрована (ключ известен, время не в будущем) или хэш
+    /// Message-ID найден в записи об отправленном; затем отправитель `From` — среди адресатов записи, DMARC
+    /// pass с выравниванием и возраст ≤ `smtp.reply.max_age`. Ошибка чтения записи — признака нет (безопасное
+    /// умолчание), письмо доставляется.
+    async fn detect_reply(&self, env: &Envelope, raw: &[u8], dmarc_pass: bool) -> bool {
+        if env.mode != Mode::Inbound || self.sent.is_none() {
+            return false;
+        }
+        let refs = referenced_ids(raw);
+        if refs.is_empty() {
+            return false;
+        }
+        let flagged = 'flag: {
+            let Some(marks) = &self.reply else {
+                break 'flag false;
+            };
+            let Some(sent) = &self.sent else {
+                break 'flag false;
+            };
+            let now = OffsetDateTime::now_utc();
+            let sender = from_address(raw).unwrap_or_default();
+            // Метка Message-ID: без БД, доказывает «наше и свежее» (решение 125 в).
+            for id in &refs {
+                let opened = match marks.open(id, now).await {
+                    Ok(o) => o,
+                    Err(e) => {
+                        tracing::warn!(id = %env.id, error = %e, "smtp: метка ответа не проверена");
+                        None
+                    }
+                };
+                let record = match opened {
+                    Some(opened) => sent.by_tag(self.deps.tenant, &opened.tag).await,
+                    None => Ok(None),
+                };
+                let confirmed = match record {
+                    Ok(Some(record)) => ReplyEvidence {
+                        age: age_since(record.sent_at, now),
+                        sent: record,
+                    }
+                    .confirms(&sender, self.reply_max_age),
+                    Ok(None) => false,
+                    Err(e) => {
+                        tracing::warn!(id = %env.id, error = %e, "smtp: запись об отправленном не прочитана");
+                        false
+                    }
+                };
+                if confirmed {
+                    break 'flag true;
+                }
+            }
+            // Хэш Message-ID клиента (как Rspamd `replies`): письму с чужим Message-ID отвечают по записи.
+            for id in &refs {
+                let found = match sent
+                    .by_message_id_hash(self.deps.tenant, &ReplyMarks::hash_of(id))
+                    .await
+                {
+                    Ok(found) => found,
+                    Err(e) => {
+                        tracing::warn!(id = %env.id, error = %e, "smtp: запись об отправленном не прочитана");
+                        break;
+                    }
+                };
+                for record in found {
+                    let evidence = ReplyEvidence {
+                        age: age_since(record.sent_at, now),
+                        sent: record,
+                    };
+                    if evidence.confirms(&sender, self.reply_max_age) {
+                        break 'flag true;
+                    }
+                }
+            }
+            false
+        };
+        let flagged = flagged && dmarc_pass;
+        if let Some(m) = &self.metrics {
+            m.reply_flag(flagged);
+        }
+        flagged
+    }
+
+    /// BATV (SMTP-51): валидная метка адреса-получателя снимается — доставка без метки в адресе. `None` —
+    /// адреса не менялись (метки нет, BATV не настроен или метка не сошлась: в `enforce` такой адрес уже
+    /// отклонён на `RCPT`, в `log` — адрес как есть).
+    async fn batv_strip_rcpts(&self, env: &Envelope) -> Result<Option<Vec<String>>> {
+        let Some(marks) = &self.reply else {
+            return Ok(None);
+        };
+        let Some(batv) = marks.batv() else {
+            return Ok(None);
+        };
+        let now = OffsetDateTime::now_utc();
+        let mut changed = false;
+        let mut rcpts = Vec::with_capacity(env.rcpts.len());
+        for rcpt in &env.rcpts {
+            match batv.open(rcpt, now).await? {
+                Some(BatvAddress::Stripped(address)) => {
+                    changed = true;
+                    rcpts.push(address);
+                }
+                _ => rcpts.push(rcpt.clone()),
+            }
+        }
+        Ok(changed.then_some(rcpts))
+    }
+
+    /// BATV-адрес получателя на `RCPT` (SMTP-51): валидная метка снимается — дальше идёт адрес без метки
+    /// (`true` — метка была валидна, отсутствие метки у bounce не проверяется). Невалидная (чужой ключ,
+    /// просрочена, подделка) у bounce (`MAIL FROM: <>`) — `550 5.7.1` в `enforce` ([`Batv::enforce`]), в
+    /// `log` — журнал и метрика, адрес как есть; у обычного письма — адрес как есть. Сбой чтения ключа —
+    /// адрес как есть (сбой не должен терять почту).
+    async fn batv_rcpt_of(
+        &self,
+        env: &Envelope,
+        rcpt: &str,
+    ) -> std::result::Result<(String, bool), Reply> {
+        let Some(marks) = &self.reply else {
+            return Ok((rcpt.to_owned(), false));
+        };
+        let Some(batv) = marks.batv() else {
+            return Ok((rcpt.to_owned(), false));
+        };
+        let now = OffsetDateTime::now_utc();
+        match batv.open(rcpt, now).await {
+            Ok(Some(BatvAddress::Stripped(address))) => {
+                if let Some(m) = &self.metrics {
+                    m.batv_bounce(BatvOutcome::Valid);
+                }
+                Ok((address, true))
+            }
+            Ok(Some(BatvAddress::Invalid(why))) => {
+                tracing::info!(id = %env.id, address = %rcpt, reason = why, "smtp: BATV-метка адреса не сошлась");
+                if let Some(m) = &self.metrics {
+                    m.batv_bounce(BatvOutcome::Invalid);
+                }
+                if env.mode == Mode::Inbound && env.mail_from.is_empty() && batv.enforce() {
+                    return Err(reply(550, [5, 7, 1], "Bad or missing BATV signature"));
+                }
+                Ok((rcpt.to_owned(), false))
+            }
+            Ok(None) => Ok((rcpt.to_owned(), false)),
+            Err(e) => {
+                tracing::warn!(id = %env.id, address = %rcpt, error = %e, "smtp: BATV-метка адреса не проверена");
+                Ok((rcpt.to_owned(), false))
+            }
+        }
+    }
+
+    /// BATV-проверка адреса-получателя на `RCPT` (SMTP-51): письмо с пустым `MAIL FROM` (bounce) на локальный
+    /// адрес без валидной метки — `550 5.7.1` в `enforce`, в `log` — только журнал и метрика. `marked` —
+    /// валидная метка была снята ранее ([`Delivery::batv_rcpt_of`]); адрес из `smtp.batv.exempt` метки не
+    /// требует. Вызывается из [`Delivery::check_rcpt_core`] после разрешения адреса.
+    async fn batv_check_rcpt(
+        &self,
+        env: &Envelope,
+        rcpt: &str,
+        local: bool,
+        marked: bool,
+    ) -> Option<Reply> {
+        if marked {
+            return None;
+        }
+        let Some(marks) = &self.reply else {
+            return None;
+        };
+        let batv = marks.batv()?;
+        if env.mode != Mode::Inbound || !env.mail_from.is_empty() || !local {
+            return None;
+        }
+        if batv.exempt_of(rcpt) {
+            return None;
+        }
+        if let Some(m) = &self.metrics {
+            m.batv_bounce(BatvOutcome::Missing);
+        }
+        tracing::info!(id = %env.id, address = %rcpt, "smtp: bounce на адрес без BATV-метки");
+        batv.enforce()
+            .then(|| reply(550, [5, 7, 1], "Bad or missing BATV signature"))
     }
 
     /// Обработка письма отправки вне сессии SMTP до доставки и очереди: фильтры Milter исходящей почты
@@ -2853,7 +3146,7 @@ impl Delivery {
                 mail_from,
                 &full,
                 &mut prepared.deliveries,
-                &RuleContext::new(peer, &prepared.junk, &prepared.group),
+                &RuleContext::new(peer, false, &prepared.junk, &prepared.group),
                 false,
                 true,
             )
@@ -3241,8 +3534,12 @@ impl Delivery {
                 mailboxes: self.deps.mailboxes.list(scope).await?,
                 // Тип абонента — от пути письма (CTR-93, SMTP-50): заголовкам письма не доверяем
                 // (RFC 8601 §5, RFC 5183); матрица — действующая для получателя. Признак «ответ на
-                // наше письмо» ставит SMTP-51 по записи об отправленном (CTR-94); до неё — false.
-                peer: PeerContext::new(ctx.peer),
+                // наше письмо» ставит SMTP-51 по записи об отправленном (CTR-94): клетки `ReplyOnly`
+                // (автоответ, MDN) между `Off` и `On` открываются только им.
+                peer: PeerContext {
+                    kind: ctx.peer,
+                    reply: ctx.reply,
+                },
                 matrix: self.matrix_for(scope).await,
                 // Вердикт справочника аномалий до Sieve и факт доверенной беседы (CTR-95, решение 126 д)
                 // считает SMTP-52 по действующему каталогу и памяти беседы; до него — без срабатываний.
@@ -3431,7 +3728,7 @@ impl Delivery {
                     mail_from,
                     &hop.raw,
                     &mut p.deliveries,
-                    &RuleContext::new(peer, &p.junk, &p.group),
+                    &RuleContext::new(peer, false, &p.junk, &p.group),
                     over,
                     false,
                 )
@@ -3843,7 +4140,13 @@ impl Delivery {
                 reply(451, [4, 3, 2], "Outbound delivery not available")
             }
         };
-        match self.srs_reverse(rcpt).await {
+        // BATV (SMTP-51): метка валидного bounce-адреса снимается; невалидная (чужой ключ, просрочена,
+        // подделка) у bounce — `550 5.7.1` в `enforce`, в `log` — журнал и метрика (адрес дальше не разрешится).
+        let (rcpt, marked) = match self.batv_rcpt_of(env, rcpt).await {
+            Ok(pair) => pair,
+            Err(r) => return r,
+        };
+        match self.srs_reverse(&rcpt).await {
             Ok(Some(Ok(_))) => return queue_ok(),
             Ok(Some(Err(e))) => {
                 tracing::info!(id = %env.id, error = %e, "smtp: адрес SRS отклонён");
@@ -3852,10 +4155,22 @@ impl Delivery {
             Ok(None) => {}
             Err(e) => return temporary(&e),
         }
-        let target = match self.target(rcpt).await {
+        let target = match self.target(&rcpt).await {
             Ok(t) => t,
             Err(e) => return temporary(&e),
         };
+        // Bounce на локальный адрес без метки BATV (SMTP-51): отказ в `enforce`, журнал в `log`.
+        if let Some(r) = self
+            .batv_check_rcpt(
+                env,
+                &rcpt,
+                matches!(target.resolved, Resolved::Local(_)),
+                marked,
+            )
+            .await
+        {
+            return r;
+        }
         if target.foreign {
             tracing::warn!(id = %env.id, "smtp: принятый домен другой организации на этом узле не обслуживается");
             return reply(451, [4, 3, 0], "Domain not served by this node");

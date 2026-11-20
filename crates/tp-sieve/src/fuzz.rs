@@ -19,6 +19,9 @@ const LIMITS: Limits = Limits {
     max_steps: 50_000,
     max_redirects: 2,
     max_body_scan: 4 * 1024,
+    max_signal_weight: 10,
+    regex_size_limit: 64 * 1024,
+    regex_dfa_size_limit: 64 * 1024,
 };
 
 /// Текст скрипта.
@@ -60,6 +63,7 @@ pub fn run(data: &[u8]) {
         envelope_to: "bob+lists@example.org",
         mailboxes: &mailboxes,
         peer: PeerKind::External,
+        ..Context::default()
     };
     let o = crate::run(&program, &ctx, &LIMITS);
     assert!(

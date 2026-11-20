@@ -1,6 +1,8 @@
 //! Выполнение программы над письмом (SIEVE-03): `if`/`elsif`/`else`, `stop`, действия и implicit keep
 //! (RFC 5228 §2.10.2), тесты ядра, компараторы `i;octet`, `i;ascii-casemap`, `i;ascii-numeric` и типы сравнения
-//! `:is`, `:contains`, `:matches`, `:value`, `:count`; тест `body` (RFC 5173, SIEVE-05).
+//! `:is`, `:contains`, `:matches`, `:value`, `:count`, `:regex` (draft-ietf-sieve-regex, SIEVE-15); тест `body`
+//! (RFC 5173, SIEVE-05); `environment` (RFC 5183) и `extlists` (RFC 6134) — факты и списки из контекста ядра
+//! (SIEVE-15, решение 126 д); команда `signal` (`vnd.thepost.risk`) — признаки в итог правил.
 //!
 //! Заголовки декодируются (RFC 2047), адреса разбираются по RFC 5322 — `mail-parser`. Ошибка выполнения (в том числе
 //! превышение [`Limits::max_steps`] и [`Limits::max_actions`]) отменяет действия скрипта: остаётся implicit keep.
@@ -13,12 +15,13 @@ use mail_parser::{
     Address, HeaderName, HeaderValue, Message, MessageParser, MimeHeaders, PartType,
 };
 use serde::{Deserialize, Serialize};
+use tp_contracts::risk::SignalId;
 use tp_contracts::sieve::ProcessCalendar;
 use tp_contracts::trust::PeerKind;
 
 use crate::Limits;
 use crate::compile::{
-    Cmd, Comparator, FlagOp, Match, MatchKind, Part, Program, Rel, Test, Transform,
+    Cmd, Comparator, EnvName, FlagOp, Match, MatchKind, Part, Program, Rel, Test, Transform,
 };
 
 /// Письмо и конверт на входе выполнения.
@@ -36,6 +39,12 @@ pub struct Context<'a> {
     /// расширения `vnd.thepost.peer`. Вычисляет вызывающий (ядро); заголовкам письма не доверяем
     /// (RFC 5183, RFC 8601 §5). Умолчание — `external` (безопасное).
     pub peer: PeerKind,
+    /// Факты теста `environment` (RFC 5183, SIEVE-15, решение 126 д): ядро и `vnd.thepost.*` — из контекста
+    /// ядра (CTR-95), не из заголовков письма.
+    pub environment: Environment<'a>,
+    /// Внешние списки `extlists` (RFC 6134, SIEVE-15): интерфейс узла (APP-79), в тестах — память. Без
+    /// интерфейса списков нет: `:list` — ложь, `valid_ext_list` — ложь.
+    pub lists: &'a dyn ExternalLists,
 }
 
 impl Default for Context<'_> {
@@ -46,9 +55,103 @@ impl Default for Context<'_> {
             envelope_to: "",
             mailboxes: &[],
             peer: PeerKind::External,
+            environment: Environment::default(),
+            lists: &NO_LISTS,
         }
     }
 }
+
+/// Этап выполнения `environment "phase"` (RFC 5183 §4): скрипт организации — `before` (до скрипта
+/// пользователя), скрипт пользователя — `during`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    /// Скрипт организации (этап before, SIEVE-14).
+    Before,
+    /// Скрипт пользователя (доставка).
+    #[default]
+    During,
+}
+
+impl Phase {
+    /// Значение пункта `phase`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Before => "before",
+            Phase::During => "during",
+        }
+    }
+}
+
+/// Беседа `environment "vnd.thepost.thread"` (SIEVE-15, решение 126 д): доверенная, известная недоверенная
+/// или данных нет. Считает вызывающий по памяти беседы; заголовкам письма не доверяем.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadTrust {
+    /// Доверенная беседа (`RulesInput::thread_trusted`).
+    Trusted,
+    /// Беседа не доверена.
+    Untrusted,
+    /// Факта нет (умолчание контекста без данных).
+    #[default]
+    None,
+}
+
+impl ThreadTrust {
+    /// Значение пункта `vnd.thepost.thread`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThreadTrust::Trusted => "trusted",
+            ThreadTrust::Untrusted => "untrusted",
+            ThreadTrust::None => "none",
+        }
+    }
+}
+
+/// Факты теста `environment` (RFC 5183, SIEVE-15): пункты ядра (`domain`, `host`, `phase`) и `vnd.thepost.*`
+/// (CTR-95, решение 126 д). Значения считает Rust до Sieve и передаёт вызывающий с контекстом.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Environment<'a> {
+    /// `domain` — домен получателя (домен `RulesInput::recipient`).
+    pub domain: &'a str,
+    /// `host` — имя узла (`Rules::with_node`); пусто, когда не задано.
+    pub host: &'a str,
+    /// `phase` — этап выполнения.
+    pub phase: Phase,
+    /// `vnd.thepost.thread` — беседа с отправителем.
+    pub thread: ThreadTrust,
+    /// `vnd.thepost.reply` — письмо ответ на наше письмо (`PeerContext::reply`): `yes`|`no`.
+    pub reply: bool,
+    /// `vnd.thepost.risk.score` — балл справочника аномалий до Sieve (`Verdict::score`).
+    pub risk_score: u32,
+    /// `vnd.thepost.risk.signals` — сработавшие признаки (`Verdict::hits`, затем `report_only`), через запятую.
+    pub risk_signals: &'a [SignalId],
+}
+
+/// Поиск во внешних списках `extlists` (RFC 6134, SIEVE-15): узел передаёт интерфейс (APP-79) — списки TI и
+/// адресные книги по URI `tag:` (CTR-95); в тестах — память. Методы синхронные: узел ищет по индексам в памяти.
+pub trait ExternalLists: std::fmt::Debug + Send + Sync + 'static {
+    /// Есть ли `value` в списке `uri` (`:list`).
+    fn contains(&self, uri: &str, value: &str) -> bool;
+    /// Существует ли список `uri` (`valid_ext_list`).
+    fn valid(&self, uri: &str) -> bool;
+}
+
+/// Списков нет — умолчание [`Context::lists`] (и [`crate::Rules`] без `with_lists`).
+#[derive(Debug)]
+pub(crate) struct NoLists;
+
+impl ExternalLists for NoLists {
+    fn contains(&self, _uri: &str, _value: &str) -> bool {
+        false
+    }
+
+    fn valid(&self, _uri: &str) -> bool {
+        false
+    }
+}
+
+pub(crate) const NO_LISTS: NoLists = NoLists;
 
 /// Параметры `vacation` из скрипта (RFC 5230); решение «отвечать ли» — SIEVE-06.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -117,6 +220,9 @@ pub struct Outcome {
     pub error: Option<String>,
     /// Выполнение закончилось командой `stop`.
     pub stopped: bool,
+    /// Признаки команды `signal` (расширение `vnd.thepost.risk`, SIEVE-15) в порядке срабатывания, без
+    /// повторов; вызывающий прибавляет их к вердикту справочника. Не действие: implicit keep не отменяют.
+    pub signals: Vec<(SignalId, Option<u16>)>,
 }
 
 /// Выполняет программу над письмом.
@@ -132,6 +238,7 @@ pub fn run(program: &Program, ctx: &Context<'_>, limits: &Limits) -> Outcome {
         vacation: false,
         calendar: false,
         body: None,
+        signals: Vec::new(),
     };
     match ex.block(&program.commands) {
         Ok(flow) => Outcome {
@@ -140,6 +247,7 @@ pub fn run(program: &Program, ctx: &Context<'_>, limits: &Limits) -> Outcome {
             actions: ex.actions,
             flags: ex.flags,
             error: None,
+            signals: ex.signals,
         },
         Err(Fail(e)) => Outcome {
             implicit_keep: true,
@@ -175,6 +283,8 @@ struct Exec<'a> {
     cancel_keep: bool,
     vacation: bool,
     calendar: bool,
+    /// Признаки команды `signal` (без повторов; повтор с другим весом не проходит проверку скрипта).
+    signals: Vec<(SignalId, Option<u16>)>,
     /// Разобранное письмо для теста `body` (разбирается при первом тесте; `Some(None)` — не разобрано).
     body: Option<Option<Message<'a>>>,
 }
@@ -259,6 +369,13 @@ impl Exec<'_> {
                 self.calendar = true;
                 self.act(Action::ProcessCalendar(p.clone()), false)?;
             }
+            Cmd::Signal { id, weight } => {
+                // Не действие: implicit keep не отменяет, к числу действий не считается. Повтор признака —
+                // один признак (повтор с другим весом не проходит проверку скрипта).
+                if !self.signals.iter().any(|(i, _)| i == id) {
+                    self.signals.push((id.clone(), *weight));
+                }
+            }
         }
         Ok(Flow::Next)
     }
@@ -333,24 +450,39 @@ impl Exec<'_> {
                 let size = len_u64(self.ctx.message.len());
                 if *over { size > *limit } else { size < *limit }
             }
-            Test::Header { m, names, keys } => {
+            Test::Header {
+                m,
+                names,
+                keys,
+                list,
+            } => {
                 let values = self.header_values(names)?;
-                self.matches(m, &values, keys)?
+                if *list {
+                    self.list_hit(&values, keys)?
+                } else {
+                    self.matches(m, &values, keys)?
+                }
             }
             Test::Address {
                 m,
                 part,
                 names,
                 keys,
+                list,
             } => {
                 let values = self.address_values(names, *part)?;
-                self.matches(m, &values, keys)?
+                if *list {
+                    self.list_hit(&values, keys)?
+                } else {
+                    self.matches(m, &values, keys)?
+                }
             }
             Test::Envelope {
                 m,
                 part,
                 names,
                 keys,
+                list,
             } => {
                 let values: Vec<String> = names
                     .iter()
@@ -363,7 +495,11 @@ impl Exec<'_> {
                         address_part(strip_angle(raw), *part)
                     })
                     .collect();
-                self.matches(m, &values, keys)?
+                if *list {
+                    self.list_hit(&values, keys)?
+                } else {
+                    self.matches(m, &values, keys)?
+                }
             }
             Test::Body { m, transform, keys } => {
                 let values = self.body_values(transform)?;
@@ -383,7 +519,47 @@ impl Exec<'_> {
                 let values = [self.ctx.peer.as_str().to_owned()];
                 self.matches(m, &values, keys)?
             }
+            Test::Environment { m, name, keys } => {
+                // Факты — из контекста ядра (CTR-95, решение 126 д), заголовки письма не читаются:
+                // подделка `X-ThePost-Thread` и подобных на тест не влияет.
+                let value = self.env_value(*name);
+                self.matches(m, &[value], keys)?
+            }
+            Test::ValidExtList(uris) => uris.iter().all(|u| self.ctx.lists.valid(u)),
         })
+    }
+
+    /// Значение пункта `environment` (RFC 5183, SIEVE-15) из контекста.
+    fn env_value(&self, name: EnvName) -> String {
+        let env = &self.ctx.environment;
+        match name {
+            EnvName::Domain => env.domain.to_owned(),
+            EnvName::Host => env.host.to_owned(),
+            EnvName::Phase => env.phase.as_str().to_owned(),
+            EnvName::Thread => env.thread.as_str().to_owned(),
+            EnvName::Reply => if env.reply { "yes" } else { "no" }.to_owned(),
+            EnvName::RiskScore => env.risk_score.to_string(),
+            EnvName::RiskSignals => env
+                .risk_signals
+                .iter()
+                .map(SignalId::as_str)
+                .collect::<Vec<_>>()
+                .join(","),
+        }
+    }
+
+    /// Поиск значений во внешних списках (`:list`, RFC 6134, SIEVE-15): истина, если хоть одно значение есть
+    /// хоть в одном списке. Поиск — интерфейс узла (APP-79), здесь — только шаги лимита.
+    fn list_hit(&mut self, values: &[String], uris: &[String]) -> Result<bool, Fail> {
+        for v in values {
+            for u in uris {
+                self.step(1)?;
+                if self.ctx.lists.contains(u, v) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Значения теста `body` (RFC 5173): `:raw` — тело как есть, `:text` — текст частей `text/*` (HTML — без
@@ -455,6 +631,13 @@ impl Exec<'_> {
                     MatchKind::Is => compare(m.cmp, v, k) == Ordering::Equal,
                     MatchKind::Contains => contains(m.cmp, v, k),
                     MatchKind::Value(rel) => rel.holds(compare(m.cmp, v, k)),
+                    // `:regex` (draft-ietf-sieve-regex, SIEVE-15): шаблоны скомпилированы при проверке
+                    // скрипта с лимитами `sieve.regex`, поиск крейта `regex` за линейное время (без ReDoS).
+                    MatchKind::Regex => m
+                        .regex
+                        .iter()
+                        .filter_map(|r| r.re.as_ref())
+                        .any(|re| re.is_match(v)),
                     MatchKind::Matches => {
                         let chars: Vec<char> = v.chars().collect();
                         let p = pattern.as_deref().unwrap_or_default();

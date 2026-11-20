@@ -23,6 +23,7 @@ fn outcome(script: &str, list: &[Mailbox], limits: &Limits) -> RulesOutcome {
         envelope_to: "bob@example.org",
         mailboxes: &paths,
         peer: PeerKind::Own,
+        ..Context::default()
     };
     merge(run(&program, &ctx, limits), list)
 }

@@ -272,6 +272,21 @@ pub const THREAD_HOLDS: Op = Op {
     method: "GET",
     path: "/api/v1/orgs/{org}/holds",
 };
+/// Правила журналирования организации (в порядке наследования ящик > группа > организация; ADM-53).
+pub const JOURNAL_RULES_LIST: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/journal/rules",
+};
+/// Создание или замена правила журналирования (администратор организации; ADM-53).
+pub const JOURNAL_RULE_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/orgs/{org}/journal/rules/{id}",
+};
+/// Удаление правила журналирования (ADM-53).
+pub const JOURNAL_RULE_DELETE: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/orgs/{org}/journal/rules/{id}",
+};
 /// Доверенные источники организации.
 pub const SOURCE_LIST: Op = Op {
     method: "GET",
@@ -467,6 +482,9 @@ pub const OPERATIONS: &[Op] = &[
     THREAD_UNHOLD,
     THREAD_EXPORT,
     THREAD_HOLDS,
+    JOURNAL_RULES_LIST,
+    JOURNAL_RULE_PUT,
+    JOURNAL_RULE_DELETE,
     SOURCE_LIST,
     SOURCE_PUT,
     SOURCE_DELETE,

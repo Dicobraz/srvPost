@@ -68,6 +68,48 @@
     - worker-controller.inc
   notify: Restart rspamd
 
+# Признак ответа узла (SMTP-51, DEP-56): правило multimap по заголовку узла — rspamd_reply_header ставит узел
+# (до Milter), пришедший извне он удаляет. Балл — как REPLY модуля replies; модуль replies не включаем:
+# признак ставит узел, второй таблицы Message-ID в Redis нет.
+- name: Create map directory for reply header
+  ansible.builtin.file:
+    path: "{{ rspamd_reply_map_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: rspamd_reply_enabled | bool
+
+- name: Write reply header value map
+  ansible.builtin.copy:
+    dest: "{{ rspamd_reply_map_file }}"
+    content: "yes\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: rspamd_reply_enabled | bool
+  notify: Restart rspamd
+
+- name: Write multimap rule for node reply header
+  ansible.builtin.template:
+    src: multimap.conf.j2
+    dest: /etc/rspamd/override.d/multimap.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: rspamd_reply_enabled | bool
+  notify: Restart rspamd
+
+- name: Remove reply rule without reply feature
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/rspamd/override.d/multimap.conf
+    - "{{ rspamd_reply_map_file }}"
+  when: not rspamd_reply_enabled | bool
+  notify: Restart rspamd
+
 - name: Start Rspamd
   ansible.builtin.systemd_service:
     name: "{{ rspamd_service }}"

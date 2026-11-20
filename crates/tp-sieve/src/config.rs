@@ -15,6 +15,11 @@ use crate::Limits;
 /// ```yaml
 /// max_steps: 10000000
 /// max_redirects: 4
+/// risk:
+///   max_weight: 10
+/// regex:
+///   size_limit: 10485760
+///   dfa_size_limit: 10485760
 /// vacation:
 ///   default_days: 7
 /// cache:
@@ -46,6 +51,10 @@ pub struct SieveConfig {
     /// Заголовков `Received` этого узла (метка узла — `by <имя узла>`), начиная с которых `redirect` отменяется:
     /// письмо уже проходило узел столько раз.
     pub max_node_hops: usize,
+    /// Справочник аномалий в Sieve (SIEVE-15).
+    pub risk: RiskConfig,
+    /// Регулярные выражения `:regex` (SIEVE-15).
+    pub regex: RegexConfig,
     /// Автоответ.
     pub vacation: VacationConfig,
     /// Кэш скомпилированных программ.
@@ -68,6 +77,8 @@ impl Default for SieveConfig {
             max_body_scan: l.max_body_scan,
             max_received: 50,
             max_node_hops: 3,
+            risk: RiskConfig::default(),
+            regex: RegexConfig::default(),
             vacation: VacationConfig::default(),
             cache: CacheConfig::default(),
             managesieve: ManageSieveConfig::default(),
@@ -87,6 +98,54 @@ impl SieveConfig {
             max_steps: self.max_steps,
             max_redirects: self.max_redirects,
             max_body_scan: self.max_body_scan,
+            max_signal_weight: self.risk.max_weight,
+            regex_size_limit: self.regex.size_limit,
+            regex_dfa_size_limit: self.regex.dfa_size_limit,
+        }
+    }
+}
+
+/// Команда `signal` расширения `vnd.thepost.risk` (SIEVE-15, решение 126 д) — только скрипт организации.
+///
+/// ```yaml
+/// max_weight: 10
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RiskConfig {
+    /// Предел веса `:weight`; вес — целое `0 ≤ N ≤ предел`, отрицательный и больший — ошибка проверки
+    /// скрипта. Скрипт может только повысить риск.
+    pub max_weight: u16,
+}
+
+impl Default for RiskConfig {
+    fn default() -> Self {
+        Self { max_weight: 10 }
+    }
+}
+
+/// Шаблоны `:regex` (draft-ietf-sieve-regex, SIEVE-15) — лимиты `regex::RegexBuilder`: компиляция при
+/// проверке скрипта, превышение — ошибка проверки; поиск за линейное время (без ReDoS).
+///
+/// ```yaml
+/// size_limit: 10485760
+/// dfa_size_limit: 10485760
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RegexConfig {
+    /// `size_limit` — приблизительный объём памяти скомпилированного шаблона, байт.
+    pub size_limit: usize,
+    /// `dfa_size_limit` — объём памяти детерминированной автоматики шаблона, байт.
+    pub dfa_size_limit: usize,
+}
+
+impl Default for RegexConfig {
+    fn default() -> Self {
+        // Умолчания крейта `regex`.
+        Self {
+            size_limit: 10 * (1 << 20),
+            dfa_size_limit: 10 * (1 << 20),
         }
     }
 }
@@ -187,7 +246,7 @@ mod tests {
     fn empty_section_is_default() {
         assert_eq!(parse("{}"), Ok(SieveConfig::default()));
         assert_eq!(
-            parse("vacation: {}\ncache: {}\nmanagesieve: {}"),
+            parse("risk: {}\nregex: {}\nvacation: {}\ncache: {}\nmanagesieve: {}"),
             Ok(SieveConfig::default())
         );
     }
@@ -205,6 +264,11 @@ max_redirects: 2
 max_body_scan: 32768
 max_received: 30
 max_node_hops: 2
+risk:
+  max_weight: 15
+regex:
+  size_limit: 65536
+  dfa_size_limit: 1024
 vacation:
   default_days: 3
   min_days: 2
@@ -234,6 +298,9 @@ managesieve:
                 max_steps: 200_000,
                 max_redirects: 2,
                 max_body_scan: 32768,
+                max_signal_weight: 15,
+                regex_size_limit: 65536,
+                regex_dfa_size_limit: 1024,
             }
         );
         assert_eq!((c.max_received, c.max_node_hops), (30, 2));
@@ -301,6 +368,8 @@ managesieve:
             ("max_stepz: 1", "max_stepz"),
             ("vacation:\n  days: 7", "days"),
             ("cache:\n  size: 1", "size"),
+            ("risk:\n  weight: 1", "weight"),
+            ("regex:\n  limit: 1", "limit"),
             ("managesieve:\n  port: 4190", "port"),
             (
                 "managesieve:\n  listen:\n    - listen: \"[::]:4190\"\n      tls: true",
@@ -326,6 +395,9 @@ managesieve:
             ("managesieve:\n  max_line: -1", "managesieve.max_line"),
             ("max_steps: many", "max_steps"),
             ("vacation:\n  max_days: x", "vacation.max_days"),
+            ("risk:\n  max_weight: -1", "risk.max_weight"),
+            ("risk:\n  max_weight: many", "risk.max_weight"),
+            ("regex:\n  size_limit: -1", "regex.size_limit"),
         ] {
             let e = parse(yaml).expect_err(yaml);
             assert!(e.contains(field), "{yaml}: {e}");

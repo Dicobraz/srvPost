@@ -141,4 +141,8 @@ export const covered: Record<string, string> = {
   "DELETE /api/v1/orgs/{org}/accounts/{account}/threads/{thread}/hold": "pages/accounts.tsx",
   "GET /api/v1/orgs/{org}/accounts/{account}/threads/{thread}/export": "pages/accounts.tsx",
   "GET /api/v1/orgs/{org}/holds": "pages/organization.tsx",
+  // Правила журналирования (ADM-53): раздел «Правила журналирования» администратора организации (UI-26, console-17).
+  "GET /api/v1/orgs/{org}/journal/rules": "pages/journal.tsx",
+  "PUT /api/v1/orgs/{org}/journal/rules/{id}": "pages/journal.tsx",
+  "DELETE /api/v1/orgs/{org}/journal/rules/{id}": "pages/journal.tsx",
 };
