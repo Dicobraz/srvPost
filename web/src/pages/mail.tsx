@@ -79,7 +79,7 @@ function MailApp() {
   const qc = useQueryClient();
 
   // Панели и окно списка.
-  const [folder, setFolder] = useState<string | null>(null);
+  const [folderRaw, setFolder] = useState<string | null>(null);
   const [quick, setQuick] = useState<QuickFilterKind | null>(null);
   const [filters, setFilters] = useState({ unread: false, attachment: false });
   const [sort, setSort] = useState<WindowArgs["sort"]>("date-desc");
@@ -102,12 +102,10 @@ function MailApp() {
   const focusOrder = [treeRef, listRef, readRef];
   const focusIndex = useRef(0);
 
-  // Папка по умолчанию — «Входящие» (роль inbox), пока пользователь не выбрал.
-  useEffect(() => {
-    if (folder === null && mailboxes) {
-      setFolder(mailboxes.find((m) => m.role === "inbox")?.id ?? mailboxes[0]?.id ?? null);
-    }
-  }, [folder, mailboxes]);
+  // Папка по умолчанию — «Входящие» (роль inbox), пока пользователь не выбрал: вывод из списка
+  // папок, без setState в эффекте (каскадный рендер недопустим).
+  const inboxFallback = mailboxes?.find((m) => m.role === "inbox")?.id ?? mailboxes?.[0]?.id ?? null;
+  const folder = folderRaw ?? inboxFallback;
 
   // Синхронизация: тик push/таймера — время в строке состояния.
   useEffect(() => {
@@ -183,7 +181,6 @@ function MailApp() {
       });
     }
     return [selected.id];
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- кэш читается синхронно, stableKey сортирует
   }, [selected, selectedThread, args.grouped]);
   const stackFull = useEmailsFull(stackIds);
 
@@ -453,11 +450,12 @@ function MailApp() {
       },
       escape: escapeAction,
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- действия читают свежее состояние через замыкание рендера
     [rows, selectedId, selected, archiveId, expanded],
   );
   const actionsRef = useRef<MailHotkeyActions>(actions);
-  actionsRef.current = actions;
+  useEffect(() => {
+    actionsRef.current = actions; // свежие замыкания на каждый рендер (не во время рендера)
+  });
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => handleMailKeydown(e, actionsRef.current);

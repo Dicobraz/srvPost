@@ -96,7 +96,6 @@ export function JmapProvider({ children, hub }: JmapProviderProps) {
       unsubscribe();
       pushHub.stop();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- env пересоздаётся со сменой сессии
   }, [pushHub, env]);
 
   const ready: JmapReady = sessionQuery.isError
