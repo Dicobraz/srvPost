@@ -641,12 +641,7 @@ struct JournalRead {
 impl JournalRead {
     /// Чтение журнала потребителя `events` шарда и перестройка запрошенных индексов ящиков, чьи разделы
     /// этого журнала держит узел. До остановки `shutdown`.
-    async fn run(
-        &self,
-        events: EventConsumer,
-        signals: LogSignals,
-        shutdown: CancellationToken,
-    ) {
+    async fn run(self, events: EventConsumer, signals: LogSignals, shutdown: CancellationToken) {
         let mut poll_log = RepeatLog::new(self.log_pause);
         let mut pending_log = RepeatLog::new(self.log_pause);
         let mut rebuild_failed = HashMap::new();
@@ -742,11 +737,7 @@ impl RoleService for IndexerRole {
             .iter()
             .map(|events| {
                 let read = read.clone();
-                tokio::spawn(read.run(
-                    events.clone(),
-                    self.signals.clone(),
-                    ctx.shutdown.clone(),
-                ))
+                tokio::spawn(read.run(events.clone(), self.signals.clone(), ctx.shutdown.clone()))
             })
             .collect();
         for reader in readers {
