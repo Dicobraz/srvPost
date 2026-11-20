@@ -413,7 +413,10 @@ mod tests {
     #[test]
     fn expires_truncated_to_micros() {
         let at = t(1_000_000) + time::Duration::nanoseconds(123_456_789);
-        assert_eq!(truncate_micros(at).expect("в диапазоне"), t(1_000_123));
+        assert_eq!(
+            truncate_micros(at).expect("в диапазоне"),
+            t(1_000_000) + time::Duration::microseconds(123_456)
+        );
     }
 
     /// Токен узнаваем и хэш — 64 hex нижнего регистра; разным токенам отвечают разные хэши.
