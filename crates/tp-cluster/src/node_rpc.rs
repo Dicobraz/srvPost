@@ -19,14 +19,17 @@
 //! заголовок `x-thepost-rpc-deadline-ms`. Ответ — заголовок `x-thepost-rpc` (`ok` или вид ошибки), тело — ответ
 //! обработчика или текст ошибки (`invalid`, `internal`).
 //!
-//! ALPN — только `http/1.1`: у axum и reqwest в workspace не включена фича `http2`; после её включения в ALPN
-//! добавляется `h2` ([`ALPN`]). Объявить `h2` раньше нельзя: сервер без фичи не поймёт клиента, выбравшего `h2`.
+//! ALPN — `h2`, `http/1.1` ([`ALPN`], CLU-15): соединение узлов договаривается о HTTP/2, клиент держит
+//! одно HTTP/2-соединение на узел — пул reqwest мультиплексирует по нему параллельные вызовы (решение 31).
+//! Объявить `h2` раньше было нельзя: сервер без фичи `axum/http2` (DEPS-06) не понял бы клиента, выбравшего `h2`.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::net::IpAddr;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -62,8 +65,9 @@ use x509_parser::extensions::GeneralName;
 
 use crate::rpc::{Admission, Permissions, RpcConfig, route};
 
-/// Протоколы ALPN внутреннего канала (сервер и клиент).
-pub const ALPN: &[&[u8]] = &[b"http/1.1"];
+/// Протоколы ALPN внутреннего канала (сервер и клиент), в порядке предпочтения клиента: `h2` — HTTP/2,
+/// параллельные вызовы узла в одном соединении; `http/1.1` — запасной, для узлов без HTTP/2 (CLU-15).
+pub const ALPN: &[&[u8]] = &[b"h2", b"http/1.1"];
 
 /// Заголовок ответа: `ok` или вид ошибки.
 const H_STATUS: &str = "x-thepost-rpc";
@@ -365,6 +369,11 @@ struct Inner {
     handlers: RwLock<HashMap<RpcService, Arc<dyn RpcHandler>>>,
     /// Клиент с текущим TLS; при замене сертификатов — новый (новые соединения).
     client: RwLock<reqwest::Client>,
+    /// (тесты) TLS-рукопожатий на слушателе и из них `h2`: проверка ALPN и одного соединения HTTP/2 (CLU-15).
+    #[cfg(test)]
+    tls_handshakes: AtomicUsize,
+    #[cfg(test)]
+    h2_handshakes: AtomicUsize,
 }
 
 /// Запросы узел → узел поверх HTTPS с mTLS; клоны разделяют состояние.
@@ -414,6 +423,10 @@ impl NodeRpc {
                 },
                 handlers: RwLock::new(HashMap::new()),
                 client: RwLock::new(client),
+                #[cfg(test)]
+                tls_handshakes: AtomicUsize::new(0),
+                #[cfg(test)]
+                h2_handshakes: AtomicUsize::new(0),
                 config: config.clone(),
             }),
         })
@@ -764,10 +777,12 @@ impl Rpc for NodeRpc {
 
 // ---------- Сервер ----------
 
-/// Вызывающий узел соединения (по клиентскому сертификату).
+/// Вызывающий узел соединения (по клиентскому сертификату) и протокол, согласованный по ALPN.
 #[derive(Debug, Clone)]
 struct Peer {
     identity: NodeIdentity,
+    /// Имя протокола (`h2`, `http/1.1`, `none` — [`protocol_name`]).
+    protocol: &'static str,
 }
 
 impl Connected<IncomingStream<'_, TlsListener>> for Peer {
@@ -829,10 +844,20 @@ async fn accept_loop(
             &inner.tls.read().unwrap_or_else(PoisonError::into_inner),
         ));
         let tx = tx.clone();
+        #[cfg(test)]
+        let inner = Arc::clone(&inner);
         tokio::spawn(async move {
             match handshake(acceptor, tcp, handshake_timeout).await {
-                Ok(conn) => {
-                    let _ = tx.send(conn).await;
+                Ok((stream, peer)) => {
+                    debug!(remote = %remote, protocol = peer.protocol, "rpc: connection accepted");
+                    #[cfg(test)]
+                    {
+                        inner.tls_handshakes.fetch_add(1, Ordering::Relaxed);
+                        if peer.protocol == "h2" {
+                            inner.h2_handshakes.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    let _ = tx.send((stream, peer)).await;
                 }
                 Err(e) => debug!(remote = %remote, error = %e, "rpc: handshake rejected"),
             }
@@ -848,6 +873,7 @@ async fn handshake(
     let stream = tokio::time::timeout(timeout, acceptor.accept(tcp))
         .await
         .map_err(|_| Error::UNAVAILABLE)??;
+    let protocol = protocol_name(stream.get_ref().1.alpn_protocol());
     let leaf = stream
         .get_ref()
         .1
@@ -855,7 +881,16 @@ async fn handshake(
         .and_then(|c| c.first())
         .ok_or(Error::Forbidden)?;
     let identity = node_identity(leaf)?;
-    Ok((stream, Peer { identity }))
+    Ok((stream, Peer { identity, protocol }))
+}
+
+/// Имя протокола по значению ALPN (журнал и проверка HTTP/2, CLU-15).
+fn protocol_name(alpn: Option<&[u8]>) -> &'static str {
+    match alpn {
+        Some(b"h2") => "h2",
+        Some(b"http/1.1") => "http/1.1",
+        _ => "none",
+    }
 }
 
 async fn http_handle(
