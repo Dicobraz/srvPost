@@ -149,7 +149,7 @@ export function useMailWindow(args: WindowArgs) {
       return { ids: query.ids, total: position === 0 ? query.total : null };
     },
     initialPageParam: 0,
-    getNextPageParam: (last, pages, lastPageParam) => {
+    getNextPageParam: (_lastPage, pages, lastPageParam) => {
       const total = pages[0]?.total;
       if (total === null || total === undefined) return undefined;
       const next = (lastPageParam as number) + PAGE;

@@ -115,13 +115,14 @@ const PURIFY_CONFIG: Parameters<typeof DOMPurify.sanitize>[1] = {
 /** Подготовка HTML письма: санитайзер → картинки (opt-in) → ссылки (spoofed) → srcdoc. */
 export function sanitizeEmailHtml(html: string, options: SanitizeOptions): SanitizedHtml {
   const clean = DOMPurify.sanitize(html, PURIFY_CONFIG);
-  const root = document.createElement("template");
+  // Контейнер — обычный div: разметка уже прошла санитайзер (скриптов нет), innerHTML не исполняет.
+  const root = document.createElement("div");
   root.innerHTML = clean;
 
   const blockedImageHosts = new Set<string>();
   if (!options.allowImages) {
     // Внешние картинки скрыты: адресные — прочь (banнер — opt-in), inline data: — можно.
-    for (const img of [...root.content.querySelectorAll("img")]) {
+    for (const img of [...root.querySelectorAll("img")]) {
       const src = img.getAttribute("src") ?? "";
       if (/^data:image\//i.test(src)) continue;
       try {
@@ -145,7 +146,7 @@ export function sanitizeEmailHtml(html: string, options: SanitizeOptions): Sanit
 
   // Ссылки: внешний адрес — target=_blank + noopener; несовпадение текста — предупреждение при клике.
   const spoofedLinks: Array<{ text: string; href: string; domain: string }> = [];
-  for (const a of [...root.content.querySelectorAll("a[href]")]) {
+  for (const a of [...root.querySelectorAll("a[href]")]) {
     const href = a.getAttribute("href") ?? "";
     if (/^javascript:/i.test(href)) {
       a.removeAttribute("href");
@@ -167,7 +168,7 @@ export function sanitizeEmailHtml(html: string, options: SanitizeOptions): Sanit
   }
 
   return {
-    doc: buildDoc(root.content.innerHTML, options.allowImages),
+    doc: buildDoc(root.innerHTML, options.allowImages),
     blockedImageHosts: [...blockedImageHosts],
     spoofedLinks,
   };

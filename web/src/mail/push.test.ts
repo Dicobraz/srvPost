@@ -148,7 +148,11 @@ test("StateChange от сервера: событие подписчику и т
   ws.onmessage!({ data: JSON.stringify(STATE_CHANGE) });
   expect(leaderEvents).toHaveLength(1);
   expect(peerEvents).toHaveLength(1);
-  expect((peerEvents[0] as { change: typeof STATE_CHANGE }).change["@type"]).toBe("StateChange");
+  const received = peerEvents[0];
+  expect(received?.kind).toBe("state");
+  if (received?.kind === "state") {
+    expect(received.change["@type"]).toBe("StateChange");
+  }
   leader.stop();
   peer.stop();
 });

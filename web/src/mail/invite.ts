@@ -60,13 +60,7 @@ function parseDateTime(value: string, params: Record<string, string>): Date | nu
   return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
 }
 
-/** Имя и адрес из `ORGANIZER;CN=Имя:mailto:a@x.test`. */
-function parsePerson(value: string, params: Record<string, string>): string | null {
-  const email = value.replace(/^mailto:/i, "");
-  if (!email) return null;
-  const name = params.CN;
-  return name ? `${name} <${email}>` : email;
-}
+/** Имя и адрес организатора собираются в parseInvitation (CN + mailto). */
 
 /** Чтение VEVENT из текста .ics; не приглашение (нет VEVENT) — null. */
 export function parseInvitation(ics: string): Invitation | null {

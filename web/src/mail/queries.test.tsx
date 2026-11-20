@@ -6,7 +6,8 @@ import type { ReactNode } from "react";
 
 import { CAP_MAIL, CAP_WEBSOCKET, type EmailSummary, type JmapSession } from "../api/jmap";
 import { keys, queryClient } from "./client";
-import { envFromSession, keywordPatch, movePatch, undoEntries, useFlaggedCount } from "./queries";
+import { keywordPatch, movePatch, undoEntries, useFlaggedCount } from "./queries";
+import { envFromSession } from "./sync";
 
 beforeEach(() => {
   queryClient.clear();

@@ -11,7 +11,6 @@ import { useMemo } from "react";
 import { blobUrl, type EmailBodyPart, type EmailFull, type EmailSummary, type JmapSession } from "../api/jmap";
 import { useJmap } from "./context";
 import {
-  areImagesAllowedFor,
   buildBodyDoc,
   plainTextHtml,
   sanitizeEmailHtml,

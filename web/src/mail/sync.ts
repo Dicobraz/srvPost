@@ -47,12 +47,13 @@ export async function handleSyncEvent(env: JmapEnv): Promise<void> {
   syncState = state;
 }
 
-/** Из сессии JMAP — среда запросов (учётная запись почты, адрес входа). */
+/** Из сессии JMAP — среда запросов (адрес API, учётная запись почты, адрес входа). */
 export function envFromSession(session: JmapSession, authorization: string | null): JmapEnv {
   const accountId = session.primaryAccounts["urn:ietf:params:jmap:mail"];
   if (!accountId) throw new Error("В сессии нет почтовой учётной записи.");
   return {
     session,
+    apiUrl: session.apiUrl,
     accountId,
     authorization,
     selfAddress: session.username,

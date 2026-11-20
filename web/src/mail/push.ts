@@ -177,12 +177,12 @@ export class PushHub {
     this.status = "connecting";
     if (src.wsUrl && src.accessToken && this.wsFailures === 0) {
       this.transport = "ws";
-      this.openWebSocket(src);
+      this.openWebSocket(src.wsUrl, src.accessToken);
       return;
     }
     if (src.eventSourceUrl && src.accessToken && this.esFailures === 0) {
       this.transport = "es";
-      this.openEventSource(src);
+      this.openEventSource(src.eventSourceUrl, src.accessToken);
       return;
     }
     this.status = "poll";
@@ -197,8 +197,8 @@ export class PushHub {
     );
   }
 
-  private openWebSocket(src: PushSource): void {
-    const url = `${src.wsUrl}${src.wsUrl.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(src.accessToken ?? "")}`;
+  private openWebSocket(wsUrl: string, accessToken: string): void {
+    const url = `${wsUrl}${wsUrl.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(accessToken)}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url, ["jmap"]);
@@ -226,13 +226,13 @@ export class PushHub {
     };
   }
 
-  private openEventSource(src: PushSource): void {
+  private openEventSource(eventSourceUrl: string, accessToken: string): void {
     // Шаблон eventSourceUrl (RFC 8620 §7.3): типы почты, поток держим открытым, ping раз в 4 минуты.
-    const url = src.eventSourceUrl
+    const url = eventSourceUrl
       .replace("{types}", "Email,Thread,Mailbox")
       .replace("{closeafter}", "no")
       .replace("{ping}", "240");
-    const full = `${url}${url.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(src.accessToken ?? "")}`;
+    const full = `${url}${url.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(accessToken)}`;
     let source: EventSource;
     try {
       source = new EventSource(full);
