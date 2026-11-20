@@ -5334,7 +5334,6 @@
         },
         "required": [
           "terms_url",
-          "attribution",
           "commercial"
         ],
         "type": "object"
@@ -5550,13 +5549,6 @@
         "required": [
           "id",
           "origin",
-          "detector",
-          "weight",
-          "threshold",
-          "action",
-          "mode",
-          "since",
-          "source",
           "orphaned"
         ],
         "type": "object"
@@ -5704,9 +5696,7 @@
           }
         },
         "required": [
-          "own",
-          "effective",
-          "source"
+          "effective"
         ],
         "type": "object"
       },
@@ -5846,7 +5836,6 @@
           "stale",
           "license",
           "tenants",
-          "key",
           "auth",
           "origin"
         ],
@@ -5918,7 +5907,6 @@
           "stale",
           "license",
           "tenants",
-          "key",
           "auth",
           "origin"
         ],
@@ -5989,7 +5977,6 @@
           "stale",
           "license",
           "tenants",
-          "key",
           "auth",
           "origin"
         ],
@@ -6059,8 +6046,7 @@
           "sha256",
           "blob",
           "entries",
-          "fetched_at",
-          "tlp"
+          "fetched_at"
         ],
         "type": "object"
       },
@@ -6180,8 +6166,7 @@
           }
         },
         "required": [
-          "hits",
-          "next"
+          "hits"
         ],
         "type": "object"
       },

@@ -10,7 +10,7 @@ export interface paths {
             header?: never;
             path?: never;
             cookie?: never;
-        } | "file";
+        };
         /** Брендинг установки: свой набор и действующий. Уровень установки читает только администратор установки. */
         get: operations["get_installation"];
         /**
@@ -36,7 +36,7 @@ export interface paths {
             header?: never;
             path?: never;
             cookie?: never;
-        } | "rpz" | "misp_feed" | "stix21";
+        };
         get?: never;
         /**
          * Знак уровня установки: тело — файл PNG (`image/png`; иной тип — 415), до 256 КБ (413) и 1024×1024 (422);
@@ -58,7 +58,7 @@ export interface paths {
             header?: never;
             path?: never;
             cookie?: never;
-        } | "report";
+        };
         /**
          * Организации, доступные вошедшему администратору: по областям его ролей среди организаций инсталляции (без модуля
          *     «Мультитенантность» — только организация по умолчанию).
@@ -78,7 +78,7 @@ export interface paths {
             header?: never;
             path?: never;
             cookie?: never;
-        } | "bearer" | "client_cert";
+        };
         /** Организация и её политика. */
         get: operations["get_org"];
         put?: never;
@@ -2424,7 +2424,7 @@ export interface components {
             /** @description События по возрастанию времени. */
             events: components["schemas"]["DeliveryEntry"][];
             /** @description `after` следующей страницы; `null` — записей больше нет. */
-            next: string | null;
+            next?: string | null;
         };
         /** @description Политика домена назначения. */
         DestinationPolicy: {
@@ -3943,7 +3943,7 @@ export interface components {
                 /** @description Процент снижения, 0–100. */
                 percent: number;
             };
-       } | "report";
+        } | "report";
         /** @description Лицензия источника TI: условия и атрибуция. */
         LicenseSchema: {
             /** @description Атрибуция (ссылка, дата, ©); `null` — не требуется. */
@@ -4144,7 +4144,10 @@ export interface components {
             tenants: components["schemas"]["TenantsSchema"];
             /** @description Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
             tier: components["schemas"]["TierSchema"];
-            /** @description Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`). */
+            /**
+             * @description Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`).
+             * @example 1h
+             */
             ttl: string;
         };
         /** @description Новый источник TI (тело `POST`): идентификатор и параметры. */
@@ -4169,7 +4172,10 @@ export interface components {
             tenants: components["schemas"]["TenantsSchema"];
             /** @description Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
             tier: components["schemas"]["TierSchema"];
-            /** @description Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`). */
+            /**
+             * @description Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`).
+             * @example 1h
+             */
             ttl: string;
         };
         /** @description Источник TI в ответе API (ключ — только ссылка, значения не отдаёт). */
@@ -4194,7 +4200,10 @@ export interface components {
             tenants: components["schemas"]["TenantsSchema"];
             /** @description Уровень: в поставке, ключ заказчика, импорт. */
             tier: components["schemas"]["TierSchema"];
-            /** @description Срок жизни данных (TTL). */
+            /**
+             * @description Срок жизни данных (TTL).
+             * @example 1h
+             */
             ttl: string;
         };
         /** @description Источники TI по идентификатору. */
