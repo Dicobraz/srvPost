@@ -126,9 +126,9 @@ fn config(dir: &Path, db_url: &str, cert: &Path) -> String {
 /// Учётных строк `table` учётной записи `account` в базе `url` (все организации).
 async fn rows_in_shard(pool: &sqlx::PgPool, table: &str, account: tp_contracts::AccountId) -> i64 {
     let mut tx = tp_meta::schema::begin_system(pool).await.expect("begin");
-    let n: i64 = sqlx::query_scalar(
-        sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table} WHERE account_id = $1")),
-    )
+    let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE account_id = $1"
+    )))
     .bind(account.as_uuid())
     .fetch_one(&mut *tx)
     .await
@@ -156,7 +156,11 @@ async fn http_get(addr: std::net::SocketAddr, path: &str) -> String {
         let mut rest = payload.as_slice();
         while let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") {
             let size = usize::from_str_radix(
-                String::from_utf8_lossy(&rest[..eol]).split(';').next().unwrap_or("0").trim(),
+                String::from_utf8_lossy(&rest[..eol])
+                    .split(';')
+                    .next()
+                    .unwrap_or("0")
+                    .trim(),
                 16,
             )
             .unwrap_or(0);
@@ -234,10 +238,7 @@ async fn imap_idle(
 }
 
 /// Строки ответа IMAP до строки с `needle` включительно (в пределах срока).
-async fn imap_wait_for(
-    s: &mut tokio_rustls::client::TlsStream<TcpStream>,
-    needle: &str,
-) -> String {
+async fn imap_wait_for(s: &mut tokio_rustls::client::TlsStream<TcpStream>, needle: &str) -> String {
     let mut buf = Vec::new();
     let deadline = tokio::time::Instant::now() + WAIT;
     loop {
@@ -249,7 +250,10 @@ async fn imap_wait_for(
         let mut chunk = [0u8; 4096];
         let read = tokio::time::timeout(Duration::from_secs(2), s.read(&mut chunk)).await;
         match read {
-            Ok(Ok(0)) => panic!("imap: соединение закрыто; {}", String::from_utf8_lossy(&buf)),
+            Ok(Ok(0)) => panic!(
+                "imap: соединение закрыто; {}",
+                String::from_utf8_lossy(&buf)
+            ),
             Err(_) => continue,
             Ok(Ok(n)) => buf.extend_from_slice(&chunk[..n]),
             Ok(Err(e)) => panic!("imap read: {e}"),
@@ -278,7 +282,10 @@ async fn two_shards_delivery_idle_and_replica_reads() {
     let db: SecretRef = "thepost/db#password".parse().expect("ref");
     secrets.set(&db, password.unwrap_or_else(|| "unused".to_owned()));
     let shard_cred: SecretRef = "thepost/shard1#password".parse().expect("ref");
-    secrets.set(&shard_cred, shard_password.unwrap_or_else(|| "unused".to_owned()));
+    secrets.set(
+        &shard_cred,
+        shard_password.unwrap_or_else(|| "unused".to_owned()),
+    );
 
     // Схема каталога в основной БД (её применит узел, но строку шарда тест вносит до запуска) — миграции
     // выполняет тест, чтобы добавить шард до старта узла.
@@ -364,8 +371,9 @@ async fn two_shards_delivery_idle_and_replica_reads() {
         tp_contracts::ids::ShardId(1),
         "учётная запись размещена на втором шарде"
     );
-    let apps = tp_auth::AppPasswords::new(Arc::new(meta.clone()), tp_auth::PasswordConfig::default())
-        .expect("app passwords");
+    let apps =
+        tp_auth::AppPasswords::new(Arc::new(meta.clone()), tp_auth::PasswordConfig::default())
+            .expect("app passwords");
     let (_, secret) = apps.issue(scope, "e2e").await.expect("issue");
     let app_password = secret.expose().to_owned();
 
@@ -417,7 +425,10 @@ async fn two_shards_delivery_idle_and_replica_reads() {
     let mut idle = imap_idle(addr(&running, "imap"), &login, &app_password).await;
     // Сервер подтвердил вход, выбор папки и режим IDLE.
     let idling = imap_wait_for(&mut idle, "+").await;
-    assert!(idling.contains("idling") || idling.contains('+'), "{idling}");
+    assert!(
+        idling.contains("idling") || idling.contains('+'),
+        "{idling}"
+    );
 
     // Приём SMTP: письмо в ящик учётной записи второго шарда.
     let word = format!("shard{}", std::process::id());
@@ -430,8 +441,14 @@ async fn two_shards_delivery_idle_and_replica_reads() {
         .expect("smtp connect");
     assert_eq!(smtp_reply(&mut smtp).await, 220);
     assert_eq!(smtp_cmd(&mut smtp, "EHLO client.test").await, 250);
-    assert_eq!(smtp_cmd(&mut smtp, "MAIL FROM:<alice@sender.test>").await, 250);
-    assert_eq!(smtp_cmd(&mut smtp, &format!("RCPT TO:<{login}>")).await, 250);
+    assert_eq!(
+        smtp_cmd(&mut smtp, "MAIL FROM:<alice@sender.test>").await,
+        250
+    );
+    assert_eq!(
+        smtp_cmd(&mut smtp, &format!("RCPT TO:<{login}>")).await,
+        250
+    );
     assert_eq!(smtp_cmd(&mut smtp, "DATA").await, 354);
     smtp.write_all(message.replace('\n', "\r\n").as_bytes())
         .await
@@ -442,7 +459,10 @@ async fn two_shards_delivery_idle_and_replica_reads() {
     // Данные письма — в БД второго шарда, не в основной.
     let until = tokio::time::Instant::now() + WAIT;
     while rows_in_shard(&shard_pool, "messages", account.id).await == 0 {
-        assert!(tokio::time::Instant::now() < until, "письмо не доставлено на шард");
+        assert!(
+            tokio::time::Instant::now() < until,
+            "письмо не доставлено на шард"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(

@@ -28,11 +28,12 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 use tp_cluster::{NodeRpc, NodeTls, PartitionAssignerConfig, RendezvousAssigner};
+use tp_contracts::bus::EventBus;
 use tp_contracts::events::{PartitionAssigner, ShardEventLogs};
 use tp_contracts::lease::LeaseStore;
 use tp_contracts::membership::{Membership, NodeId, NodeInfo};
 use tp_contracts::role::{CancellationToken, Role, RoleService, fixed_config};
-use tp_contracts::rpc::RpcService;
+use tp_contracts::rpc::{Rpc, RpcService};
 use tp_contracts::secrets::SecretStore;
 use tp_contracts::tls::InternalTls;
 use tp_contracts::{Error, Result};
@@ -40,7 +41,7 @@ use tp_meta::events::EventConsumer;
 use tp_meta::shards::ReadIntent;
 use tp_meta::signals::ShardedSignalBus;
 use tp_meta::{MetaConfig, PgMeta};
-use tp_platform::fswatch::{self, FsEvents, FsWatch};
+use tp_platform::fswatch;
 use tp_platform::roles::{RssGauge, uses_data_layer};
 use tp_platform::{
     Config, DbMetrics, Health, LoadConfig, LoadInputs, Metrics, NodeLoad, PressureConfig, Reloader,
@@ -227,7 +228,10 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
     let shards = infra::shard_directory(&cfg, pool.clone(), store.clone())?;
     if meta_cfg.migrate_on_start {
         tp_meta::schema::migrate(&migrations).await?;
-        shards.migrate().await.map_err(|e| infra::context("shards", e))?;
+        shards
+            .migrate()
+            .await
+            .map_err(|e| infra::context("shards", e))?;
     }
     // Фоновые задачи узла живут дольше ролей: служебный HTTP отвечает 503 во время drain. Ошибка запуска
     // останавливает уже запущенные (слушатель HTTP-01, перечитывание сертификатов).
@@ -250,7 +254,11 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
     // Шины шардов, добавленных в справочник после запуска, подключает `ShardedSignalBus::refresh` по сигналам
     // `ShardsChanged`, `ConfigReloaded` и `Resync` (APP-47); сама шина узла работает и до их подключения.
     if let Some(sharded) = bus.signals.as_ref().and_then(infra::SignalBus::sharded) {
-        tokio::spawn(shard_buses_follow(sharded, events_cfg.retry_min, aux.clone()));
+        tokio::spawn(shard_buses_follow(
+            sharded,
+            events_cfg.retry_min,
+            aux.clone(),
+        ));
     }
     crate::metrics::register_db(&metrics, &db_metrics, bus.signals.clone());
     let bus = bus.bus;
@@ -443,7 +451,11 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         if cfg.roles().contains(Role::Admin) {
             rpc.serve(
                 RpcService::new(Role::Admin, rpc_services::NODE_STATE)?,
-                Arc::new(rpc_services::NodeState::new(node.clone(), health.clone(), load.shared())),
+                Arc::new(rpc_services::NodeState::new(
+                    node.clone(),
+                    health.clone(),
+                    load.shared(),
+                )),
             )?;
         }
     }
@@ -461,7 +473,10 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
     // Журнал событий — по шардам справочника (CTR-34, APP-47): потребители (maintenance, indexer) читают
     // журнал каждого шарда — по `EventConsumer` на шард (`with_shard`; ключи назначения и имён лиз — с
     // шардом). Шарды справочника, добавленные после запуска узла, подключает его перезапуск.
-    let logs = meta.shard_logs().await.map_err(|e| infra::context("meta.events", e))?;
+    let logs = meta
+        .shard_logs()
+        .await
+        .map_err(|e| infra::context("meta.events", e))?;
     let events: Vec<EventConsumer> = logs
         .shards()
         .into_iter()
@@ -1085,9 +1100,7 @@ async fn feed_cache_disk(
 fn cache_disk_load(usage: FsUsage, used: u64, max_bytes: u64) -> (u64, u64) {
     let fs_used = usage.total.saturating_sub(usage.available);
     let by_limit = (max_bytes > 0)
-        .then(|| {
-            (used.min(max_bytes) as f64 / max_bytes as f64 * usage.total as f64) as u64
-        })
+        .then(|| (used.min(max_bytes) as f64 / max_bytes as f64 * usage.total as f64) as u64)
         .unwrap_or(0);
     let used = fs_used.max(by_limit.min(usage.total));
     (usage.total - used, usage.total)
@@ -1129,7 +1142,12 @@ async fn start_rpc(
         .await
         .map_err(ctx)?;
     let rpc = NodeRpc::new(node.clone(), &cluster.rpc, tls, members).map_err(ctx)?;
-    tokio::spawn(follow_rpc_tls(rpc.clone(), store, updates, shutdown.clone()));
+    tokio::spawn(follow_rpc_tls(
+        rpc.clone(),
+        store,
+        updates,
+        shutdown.clone(),
+    ));
     let Some(listen) = cluster.listen_addr() else {
         tracing::info!("cluster.rpc: адрес узла не задан — запросы других узлов не принимаются");
         return Ok(Some(rpc));
@@ -1184,7 +1202,10 @@ async fn follow_rpc_tls(
 ) {
     let mut updates = updates;
     loop {
-        let Ok(cluster) = updates.borrow_and_update().section::<ClusterSection>(CLUSTER) else {
+        let Ok(cluster) = updates
+            .borrow_and_update()
+            .section::<ClusterSection>(CLUSTER)
+        else {
             if updates.changed().await.is_err() {
                 return;
             }
@@ -1242,7 +1263,7 @@ fn rpc_tls_events(tls: &InternalTls, poll: Duration) -> impl futures::Stream<Ite
     let dirs = cert_dirs(&files);
     futures::stream::unfold(
         (fswatch::os_events(), dirs, None, poll, None::<u64>),
-        |(events, dirs, mut watch, poll, mut seen)| async move {
+        move |(events, dirs, mut watch, poll, mut seen)| async move {
             loop {
                 // Наблюдение ставится заново, когда набор каталогов изменился или прежнее прекратилось
                 // (постановка наблюдения — блокирующие системные вызовы, `spawn_blocking`).
@@ -1967,7 +1988,7 @@ mod tests {
             cpu_usage_usec: None,
             cpu_used: None,
         };
-        let (resources, _) = tokio::sync::watch::channel(snapshot);
+        let (_, resources) = tokio::sync::watch::channel(snapshot);
         let shutdown = CancellationToken::new();
         let load = NodeLoad::start(
             LoadConfig::default(),
@@ -1980,7 +2001,10 @@ mod tests {
         let inputs = load.inputs();
         // Диск каталога кэша занят на 99 % — выше порога «высокого» уровня (95 %).
         let (free, total) = cache_disk_load(
-            FsUsage { total, available: total / 100 },
+            FsUsage {
+                total,
+                available: total / 100,
+            },
             total - total / 100,
             total,
         );
@@ -2151,7 +2175,9 @@ mod tests {
 
         // APP-46: служба роли search, которую узел не зарегистрировал, — `NotFound`.
         let snippet = RpcService::new(Role::Search, "snippet").expect("service");
-        let refused = a.call(&snippet, "k2", bytes::Bytes::new(), Duration::from_secs(10)).await;
+        let refused = a
+            .call(&snippet, "k2", bytes::Bytes::new(), Duration::from_secs(10))
+            .await;
         assert_eq!(refused, Err(RpcError::Failed(Error::NotFound)));
 
         // Роли search службы maintenance не разрешены: отказ на принимающем узле `a`.
@@ -2270,7 +2296,7 @@ mod tests {
             nodes.push((running, shutdown));
         }
         let rpc = |i: usize| nodes[i].0.rpc.clone().expect("rpc");
-        let (a, b) = (rpc(0), rpc(1));
+        let a = rpc(0);
         let query = RpcService::new(Role::Search, rpc_services::SEARCH_QUERY).expect("service");
 
         // Вызов `a` → `b` работает: старая пара узла `b` в силе.
@@ -2287,7 +2313,12 @@ mod tests {
         })
         .expect("body");
         let out = a
-            .call(&query, "default/none", bytes::Bytes::from(body), Duration::from_secs(10))
+            .call(
+                &query,
+                "default/none",
+                bytes::Bytes::from(body),
+                Duration::from_secs(10),
+            )
             .await
             .expect("call a -> b");
         let ids: Vec<tp_contracts::MessageId> = serde_json::from_slice(&out).expect("ids");

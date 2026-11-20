@@ -255,13 +255,10 @@ pub async fn open_bus(
                 .clone();
             let (observer, slot) =
                 crate::metrics::pool_observer(metrics, crate::metrics::POOL_LISTENER);
-            let listen = tp_meta::signals::connect_listener(
-                &pool_config(cfg)?,
-                store.clone(),
-                observer,
-            )
-            .await
-            .map_err(|e| context("bus", e))?;
+            let listen =
+                tp_meta::signals::connect_listener(&pool_config(cfg)?, store.clone(), observer)
+                    .await
+                    .map_err(|e| context("bus", e))?;
             slot.set(listen.pool());
             let main = PgSignalBus::start(db.clone(), listen, signals)
                 .map_err(|e| context("meta.signals", e))?;
@@ -270,12 +267,15 @@ pub async fn open_bus(
                     let probe = main.clone();
                     Ok(Bus {
                         bus: Arc::new(main.clone()),
-                        sample: Arc::new(move || pg_bus_sample(probe.connected(), &probe.metrics())),
+                        sample: Arc::new(move || {
+                            pg_bus_sample(probe.connected(), &probe.metrics())
+                        }),
                         signals: Some(SignalBus::Main(main)),
                     })
                 }
                 Some(dir) => {
                     let bus = ShardedSignalBus::start(main.clone(), dir, store, signals_cfg(cfg)?)
+                        .await
                         .map_err(|e| context("bus", e))?;
                     let bus = Arc::new(bus);
                     Ok(Bus {

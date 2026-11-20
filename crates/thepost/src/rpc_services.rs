@@ -9,13 +9,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tp_contracts::Error;
+use tp_contracts::Result;
 use tp_contracts::ids::MailboxId;
 use tp_contracts::load::{LoadLevel, LoadMonitor};
 use tp_contracts::membership::NodeId;
 use tp_contracts::meta::AccountScope;
 use tp_contracts::rpc::{RpcHandler, RpcRequest};
 use tp_contracts::search::{SearchIndex, SearchSort, TextQuery};
-use tp_contracts::Result;
 use tp_platform::service_http::Health;
 use tp_search::Search;
 
@@ -75,14 +75,14 @@ impl RpcHandler for SearchQuery {
             q.limit,
         )
         .await?;
-        let out = serde_json::to_vec(&ids)
-            .map_err(|e| Error::internal(format!("search/query: {e}")))?;
+        let out =
+            serde_json::to_vec(&ids).map_err(|e| Error::internal(format!("search/query: {e}")))?;
         Ok(Bytes::from(out))
     }
 }
 
 /// Состояние узла для администрирования ([`NodeState`], SRS 2.8 — «состояние узлов для администрирования»).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct NodeStateReport {
     /// Имя узла в членстве.
     pub node: NodeId,
@@ -99,7 +99,7 @@ pub struct NodeStateReport {
 }
 
 /// Готовность одной роли узла.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RoleStatus {
     /// Роль.
     pub role: String,
@@ -117,11 +117,7 @@ pub struct NodeState {
 impl NodeState {
     /// Обработчик состояния узла `node`: готовность ролей — `health`, уровень нагрузки — `load`.
     pub fn new(node: NodeId, health: Health, load: Arc<dyn LoadMonitor>) -> Self {
-        Self {
-            node,
-            health,
-            load,
-        }
+        Self { node, health, load }
     }
 }
 

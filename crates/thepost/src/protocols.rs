@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::task::JoinSet;
-use tp_contracts::events::{EventLog, EventSink, ShardPartition, partition_of};
+use tp_contracts::events::{EventLog, EventSink, partition_of};
 use tp_contracts::meta::AccountScope;
 use tp_contracts::role::{CancellationToken, Role, RoleCtx, RoleService};
 use tp_contracts::search::IndexManifestStore as _;
@@ -19,7 +19,6 @@ use tp_contracts::tls::Profile;
 use tp_contracts::{Error, Result, ShardId};
 use tp_meta::PgMeta;
 use tp_meta::events::EventConsumer;
-use tp_meta::shards::ShardResolver as _;
 use tp_platform::listen::EndpointConfig;
 use tp_platform::{Config, InheritedSockets, Listener, TlsCerts, service_http};
 use tp_search::{Indexer, IndexerConfig, Rebuilder, SCHEMA_VERSION, SUBSCRIBER};
@@ -664,7 +663,7 @@ async fn read_journal(
         }
         log_step(&mut pending_log, pending, "чтение запросов перестройки");
     }
-    if let Err(e) = reader.release_all(SUBSCRIBER).await {
+    if let Err(e) = events.release_all(SUBSCRIBER).await {
         tracing::warn!(error = %e, "indexer: лизы разделов не отданы");
     }
 }

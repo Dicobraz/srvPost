@@ -350,11 +350,7 @@ impl<F: Fn() -> Histogram + Send + Sync> EncodeMetric for Durations<F> {
 ///   `tp_db_notify_commit_seconds` (время фиксаций с NOTIFY), `tp_db_commit_seconds` (время всех фиксаций),
 ///   `tp_db_listeners` (соединений-слушателей узла), `tp_db_notify_commit_share` (доля NOTIFY во времени фиксаций,
 ///   критерий — не больше 0,05; 0 — фиксаций ещё не было).
-pub fn register_db(
-    metrics: &Metrics,
-    db: &DbMetrics,
-    signals: Option<crate::infra::SignalBus>,
-) {
+pub fn register_db(metrics: &Metrics, db: &DbMetrics, signals: Option<crate::infra::SignalBus>) {
     let Some(bus) = signals else {
         return;
     };
@@ -388,7 +384,12 @@ pub fn register_db(
         |m| m.listeners,
         false,
     )];
-    register(metrics, &source, crate::infra::SignalBus::metrics, listeners);
+    register(
+        metrics,
+        &source,
+        crate::infra::SignalBus::metrics,
+        listeners,
+    );
     let share: [StatDef<SignalMetrics, f64>; 1] = [(
         "tp_db_notify_commit_share",
         "Доля времени фиксаций, занятая NOTIFY (0 — фиксаций ещё не было)",

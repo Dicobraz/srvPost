@@ -915,10 +915,8 @@ impl RoleService for Maintenance {
             }
         }
         // Читатели журнала завершаются только с остановкой роли; отказ задачи — внутренняя ошибка.
-        for done in journal {
-            if let Err(e) = done {
-                return Err(tp_contracts::Error::Internal(format!("journal: {e}")));
-            }
+        if let Err(e) = journal {
+            return Err(tp_contracts::Error::Internal(format!("journal: {e}")));
         }
         Ok(())
     }
