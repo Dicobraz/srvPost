@@ -12,7 +12,12 @@
 //! - `tp_smtp_reply_flag_total{result}` — признак «ответ на наше письмо» (SMTP-51): `flagged` — признак
 //!   поставлен, `checked` — проверялся и не подтверждён;
 //! - `tp_smtp_batv_bounces_total{outcome}` — адреса bounce (SMTP-51): `valid` — метка валидна, `missing` —
-//!   метки нет, `invalid` — не сходится (в `enforce` оба последних — отказ `550 5.7.1`).
+//!   метки нет, `invalid` — не сходится (в `enforce` оба последних — отказ `550 5.7.1`);
+//! - `tp_smtp_risk_signals_total{signal,mode}` — срабатывания детекторов каталога (SMTP-52): по признаку
+//!   и режиму (`enforce` — балл и действие, `report` — только журнал);
+//! - `tp_smtp_risk_detector_seconds` — время проверки письма детекторами каталога;
+//! - `tp_smtp_risk_stale_total{source}` — срабатывания признаков устаревшего источника TI (предупреждение:
+//!   вес снижен или признак «только отчёт», [`tp_contracts::risk::StaleAction`]).
 
 use std::fmt;
 
@@ -41,6 +46,9 @@ pub struct SmtpMetrics {
     delivery: Histogram,
     reply: Family<Labels1, Counter>,
     batv: Family<Labels1, Counter>,
+    risk_signals: Family<Labels2, Counter>,
+    risk_detector: Histogram,
+    risk_stale: Family<Labels1, Counter>,
 }
 
 impl Default for SmtpMetrics {
@@ -59,6 +67,10 @@ impl Default for SmtpMetrics {
             delivery: Histogram::new(exponential_buckets(1.0, 4.0, 10)),
             reply: Family::default(),
             batv: Family::default(),
+            risk_signals: Family::default(),
+            // 1 мс … ~7 с.
+            risk_detector: Histogram::new(exponential_buckets(0.001, 2.0, 13)),
+            risk_stale: Family::default(),
         }
     }
 }
@@ -156,6 +168,21 @@ impl SmtpMetrics {
             "Проверки BATV адресов bounce (SMTP-51)",
             self.batv.clone(),
         );
+        registry.register(
+            "tp_smtp_risk_signals",
+            "Срабатывания детекторов каталога признаков (SMTP-52)",
+            self.risk_signals.clone(),
+        );
+        registry.register(
+            "tp_smtp_risk_detector_seconds",
+            "Время проверки письма детекторами каталога (SMTP-52)",
+            self.risk_detector.clone(),
+        );
+        registry.register(
+            "tp_smtp_risk_stale",
+            "Срабатывания признаков устаревшего источника TI (SMTP-52)",
+            self.risk_stale.clone(),
+        );
     }
 
     /// Начало сессии роли `mode`.
@@ -232,6 +259,25 @@ impl SmtpMetrics {
             BatvOutcome::Invalid => "invalid",
         };
         self.batv.get_or_create(&[("result", result)]).inc();
+    }
+
+    /// Срабатывание детектора каталога (SMTP-52): признак `signal`, режим `mode` (`enforce` — балл и
+    /// действие, `report` — только журнал срабатываний).
+    pub fn risk_signal(&self, signal: &str, mode: &str) {
+        self.risk_signals
+            .get_or_create(&[("signal", signal), ("mode", mode)])
+            .inc();
+    }
+
+    /// Время проверки письма детекторами каталога, секунд.
+    pub fn risk_detector(&self, secs: f64) {
+        self.risk_detector.observe(secs.max(0.0));
+    }
+
+    /// Срабатывание признака устаревшего источника TI (SMTP-52, [`tp_contracts::risk::StaleAction`]):
+    /// предупреждение — вес снижен или признак «только отчёт».
+    pub fn risk_stale(&self, source: &str) {
+        self.risk_stale.get_or_create(&[("source", source)]).inc();
     }
 }
 

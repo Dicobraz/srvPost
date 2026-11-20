@@ -257,13 +257,20 @@ impl Env {
 
     /// Письма во «Входящих» учётной записи (исходный текст).
     async fn inbox(&self, login: &str) -> Vec<String> {
+        self.mail_in(login, SpecialUse::Inbox).await
+    }
+
+    /// Письма в «Спаме» учётной записи (исходный текст; карантин каталога признаков, SMTP-52).
+    async fn junk_mail(&self, login: &str) -> Vec<String> {
+        self.mail_in(login, SpecialUse::Junk).await
+    }
+
+    /// Письма в папке `role` учётной записи (исходный текст).
+    async fn mail_in(&self, login: &str, role: SpecialUse) -> Vec<String> {
         let scope = self.scope(login).await;
-        let inbox = self
-            .meta
-            .mailbox_by_role(scope, SpecialUse::Inbox)
-            .expect("inbox");
+        let mailbox = self.meta.mailbox_by_role(scope, role).expect("mailbox");
         let mut out = Vec::new();
-        for m in MessageStore::list(&self.meta, scope, inbox, MessageQuery::All, 100)
+        for m in MessageStore::list(&self.meta, scope, mailbox, MessageQuery::All, 100)
             .await
             .expect("list")
         {
@@ -1560,6 +1567,7 @@ mod org_policy;
 mod pipeline;
 mod rcpt_rate;
 mod reply;
+mod risk;
 mod rules;
 mod scheduled;
 mod sender_login;
