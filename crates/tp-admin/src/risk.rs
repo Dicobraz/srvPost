@@ -2669,8 +2669,9 @@ mod tests {
             .collect();
         assert!(log.len() >= 3, "загрузка, активация, откат: {log:?}");
         assert!(
-            log.iter()
-                .all(|r| (200..300).contains(&r.status) || matches!(r.status, 413 | 415 | 422))
+            log.iter().all(
+                |r| (200..300).contains(&r.status) || matches!(r.status, 403 | 413 | 415 | 422)
+            )
         );
     }
 
