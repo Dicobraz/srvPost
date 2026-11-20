@@ -1131,7 +1131,7 @@ async fn reply_marks_threads_and_hold() {
         "удержание беседы не пережило перезапуск: {view}"
     );
     // Беседа та же: письма на месте (привязка — в PostgreSQL).
-    let after = ThreadStore::thread_of(&meta, scope, reply_id)
+    let after = ThreadStore::thread_of(&meta, scope, answer)
         .await
         .expect("thread_of");
     assert_eq!(after, Some(thread));
