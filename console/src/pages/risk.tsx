@@ -32,7 +32,7 @@ import {
   Upload,
 } from "antd";
 import type { Dayjs } from "dayjs";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useNavigate } from "react-router";
 
 import { request, type Schemas } from "../api/client";
@@ -897,6 +897,8 @@ const sourceToForm = (s: Schemas["TiSourceView"]): SourceForm => ({
 });
 
 const TTL_UNITS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+// Текущий момент — снимок при загрузке страницы (модуль один на сессию): сравнение чистое при отрисовке.
+const NOW = Date.now();
 
 /** Момент устаревания версии списка: загрузка + TTL (`30m`, `1h`, `12h`, `2d`); TTL не распознан — null. */
 const staleAt = (version: Schemas["ListVersionView"], ttl: string): number | null => {
@@ -1134,9 +1136,6 @@ function SourcesTab() {
   const [versions, setVersions] = useState<Record<string, Schemas["ListVersionView"]>>({});
   const [modal, setModal] = useState<{ row?: Schemas["TiSourceView"] } | null>(null);
   const [usage, setUsage] = useState<string | null>(null);
-  // Текущий момент — для вывода «устарел»: чистота отрисовки (время снимается после монтирования).
-  const [now, setNow] = useState<number>();
-  useEffect(() => setNow(Date.now()), []);
   const { mutate: remove, mutation: removing } = useCustomMutation<Schemas["TiSourceView"], HttpError, undefined>();
 
   const known = (id: string) => versions[id];
@@ -1208,7 +1207,7 @@ function SourcesTab() {
             const v = known(s.id);
             if (!v) return <Typography.Text type="secondary">—</Typography.Text>;
             const limit = staleAt(v, s.ttl);
-            const stale = limit != null && now != null && limit < now;
+            const stale = limit != null && limit < NOW;
             return <StatusTag role={stale ? "warn" : "ok"}>{`${stale ? "устарел" : "свежий"}: загружен ${when(v.fetched_at)}`}</StatusTag>;
           }}
         />
