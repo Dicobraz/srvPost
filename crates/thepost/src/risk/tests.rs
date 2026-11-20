@@ -507,7 +507,7 @@ fn rebuild_with_extra_file(bytes: &mut Vec<u8>, name: &str, data: &[u8]) {
         .compression_method(zip::CompressionMethod::Deflated);
     for i in 0..zip.len() {
         let mut file = zip.by_index(i).expect("запись");
-        let name_in = file.name().to_owned();
+        let name_in = file.name().expect("имя записи").into_owned();
         writer.start_file(name_in.clone(), options).expect("запись");
         std::io::copy(&mut file, &mut writer).expect("копия");
     }
@@ -598,7 +598,7 @@ fn rewrite_manifest_field(bytes: &mut Vec<u8>, change: impl FnOnce(&mut PackageM
         .compression_method(zip::CompressionMethod::Deflated);
     for i in 0..zip.len() {
         let mut file = zip.by_index(i).expect("запись");
-        let name = file.name().to_owned();
+        let name = file.name().expect("имя записи").into_owned();
         writer.start_file(name.clone(), options).expect("запись");
         if name == "manifest.json" {
             writer
@@ -771,6 +771,7 @@ async fn pack_signs_and_verify_accepts_roundtrip() {
     )
     .expect("sources.json");
     // Манифест сборки: хэши списка ещё не заполнены (считает `pack`).
+    let zeros = [0u8; 32];
     let manifest = serde_json::json!({
         "format": 1,
         "version": 7,
@@ -790,7 +791,7 @@ async fn pack_signs_and_verify_accepts_roundtrip() {
         "lists": [{
             "id": "bad-domains",
             "path": "lists/bad-domains.txt",
-            "sha256": [0u8; 32],
+            "sha256": zeros,
             "entries": 2,
             "kind": "domain",
             "source": "vendor-feed"

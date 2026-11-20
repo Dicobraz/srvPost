@@ -64,6 +64,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
+use publicsuffix::Psl as _;
 use ring::signature as ring_sig;
 use sha2::Digest;
 use time::OffsetDateTime;
@@ -74,8 +75,8 @@ use tp_contracts::ids::{AccountId, BlobHash, TenantId};
 use tp_contracts::risk::{
     Catalog, Detector, EffectiveCatalog, FeedFormat, Field, HttpAuth, ListFile, ListId, ListKind,
     ListVersion, Mode, PackageEntry, PackageManifest, RiskLevel, RiskPolicy, RiskStore, SampleFile,
-    Semver, Signal, SignalId, SourceId, SourceKind, Tenants, TiOrigin, Tier, UpdateReport,
-    UsageEntry, Verdict, risk_changed,
+    Semver, Signal, SignalId, SourceId, SourceKind, Tenants, TiOrigin, TiSource, Tier,
+    UpdateReport, UsageEntry, Verdict, risk_changed,
 };
 use tp_contracts::role::CancellationToken;
 use tp_contracts::secrets::SecretRef;
@@ -358,7 +359,7 @@ impl Verifier {
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
             .map_err(|e| Error::invalid(format!("risk: файл не архив ZIP: {e}")))?;
         let manifest: PackageManifest = {
-            let raw = zip_entry(&zip, "manifest.json")?;
+            let raw = zip_entry(&mut zip, "manifest.json")?;
             serde_json::from_slice(&raw)
                 .map_err(|e| Error::invalid(format!("risk: manifest.json: {e}")))?
         };
@@ -385,8 +386,8 @@ impl Verifier {
             )));
         }
         verify_ed25519(public, &canonical_manifest(&manifest)?, &signature)?;
-        // Источники списков пакета: только поставка,lint проверяет и hosts, и лицензию.
-        let sources: Vec<TiSource> = match zip_entry_opt(&zip, "sources.json")? {
+        // Источники списков пакета: только поставка, lint проверяет и hosts, и лицензию.
+        let sources: Vec<TiSource> = match zip_entry_opt(&mut zip, "sources.json")? {
             Some(raw) => serde_json::from_slice(&raw)
                 .map_err(|e| Error::invalid(format!("risk: sources.json: {e}")))?,
             None => Vec::new(),
@@ -425,7 +426,10 @@ impl Verifier {
             if file.is_dir() {
                 continue;
             }
-            let name = file.name().to_owned();
+            let name = file
+                .name()
+                .map_err(|e| Error::internal(format!("risk: имя записи архива: {e}")))?
+                .into_owned();
             if matches!(
                 name.as_str(),
                 "manifest.json" | "manifest.sig" | "sources.json"
@@ -481,7 +485,7 @@ impl Verifier {
             let bytes = files.get(&psl.path).ok_or_else(|| {
                 Error::invalid(format!("risk: файла PSL {} нет в пакете", psl.path))
             })?;
-            publicsuffix::List::parse(bytes)
+            publicsuffix::List::from_bytes(bytes)
                 .map_err(|e| Error::invalid(format!("risk: список PSL не разбирается: {e}")))?;
         }
         // Пробный прогон: детекторы и каталог на образцах пакета (решение 126 б).
@@ -490,7 +494,7 @@ impl Verifier {
             .iter()
             .find(|l| l.id.as_str() == PSL_LIST)
             .and_then(|l| files.get(&l.path))
-            .and_then(|b| publicsuffix::List::parse(b).ok());
+            .and_then(|b| publicsuffix::List::from_bytes(b).ok());
         let mut failed = Vec::new();
         let mut run = 0u64;
         for sample in &manifest.samples {
@@ -513,12 +517,12 @@ impl Verifier {
                     sample.path,
                     expected
                         .iter()
-                        .map(String::as_str)
+                        .map(|id| id.as_str())
                         .collect::<Vec<_>>()
                         .join(", "),
                     fired
                         .iter()
-                        .map(String::as_str)
+                        .map(|id| id.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 ));
@@ -571,7 +575,7 @@ fn zip_entry<R: std::io::Read + std::io::Seek>(
 }
 
 fn zip_entry_opt<R: std::io::Read + std::io::Seek>(
-    zip: &zip::ZipArchive<R>,
+    zip: &mut zip::ZipArchive<R>,
     name: &str,
 ) -> Result<Option<Vec<u8>>> {
     let Ok(mut file) = zip.by_name(name) else {
@@ -954,7 +958,7 @@ fn aging(catalog: &EffectiveCatalog, days: u32, now: OffsetDateTime) -> Arc<Effe
             .collect();
         if !fresh.is_empty() {
             tracing::info!(
-                signals = %fresh.iter().map(String::as_str).collect::<Vec<_>>().join(", "),
+                signals = %fresh.iter().map(|id| id.as_str()).collect::<Vec<_>>().join(", "),
                 "risk: признаки поставщика отработали срок «только отчёт» ({days} сут) и переведены \
                  в enforce; строка — в отчёте doctor"
             );
@@ -1375,7 +1379,11 @@ impl NodeEnviron {
         if let Some(data) = cached {
             return Some(data);
         }
-        let data = Arc::new(load_list(&self.blob, &version).await.unwrap_or_default());
+        let data = Arc::new(
+            load_list(self.blob.as_ref(), &version)
+                .await
+                .unwrap_or_default(),
+        );
         self.lists
             .lock()
             .expect("lock")
@@ -1397,8 +1405,8 @@ impl NodeEnviron {
         if let Some(list) = cached {
             return Some(list);
         }
-        let bytes = read_raw(&self.blob, &version.blob).await.ok()?;
-        let list = Arc::new(publicsuffix::List::parse(&bytes).ok()?);
+        let bytes = read_raw(self.blob.as_ref(), &version.blob).await.ok()?;
+        let list = Arc::new(publicsuffix::List::from_bytes(&bytes).ok()?);
         *self.psl.lock().expect("lock") = Some((version.sha256, Arc::clone(&list)));
         Some(list)
     }
@@ -1713,7 +1721,7 @@ impl RiskNode for AdminNode {
                 std::fs::read(&path)
                     .map_err(|e| Error::internal(format!("risk: файл {}: {e}", path.display())))?
             }
-            SourceKind::Http { url } => fetch_http(source, url, &self.secrets).await?,
+            SourceKind::Http { url } => fetch_http(source, url, self.secrets.as_ref()).await?,
             SourceKind::Taxii { .. } => {
                 return Err(Error::invalid(
                     "risk: коннектор TAXII 2.1 — волна источников TI (APP-79)",
@@ -2191,7 +2199,7 @@ pub fn pack(
 /// Каталог с файлами пакетов, если он читается и непуст.
 fn packages_in_dir_ok(dir: &Path) -> Option<String> {
     match packages_in_dir(dir) {
-        Ok(list) if !list.is_empty() => Some(dir.display().to_owned()),
+        Ok(list) if !list.is_empty() => Some(dir.display().to_string()),
         _ => None,
     }
 }
@@ -2283,7 +2291,7 @@ pub async fn doctor_risk(
                 .to_owned(),
         ),
         Some(Err(e)) => report.push("risk.packages", Status::Fail, "", message(&e)),
-        Some(Ok(rows)) => match rows.first() {
+        Some(Ok(rows)) => match rows.first().map(|(v, state)| (*v, state.as_str())) {
             Some((version, "active")) => report.push(
                 "risk.packages",
                 Status::Ok,

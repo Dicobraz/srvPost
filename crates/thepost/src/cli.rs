@@ -553,7 +553,7 @@ fn fail(e: &Error) -> i32 {
 }
 
 /// Загружает config.yaml (для `risk.trusted_keys` и хранилища секретов `--key SecretRef`).
-async fn load_config(path: &Path) -> Result<tp_platform::Config> {
+async fn load_config(path: &Path) -> tp_contracts::Result<tp_platform::Config> {
     let registry = sections::registry()?;
     let p = path.to_owned();
     tokio::task::spawn_blocking(move || registry.load(&p))
