@@ -1,14 +1,19 @@
-import { NavLink, Navigate, Route, Routes } from "react-router";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
 
 import { CalendarPage } from "./pages/calendar";
 import { ContactsPage } from "./pages/contacts";
 import { MailPage } from "./pages/mail";
+import { LoginPage } from "./pages/login";
+import { CallbackPage } from "./pages/callback";
+import { AuthProvider, useAuth } from "./auth/session";
 import { useTheme, type ThemeChoice } from "./theme";
 
-// Оболочка веб-клиента (WEB-01): разделы Почта / Календарь / Контакты и шов «Каналы» — место под будущий
-// веб-чат (решение 2026-11-17: свой брендированный чат после запуска, сейчас не реализуется). На узких
-// экранах навигация уходит вниз (паттерн mobile Outlook, ADR 2026-11-20). Данные — через JMAP того же
-// узла (same-origin); вход и ящики — карточки WEB-02/03, разделы пока заглушки.
+// Оболочка веб-клиента (WEB-01/02): вход — карточка WEB-02 (OIDC PKCE из SPA или пароль приложения;
+// решение 2026-11-20 — без новой серверной точки), разделы Почта / Календарь / Контакты и шов
+// «Каналы» — место под будущий веб-чат (решение 2026-11-17). На узких экранах навигация уходит вниз
+// (паттерн mobile Outlook, ADR 2026-11-20). Данные — через JMAP того же узла (same-origin); ящики —
+// карточка WEB-03, разделы пока заглушки.
 const SECTIONS = [
   { to: "/", label: "Почта", end: true },
   { to: "/calendar", label: "Календарь", end: false },
@@ -58,13 +63,35 @@ function ThemeButton() {
   );
 }
 
-export function App() {
-  useTheme();
+function Account() {
+  const { session, userName, logout } = useAuth();
+  if (!session) return null;
+  return (
+    <span className="account">
+      {userName && <span className="account-name">{userName}</span>}
+      <button
+        type="button"
+        className="theme-button"
+        onClick={() => {
+          void logout();
+        }}
+        title="Выйти (вход по OIDC — и на других устройствах, если поставщик даёт end session)"
+      >
+        Выйти
+      </button>
+    </span>
+  );
+}
+
+function Shell() {
   return (
     <div className="shell">
       <header className="header">
         <span className="product">The Post</span>
-        <ThemeButton />
+        <span className="header-actions">
+          <Account />
+          <ThemeButton />
+        </span>
       </header>
       <Nav />
       <main className="content">
@@ -76,5 +103,59 @@ export function App() {
         </Routes>
       </main>
     </div>
+  );
+}
+
+/** Заставка, пока конфигурация входа и сессия не готовы (мигание оболочки недопустимо). */
+function Splash() {
+  return (
+    <section className="login" aria-busy="true">
+      <h1>The Post</h1>
+      <p>Загружаем…</p>
+    </section>
+  );
+}
+
+/** Оболочка — только в состоянии входа. Нет сессии: OIDC — тихий перевход к поставщику (маршрут
+ * сохраняется в state), пароль приложения — форма входа; route не теряется. */
+function Protected({ children }: { children: ReactNode }) {
+  const { ready, session, config, loginOidc } = useAuth();
+  const location = useLocation();
+  const kicked = useRef(false);
+  const [kickFailed, setKickFailed] = useState(false);
+  const route = location.pathname + location.search;
+
+  useEffect(() => {
+    if (!ready || session || kicked.current || !config?.oidc) return;
+    kicked.current = true; // один перевод; неудача (поставщик недоступен) — форма входа ниже
+    loginOidc(route).catch(() => setKickFailed(true));
+  }, [ready, session, config, loginOidc, route]);
+
+  if (!ready) return <Splash />;
+  if (!session) {
+    // OIDC-перевход уже начат (ждём поставщика); если он не настроен или не удался — форма входа.
+    if (config?.oidc && kicked.current && !kickFailed) return <Splash />;
+    return <Navigate to={`/login?next=${encodeURIComponent(route)}`} replace />;
+  }
+  return children;
+}
+
+export function App() {
+  useTheme();
+  return (
+    <AuthProvider>
+      <Routes>
+        <Route path="/callback" element={<CallbackPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="*"
+          element={
+            <Protected>
+              <Shell />
+            </Protected>
+          }
+        />
+      </Routes>
+    </AuthProvider>
   );
 }
