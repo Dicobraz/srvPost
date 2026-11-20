@@ -80,6 +80,13 @@ pub struct DavConfig {
     pub principal_search_scan: usize,
     /// Найденных принципалов в одном ответе поиска; клиент может запросить меньше (`cs:nresults`).
     pub principal_search_results: usize,
+    /// Запросов в минуту к одной ссылке публикации — календаря ICS (`/dav/pub/<токен>.ics`) или занятости
+    /// (`/dav/freebusy/<токен>.vfb`, DAV-20, DAV-21); больше — 429 с `Retry-After`. `0` — без ограничения.
+    pub pub_rate_limit: u32,
+    /// Наибольший интервал ссылки занятости (`start`…`end`, DAV-21); больше — 400.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub max_freebusy_span: Duration,
 }
 
 impl Default for DavConfig {
@@ -107,6 +114,8 @@ impl Default for DavConfig {
             max_freebusy_attendees: 100,
             principal_search_scan: 10_000,
             principal_search_results: 50,
+            pub_rate_limit: 60,
+            max_freebusy_span: Duration::from_secs(62 * 24 * 3600),
         }
     }
 }

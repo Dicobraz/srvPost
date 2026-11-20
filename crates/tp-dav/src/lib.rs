@@ -20,6 +20,11 @@
 //! представители `calendar-proxy`, поиск
 //! принципалов и переговорных; бронирование ресурсов при приёме iTIP — [`ItipInbox::with_booking`].
 //!
+//! Публикация без входа (DAV-20, DAV-21; [`publish`]): календарь по ссылке ICS (`/dav/pub/<токен>.ics`) и ссылка
+//! занятости (`/dav/freebusy/<токен>.vfb`, FBURL) с уровнем детализации не выше политики организации; выдачу и отзыв
+//! ссылок делает JMAP-расширение `urn:thepost:calendarpublish` (JMAP-20), хранилище — `tp-meta` (META-34, токен —
+//! только хэш).
+//!
 //! - [`config`] — секция `dav` ([`DavConfig`]);
 //! - [`gal`] — книга GAL из каталога ([`gal::sync`], [`GalDeps`]);
 //! - [`itip`] — разбор и построение iTIP (RFC 5546), общий с `tp-jmap`;
@@ -46,6 +51,7 @@ mod path;
 mod principals;
 mod props;
 mod proxy;
+pub mod publish;
 mod query;
 mod resource;
 pub mod schedule;

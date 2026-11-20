@@ -14,9 +14,12 @@
 //! (`MailContact::hidden_from_gal` в `ContactStore`: по идентификатору каталога или контакта). Карточка (calcard,
 //! vCard 3.0; по запросу клиента — 4.0): `UID` — идентификатор в каталоге, `FN`, `EMAIL` (первый — основной),
 //! телефоны из атрибутов `telephoneNumber` и `mobile`; у контакта — так же, один `EMAIL`; группа — `KIND:group`
-//! (`X-ADDRESSBOOKSERVER-KIND` в 3.0). Имя ресурса — идентификатор каталога с `.vcf`. Неизменная карточка
+//! (`X-ADDRESSBOOKSERVER-KIND` в 3.0). Оргструктура (DAV-22, SRS 4.4): `ORG` — путь подразделения
+//! ([`Directory::units`]: организация; департамент; отдел), `TITLE` — должность, `RELATED;TYPE=x-manager` —
+//! руководитель (идентификатор его карточки в книге); ссылка занятости (DAV-21) — `FBURL` из атрибута каталога
+//! `calFBURL`. Имя ресурса — идентификатор каталога с `.vcf`. Неизменная карточка
 //! хранилищем не перезаписывается: после изменения каталога новую версию получает только изменённая.
-//! Оргструктура (подразделение, должность, руководитель) — DAV-22. Вызывает [`sync`] узел: при старте роли и по
+//! Вызывает [`sync`] узел: при старте роли и по
 //! событию изменения каталога (APP-49). Пока [`sync`] не вызывался, книги нет.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -26,11 +29,12 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::response::Response;
 use calcard::vcard::{
-    VCard, VCardEntry, VCardKind, VCardParameter, VCardProperty, VCardType, VCardVersion,
+    VCard, VCardEntry, VCardKind, VCardParameter, VCardProperty, VCardType, VCardValue,
+    VCardVersion,
 };
 use tp_contracts::addressbook::ContactStore;
 use tp_contracts::auth::{
-    DirAccount, DirChange, DirContact, DirCursor, DirGroup, DirPage, Directory,
+    DirAccount, DirChange, DirContact, DirCursor, DirGroup, DirOrg, DirPage, DirUnit, Directory,
 };
 use tp_contracts::dav::{CollectionKind, DavStore, GAL_COLLECTION_NAME, GalCard, valid_name};
 use tp_contracts::groups::GroupStore;
@@ -94,6 +98,7 @@ pub async fn sync(
             .await?;
         contacts.apply(page);
     }
+    let units = Units::new(dir.units(tenant).await?);
     let hidden: HashSet<String> = match source.groups.as_deref() {
         Some(store) => store
             .list(tenant)
@@ -118,7 +123,7 @@ pub async fn sync(
     let cards = accounts
         .items
         .values()
-        .filter_map(account_card)
+        .filter_map(|a| account_card(a, &units))
         .chain(
             groups
                 .items
@@ -203,7 +208,7 @@ fn write(uid: &str, entries: Vec<VCardEntry>) -> Option<Card> {
 }
 
 /// Карточка учётной записи; вход запрещён, запись скрыта из адресной книги или нет адреса — `None`.
-fn account_card(a: &DirAccount) -> Option<Card> {
+fn account_card(a: &DirAccount, units: &Units) -> Option<Card> {
     if !a.enabled || a.hidden_from_gal || a.emails.is_empty() {
         return None;
     }
@@ -225,6 +230,12 @@ fn account_card(a: &DirAccount) -> Option<Card> {
         entries.push(e);
     }
     phones(&a.attributes, &mut entries);
+    org(&a.org, units, &mut entries);
+    // Ссылка занятости (DAV-21, SRS 4.4): `FBURL` — из атрибута каталога `calFBURL` (Internet
+    // Free/Busy Outlook и внешние серверы; адрес ссылки собирает выпустивший её клиент, JMAP-20).
+    if let Some(url) = attribute(&a.attributes, "calFBURL") {
+        entries.push(entry(VCardProperty::Fburl, url));
+    }
     write(&a.external_id, entries)
 }
 
@@ -237,6 +248,81 @@ fn phones(attributes: &BTreeMap<String, String>, entries: &mut Vec<VCardEntry>) 
         if let Some(tel) = attributes.get(attr).filter(|t| !t.trim().is_empty()) {
             entries.push(entry(VCardProperty::Tel, tel).with_param(VCardParameter::typ(typ)));
         }
+    }
+}
+
+/// Атрибут каталога `name` (регистр имени не важен) с непустым значением.
+fn attribute<'a>(attributes: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    attributes
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+}
+
+/// Оргструктура учётной записи (DAV-22, SRS 4.4): `ORG` — путь подразделения от корня
+/// ([`Directory::units`]: организация; департамент; отдел), `TITLE` — должность,
+/// `RELATED;TYPE=x-manager` — руководитель (идентификатор каталога — `UID` его карточки в книге).
+/// Незаполненное — без свойства.
+fn org(o: &DirOrg, units: &Units, entries: &mut Vec<VCardEntry>) {
+    let path = o
+        .department
+        .as_deref()
+        .map(|d| units.path(d))
+        .unwrap_or_default();
+    if !path.is_empty() {
+        entries.push(
+            VCardEntry::new(VCardProperty::Org)
+                .with_values(path.into_iter().map(VCardValue::Text).collect()),
+        );
+    }
+    if let Some(title) = o.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        entries.push(entry(VCardProperty::Title, title));
+    }
+    if let Some(manager) = o
+        .manager
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        entries.push(
+            VCardEntry::new(VCardProperty::Related)
+                .with_param(VCardParameter::typ("x-manager".to_owned()))
+                .with_value(manager),
+        );
+    }
+}
+
+/// Дерево подразделений организации ([`Directory::units`]): путь подразделения для `ORG` (DAV-22).
+struct Units(BTreeMap<String, DirUnit>);
+
+impl Units {
+    fn new(units: Vec<DirUnit>) -> Self {
+        Self(
+            units
+                .into_iter()
+                .map(|u| (u.external_id.clone(), u))
+                .collect(),
+        )
+    }
+
+    /// Названия от корня к `id`; неизвестное подразделение, цикл или глубже 32 уровней — пусто.
+    fn path(&self, id: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        let mut cur = Some(id);
+        while let Some(next) = cur {
+            if !seen.insert(next.to_owned()) || out.len() >= 32 {
+                return Vec::new();
+            }
+            let Some(u) = self.0.get(next) else {
+                return Vec::new();
+            };
+            out.push(u.name.clone());
+            cur = u.parent.as_deref();
+        }
+        out.reverse();
+        out
     }
 }
 

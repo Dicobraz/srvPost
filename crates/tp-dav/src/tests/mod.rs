@@ -25,6 +25,7 @@ mod gal;
 mod multiget;
 mod preconditions;
 mod propfind;
+mod publish;
 mod query;
 mod resource;
 mod schedule;
