@@ -167,7 +167,6 @@ fn build_package(
         files.insert(sample.path.clone(), bytes);
         manifest.samples.push(sample);
     }
-    manifest.signals = signals;
     let signature = key
         .sign(&canonical_manifest(&manifest).expect("канонический json"))
         .as_ref()

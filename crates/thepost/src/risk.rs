@@ -378,7 +378,7 @@ impl Verifier {
                 self.trusted.keys().cloned().collect::<Vec<_>>().join(", ")
             ))
         })?;
-        let signature = zip_entry(&zip, "manifest.sig")?;
+        let signature = zip_entry(&mut zip, "manifest.sig")?;
         if signature.len() != 64 {
             return Err(Error::invalid(format!(
                 "risk: manifest.sig — {} байт, подпись Ed25519 — 64",
