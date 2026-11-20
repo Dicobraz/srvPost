@@ -22,6 +22,12 @@ use tp_testkit::{MemRisk, SystemClock};
 
 /// MIME-письмо с вложением `payload` (base64) и именем `name`.
 fn mime_with_attachment(name: &str, payload: &[u8]) -> Vec<u8> {
+    mime_with_link_and_attachment("", name, payload)
+}
+
+/// То же с текстовой частью `link` (списки TI по полю `link_url` сверяют значения как в тексте;
+/// пустая строка — без текстовой части).
+fn mime_with_link_and_attachment(link: &str, name: &str, payload: &[u8]) -> Vec<u8> {
     use base64::Engine;
     // Тип — по расширению имени: почтовые программы ставят настоящий тип вложения, а каталог
     // сверяет заявленные типы с памятью беседы (CTR-94).
@@ -34,10 +40,19 @@ fn mime_with_attachment(name: &str, payload: &[u8]) -> Vec<u8> {
         Some("jpg") => "image/jpeg",
         _ => "application/octet-stream",
     };
+    let text = if link.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "--b\r\n\
+             Content-Type: text/plain; charset=utf-8\r\n\r\n\
+             see {link}\r\n"
+        )
+    };
     format!(
         "From: alice@example.net\r\nSubject: x\r\n\
          MIME-Version: 1.0\r\n\
-         Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+         Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n{text}\
          --b\r\n\
          Content-Type: {ctype}; name=\"{name}\"\r\n\
          Content-Disposition: attachment; filename=\"{name}\"\r\n\
@@ -661,8 +676,10 @@ async fn engine_list_match() {
     let verdict = scan.verdict_for(tenant);
     assert_eq!(verdict.score, 8);
     assert_eq!(verdict.hits.len(), 2);
-    // Совпадение по URL ссылки и по SHA-256 вложения (содержимое вложения — `payload`).
-    let hash_raw = mime_with_attachment("e.bin", b"payload");
+    // Совпадение по URL ссылки и по SHA-256 вложения (содержимое вложения — `payload`):
+    // URL — как в тексте письма, хэш — по decoded-содержимому вложения.
+    let hash_raw =
+        mime_with_link_and_attachment("https://a.b.example.co.uk/login", "e.bin", b"payload");
     let environ = Environ::default()
         .with_list("phish-url", "https://a.b.example.co.uk/login")
         .with_list(

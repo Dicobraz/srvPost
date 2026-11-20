@@ -336,21 +336,23 @@ fn disk_image_or_shortcut(decoded: &[u8], ext: Option<&str>) -> bool {
     decoded.starts_with(&[0x4C, 0x00, 0x00, 0x00, 0x01, 0x14])
 }
 
-/// Записи ZIP: флаг шифрования (`ZipFile::encrypted`) и вложенные вложения до предела глубины.
-/// Битый или неподдерживаемый архив — не ошибка (fail-open).
+/// Записи ZIP: флаг шифрования и вложенные вложения до предела глубины. Битый или неподдерживаемый
+/// архив — не ошибка (fail-open).
 fn scan_zip(decoded: &[u8], out: &mut Findings, budget: &mut usize, max_depth: usize) {
     let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(decoded)) else {
         return;
     };
     for i in 0..archive.len() {
-        let Ok(file) = archive.by_index(i) else {
-            continue;
-        };
-        if file.encrypted() {
-            // Флаг шифрования записи (общий бит заголовка) — архив вскрывается паролем.
+        // Флаг шифрования записи (общий бит заголовка) — архив вскрывается паролем. Метаданные —
+        // по raw-доступу: `by_index` зашифрованную запись без пароля отклоняет (fail-open —
+        // без срабатывания), а чтение её содержимого и не нужно.
+        if archive.by_index_raw(i).is_ok_and(|file| file.encrypted()) {
             out.encrypted_archive = true;
             continue;
         }
+        let Ok(file) = archive.by_index(i) else {
+            continue;
+        };
         if file.is_dir() {
             continue;
         }
