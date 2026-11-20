@@ -122,3 +122,17 @@ app-role с паролями из OpenBao KV: `db_secret` не переписы�
   кэши cargo-target в корне workspace ОТСУТСТВУЮТ). Не удалять чужие target-каталоги. Guard < 3 ГБ.
 - Прогон A/B ещё не выполнялся. Генератор: собрать по stand_generator/files (run-scenario.sh требует
   /etc/thepost-stand/stand.env, smtp-source (postfix), swaks, imaptest, k6; образ grafana/k6:1.0.0 уже в docker).
+
+## Уборка и состояние после остановки (11:45 UTC)
+- Docker Desktop не работает — контейнеры exited, compose-стек не поднят (объекты Docker на месте, НЕ
+  сносились: тома pgdata-tls/tpdata/d7stand с данными A, образы d7gen:local, dovecot/imaptest, стек thepost_*).
+  Владелец поднимает стек сам (команда в разделе «Остановка по guard») — это и есть «стек оставить
+  владельцу», только после возврата Docker Desktop.
+- Уборка генератора (когда Docker Desktop вернётся и прогоны больше не нужны): `docker rm -f d7run d7fill
+  d7filldav d7sink` (часть уже удалена), `docker rmi d7gen:local`, `docker volume rm thepost_d7stand`
+  (после копирования отчётов; отчёты также лежат локально в `d7/work/reports/`, журналы PG —
+  `d7/work/pglog-*.log`, срезы pg_stat_activity — `d7/work/pg-samples-*.csv`). Том d7stand — промежуточный,
+  стековые тома (pgdata-tls, tpdata, tls, openbao-*) не трогать.
+- Диск C:: в 11:45 — 2.7 ГБ свободно (guard продолжает действовать). Серия за день — в разделе выше;
+  колебания определяются чужой компиляцией, не диагностикой.
+- PR: https://github.com/Dicobraz/srvPost/pull/205 (w/laptop-d7 → main, rebase на origin/main, НЕ мержить).
