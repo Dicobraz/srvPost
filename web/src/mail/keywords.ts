@@ -88,11 +88,12 @@ export function lifecycleOf(keywords: Keywords): Lifecycle {
     ] as const) {
       const dated = parseDatedKeyword(word, prefix);
       const general = dated === null && word === prefix.slice(0, -1);
-      if (dated || general) {
-        out[key] = {
-          at: dated ? endOfDay(dated.date) : null,
-          general,
-        };
+      // Сервер ставит рядом и слово с датой, и общее (S5-04): дата и признак сливаются,
+      // а не перезаписывают друг друга.
+      if (dated) {
+        out[key] = { at: endOfDay(dated.date), general: out[key]?.general ?? false };
+      } else if (general) {
+        out[key] = { at: out[key]?.at ?? null, general: true };
       }
     }
   }

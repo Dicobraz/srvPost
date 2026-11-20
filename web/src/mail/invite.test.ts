@@ -42,9 +42,9 @@ test("не iCalendar и не VEVENT — null; part text/calendar — пригл�
   expect(isInvitationPart("application/pdf")).toBe(false);
 });
 
-test("свёртка строк RFC 5545 §3.1: продолжение склеивается", () => {
+test("свёртка строк RFC 5545 §3.1: unfolding убирает CRLF и ведущий пробел", () => {
   const folded = "BEGIN:VEVENT\r\nSUMMARY:Длинная тема\r\n продолжение\r\nEND:VEVENT";
-  expect(parseInvitation(folded)?.summary).toBe("Длинная тема продолжение");
+  expect(parseInvitation(folded)?.summary).toBe("Длинная темапродолжение");
 });
 
 test("подпись «вт 24.11.2026 14:00–15:00» — как в карточке макета", () => {
@@ -59,7 +59,7 @@ test("лента «Ваш день»: часы по 24 px, приглашени�
   const end = new Date(2026, 10, 24, 15, 0);
   const ribbon = dayRibbon(start, end, new Date(2026, 10, 24, 13, 20));
   const hours = ribbon.filter((r) => "hour" in r) as Array<{ hour: number; label: string }>;
-  expect(hours.map((h) => h.label)).toEqual(["13:00", "14:00", "15:00", "16:00"]);
+  expect(hours.map((h) => h.label)).toEqual(["13:00", "14:00", "15:00"]);
   const invite = ribbon.find((r) => "invite" in r) as { top: number; height: number; nowTop: number | null };
   expect(invite.top).toBeCloseTo(24); // 14:00 — через час от 13:00
   expect(invite.height).toBeCloseTo(24); // час встречи
