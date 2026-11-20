@@ -297,11 +297,12 @@ pub enum TiOriginSchema {
     Own,
 }
 
-/// Доставка и параметры источника TI.
+/// Доставка и параметры источника TI (зеркало `tp_contracts::risk::SourceKind`; имя `TiSourceKind` —
+/// не пересекается с видом доверенного источника транспорта).
 #[allow(dead_code)]
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-#[schema(as = SourceKind)]
+#[schema(as = TiSourceKind)]
 pub enum SourceKindSchema {
     /// Фид по HTTP(S).
     Http {

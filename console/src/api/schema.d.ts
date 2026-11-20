@@ -3918,22 +3918,6 @@ export interface components {
          * @enum {string}
          */
         TiOrigin: "vendor" | "gos_sopka" | "fin_cert" | "own";
-        /** @description Доставка и параметры источника TI. */
-        SourceKind: {
-            /** @description Фид по HTTP(S). */
-            http: {
-                /** @description Адрес. */
-                url: string;
-            };
-        } | {
-            /** @description Коллекция TAXII 2.1. */
-            taxii: {
-                /** @description API root. */
-                api_root: string;
-                /** @description Коллекция. */
-                collection: string;
-            };
-        } | "file";
         /** @description Формат фида источника TI. */
         FeedFormat: "txt" | {
             /** @description CSV; `column` — колонка с индикатором. */
@@ -4132,7 +4116,7 @@ export interface components {
             format: components["schemas"]["FeedFormat"];
             key?: components["schemas"]["SecretRef"] | null;
             /** @description Доставка. */
-            kind: components["schemas"]["SourceKind"];
+            kind: components["schemas"]["TiSourceKind"];
             /** @description Лицензия. */
             license: components["schemas"]["License"];
             /** @description Происхождение — для журнала и отчётов. */
@@ -4159,7 +4143,7 @@ export interface components {
             id: string;
             key?: components["schemas"]["SecretRef"] | null;
             /** @description Доставка. */
-            kind: components["schemas"]["SourceKind"];
+            kind: components["schemas"]["TiSourceKind"];
             /** @description Лицензия. */
             license: components["schemas"]["License"];
             /** @description Происхождение — для журнала и отчётов. */
@@ -4186,7 +4170,7 @@ export interface components {
             id: string;
             key?: components["schemas"]["SecretRef"] | null;
             /** @description Доставка. */
-            kind: components["schemas"]["SourceKind"];
+            kind: components["schemas"]["TiSourceKind"];
             /** @description Лицензия. */
             license: components["schemas"]["License"];
             /** @description Происхождение. */
@@ -4305,6 +4289,22 @@ export interface components {
             /** @description Краткое описание кода. */
             title: string;
         };
+        /** @description Доставка и параметры источника TI. */
+        TiSourceKind: {
+            /** @description Фид по HTTP(S). */
+            http: {
+                /** @description Адрес. */
+                url: string;
+            };
+        } | {
+            /** @description Коллекция TAXII 2.1. */
+            taxii: {
+                /** @description API root. */
+                api_root: string;
+                /** @description Коллекция. */
+                collection: string;
+            };
+        } | "file";
     };
     responses: never;
     parameters: never;
@@ -12288,6 +12288,14 @@ export interface operations {
                     "application/json": components["schemas"]["SignalsView"];
                 };
             };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12457,6 +12465,14 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ThresholdsView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             403: {

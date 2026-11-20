@@ -3488,63 +3488,66 @@
         "type": "object"
       },
       "SourceKind": {
-        "description": "Доставка и параметры источника TI.",
+        "description": "Вид доверенного источника: шлюз перед продуктом или приложение без SASL (только у источника организации).",
         "oneOf": [
           {
-            "description": "Фид по HTTP(S).",
+            "description": "Внешний MTA перед продуктом.",
             "properties": {
-              "http": {
-                "description": "Фид по HTTP(S).",
+              "gateway": {
+                "description": "Внешний MTA перед продуктом.",
                 "properties": {
-                  "url": {
-                    "description": "Адрес.",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "url"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "http"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "Коллекция TAXII 2.1.",
-            "properties": {
-              "taxii": {
-                "description": "Коллекция TAXII 2.1.",
-                "properties": {
-                  "api_root": {
-                    "description": "API root.",
-                    "type": "string"
+                  "authserv_id": {
+                    "description": "authserv-id доверенных `Authentication-Results` шлюза; `null` — не доверять.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
-                  "collection": {
-                    "description": "Коллекция.",
-                    "type": "string"
+                  "xclient": {
+                    "description": "Принимать исходного клиента из `XCLIENT`/`XFORWARD`.",
+                    "type": "boolean"
                   }
                 },
                 "required": [
-                  "api_root",
-                  "collection"
+                  "xclient"
                 ],
                 "type": "object"
               }
             },
             "required": [
-              "taxii"
+              "gateway"
             ],
             "type": "object"
           },
           {
-            "description": "Файл в каталоге импорта (закрытый контур).",
-            "enum": [
-              "file"
+            "description": "Устройство или система без SASL.",
+            "properties": {
+              "application": {
+                "description": "Устройство или система без SASL.",
+                "properties": {
+                  "external": {
+                    "description": "Разрешены внешние получатели.",
+                    "type": "boolean"
+                  },
+                  "senders": {
+                    "description": "Разрешённые адреса отправителя (`user@example.org` или `@example.org`; не пусто).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "senders",
+                  "external"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "application"
             ],
-            "type": "string"
+            "type": "object"
           }
         ]
       },
@@ -5752,7 +5755,7 @@
             ]
           },
           "kind": {
-            "$ref": "#/components/schemas/SourceKind",
+            "$ref": "#/components/schemas/TiSourceKind",
             "description": "Доставка."
           },
           "license": {
@@ -5822,7 +5825,7 @@
             ]
           },
           "kind": {
-            "$ref": "#/components/schemas/SourceKind",
+            "$ref": "#/components/schemas/TiSourceKind",
             "description": "Доставка."
           },
           "license": {
@@ -5892,7 +5895,7 @@
             ]
           },
           "kind": {
-            "$ref": "#/components/schemas/SourceKind",
+            "$ref": "#/components/schemas/TiSourceKind",
             "description": "Доставка."
           },
           "license": {
@@ -6155,6 +6158,67 @@
           "errors"
         ],
         "type": "object"
+      },
+      "TiSourceKind": {
+        "description": "Доставка и параметры источника TI.",
+        "oneOf": [
+          {
+            "description": "Фид по HTTP(S).",
+            "properties": {
+              "http": {
+                "description": "Фид по HTTP(S).",
+                "properties": {
+                  "url": {
+                    "description": "Адрес.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "http"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Коллекция TAXII 2.1.",
+            "properties": {
+              "taxii": {
+                "description": "Коллекция TAXII 2.1.",
+                "properties": {
+                  "api_root": {
+                    "description": "API root.",
+                    "type": "string"
+                  },
+                  "collection": {
+                    "description": "Коллекция.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "api_root",
+                  "collection"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "taxii"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Файл в каталоге импорта (закрытый контур).",
+            "enum": [
+              "file"
+            ],
+            "type": "string"
+          }
+        ]
       }
     },
     "securitySchemes": {
@@ -17019,6 +17083,15 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "summary": "Действующий каталог организации: пакет поставщика, изменения установки и организации; по признаку\n`source` — уровень, давший отличие. Администраторы и оператор (чтение).",
@@ -17240,6 +17313,15 @@
             }
           },
           "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
