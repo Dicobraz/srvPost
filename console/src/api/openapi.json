@@ -4885,7 +4885,7 @@
         ],
         "type": "object"
       },
-      "OriginSchema": {
+      "Origin": {
         "description": "Происхождение признака: поставщик или администратор.",
         "enum": [
           "vendor",
@@ -4893,7 +4893,7 @@
         ],
         "type": "string"
       },
-      "FieldSchema": {
+      "Field": {
         "description": "Поле письма детектора совпадения со списком TI.",
         "enum": [
           "sender_ip",
@@ -4904,7 +4904,7 @@
         ],
         "type": "string"
       },
-      "DetectorSchema": {
+      "Detector": {
         "description": "Детектор признака — типизированный Rust-код с параметрами (решение 126 г).",
         "oneOf": [
           {
@@ -4946,7 +4946,7 @@
             "description": "Совпадение поля письма со списком TI.",
             "properties": {
               "field": {
-                "$ref": "#/components/schemas/FieldSchema",
+                "$ref": "#/components/schemas/Field",
                 "description": "Поле письма."
               },
               "list": {
@@ -4962,7 +4962,7 @@
           }
         ]
       },
-      "RiskActionSchema": {
+      "RiskAction": {
         "description": "Собственное действие признака (от мягкого к строгому).",
         "enum": [
           "none",
@@ -4973,7 +4973,7 @@
         ],
         "type": "string"
       },
-      "ModeSchema": {
+      "Mode": {
         "description": "Режим признака: «только отчёт» или «применять».",
         "enum": [
           "report",
@@ -4981,7 +4981,7 @@
         ],
         "type": "string"
       },
-      "RiskLevelSchema": {
+      "RiskLevel": {
         "description": "Уровень политики справочника: установка → организация.",
         "oneOf": [
           {
@@ -5006,7 +5006,7 @@
           }
         ]
       },
-      "ThresholdsSchema": {
+      "Thresholds": {
         "description": "Пороги действий: балл, с которого действует действие (константы контракта — 1, 6, 10, 15).",
         "properties": {
           "junk": {
@@ -5042,7 +5042,7 @@
         ],
         "type": "object"
       },
-      "PolicyViolationSchema": {
+      "PolicyViolation": {
         "description": "Несоответствие политики организации базовым значениям: организация смягчила признак.",
         "properties": {
           "base": {
@@ -5070,7 +5070,7 @@
         ],
         "type": "object"
       },
-      "UpdateReportSchema": {
+      "UpdateReport": {
         "description": "Итог обновления пакета: что изменится при активации.",
         "properties": {
           "added": {
@@ -5110,7 +5110,7 @@
         ],
         "type": "object"
       },
-      "PackageStateSchema": {
+      "PackageState": {
         "description": "Состояние хранимого пакета.",
         "oneOf": [
           {
@@ -5142,7 +5142,7 @@
           }
         ]
       },
-      "TierSchema": {
+      "Tier": {
         "description": "Уровень источника TI (решение 126 е–з).",
         "enum": [
           "bundled",
@@ -5151,7 +5151,7 @@
         ],
         "type": "string"
       },
-      "TiOriginSchema": {
+      "TiOrigin": {
         "description": "Происхождение данных источника — для журнала и отчётов (решение 126 к).",
         "enum": [
           "vendor",
@@ -5161,7 +5161,7 @@
         ],
         "type": "string"
       },
-      "SourceKindSchema": {
+      "SourceKind": {
         "description": "Доставка и параметры источника TI.",
         "oneOf": [
           {
@@ -5222,7 +5222,7 @@
           }
         ]
       },
-      "FeedFormatSchema": {
+      "FeedFormat": {
         "description": "Формат фида источника TI.",
         "oneOf": [
           {
@@ -5277,7 +5277,7 @@
           }
         ]
       },
-      "StaleActionSchema": {
+      "StaleAction": {
         "description": "Действие при устаревании источника («отключить» нет).",
         "oneOf": [
           {
@@ -5313,7 +5313,7 @@
           }
         ]
       },
-      "LicenseSchema": {
+      "License": {
         "description": "Лицензия источника TI: условия и атрибуция.",
         "properties": {
           "attribution": {
@@ -5338,7 +5338,7 @@
         ],
         "type": "object"
       },
-      "TenantsSchema": {
+      "Tenants": {
         "description": "Организации, которым доступен источник.",
         "oneOf": [
           {
@@ -5366,7 +5366,7 @@
           }
         ]
       },
-      "SecretRefSchema": {
+      "SecretRef": {
         "description": "Ссылка на поле секрета в хранилище (`<путь>#<поле>`); значение ключа API не принимает и не отдаёт.",
         "properties": {
           "secret": {
@@ -5379,7 +5379,7 @@
         ],
         "type": "object"
       },
-      "HttpAuthSchema": {
+      "HttpAuth": {
         "description": "Авторизация источника TI: секрет — из ссылки `key`.",
         "oneOf": [
           {
@@ -5449,7 +5449,7 @@
           }
         ]
       },
-      "TlpSchema": {
+      "Tlp": {
         "description": "Маркировка TLP версии списка из источника.",
         "enum": [
           "clear",
@@ -5466,7 +5466,7 @@
           "action": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/RiskActionSchema",
+                "$ref": "#/components/schemas/RiskAction",
                 "description": "Собственное действие."
               },
               {
@@ -5477,7 +5477,7 @@
           "detector": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/DetectorSchema",
+                "$ref": "#/components/schemas/Detector",
                 "description": "Детектор; `null` — осиротевшее изменение."
               },
               {
@@ -5492,7 +5492,7 @@
           "mode": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ModeSchema",
+                "$ref": "#/components/schemas/Mode",
                 "description": "Режим: «только отчёт» или «применять»."
               },
               {
@@ -5501,7 +5501,7 @@
             ]
           },
           "origin": {
-            "$ref": "#/components/schemas/OriginSchema",
+            "$ref": "#/components/schemas/Origin",
             "description": "Происхождение значения: поставщик или администратор."
           },
           "orphaned": {
@@ -5519,7 +5519,7 @@
           "source": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/RiskLevelSchema",
+                "$ref": "#/components/schemas/RiskLevel",
                 "description": "Уровень, давший отличие от пакета; `null` — признак пакета без изменений."
               },
               {
@@ -5560,7 +5560,7 @@
           "action": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/RiskActionSchema",
+                "$ref": "#/components/schemas/RiskAction",
                 "description": "Собственное действие."
               },
               {
@@ -5571,7 +5571,7 @@
           "detector": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/DetectorSchema",
+                "$ref": "#/components/schemas/Detector",
                 "description": "Детектор (только свой признак `org.*`)."
               },
               {
@@ -5582,7 +5582,7 @@
           "mode": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ModeSchema",
+                "$ref": "#/components/schemas/Mode",
                 "description": "Режим."
               },
               {
@@ -5669,13 +5669,13 @@
         "description": "Пороги уровня: свои (уровень не задан — `null`), действующие и уровень-источник.",
         "properties": {
           "effective": {
-            "$ref": "#/components/schemas/ThresholdsSchema",
+            "$ref": "#/components/schemas/Thresholds",
             "description": "Действующие пороги."
           },
           "own": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ThresholdsSchema",
+                "$ref": "#/components/schemas/Thresholds",
                 "description": "Пороги уровня; `null` — уровень не задан (действует уровень выше и константы контракта)."
               },
               {
@@ -5686,7 +5686,7 @@
           "source": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/RiskLevelSchema",
+                "$ref": "#/components/schemas/RiskLevel",
                 "description": "Уровень, давший действующие пороги; `null` — константы контракта."
               },
               {
@@ -5704,7 +5704,7 @@
         "description": "Хранимый пакет: номер и состояние.",
         "properties": {
           "state": {
-            "$ref": "#/components/schemas/PackageStateSchema",
+            "$ref": "#/components/schemas/PackageState",
             "description": "Состояние: активный, прошлый, отклонённый с отчётом."
           },
           "version": {
@@ -5756,7 +5756,7 @@
             "type": "integer"
           },
           "update": {
-            "$ref": "#/components/schemas/UpdateReportSchema",
+            "$ref": "#/components/schemas/UpdateReport",
             "description": "Что изменится при активации (новые признаки приходят в режиме «только отчёт»)."
           },
           "version": {
@@ -5780,17 +5780,17 @@
         "description": "Источник TI без идентификатора (тело `PUT`): вид, доставка, формат, TTL, действие при устаревании,\nлицензия, организации, ключ-ссылка и авторизация.",
         "properties": {
           "auth": {
-            "$ref": "#/components/schemas/HttpAuthSchema",
+            "$ref": "#/components/schemas/HttpAuth",
             "description": "Авторизация (секрет — из `key`)."
           },
           "format": {
-            "$ref": "#/components/schemas/FeedFormatSchema",
+            "$ref": "#/components/schemas/FeedFormat",
             "description": "Формат."
           },
           "key": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/SecretRefSchema",
+                "$ref": "#/components/schemas/SecretRef",
                 "description": "Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт."
               },
               {
@@ -5799,27 +5799,27 @@
             ]
           },
           "kind": {
-            "$ref": "#/components/schemas/SourceKindSchema",
+            "$ref": "#/components/schemas/SourceKind",
             "description": "Доставка."
           },
           "license": {
-            "$ref": "#/components/schemas/LicenseSchema",
+            "$ref": "#/components/schemas/License",
             "description": "Лицензия."
           },
           "origin": {
-            "$ref": "#/components/schemas/TiOriginSchema",
+            "$ref": "#/components/schemas/TiOrigin",
             "description": "Происхождение — для журнала и отчётов."
           },
           "stale": {
-            "$ref": "#/components/schemas/StaleActionSchema",
+            "$ref": "#/components/schemas/StaleAction",
             "description": "Действие при устаревании («отключить» нет)."
           },
           "tenants": {
-            "$ref": "#/components/schemas/TenantsSchema",
+            "$ref": "#/components/schemas/Tenants",
             "description": "Организации, которым доступен."
           },
           "tier": {
-            "$ref": "#/components/schemas/TierSchema",
+            "$ref": "#/components/schemas/Tier",
             "description": "Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400)."
           },
           "ttl": {
@@ -5846,11 +5846,11 @@
         "description": "Новый источник TI (тело `POST`): идентификатор и параметры.",
         "properties": {
           "auth": {
-            "$ref": "#/components/schemas/HttpAuthSchema",
+            "$ref": "#/components/schemas/HttpAuth",
             "description": "Авторизация (секрет — из `key`)."
           },
           "format": {
-            "$ref": "#/components/schemas/FeedFormatSchema",
+            "$ref": "#/components/schemas/FeedFormat",
             "description": "Формат."
           },
           "id": {
@@ -5860,7 +5860,7 @@
           "key": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/SecretRefSchema",
+                "$ref": "#/components/schemas/SecretRef",
                 "description": "Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт."
               },
               {
@@ -5869,27 +5869,27 @@
             ]
           },
           "kind": {
-            "$ref": "#/components/schemas/SourceKindSchema",
+            "$ref": "#/components/schemas/SourceKind",
             "description": "Доставка."
           },
           "license": {
-            "$ref": "#/components/schemas/LicenseSchema",
+            "$ref": "#/components/schemas/License",
             "description": "Лицензия."
           },
           "origin": {
-            "$ref": "#/components/schemas/TiOriginSchema",
+            "$ref": "#/components/schemas/TiOrigin",
             "description": "Происхождение — для журнала и отчётов."
           },
           "stale": {
-            "$ref": "#/components/schemas/StaleActionSchema",
+            "$ref": "#/components/schemas/StaleAction",
             "description": "Действие при устаревании («отключить» нет)."
           },
           "tenants": {
-            "$ref": "#/components/schemas/TenantsSchema",
+            "$ref": "#/components/schemas/Tenants",
             "description": "Организации, которым доступен."
           },
           "tier": {
-            "$ref": "#/components/schemas/TierSchema",
+            "$ref": "#/components/schemas/Tier",
             "description": "Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400)."
           },
           "ttl": {
@@ -5916,11 +5916,11 @@
         "description": "Источник TI в ответе API (ключ — только ссылка, значения не отдаёт).",
         "properties": {
           "auth": {
-            "$ref": "#/components/schemas/HttpAuthSchema",
+            "$ref": "#/components/schemas/HttpAuth",
             "description": "Авторизация."
           },
           "format": {
-            "$ref": "#/components/schemas/FeedFormatSchema",
+            "$ref": "#/components/schemas/FeedFormat",
             "description": "Формат."
           },
           "id": {
@@ -5930,7 +5930,7 @@
           "key": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/SecretRefSchema",
+                "$ref": "#/components/schemas/SecretRef",
                 "description": "Ключ — ссылка на хранилище секретов; значение не отдаётся."
               },
               {
@@ -5939,27 +5939,27 @@
             ]
           },
           "kind": {
-            "$ref": "#/components/schemas/SourceKindSchema",
+            "$ref": "#/components/schemas/SourceKind",
             "description": "Доставка."
           },
           "license": {
-            "$ref": "#/components/schemas/LicenseSchema",
+            "$ref": "#/components/schemas/License",
             "description": "Лицензия."
           },
           "origin": {
-            "$ref": "#/components/schemas/TiOriginSchema",
+            "$ref": "#/components/schemas/TiOrigin",
             "description": "Происхождение."
           },
           "stale": {
-            "$ref": "#/components/schemas/StaleActionSchema",
+            "$ref": "#/components/schemas/StaleAction",
             "description": "Действие при устаревании."
           },
           "tenants": {
-            "$ref": "#/components/schemas/TenantsSchema",
+            "$ref": "#/components/schemas/Tenants",
             "description": "Организации, которым доступен."
           },
           "tier": {
-            "$ref": "#/components/schemas/TierSchema",
+            "$ref": "#/components/schemas/Tier",
             "description": "Уровень: в поставке, ключ заказчика, импорт."
           },
           "ttl": {
@@ -6031,7 +6031,7 @@
           "tlp": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/TlpSchema",
+                "$ref": "#/components/schemas/Tlp",
                 "description": "Маркировка TLP из источника; `null` — маркировки нет."
               },
               {
@@ -6117,7 +6117,7 @@
             "type": "string"
           },
           "mode": {
-            "$ref": "#/components/schemas/ModeSchema",
+            "$ref": "#/components/schemas/Mode",
             "description": "Режим признака при срабатывании: `report` — только журнал."
           },
           "signal": {
@@ -6180,7 +6180,7 @@
           "errors": {
             "description": "Несоответствия: организация смягчила признак.",
             "items": {
-              "$ref": "#/components/schemas/PolicyViolationSchema"
+              "$ref": "#/components/schemas/PolicyViolation"
             },
             "type": "array"
           },

@@ -3824,16 +3824,16 @@ export interface components {
          * @description Происхождение признака: поставщик или администратор.
          * @enum {string}
          */
-        OriginSchema: "vendor" | "admin";
+        Origin: "vendor" | "admin";
         /**
          * @description Поле письма детектора совпадения со списком TI.
          * @enum {string}
          */
-        FieldSchema: "sender_ip" | "link_domain" | "link_url" | "from_domain" | "attachment_sha256";
+        Field: "sender_ip" | "link_domain" | "link_url" | "from_domain" | "attachment_sha256";
         /** @description Детектор признака — типизированный Rust-код с параметрами (решение 126 г). */
-        DetectorSchema: "thread_new_attachment_type" | "encrypted_archive" | "disk_image_or_shortcut" | "thread_new_link_domain" | "reply_to_changed" | {
+        Detector: "thread_new_attachment_type" | "encrypted_archive" | "disk_image_or_shortcut" | "thread_new_link_domain" | "reply_to_changed" | {
             /** @description Поле письма. */
-            field: components["schemas"]["FieldSchema"];
+            field: components["schemas"]["Field"];
             /** @description Список. */
             list: string;
         };
@@ -3841,19 +3841,19 @@ export interface components {
          * @description Собственное действие признака (от мягкого к строгому).
          * @enum {string}
          */
-        RiskActionSchema: "none" | "tag" | "junk" | "quarantine" | "reject";
+        RiskAction: "none" | "tag" | "junk" | "quarantine" | "reject";
         /**
          * @description Режим признака: «только отчёт» или «применять».
          * @enum {string}
          */
-        ModeSchema: "report" | "enforce";
+        Mode: "report" | "enforce";
         /** @description Уровень политики справочника: установка → организация. */
-        RiskLevelSchema: "installation" | {
+        RiskLevel: "installation" | {
             /** @description Организация (UUID) — только в сторону строгости. */
             org: string;
         };
         /** @description Пороги действий: балл, с которого действует действие (константы контракта — 1, 6, 10, 15). */
-        ThresholdsSchema: {
+        Thresholds: {
             /**
              * Format: int32
              * @description В папку «Спам».
@@ -3876,7 +3876,7 @@ export interface components {
             tag: number;
         };
         /** @description Несоответствие политики организации базовым значениям: организация смягчила признак. */
-        PolicyViolationSchema: {
+        PolicyViolation: {
             /** @description Базовое значение (уровней ниже). */
             base: string;
             /** @description Поле: `weight`, `action`, `mode`. */
@@ -3887,7 +3887,7 @@ export interface components {
             value: string;
         };
         /** @description Итог обновления пакета: что изменится при активации. */
-        UpdateReportSchema: {
+        UpdateReport: {
             /** @description Добавленные признаки (приходят в режиме «только отчёт»). */
             added: string[];
             /** @description Изменённые пакетом. */
@@ -3898,7 +3898,7 @@ export interface components {
             removed: string[];
         };
         /** @description Состояние хранимого пакета. */
-        PackageStateSchema: "active" | "previous" | {
+        PackageState: "active" | "previous" | {
             /** @description Отчёт проверки (что не так). */
             report: string;
         };
@@ -3906,14 +3906,14 @@ export interface components {
          * @description Уровень источника TI (решение 126 е–з).
          * @enum {string}
          */
-        TierSchema: "bundled" | "customer_key" | "import";
+        Tier: "bundled" | "customer_key" | "import";
         /**
          * @description Происхождение данных источника — для журнала и отчётов (решение 126 к).
          * @enum {string}
          */
-        TiOriginSchema: "vendor" | "gossopka" | "fincert" | "own";
+        TiOrigin: "vendor" | "gossopka" | "fincert" | "own";
         /** @description Доставка и параметры источника TI. */
-        SourceKindSchema: {
+        SourceKind: {
             /** @description Фид по HTTP(S). */
             http: {
                 /** @description Адрес. */
@@ -3929,7 +3929,7 @@ export interface components {
             };
         } | "file";
         /** @description Формат фида источника TI. */
-        FeedFormatSchema: "txt" | {
+        FeedFormat: "txt" | {
             /** @description CSV; `column` — колонка с индикатором. */
             csv: {
                 /** @description Имя колонки. */
@@ -3937,7 +3937,7 @@ export interface components {
             };
         } | "rpz" | "misp_feed" | "stix21";
         /** @description Действие при устаревании источника («отключить» нет). */
-        StaleActionSchema: {
+        StaleAction: {
             /** @description Снизить вес признаков источника на `percent` процентов. */
             reduce: {
                 /**
@@ -3948,7 +3948,7 @@ export interface components {
             };
         } | "report";
         /** @description Лицензия источника TI: условия и атрибуция. */
-        LicenseSchema: {
+        License: {
             /** @description Атрибуция (ссылка, дата, ©); `null` — не требуется. */
             attribution?: string | null;
             /** @description Коммерческое использование разрешено условиями. */
@@ -3957,17 +3957,17 @@ export interface components {
             terms_url: string;
         };
         /** @description Организации, которым доступен источник. */
-        TenantsSchema: "all" | {
+        Tenants: "all" | {
             /** @description Только перечисленные (UUID). */
             only: string[];
         };
         /** @description Ссылка на поле секрета в хранилище (`<путь>#<поле>`); значение ключа API не принимает и не отдаёт. */
-        SecretRefSchema: {
+        SecretRef: {
             /** @description Ссылка `<путь>#<поле>`, например `thepost/db#api_key`. */
             secret: string;
         };
         /** @description Авторизация источника TI: секрет — из ссылки `key`. */
-        HttpAuthSchema: "none" | {
+        HttpAuth: "none" | {
             /** @description Свой заголовок; имя здесь, значение — секрет. */
             header: {
                 /** @description Имя заголовка (`X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch). */
@@ -3984,20 +3984,20 @@ export interface components {
          * @description Маркировка TLP версии списка из источника.
          * @enum {string}
          */
-        TlpSchema: "clear" | "green" | "amber" | "amber_strict" | "red";
+        Tlp: "clear" | "green" | "amber" | "amber_strict" | "red";
         /**
          * @description Признак действующего каталога: значение и уровень-источник. У «осиротевшего» изменения (признака
          *     больше нет в пакете поставщика, решение 126 в) детектор, порог и дата — `null`: известно только
          *     само изменение.
          */
         SignalView: {
-            action?: components["schemas"]["RiskActionSchema"] | null;
-            detector?: components["schemas"]["DetectorSchema"] | null;
+            action?: components["schemas"]["RiskAction"] | null;
+            detector?: components["schemas"]["Detector"] | null;
             /** @description Идентификатор: `tp.*` — поставщик, `org.*` — администратор. */
             id: string;
-            mode?: components["schemas"]["ModeSchema"] | null;
+            mode?: components["schemas"]["Mode"] | null;
             /** @description Происхождение значения: поставщик или администратор. */
-            origin: components["schemas"]["OriginSchema"];
+            origin: components["schemas"]["Origin"];
             /** @description Осиротевшее изменение: признака нет в действующем пакете (решение 126 в). */
             orphaned: boolean;
             /**
@@ -4005,7 +4005,7 @@ export interface components {
              * @description Дата появления признака (UTC).
              */
             since?: string | null;
-            source?: components["schemas"]["RiskLevelSchema"] | null;
+            source?: components["schemas"]["RiskLevel"] | null;
             /**
              * Format: int32
              * @description Порог силы срабатывания детектора, 0–100; `null` — осиротевшее изменение.
@@ -4023,9 +4023,9 @@ export interface components {
          *     режим обязательны.
          */
         SignalBody: {
-            action?: components["schemas"]["RiskActionSchema"] | null;
-            detector?: components["schemas"]["DetectorSchema"] | null;
-            mode?: components["schemas"]["ModeSchema"] | null;
+            action?: components["schemas"]["RiskAction"] | null;
+            detector?: components["schemas"]["Detector"] | null;
+            mode?: components["schemas"]["Mode"] | null;
             /**
              * Format: int32
              * @description Порог силы срабатывания, 0–100 (только свой признак).
@@ -4071,14 +4071,14 @@ export interface components {
         /** @description Пороги уровня: свои (уровень не задан — `null`), действующие и уровень-источник. */
         ThresholdsView: {
             /** @description Действующие пороги. */
-            effective: components["schemas"]["ThresholdsSchema"];
-            own?: components["schemas"]["ThresholdsSchema"] | null;
-            source?: components["schemas"]["RiskLevelSchema"] | null;
+            effective: components["schemas"]["Thresholds"];
+            own?: components["schemas"]["Thresholds"] | null;
+            source?: components["schemas"]["RiskLevel"] | null;
         };
         /** @description Хранимый пакет: номер и состояние. */
         PackageEntryView: {
             /** @description Состояние: активный, прошлый, отклонённый с отчётом. */
-            state: components["schemas"]["PackageStateSchema"];
+            state: components["schemas"]["PackageState"];
             /**
              * Format: int64
              * @description Номер версии (только растёт).
@@ -4108,7 +4108,7 @@ export interface components {
              */
             signals: number;
             /** @description Что изменится при активации (новые признаки приходят в режиме «только отчёт»). */
-            update: components["schemas"]["UpdateReportSchema"];
+            update: components["schemas"]["UpdateReport"];
             /**
              * Format: int64
              * @description Номер версии проверенного пакета.
@@ -4121,22 +4121,22 @@ export interface components {
          */
         TiSourceBody: {
             /** @description Авторизация (секрет — из `key`). */
-            auth: components["schemas"]["HttpAuthSchema"];
+            auth: components["schemas"]["HttpAuth"];
             /** @description Формат. */
-            format: components["schemas"]["FeedFormatSchema"];
-            key?: components["schemas"]["SecretRefSchema"] | null;
+            format: components["schemas"]["FeedFormat"];
+            key?: components["schemas"]["SecretRef"] | null;
             /** @description Доставка. */
-            kind: components["schemas"]["SourceKindSchema"];
+            kind: components["schemas"]["SourceKind"];
             /** @description Лицензия. */
-            license: components["schemas"]["LicenseSchema"];
+            license: components["schemas"]["License"];
             /** @description Происхождение — для журнала и отчётов. */
-            origin: components["schemas"]["TiOriginSchema"];
+            origin: components["schemas"]["TiOrigin"];
             /** @description Действие при устаревании («отключить» нет). */
-            stale: components["schemas"]["StaleActionSchema"];
+            stale: components["schemas"]["StaleAction"];
             /** @description Организации, которым доступен. */
-            tenants: components["schemas"]["TenantsSchema"];
+            tenants: components["schemas"]["Tenants"];
             /** @description Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
-            tier: components["schemas"]["TierSchema"];
+            tier: components["schemas"]["Tier"];
             /**
              * @description Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`).
              * @example 1h
@@ -4146,24 +4146,24 @@ export interface components {
         /** @description Новый источник TI (тело `POST`): идентификатор и параметры. */
         NewTiSourceBody: {
             /** @description Авторизация (секрет — из `key`). */
-            auth: components["schemas"]["HttpAuthSchema"];
+            auth: components["schemas"]["HttpAuth"];
             /** @description Формат. */
-            format: components["schemas"]["FeedFormatSchema"];
+            format: components["schemas"]["FeedFormat"];
             /** @description Идентификатор: `[a-z0-9._-]`, до 64 символов. */
             id: string;
-            key?: components["schemas"]["SecretRefSchema"] | null;
+            key?: components["schemas"]["SecretRef"] | null;
             /** @description Доставка. */
-            kind: components["schemas"]["SourceKindSchema"];
+            kind: components["schemas"]["SourceKind"];
             /** @description Лицензия. */
-            license: components["schemas"]["LicenseSchema"];
+            license: components["schemas"]["License"];
             /** @description Происхождение — для журнала и отчётов. */
-            origin: components["schemas"]["TiOriginSchema"];
+            origin: components["schemas"]["TiOrigin"];
             /** @description Действие при устаревании («отключить» нет). */
-            stale: components["schemas"]["StaleActionSchema"];
+            stale: components["schemas"]["StaleAction"];
             /** @description Организации, которым доступен. */
-            tenants: components["schemas"]["TenantsSchema"];
+            tenants: components["schemas"]["Tenants"];
             /** @description Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400). */
-            tier: components["schemas"]["TierSchema"];
+            tier: components["schemas"]["Tier"];
             /**
              * @description Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`).
              * @example 1h
@@ -4173,24 +4173,24 @@ export interface components {
         /** @description Источник TI в ответе API (ключ — только ссылка, значения не отдаёт). */
         TiSourceView: {
             /** @description Авторизация. */
-            auth: components["schemas"]["HttpAuthSchema"];
+            auth: components["schemas"]["HttpAuth"];
             /** @description Формат. */
-            format: components["schemas"]["FeedFormatSchema"];
+            format: components["schemas"]["FeedFormat"];
             /** @description Идентификатор. */
             id: string;
-            key?: components["schemas"]["SecretRefSchema"] | null;
+            key?: components["schemas"]["SecretRef"] | null;
             /** @description Доставка. */
-            kind: components["schemas"]["SourceKindSchema"];
+            kind: components["schemas"]["SourceKind"];
             /** @description Лицензия. */
-            license: components["schemas"]["LicenseSchema"];
+            license: components["schemas"]["License"];
             /** @description Происхождение. */
-            origin: components["schemas"]["TiOriginSchema"];
+            origin: components["schemas"]["TiOrigin"];
             /** @description Действие при устаревании. */
-            stale: components["schemas"]["StaleActionSchema"];
+            stale: components["schemas"]["StaleAction"];
             /** @description Организации, которым доступен. */
-            tenants: components["schemas"]["TenantsSchema"];
+            tenants: components["schemas"]["Tenants"];
             /** @description Уровень: в поставке, ключ заказчика, импорт. */
-            tier: components["schemas"]["TierSchema"];
+            tier: components["schemas"]["Tier"];
             /**
              * @description Срок жизни данных (TTL).
              * @example 1h
@@ -4222,7 +4222,7 @@ export interface components {
             sha256: string;
             /** @description Источник. */
             source: string;
-            tlp?: components["schemas"]["TlpSchema"] | null;
+            tlp?: components["schemas"]["Tlp"] | null;
         };
         /** @description Учёт источника по организации: суммы обращений и совпадений (MSSP, решение 126 е). */
         UsageTotalView: {
@@ -4261,7 +4261,7 @@ export interface components {
             /** @description Письмо (SHA-256, hex). */
             message: string;
             /** @description Режим признака при срабатывании: `report` — только журнал. */
-            mode: components["schemas"]["ModeSchema"];
+            mode: components["schemas"]["Mode"];
             /** @description Признак. */
             signal: string;
             /**
@@ -4290,7 +4290,7 @@ export interface components {
             /** @description Несоответствия по-русски, через «; ». */
             detail: string;
             /** @description Несоответствия: организация смягчила признак. */
-            errors: components["schemas"]["PolicyViolationSchema"][];
+            errors: components["schemas"]["PolicyViolation"][];
             /**
              * Format: int32
              * @description Код HTTP (422).
