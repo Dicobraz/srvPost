@@ -29,6 +29,15 @@
 //! ошибка чтения — закрытая матрица и метрика). Его получают доставка SMTP, приём iTIP, DAV (занятость и общий
 //! доступ), JMAP и Admin API; в Sieve тип абонента и матрица приходят с письмом из доставки.
 //!
+//! Ответ на наше письмо и беседы (APP-77, решения 125 в–е): `SentLog` и `ThreadStore` — `PgMeta` (META-86),
+//! узел передаёт их доставке SMTP (признак ответа и BATV, SMTP-51), приёму `MailStore` (привязка в той же
+//! транзакции, MS-21), JMAP (`Thread/get|changes`, JMAP-48) и Admin API (удержания и действия, ADM-50) —
+//! памяти в узле не остаётся. Ключи метки Message-ID и BATV ([`Services::reply`]) — из хранилища секретов по
+//! `smtp.reply.keys` (`SecretRef` с id): активный подписывает, все проверяют, ротация — перечитанная секция
+//! без перезапуска ([`crate::serve::apply_reply`]). Без ключей метки не ставятся и не проверяются (признак
+//! ответа — только по хэшу Message-ID), BATV — режим журнала; предупреждение — `thepost doctor`
+//! (`smtp.reply.keys`).
+//!
 //! Организация — `TenantId::DEFAULT`: несколько организаций на узле — модуль «Мультитенантность» (SRS 1.3).
 
 use std::net::IpAddr;
@@ -47,9 +56,11 @@ use tp_contracts::mailstore::MailStore;
 use tp_contracts::membership::NodeId;
 use tp_contracts::meta::{AccountScope, AccountStore, MailboxStore, MessageQuery, MessageStore};
 use tp_contracts::queue::Outbound;
+use tp_contracts::reply::SentLog;
 use tp_contracts::sasl::SaslServer;
 use tp_contracts::secrets::SecretStore;
 use tp_contracts::sharing::SharingAuthorizer;
+use tp_contracts::thread::ThreadStore;
 use tp_contracts::transport::MailFlow;
 use tp_contracts::trust::TrustStore;
 use tp_contracts::{Error, Result, TenantId};
@@ -59,8 +70,10 @@ use tp_search::{
     DocumentSource, Extractor, IndexCache, IndexDoc, IndexManager, IndexStore, Indexer, Rebuilder,
     Search, SearchConfig,
 };
+use tp_smtp::config::{BatvConfig, BatvMode};
 use tp_smtp::forward::Forwarding;
 use tp_smtp::queue::{QueueDeps, system_now};
+use tp_smtp::reply::ReplyMarks;
 use tp_smtp::routes::Routes;
 use tp_smtp::sources::Sources;
 use tp_smtp::{
@@ -130,6 +143,10 @@ pub struct Services {
     pub queue: Arc<Queue>,
     /// DKIM-подпись (ротация ключей — по перечитанной секции `smtp.dkim`).
     pub dkim: Arc<tp_smtp::dkim_sign::DkimSign>,
+    /// Метка ответа узла (APP-77, SMTP-51): ключи `smtp.reply.keys` — из хранилища секретов, одна на узел
+    /// — очередь (метка Message-ID, BATV, запись об отправленном) и доставка (признак ответа) разделяют
+    /// набор и кэш; ротация — перечитанная секция без перезапуска (`crate::serve::apply_reply`).
+    pub reply: Arc<ReplyMarks>,
     /// Метрики SMTP.
     pub smtp_metrics: Arc<SmtpMetrics>,
     /// Лимиты отправки учётной записи в час.
@@ -303,8 +320,9 @@ impl Services {
                 trash: Arc::new(meta.clone()),
                 quota: Arc::new(meta.clone()),
                 bus: bus.clone(),
-                // Беседы в PostgreSQL — META-86 (`PgMeta`); до неё приём без привязки к беседам.
-                threads: None,
+                // Беседы (APP-77, MS-21): привязка письма и политики беседы — в той же транзакции приёма;
+                // `ThreadStore` — `PgMeta` (META-86), памяти в узле нет.
+                threads: Some(Arc::new(meta.clone()) as Arc<dyn ThreadStore>),
                 hooks: hooks.clone(),
             },
             mail_cfg.clone(),
@@ -419,14 +437,25 @@ impl Services {
         });
 
         // Очередь исходящей почты: письмо и уведомления подписываются DKIM при постановке; селектор подписи —
-        // политика организации принятого домена `From` (SMTP-40).
+        // политика организации принятого домена `From` (SMTP-40). Метка ответа и запись об отправленном
+        // (APP-77, SMTP-51): Message-ID без метки получает метку с ключом из секции `smtp.reply.keys`,
+        // `MAIL FROM` — BATV-подпись, письмо с адресатами — запись в `SentLog` (`PgMeta`, META-86).
         let smtp = cfg.section::<SmtpConfig>(SMTP)?;
+        let reply = Arc::new(reply_marks(secrets.clone(), &smtp));
         let routes = Arc::new(Routes::new(Arc::new(meta.clone())));
         let dkim = Arc::new(
             tp_smtp::dkim_sign::DkimSign::new(secrets.clone(), smtp.dkim.clone())
                 .with_policies(Arc::new(meta.clone()), routes.clone()),
         );
-        let queue = Arc::new(Queue::new(queue_deps(&meta, &blob)).with_dkim(dkim.clone()));
+        let queue = Arc::new(
+            Queue::new(queue_deps(&meta, &blob))
+                .with_dkim(dkim.clone())
+                .with_reply(
+                    reply.clone(),
+                    Some(Arc::new(meta.clone()) as Arc<dyn SentLog>),
+                    smtp.hostname.clone(),
+                ),
+        );
         let smtp_metrics = Arc::new(SmtpMetrics::new());
         smtp_metrics.register(metrics);
         let limiter = Arc::new(RateLimiter::new(
@@ -502,6 +531,7 @@ impl Services {
             documents,
             queue,
             dkim,
+            reply,
             smtp_metrics,
             send_limits: Arc::new(SendLimits::new()),
             limiter,
@@ -579,6 +609,10 @@ impl Services {
             .with_delegates(Arc::new(self.meta.clone()))
             .with_authz(self.authz.clone())
             .with_messages(Arc::new(self.meta.clone()))
+            // Ответ на наше письмо и BATV (APP-77, SMTP-51): метки и запись об отправленном — те же, что у
+            // очереди (ключи `smtp.reply.keys`, `SentLog` — `PgMeta`); признак — заголовок `X-ThePost-Reply`.
+            .with_reply_marks(self.reply.clone())
+            .with_sent_log(Arc::new(self.meta.clone()) as Arc<dyn SentLog>)
             // Политика доверия (APP-76, решение 124): тип абонента, действующая матрица получателя,
             // домены-партнёры и автопересылки — тот же кэш узла, что у iTIP, DAV, JMAP и Admin API.
             .with_trust(Arc::clone(&self.trust) as Arc<dyn TrustStore>);
@@ -763,7 +797,10 @@ impl Services {
             }))
             // Принципалы, занятость и общий доступ — своей организации и по действующей матрице (JMAP-47,
             // APP-76): тот же кэш узла, что у SMTP, DAV и Admin API.
-            .with_trust(Some(Arc::clone(&self.trust) as Arc<dyn TrustStore>)))
+            .with_trust(Some(Arc::clone(&self.trust) as Arc<dyn TrustStore>))
+            // Беседы (APP-77, JMAP-48): `Thread/get|changes` и `threadId` писем — по привязке `ThreadStore`
+            // (`PgMeta`, META-86) — тот же, что у приёма и Admin API.
+            .with_threads(Some(Arc::new(self.meta.clone()) as Arc<dyn ThreadStore>)))
     }
 
     /// Маршруты календарей и контактов (CalDAV, CardDAV; APP-29): хранилище — `PgMeta`, вход — тот же, что у
@@ -921,7 +958,10 @@ impl Services {
             // Брендинг установки и организаций (ADM-48): наборы уровней — `BrandingStore` поверх `PgMeta`
             // (META-84), байты знаков — BLOB узла (`BrandLogo::path`, без распаковки: знак записан как есть);
             // без этого маршруты брендинга и открытый маршрут отвечают 503.
-            .with_branding(Arc::new(self.meta.clone()), self.blob.clone());
+            .with_branding(Arc::new(self.meta.clone()), self.blob.clone())
+            // Беседы учётных записей (APP-77, ADM-50): беседа письма, удержание целиком и выгрузка —
+            // `ThreadStore` `PgMeta` (META-86), тот же, что у приёма и JMAP; без этого маршруты — 503.
+            .with_threads(Arc::new(self.meta.clone()) as Arc<dyn ThreadStore>);
         // Журнал переписки (ADM-52): хранилище узла — тот же индекс с бакетом, что у этапа конвейера
         // доставки (APP-84); секция `journal` выключена — журнал не подключён, маршруты отвечают 503.
         Ok(match &self.journal {
@@ -974,6 +1014,27 @@ fn queue_deps(meta: &PgMeta, blob: &Arc<dyn BlobStore>) -> QueueDeps {
         index: Arc::new(meta.clone()) as Arc<dyn BlobIndex>,
         now: system_now(),
     }
+}
+
+/// Метки ответа узла (APP-77, SMTP-51) по секциям `smtp.reply` и `smtp.batv`: ключи — из хранилища секретов
+/// по `SecretRef` (`smtp.reply.keys`, значение — не меньше 32 байт), активный подписывает новые метки, все
+/// проверяют до конца их срока; ротация — перечитанная секция без перезапуска ([`ReplyMarks::update`], узлу
+/// её применяет `crate::serve::apply_reply`). Ключей нет — метки не ставятся и не проверяются (признак
+/// «ответ на наше письмо» — только по хэшу Message-ID), а BATV остаётся в режиме журнала: пока узел не ставит
+/// метки, отказывать bounce было бы отказом всей почты рассылок. Предупреждение — `thepost doctor`
+/// (`smtp.reply.keys`).
+fn reply_marks(secrets: Arc<dyn SecretStore>, smtp: &SmtpConfig) -> ReplyMarks {
+    if smtp.reply.keys.is_empty() {
+        tracing::warn!(
+            "smtp.reply.keys: ключей нет — метки Message-ID и BATV не ставятся и не проверяются \
+             (признак ответа — только по хэшу Message-ID), BATV — режим журнала (thepost doctor)"
+        );
+        return ReplyMarks::new(secrets, smtp.reply.clone()).with_batv(&BatvConfig {
+            mode: BatvMode::Log,
+            ..smtp.batv.clone()
+        });
+    }
+    ReplyMarks::new(secrets, smtp.reply.clone()).with_batv(&smtp.batv)
 }
 
 /// Системный резолвер DNS (`/etc/resolv.conf`).
@@ -2487,6 +2548,7 @@ mod tests {
             meta: meta.clone(),
             interval: std::time::Duration::from_secs(3600),
             admin_token_retention: std::time::Duration::from_secs(3600),
+            sent_max_age: std::time::Duration::from_secs(3600),
             probe: crate::roles::PurgeProbe::new(),
             itip: Some(crate::roles::ItipPurge {
                 tenant: t,
