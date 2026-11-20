@@ -326,7 +326,8 @@ async fn unthreaded_tx(
 /// в порядке приёма; уже привязанные письма не переносятся. Идентификаторы `thread_key` канонизируются
 /// (`join_key`): приём регистрирует ключи канонической формы, а `thread_key` хранит значения заголовков
 /// в угловых скобках — без канонизации фоновая привязка не нашла бы беседу приёма (RFC 5322 msg-id в
-/// `<…>`). Письмо без ни одного канонического идентификатора — новая беседа.
+/// `<…>`). Ключи цепочки регистрируются за беседой, как при приёме; письмо без ни одного канонического
+/// идентификатора — новая беседа.
 async fn bind_unthreaded_in_tx(
     tx: &mut PgConnection,
     scope: AccountScope,
@@ -350,10 +351,13 @@ async fn bind_unthreaded_in_tx(
             None => {
                 let thread = ThreadId::new();
                 create_thread_tx(tx, scope, thread).await?;
-                register_keys_tx(tx, scope, &keys, thread).await?;
                 thread
             }
         };
+        // Все ключи цепочки регистрируются за беседой, как при приёме (`bind_in_tx`): ответ по любому
+        // идентификатору `References` находит беседу. Зарегистрированный за другой беседой ключ не
+        // меняется (`ON CONFLICT DO NOTHING`) — беседы задним числом не сливаются.
+        register_keys_tx(tx, scope, &keys, thread).await?;
         for message in messages {
             bind_message_tx(tx, scope, message, thread).await?;
             bound += 1;
