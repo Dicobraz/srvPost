@@ -58,7 +58,7 @@ test("организация не может выбрать вес ниже ус
   fireEvent.change(weight, { target: { value: "3" } });
   expect(screen.getByText("не ниже уровня установки: 8")).toBeTruthy();
   expect((screen.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement).disabled).toBe(true);
-  expect(sent(calls, "PUT", PUT_URL)).toBeUndefined();
+  expect(sent(calls, "PUT", PUT_URL)).toHaveLength(0);
 
   // Строгое значение принимается: вес, действие и режим — уровнем выше текущего каталога.
   fireEvent.change(weight, { target: { value: "10" } });
@@ -161,7 +161,7 @@ test("пороги: четыре числа с подписями действи
   fireEvent.click(await screen.findByRole("radio", { name: "Установка" }));
   fireEvent.click(await screen.findByRole("tab", { name: "Пороги" }));
   await waitFor(() => expect(sent(calls, "GET", "/api/v1/risk/thresholds")).toHaveLength(1));
-  expect(screen.getByText(/действует самое строгое/)).toBeTruthy();
+  expect(await screen.findByText(/действует самое строгое/)).toBeTruthy();
   fireEvent.change(await screen.findByRole("spinbutton", { name: "Порог папки «Спам»" }), { target: { value: "7" } });
   fireEvent.click(screen.getByRole("button", { name: "Сохранить пороги" }));
   await waitFor(() =>
@@ -198,7 +198,7 @@ test("загрузка пакета показывает отчёт провер
   expect(screen.getByText("tp.new_link_domain")).toBeTruthy();
   expect(screen.getByText(ID)).toBeTruthy();
   // Автоактивации нет: активация — отдельным действием с подтверждением.
-  expect(sent(calls, "POST", "/api/v1/risk/packages/6/activate")).toBeUndefined();
+  expect(sent(calls, "POST", "/api/v1/risk/packages/6/activate")).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Активировать" }));
   const confirm = await screen.findByText("Активировать пакет 6?");
   fireEvent.click(within(confirm.closest(".ant-popover") as HTMLElement).getByRole("button", { name: "Активировать" }));
