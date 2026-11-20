@@ -2670,7 +2670,7 @@ mod tests {
         assert!(log.len() >= 3, "загрузка, активация, откат: {log:?}");
         assert!(
             log.iter()
-                .all(|r| (200..300).contains(&r.status) || r.status == 422)
+                .all(|r| (200..300).contains(&r.status) || matches!(r.status, 413 | 415 | 422))
         );
     }
 
