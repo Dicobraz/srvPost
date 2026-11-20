@@ -1698,8 +1698,7 @@ mod tests {
                 .with_sessions(shared.clone())
         };
         // Первый экземпляр: `admin init` и обмен токена на сессию.
-        let first = admin(MemLocalAdminTokens::new())
-            .with_transport(Arc::new(MemTransport::new()));
+        let first = admin(MemLocalAdminTokens::new()).with_transport(Arc::new(MemTransport::new()));
         let first = Arc::new(first);
         let g = first
             .init(&req("boss@example.test", false))
