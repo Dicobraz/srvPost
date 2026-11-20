@@ -994,6 +994,29 @@ eDiscovery), Шардирование, Миграция бэкенда, Геор
 
 SRS ред. 8 (PR #31): конвейер обработки и журналирование — **базовая поставка** (SRS 4.9: этап конвейера до Sieve, отдельный бакет S3 с Object Lock, индекс-схема `journal`, роль «аудитор журнала»), журналирование из модуля «Соответствие требованиям» убрано; «Правила потока почты» — по-прежнему модуль (SRS 4.10: фазы before/after, `vnd.thepost.admin`, действия journal/quarantine/block_external_forward/…, dry-run, схема `mod_flowrules`). Волны конвейера и журнала (база, Ф3 по приложению Г) — этап 3 выше: `contracts-67` → `meta-61`/`blob-11` → `smtp-33` → `admin-38`/`app-79` → `console-16` → `deploy-51`; модуль строится поверх заделов CTR-96 (реестр этапов, итоговый контроль), старт — решение владельца.
 
+### Полоса mod-webmail: веб-клиент (решение 2026-11-20 — docs/decisions/2026-11-20-webmail.md)
+
+Веб-клиент — SPA поверх JMAP, **без отдельного веб-сервиса** (сервер уже отдаёт Mail/Submission,
+push WS/EventSource, блобы, FTS, Contacts/Calendars/GAL). Скоуп v1: почта + календарь (минимум:
+просмотр, приём встреч методом веб-почты JMAP-50) + контакты/GAL; задачи — после v1; чаты — вне
+v1 (шов «Каналы» в навигации, брендированный веб-чат — решение 2026-11-17, после запуска).
+Вход v1 — OIDC PKCE из SPA (+ app-password); SAML 2.0 SP — WEB-10 после v1. Мобильный — тот же
+SPA как PWA, паттерны mobile Outlook. Дизайн-эталон — DESIGN.md Postman. Единые с десктопом
+механизмы: спам — папка роли junk как единая правда (решение #134).
+
+| Волна | Карточки | Класс | Ждёт | Поток |
+|---|---|---|---|---|
+| mod-webmail-1 | WEB-01 (полоса, lanes.toml, SPA в бинаре) | B | — | 4 |
+| mod-webmail-2 | WEB-02 (вход OIDC/app-password, сессия) | B | mod-webmail-1 | 4 |
+| mod-webmail-3 | WEB-03 (список+чтение, санитайзер, push) | A | mod-webmail-2 | 4 |
+| mod-webmail-4 | WEB-04 (композер, вложения, undo-send) | A | mod-webmail-3 | 4 |
+| mod-webmail-5 | WEB-05 (поиск, раскладка, сниппеты) | A | mod-webmail-3 | 4 |
+| mod-webmail-6 | WEB-06 (календарь-минимум, JMAP-50) | A | mod-webmail-3 | 4 |
+| mod-webmail-7 | WEB-07 (контакты, GAL, autocomplete) | A | mod-webmail-4 | 4 |
+| mod-webmail-8 | WEB-08 (мобильный layout, PWA) | A | mod-webmail-3, mod-webmail-4 | 4 |
+| mod-webmail-9 | WEB-09 (офлайн-кэш, очередь исходящих) | A | mod-webmail-4 | 4 |
+| mod-webmail-10 | WEB-10 (SAML 2.0 SP, после v1) | B | mod-webmail-2 | 4 |
+
 ## Открытые вопросы
 
 Вопросы владельцу — [issue с меткой «решение»](https://github.com/Dicobraz/srvPost/issues?q=is%3Aopen+label%3A%D1%80%D0%B5%D1%88%D0%B5%D0%BD%D0%B8%D0%B5). На 2026-11-11:
