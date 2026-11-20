@@ -13,11 +13,21 @@
                                 'address': address, 'direction': direction}) -%}
 {%-   endfor -%}
 {%- endfor -%}
+{#- Ключи метки ответа (SMTP-51, DEP-56): секрет thepost/reply, поле — id; активный — первый в thepost_reply_keys
+    (метки подписывает ровно один ключ), проверяют все; BATV — те же ключи (секция smtp.batv). -#}
+{%- set reply_keys = [] -%}
+{%- for k in thepost_reply_keys -%}
+{%-   set _ = reply_keys.append({'id': k, 'secret': {'secret': thepost_reply_secret ~ '#' ~ k},
+                                'active': loop.first}) -%}
+{%- endfor -%}
 {%- set node = {
   'domain': thepost_domain,
   'database': {'url': thepost_db_url, 'owner': {'user': thepost_db_owner_role}},
   'http': {'admin': {'listen': thepost_admin_listen}},
-  'smtp': {'hostname': thepost_hostname, 'milter': {'filters': filters}},
+  'smtp': {'hostname': thepost_hostname, 'milter': {'filters': filters},
+           'reply': {'keys': reply_keys, 'max_age': thepost_reply_max_age},
+           'batv': {'mode': thepost_batv_mode, 'valid_for': thepost_batv_valid_for,
+                    'exempt': thepost_batv_exempt}},
   'maintenance': thepost_maintenance,
   'secrets': {
     'url': thepost_secrets_url,
