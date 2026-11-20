@@ -21,6 +21,7 @@
 //! # }
 //! ```
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,13 +38,14 @@ use tp_contracts::addressbook::{
 use tp_contracts::admin_audit::{
     AdminAuditEntry, AdminAuditPage, AdminAuditQuery, AdminAuditRecord, AuditLog,
 };
+use tp_contracts::admin_session::{AdminSession, AdminSessions};
 use tp_contracts::admin_token::{LocalAdminToken, LocalAdminTokens};
 use tp_contracts::app_password::{AppPassword, AppPasswordStore};
 use tp_contracts::audit::{
     AuditAction, AuditActorKind, AuditCursor, AuditEntry, AuditObject, AuditPage, AuditPolicy,
     AuditQuery, MailboxAudit,
 };
-use tp_contracts::auth::{MassRemoval, Rights, SendRight, SyncGate};
+use tp_contracts::auth::{MassRemoval, Principal, Rights, SendRight, SyncGate};
 use tp_contracts::blob::{Acquire, BlobIndex, Commit, Compression};
 use tp_contracts::bus::{Event, EventBus, EventKind, EventStream};
 use tp_contracts::delivery::{
@@ -1432,6 +1434,76 @@ pub async fn local_admin_tokens(store: &dyn LocalAdminTokens, tenant: TenantId) 
         .map(|t| t.id)
         .collect();
     assert_eq!(ids, [c.id.clone(), d.id.clone()]);
+}
+
+/// Набор проверок `AdminSessions` (CTR-61, решение 77): хранилище — пустое.
+pub async fn admin_sessions(store: &dyn AdminSessions) {
+    // Целые секунды: PostgreSQL хранит микросекунды.
+    let now = OffsetDateTime::from_unix_timestamp(OffsetDateTime::now_utc().unix_timestamp())
+        .expect("now");
+    let run = AccountId::new();
+    let hash = || {
+        let (a, b) = (AccountId::new(), AccountId::new());
+        format!(
+            "{:032x}{:032x}",
+            a.as_uuid().as_u128(),
+            b.as_uuid().as_u128()
+        )
+    };
+    let session = |login: &str, expires_at: OffsetDateTime| AdminSession {
+        hash: hash(),
+        principal: Principal {
+            tenant: TenantId::DEFAULT,
+            account: run,
+            login: login.into(),
+            groups: BTreeSet::new(),
+            scopes: None,
+        },
+        roles: vec!["organization_admin".into()],
+        expires_at,
+    };
+
+    // Живая сессия читается целиком; нет такой — None.
+    let a = session("admin@example.org", now + Duration::from_secs(600));
+    store.put(a.clone()).await.expect("put");
+    assert_eq!(store.get(&a.hash).await.expect("get"), Some(a.clone()));
+    assert_eq!(store.get(&hash()).await.expect("get unknown"), None);
+
+    // Выпуск: занятый хэш — Conflict, недопустимый хэш — Invalid.
+    let same = AdminSession {
+        hash: a.hash.clone(),
+        ..session("other@example.org", a.expires_at)
+    };
+    assert_eq!(store.put(same).await, Err(Error::Conflict));
+    let bad = AdminSession {
+        hash: "not-a-hash".into(),
+        ..session("bad@example.org", a.expires_at)
+    };
+    assert!(matches!(store.put(bad).await, Err(Error::Invalid(_))));
+
+    // Истёкшая не читается: как отсутствующая (и остаётся — для очистки).
+    let e = session("old@example.org", OffsetDateTime::UNIX_EPOCH);
+    store.put(e.clone()).await.expect("put expired");
+    assert_eq!(store.get(&e.hash).await.expect("get expired"), None);
+
+    // Удаление: живую и отсутствующую (выход идемпотентен).
+    store.delete(&a.hash).await.expect("delete");
+    assert_eq!(store.get(&a.hash).await.expect("get deleted"), None);
+    store.delete(&a.hash).await.expect("delete again");
+    store.delete(&hash()).await.expect("delete unknown");
+
+    // Очистка: удаляются только с expires_at <= now (граница включительно), живые остаются.
+    let b = session("admin@example.org", now + Duration::from_secs(600));
+    store.put(b.clone()).await.expect("put b");
+    let c = session("operator@example.org", OffsetDateTime::UNIX_EPOCH);
+    store.put(c.clone()).await.expect("put c");
+    let d = session("auditor@example.org", now);
+    store.put(d.clone()).await.expect("put d");
+    let removed = store.purge_expired(now).await.expect("purge");
+    assert_eq!(removed, 3, "{removed}"); // e, c, d
+    assert_eq!(store.get(&b.hash).await.expect("get b"), Some(b));
+    assert_eq!(store.get(&c.hash).await.expect("get c"), None);
+    assert_eq!(store.get(&d.hash).await.expect("get d"), None);
 }
 
 // ---------- IdentityStore, SubmissionStore ----------

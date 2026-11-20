@@ -538,6 +538,16 @@ revoked_at? }` (`Debug` без хэша; `validate()`: id 1–64 байт без
 один), нет/погашен/отозван/истёк (`now ≥ expires_at`) — `Forbidden`; `revoke(id, at)` — нет — `NotFound`, повтор сохраняет первый момент;
 `list(tenant)` — все состояния по (`created_at`, `id`); `prune(before)` — удаляет с `expires_at < before`, возвращает число.
 In-memory — `MemLocalAdminTokens`; набор `suite::local_admin_tokens`. PostgreSQL — `tp-meta` (карточка meta).
+Сессии Admin API (код — `admin_session.rs`, CTR-61, решение 77): вход консоли (`POST /api/v1/session` — локальный токен,
+пароль, OIDC) выдаёт сессию; значение (`tps_…`) показывается один раз, в хранилище — только хэш (hex SHA-256 значения).
+Хранилище — основная БД: сессия видна всем узлам роли `admin` и переживает перезапуск узла. Значение, хэш и выпуск ведёт
+`tp-admin`; хранилище — чтение, удаление и очистка. `AdminSession { hash, principal: Principal, roles: Vec<String> (роли
+Admin API, как в журнале аудита), expires_at }` (`Debug` без хэша; `validate()`: хэш — 64 hex в нижнем регистре →
+`Invalid`). `AdminSessions`: `put(session)` — занятый хэш — `Conflict` (значение сессии случайно), истёкший срок не
+запрещён; `get(hash) -> Option<AdminSession>` — истёкшая (`now ≥ expires_at`) как отсутствующая — `None`; `delete(hash)`
+— выход, в том числе истёкшей, нет — не ошибка (идемпотентен); `purge_expired(now)` — удаляет с `expires_at ≤ now`,
+возвращает число. In-memory — `MemAdminSessions`; набор `suite::admin_sessions`. PostgreSQL — META-64, потребитель —
+ADM-28.
 
 ## Roles
 SRS 2.1. `enum Role { SmtpIn, Submission, SmtpOut, Imap, Jmap, Dav, Admin, Search, Indexer, Maintenance }`; пресеты (`all`, `edge`, `transport`, `access`, `backend`, `mailbox`) раскрываются в набор ролей при загрузке конфигурации; режим edge — параметр smtp-in (SRS 2.6).
