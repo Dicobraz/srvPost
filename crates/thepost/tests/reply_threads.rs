@@ -380,27 +380,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Imap<S> {
         self.read_until_tagged(&tag, cmd).await
     }
 
-    /// APPEND письма в папку (литерал); `OK` обязателен.
-    async fn append(&mut self, mailbox: &str, raw: &[u8]) -> String {
-        self.tag += 1;
-        let tag = format!("a{}", self.tag);
-        self.s
-            .write_all(format!("{tag} APPEND \"{mailbox}\" {{{}}}\r\n", raw.len()).as_bytes())
-            .await
-            .expect("imap write");
-        let mut buf = Vec::new();
-        while !buf.ends_with(b"\r\n") {
-            let mut byte = [0u8; 1];
-            self.s.read_exact(&mut byte).await.expect("imap read");
-            buf.push(byte[0]);
-        }
-        let cont = String::from_utf8_lossy(&buf).into_owned();
-        assert!(cont.starts_with('+'), "imap APPEND: {cont}");
-        self.s.write_all(raw).await.expect("imap literal");
-        self.s.write_all(b"\r\n").await.expect("imap eol");
-        self.read_until_tagged(&tag, "APPEND").await
-    }
-
     async fn read_until_tagged(&mut self, tag: &str, what: &str) -> String {
         let mut buf = Vec::new();
         let mut chunk = [0u8; 4096];
