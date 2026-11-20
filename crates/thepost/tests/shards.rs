@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::Executor as _;
 use thepost::serve::{Running, ServeOptions, start};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -22,7 +21,7 @@ use tp_contracts::meta::{AccountKind, AccountStore, AccountUpsert};
 use tp_contracts::role::CancellationToken;
 use tp_contracts::secrets::SecretRef;
 use tp_contracts::transport::{AcceptedDomain, DomainKind, TransportStore};
-use tp_meta::pool::NoAcquireObserver;
+use tp_meta::pool::{DbPool, NoAcquireObserver};
 use tp_meta::shards::{ShardDirectory, ShardResolver as _};
 use tp_meta::{MetaConfig, PgMeta};
 use tp_testkit::MemSecretStore;
@@ -123,8 +122,14 @@ fn config(dir: &Path, db_url: &str, cert: &Path) -> String {
     )
 }
 
-/// Учётных строк `table` учётной записи `account` в базе `url` (все организации).
-async fn rows_in_shard(pool: &sqlx::PgPool, table: &str, account: tp_contracts::AccountId) -> i64 {
+/// Пул к базе `url` без наблюдателя ожидания соединения (тест не измеряет пулы СУБД).
+async fn connect_db(url: &str) -> DbPool {
+    let pool = sqlx::PgPool::connect(url).await.expect("pool");
+    DbPool::new(pool, Arc::new(NoAcquireObserver))
+}
+
+/// Учётных строк `table` учётной записи `account` в базе `pool` (все организации).
+async fn rows_in_shard(pool: &DbPool, table: &str, account: tp_contracts::AccountId) -> i64 {
     let mut tx = tp_meta::schema::begin_system(pool).await.expect("begin");
     let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT count(*) FROM {table} WHERE account_id = $1"
@@ -289,10 +294,10 @@ async fn two_shards_delivery_idle_and_replica_reads() {
 
     // Схема каталога в основной БД (её применит узел, но строку шарда тест вносит до запуска) — миграции
     // выполняет тест, чтобы добавить шард до старта узла.
-    let main_pool = sqlx::PgPool::connect(&url_main).await.expect("main pool");
+    let main_pool = connect_db(&url_main).await;
     tp_meta::schema::migrate(&main_pool).await.expect("migrate");
     sqlx::query("UPDATE shards SET accepts_new = false WHERE shard_id = 0")
-        .execute(&main_pool)
+        .execute(&mut *main_pool.acquire().await.expect("conn"))
         .await
         .expect("main accepts_new off");
     sqlx::query(
@@ -301,7 +306,7 @@ async fn two_shards_delivery_idle_and_replica_reads() {
     )
     .bind(&shard_url)
     .bind(shard_cred.to_string())
-    .execute(&main_pool)
+    .execute(&mut *main_pool.acquire().await.expect("conn"))
     .await
     .expect("shard row");
 
@@ -414,9 +419,9 @@ async fn two_shards_delivery_idle_and_replica_reads() {
     }
 
     // Схему шарда применил узел: таблица ящиков на шарде существует, ящик учётной записи на месте.
-    let shard_pool = sqlx::PgPool::connect(&url_shard).await.expect("shard pool");
+    let shard_pool = connect_db(&url_shard).await;
     let boxes: i64 = sqlx::query_scalar("SELECT count(*) FROM mailboxes")
-        .fetch_one(&shard_pool)
+        .fetch_one(&mut *shard_pool.acquire().await.expect("conn"))
         .await
         .expect("shard schema");
     assert!(boxes >= 1, "системные папки учётной записи — на шарде");
