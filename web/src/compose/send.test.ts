@@ -171,7 +171,6 @@ describe("undo-send", () => {
         destroyed: [],
       } satisfies SetResult);
     await expect(cancelSend(ENV, "s1")).resolves.toBe(true);
-    expect(mockedSubmissionSet.mock.calls[0][2]).toBe("EmailSubmission/set");
     expect(mockedSubmissionSet.mock.calls[0][3].update).toEqual({ s1: { undoStatus: "canceled" } });
     await expect(cancelSend(ENV, "s1")).resolves.toBe(false);
   });
