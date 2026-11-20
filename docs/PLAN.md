@@ -917,7 +917,7 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ dav-21 | DAV-44 | A | contracts-64, решение 123 (`x/inbound-mail-only`) | 4 |
 | ✅ jmap-30 | JMAP-47 | A | contracts-64 | 3 |
 | ✅ sieve-07 | SIEVE-14 | A | contracts-64 | 2 |
-| app-73 | APP-76 | A | meta-58, admin-35, smtp-30, dav-21, jmap-30, sieve-07 | 2 |
+| ✅ app-73 (#148) | APP-76 | A | meta-58, admin-35, smtp-30, dav-21, jmap-30, sieve-07 | 2 |
 | docs-12 | DOC-12 | A | app-73 | 1 |
 | ✅ deps-18 (ветка `x/deps-18`) | DEPS-18 | B | — | 1 |
 | ✅ contracts-65 (ветка `x/contracts-65`) | CTR-94 | B | contracts-64 | 1 |
