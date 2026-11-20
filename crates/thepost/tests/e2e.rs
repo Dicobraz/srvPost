@@ -1127,6 +1127,30 @@ async fn mvp_mail_flow() {
 
 // ---------- соответствие Exchange: сборка (APP-12) ----------
 
+/// Черновик alice к bob в папке `drafts`; возвращает идентификатор письма.
+async fn draft(jmap: &Jmap, drafts: &str, subject: &str, login: &str, bob_login: &str) -> String {
+    let created = jmap
+        .call(
+            "Email/set",
+            json!({
+                "accountId": jmap.account,
+                "create": { "m": {
+                    "mailboxIds": { drafts: true },
+                    "from": [{ "name": "Alice", "email": login }],
+                    "to": [{ "name": "Bob", "email": bob_login }],
+                    "subject": subject,
+                    "textBody": [{ "partId": "t", "type": "text/plain" }],
+                    "bodyValues": { "t": { "value": "Deferred send check.\n" } },
+                } },
+            }),
+        )
+        .await;
+    created["created"]["m"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("черновик не создан: {created}"))
+        .to_owned()
+}
+
 /// Соответствие Exchange (APP-12, решение 2026-11-04-exchange-parity): отложенная отправка с отменой и
 /// с выпуском — выпущенная запись доставляет локального получателя доставкой узла
 /// (`QueueWorker::with_local`, SMTP-24), отправка становится `final` со статусом доставки; письмо
@@ -1245,34 +1269,6 @@ async fn exchange_parity_wave() {
         .to_owned();
     let drafts = jmap.mailbox("drafts").await;
     let inbox = bob_jmap.mailbox("inbox").await;
-    let draft = |jmap: &Jmap, drafts: &str, subject: String| {
-        let account = jmap.account.clone();
-        let drafts = drafts.to_owned();
-        let login = login.clone();
-        let bob_login = bob_login.clone();
-        async move {
-            let created = jmap
-                .call(
-                    "Email/set",
-                    json!({
-                        "accountId": account,
-                        "create": { "m": {
-                            "mailboxIds": { drafts: true },
-                            "from": [{ "name": "Alice", "email": login }],
-                            "to": [{ "name": "Bob", "email": bob_login }],
-                            "subject": subject,
-                            "textBody": [{ "partId": "t", "type": "text/plain" }],
-                            "bodyValues": { "t": { "value": "Deferred send check.\n" } },
-                        } },
-                    }),
-                )
-                .await;
-            created["created"]["m"]["id"]
-                .as_str()
-                .unwrap_or_else(|| panic!("черновик не создан: {created}"))
-                .to_owned()
-        }
-    };
     // `sendAt` — RFC 3339 вперёд на несколько секунд: очередь хранит срок выпуска.
     let send_at = |secs: i64| {
         (time::OffsetDateTime::now_utc() + time::Duration::seconds(secs))
@@ -1282,7 +1278,7 @@ async fn exchange_parity_wave() {
 
     // 1. Отложенная отправка с отменой (SMTP-24): письмо ставится в очередь со сроком выпуска (`pending`),
     //    отмена до срока снимает его с очереди — письмо не доставляется.
-    let email1 = draft(&jmap, &drafts, "Canceled deferred send".into()).await;
+    let email1 = draft(&jmap, &drafts, "Canceled deferred send", &login, &bob_login).await;
     let created = jmap
         .call(
             "EmailSubmission/set",
@@ -1303,7 +1299,7 @@ async fn exchange_parity_wave() {
     let canceled = jmap
         .call(
             "EmailSubmission/set",
-            json!({ "accountId": jmap.account, "update": { sub1: { "undoStatus": "canceled" } } }),
+            json!({ "accountId": jmap.account, "update": { sub1.clone(): { "undoStatus": "canceled" } } }),
         )
         .await;
     assert!(
@@ -1401,7 +1397,7 @@ async fn exchange_parity_wave() {
             .is_some_and(|m| m.contains_key("singleton")),
         "список отправителей не очищен: {cleared}"
     );
-    let email2 = draft(&jmap, &drafts, "Released deferred send".into()).await;
+    let email2 = draft(&jmap, &drafts, "Released deferred send", &login, &bob_login).await;
     let created = jmap
         .call(
             "EmailSubmission/set",
