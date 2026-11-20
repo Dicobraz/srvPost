@@ -3,6 +3,8 @@
 .env
 junit.xml
 /console/dist
+/web/dist
+/web/node_modules
 /console/node_modules
 
 # Диагностика Д.7: рабочие артефакты (не в репозитории)

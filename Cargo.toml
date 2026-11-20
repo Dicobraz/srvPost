@@ -39,6 +39,8 @@ tp-search = { path = "crates/tp-search" }
 tp-admin = { path = "crates/tp-admin" }
 tp-admin-client = { path = "crates/tp-admin-client" }
 tp-tui = { path = "crates/tp-tui" }
+# Веб-клиент (полоса mod-webmail, WEB-01): статика web/dist внутри бинарного файла; thepost, фича `webmail`.
+tp-webmail = { path = "crates/tp-webmail" }
 # Внешние (SRS 7.4). Добавление/обновление — только полоса deps (класс B).
 anyhow = "1.0.104"
 argon2 = "0.6.0"

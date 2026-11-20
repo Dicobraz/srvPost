@@ -118,6 +118,9 @@ pub fn registry_of(builtin: &[modules::Builtin]) -> Result<SectionRegistry> {
     r.add_check::<AuthSection>(AUTH, AuthSection::check)?;
     r.add_check::<HttpSection>(HTTP, HttpSection::check)?;
     modules::register_sections_of(&mut r, builtin)?;
+    // Секция веб-клиента (WEB-01, полоса mod-webmail): модуль `modules.webmail`, фича `webmail`.
+    #[cfg(feature = "webmail")]
+    crate::webmail::register(&mut r)?;
     Ok(r)
 }
 

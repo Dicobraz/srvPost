@@ -5745,6 +5745,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "tower",
  "tp-admin",
  "tp-admin-client",
  "tp-auth",
@@ -5763,6 +5764,7 @@ dependencies = [
  "tp-sys",
  "tp-testkit",
  "tp-tui",
+ "tp-webmail",
  "tracing",
  "winnow",
  "x509-parser",
@@ -6488,6 +6490,20 @@ dependencies = [
  "tp-admin",
  "tp-admin-client",
  "tp-sys",
+]
+
+[[package]]
+name = "tp-webmail"
+version = "0.2.1"
+dependencies = [
+ "axum",
+ "rust-embed",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tp-contracts",
 ]
 
 [[package]]
