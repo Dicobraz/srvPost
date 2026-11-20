@@ -52,7 +52,7 @@ use crate::core::request::{
     ChangesArgs, Comparator, GetArgs, QueryChangesArgs, QueryWindow, SetOutcome, apply_window,
     object, or_null, parse_args, query_changes_response, select,
 };
-use crate::core::{Ctx, Jmap, digest, lone_thread_id, thread_id};
+use crate::core::{Ctx, Jmap, digest, lone_thread_id};
 use crate::email_get::{collect, utc_date};
 
 // ---------- Identity ----------
@@ -305,23 +305,26 @@ fn parse_submission_state(s: &str) -> MethodResult<u64> {
         .map_err(|_| MethodError::new("cannotCalculateChanges"))
 }
 
-/// Цепочки писем учётной записи: письмо → `threadId`.
+/// Цепочки писем учётной записи: письмо → `threadId` (привязка беседы с подключённым `ThreadStore`,
+/// JMAP-48, иначе ключ цепочки).
 async fn threads(ctx: &Ctx<'_>) -> MethodResult<HashMap<MessageId, String>> {
-    Ok(ctx
-        .jmap
-        .messages_in(ctx.scope, None)
-        .await?
-        .iter()
-        .map(|m| (m.id, thread_id(m)))
-        .collect())
+    let msgs = ctx.jmap.messages_in(ctx.scope, None).await?;
+    Ok(ctx.jmap.thread_ids(ctx.scope, &msgs).await?)
 }
 
 /// `threadId` письма отправки; письмо удалено — его собственная цепочка.
 async fn thread_of(ctx: &Ctx<'_>, email: MessageId) -> MethodResult<String> {
-    Ok(match ctx.jmap.d.messages.get(ctx.scope, email).await? {
-        Some(m) => thread_id(&m),
-        None => lone_thread_id(email),
-    })
+    let msgs = match ctx.jmap.d.messages.get(ctx.scope, email).await? {
+        Some(m) => vec![m],
+        None => return Ok(lone_thread_id(email)),
+    };
+    Ok(ctx
+        .jmap
+        .thread_ids(ctx.scope, &msgs)
+        .await?
+        .get(&email)
+        .cloned()
+        .unwrap_or_else(|| lone_thread_id(email)))
 }
 
 /// Объект EmailSubmission (RFC 8621 §7). Параметры SMTP конверта и DSN/MDN не ведутся: `parameters` — `null`,

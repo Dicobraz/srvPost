@@ -696,7 +696,7 @@
 | [PERF-08](PERF-08.md) | 108 мс, порог 100 мс — добить кэшем/прогревом (Д.7 №2) |  |  | mailstore-20 | done | — |
 | [FIND-02](FIND-02.md) | — | — | — | smtp-34 | done | — |
 | [FIX-18](FIX-18.md) | # FIX-18 — экран соединений освобождает генератор стенда (screen.exempt) |  |  | smtp-34 | done | — |
-| [PERF-09](PERF-09.md) | mailbox_state FOR UPDATE держит приём (класс B) |  |  | perf-09 | ready | — |
+| [PERF-09](PERF-09.md) | mailbox_state FOR UPDATE держит приём (класс B) |  |  | perf-09 | done | — |
 | [FIX-17](FIX-17.md) | соединение DAV на учётную запись (beta.3 привязывает сессию к соединению) |  |  | deploy-52 | done | — |
 
 ## Ф1 · ACME: короткие сертификаты (ballot SC-081v3, RFC 9773)
@@ -931,7 +931,7 @@
 | [META-86](META-86.md) | запись об отправленном и беседы в PostgreSQL — `SentLog`, `ThreadStore`, удержание и действия по беседе | meta | A | meta-59 | ready | CTR-94 |
 | [MS-21](MS-21.md) | приём письма — беседа и политики беседы в той же транзакции | mailstore | A | mailstore-15 | done | CTR-94 |
 | [SMTP-51](SMTP-51.md) | ответ на наше письмо — метка в Message-ID, BATV, признак ответа, память беседы | smtp | A | smtp-31 | ready | CTR-94,DEPS-18,SMTP-50 |
-| [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | ready | CTR-94,MS-21 |
+| [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | done | CTR-94,MS-21 |
 | [JMAP-49](JMAP-49.md) | доступ к чужим ящикам почты в JMAP — делегированные Email/query и Email/get по ACL | jmap | A | jmap-33 | done | JMAP-32,CTR-82 |
 | [ADM-50](ADM-50.md) | удержание беседы в Admin API — удержать, снять, перечислить, выгрузить; CLI | admin | B | admin-36 | ready | CTR-94,ADM-44 |
 | [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | app-74 | todo | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
@@ -939,9 +939,9 @@
 | [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | todo | APP-77,DEP-56 |
 | [DEPS-19](DEPS-19.md) | зависимости каталога признаков и TI — `ring` (Ed25519), `regex`, `publicsuffix`, `winnow`; `zip`, `infer`, `ipnet` в крейты | deps | B | deps-19 | done | — |
 | [DEPS-20](DEPS-20.md) | — | — | — | deps-20 | done | — |
-| [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | ready | CTR-94 |
-| [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | todo | CTR-95 |
-| [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | todo | CTR-95,DEPS-19,SIEVE-14 |
+| [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | done | CTR-94 |
+| [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | ready | CTR-95 |
+| [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | ready | CTR-95,DEPS-19,SIEVE-14 |
 | [SMTP-52](SMTP-52.md) | детекторы каталога признаков и применение балла на smtp-in | smtp | A | smtp-32 | todo | CTR-95,DEPS-19,SMTP-51 |
 | [ADM-51](ADM-51.md) | каталог признаков и TI в Admin API — признаки, пороги, пакеты, источники, срабатывания; CLI | admin | B | admin-37 | todo | CTR-95,ADM-44 |
 | [UI-24](UI-24.md) | консоль — экран «Признаки риска»: каталог, пороги, пакеты, источники TI, срабатывания | console | A | console-15 | todo | ADM-51 |
@@ -975,7 +975,7 @@
 | [ADM-53](ADM-53.md) | # ADM-53. Правила журналирования — CRUD в Admin API + CLI (решение #171) |  |  | admin-39 | ready | — |
 | [UI-26](UI-26.md) | # UI-26. Консоль — управление правилами журналирования (решение #171) |  |  | console-17 | todo | — |
 | [DEP-58](DEP-58.md) | развёртывание журнала — SeaweedFS Object Lock, SMB append-only, восстановление индекса на стенде | deploy | A | deploy-51 | done | APP-83,BLOB-18 |
-| [APP-84](APP-84.md) | # APP-84. Включение журнала в узле — wiring JournalStore/JournalRules в thepost |  |  | app-81 | todo | — |
+| [APP-84](APP-84.md) | # APP-84. Включение журнала в узле — wiring JournalStore/JournalRules в thepost |  |  | app-81 | done | — |
 
 ## Вне волн
 

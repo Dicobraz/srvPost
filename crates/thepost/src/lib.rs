@@ -9,6 +9,7 @@ pub mod doctor_dns;
 pub mod gal;
 pub mod help;
 pub mod infra;
+pub mod journal;
 pub mod local_admin;
 pub mod log_reader;
 pub mod metrics;

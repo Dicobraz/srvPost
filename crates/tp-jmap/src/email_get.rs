@@ -543,13 +543,15 @@ fn check_props(props: &[String]) -> MethodResult<()> {
     Ok(())
 }
 
-/// Объект Email с запрошенными свойствами.
+/// Объект Email с запрошенными свойствами; `tids` — беседы писем ([`crate::Jmap::thread_ids`], JMAP-48):
+/// письмо без записи — запасной расчёт по ключу цепочки.
 async fn email_json(
     ctx: &Ctx<'_>,
     m: &Message,
     props: &[String],
     a: &EmailGetArgs,
     body_props: &[String],
+    tids: &HashMap<MessageId, String>,
 ) -> MethodResult<Value> {
     let need_headers = props
         .iter()
@@ -586,7 +588,7 @@ async fn email_json(
         let v = match p.as_str() {
             "id" => json!(m.id.to_string()),
             "blobId" => json!(blob_id(m.id, None)),
-            "threadId" => json!(thread_id(m)),
+            "threadId" => json!(tids.get(&m.id).cloned().unwrap_or_else(|| thread_id(m))),
             "mailboxIds" => json!({ m.mailbox.to_string(): true }),
             "keywords" => {
                 let kw: Map<String, Value> = m
@@ -826,8 +828,14 @@ pub(crate) async fn get(
         }
     }
     let mut list = Vec::with_capacity(found.len());
+    // Беседы писем (JMAP-48): по привязке, только когда свойство запрошено.
+    let tids = if props.iter().any(|p| p == "threadId") {
+        ctx.jmap.thread_ids(ctx.scope, &found).await?
+    } else {
+        HashMap::new()
+    };
     for m in &found {
-        list.push(email_json(ctx, m, &props, &a, &body_props).await?);
+        list.push(email_json(ctx, m, &props, &a, &body_props, &tids).await?);
     }
     let out = object(json!({
         "accountId": a.get.account_id,
@@ -865,11 +873,16 @@ pub(crate) async fn changes(
     Ok(changes_response(&a.account_id, &a.since_state, &c))
 }
 
-/// Цепочки учётной записи: идентификатор → письма по возрастанию `receivedAt`.
-pub(crate) fn threads(msgs: &[Message]) -> HashMap<String, Vec<&Message>> {
+/// Цепочки учётной записи: идентификатор → письма по возрастанию `receivedAt`. Идентификаторы — беседы
+/// писем (`tids`, привязка с подключённым `ThreadStore`, JMAP-48, иначе ключ цепочки).
+pub(crate) fn threads<'a>(
+    msgs: &'a [Message],
+    tids: &HashMap<MessageId, String>,
+) -> HashMap<String, Vec<&'a Message>> {
     let mut map: HashMap<String, Vec<&Message>> = HashMap::new();
     for m in msgs {
-        map.entry(thread_id(m)).or_default().push(m);
+        let t = tids.get(&m.id).cloned().unwrap_or_else(|| thread_id(m));
+        map.entry(t).or_default().push(m);
     }
     for list in map.values_mut() {
         list.sort_by_key(|m| (m.received_at, m.id));
@@ -887,7 +900,8 @@ pub(crate) async fn thread_get(
     ctx.check_get_limit(a.ids.as_ref())?;
     let state = ctx.state().await?;
     let msgs = ctx.jmap.messages_in(ctx.scope, None).await?;
-    let map = threads(&msgs);
+    let tids = ctx.jmap.thread_ids(ctx.scope, &msgs).await?;
+    let map = threads(&msgs, &tids);
     let thread = |id: &str, list: &[&Message]| json!({"id": id, "emailIds": list.iter().map(|m| m.id.to_string()).collect::<Vec<_>>()});
     let mut list = Vec::new();
     let mut not_found = Vec::new();
@@ -911,7 +925,8 @@ pub(crate) async fn thread_get(
 }
 
 /// `Thread/changes`: цепочки изменённых писем; созданная — все её письма созданы после `sinceState`.
-/// Цепочку удалённого письма журнал не хранит, поэтому при удалённых письмах — `cannotCalculateChanges`
+/// Идентификаторы цепочек — беседы писем по привязке (`threadId` письма не меняется, JMAP-48). Цепочку
+/// удалённого письма журнал не хранит, поэтому при удалённых письмах — `cannotCalculateChanges`
 /// (клиент перечитывает цепочки).
 pub(crate) async fn thread_changes(
     ctx: &mut Ctx<'_>,
@@ -942,7 +957,8 @@ pub(crate) async fn thread_changes(
     };
     if !touched.is_empty() {
         let msgs = ctx.jmap.messages_in(ctx.scope, None).await?;
-        let mut ids: Vec<(String, Vec<&Message>)> = threads(&msgs).into_iter().collect();
+        let tids = ctx.jmap.thread_ids(ctx.scope, &msgs).await?;
+        let mut ids: Vec<(String, Vec<&Message>)> = threads(&msgs, &tids).into_iter().collect();
         ids.sort_by(|x, y| x.0.cmp(&y.0));
         for (id, list) in ids {
             if !list.iter().any(|m| touched.contains(&m.id)) {
