@@ -54,6 +54,8 @@ all:
         small_vip_interface: eth0
         small_vip_router_id: 51
         # Свои параметры config.yaml поверх эталона: small_thepost_config_extra: { … }
-        # Бинарный файл: собранный на управляющей машине (cargo build --release) или релиз:
-        # thepost_binary_url: https://…/thepost-x86_64-linux
-        # thepost_binary_checksum: "sha256:…"
+        # Бинарный файл — релиз: тарболл выпуска + .sha256 (сверить, распаковать), бинарь — сюда:
+        # thepost_binary_url: https://…/thepost-vX.Y.Z   # + thepost_binary_checksum: "sha256:<хэш бинаря>" (не тарболла)
+        # …или путь на управляющей машине (распакованный релиз или cargo build --release):
+        # thepost_binary_src: /путь/thepost-vX.Y.Z/thepost   # по умолчанию target/release/thepost
+        # Обновление — тот же плейбук с новым тегом; матрица и рецепт: deploy/README.md («Обновление», DEP-60).
