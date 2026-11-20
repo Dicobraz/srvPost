@@ -942,9 +942,9 @@
 | [JMAP-48](JMAP-48.md) | Thread — неизменяемый `threadId` и действия по беседе | jmap | A | jmap-31 | done | CTR-94,MS-21 |
 | [JMAP-49](JMAP-49.md) | доступ к чужим ящикам почты в JMAP — делегированные Email/query и Email/get по ACL | jmap | A | jmap-33 | done | JMAP-32,CTR-82 |
 | [ADM-50](ADM-50.md) | удержание беседы в Admin API — удержать, снять, перечислить, выгрузить; CLI | admin | B | admin-36 | done | CTR-94,ADM-44 |
-| [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | app-74 | ready | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
+| [APP-77](APP-77.md) | узел — ответ на наше письмо и беседы: ключи меток, `SentLog`, `ThreadStore` | app | A | app-74 | done | META-86,MS-21,SMTP-51,JMAP-48,ADM-50 |
 | [DEP-56](DEP-56.md) | Rspamd — балл за признак ответа; ключи меток и BATV в поставке | deploy | A | deploy-43 | done | SMTP-51 |
-| [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | todo | APP-77,DEP-56 |
+| [DOC-13](DOC-13.md) | ADMIN-GUIDE — раздел «Ответы на наши письма и беседы» | docs | A | docs-13 | ready | APP-77,DEP-56 |
 | [DEPS-19](DEPS-19.md) | зависимости каталога признаков и TI — `ring` (Ed25519), `regex`, `publicsuffix`, `winnow`; `zip`, `infer`, `ipnet` в крейты | deps | B | deps-19 | done | — |
 | [DEPS-20](DEPS-20.md) | — | — | — | deps-20 | done | — |
 | [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | done | CTR-94 |
