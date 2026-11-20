@@ -586,6 +586,7 @@ fn quoted_printable_decode(bytes: &[u8]) -> Option<Vec<u8>> {
         }
     }
     // Состояние: вне `=`, после `=`, после `=` и одной hex-цифры.
+    #[derive(PartialEq)]
     enum State {
         None,
         Eq,
