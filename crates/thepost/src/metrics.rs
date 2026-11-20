@@ -21,7 +21,7 @@ use tp_mailstore::{CachedMessages, ListCacheStats, TrashStats};
 use tp_meta::commits::{HISTOGRAM_BUCKETS, Histogram};
 use tp_meta::failover::{Failover, FailoverMetrics};
 use tp_meta::pool::DbPool;
-use tp_meta::signals::{PgSignalBus, SignalMetrics};
+use tp_meta::signals::SignalMetrics;
 use tp_platform::{DbMetrics, ListenerSample, Metrics, PoolSample};
 use tp_search::{CacheStats, IndexCache, Indexer, IndexerStats};
 
@@ -279,6 +279,8 @@ pub const POOL_PRIMARY: &str = "primary";
 pub const POOL_MIGRATIONS: &str = "migrations";
 /// Имя пула слушателя сигналов (`bus.kind: postgres`) в метке `pool`.
 pub const POOL_LISTENER: &str = "listener";
+/// Имя пула реплики для фоновых чтений (`database.read_replica`) в метке `pool`.
+pub const POOL_REPLICA: &str = "replica";
 
 /// Пул, о котором сообщает наблюдатель [`pool_observer`]: назначается, когда пул создан (наблюдатель нужен при
 /// создании пула, снимок занятости — от готового пула). До назначения снимок нулевой.
@@ -348,7 +350,7 @@ impl<F: Fn() -> Histogram + Send + Sync> EncodeMetric for Durations<F> {
 ///   `tp_db_notify_commit_seconds` (время фиксаций с NOTIFY), `tp_db_commit_seconds` (время всех фиксаций),
 ///   `tp_db_listeners` (соединений-слушателей узла), `tp_db_notify_commit_share` (доля NOTIFY во времени фиксаций,
 ///   критерий — не больше 0,05; 0 — фиксаций ещё не было).
-pub fn register_db(metrics: &Metrics, db: &DbMetrics, signals: Option<PgSignalBus>) {
+pub fn register_db(metrics: &Metrics, db: &DbMetrics, signals: Option<crate::infra::SignalBus>) {
     let Some(bus) = signals else {
         return;
     };
@@ -382,14 +384,19 @@ pub fn register_db(metrics: &Metrics, db: &DbMetrics, signals: Option<PgSignalBu
         |m| m.listeners,
         false,
     )];
-    register(metrics, &source, PgSignalBus::metrics, listeners);
+    register(
+        metrics,
+        &source,
+        crate::infra::SignalBus::metrics,
+        listeners,
+    );
     let share: [StatDef<SignalMetrics, f64>; 1] = [(
         "tp_db_notify_commit_share",
         "Доля времени фиксаций, занятая NOTIFY (0 — фиксаций ещё не было)",
         |m| m.notify_commit_share().unwrap_or(0.0),
         false,
     )];
-    register(metrics, &source, PgSignalBus::metrics, share);
+    register(metrics, &source, crate::infra::SignalBus::metrics, share);
 }
 
 /// Регистрирует метрики поиска «сирот» BLOB роли maintenance (BLOB-16, Д.7):

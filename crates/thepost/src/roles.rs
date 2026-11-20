@@ -83,8 +83,9 @@ pub struct Maintenance {
     pub leases: Arc<dyn LeaseStore>,
     /// Держатель лиз: узел и процесс.
     pub holder: String,
-    /// Обработчик журнала событий с назначением разделов узлу.
-    pub events: EventConsumer,
+    /// Обработчики журнала событий с назначением разделов узлу — по одному на шард справочника
+    /// (`EventConsumer::with_shard`, APP-47); один шард — один обработчик.
+    pub events: Vec<EventConsumer>,
     /// Подписчики журнала событий (модули).
     pub sinks: Vec<Arc<dyn EventSink>>,
     /// Сигналы, будящие подписчиков журнала (опроса нет).
@@ -813,6 +814,16 @@ impl RoleService for Maintenance {
             let token = ctx.shutdown.clone();
             tokio::spawn(async move { threads.run(token).await })
         });
+        // Чтение журнала событий — по потребителю каждого шарда (APP-47); ошибки разделов — в журнал узла.
+        let journal = self.events.iter().map(|events| {
+            let (events, sinks, signals, token) = (
+                events.clone(),
+                self.sinks.clone(),
+                self.signals.clone(),
+                ctx.shutdown.clone(),
+            );
+            tokio::spawn(consume(events, sinks, signals, token))
+        });
         ctx.ready.set(true);
         let gal = async move {
             match gal {
@@ -873,7 +884,7 @@ impl RoleService for Maintenance {
             card_reindex,
             gal,
             threads,
-            (),
+            journal,
         ) = tokio::join!(
             gc,
             orphans,
@@ -885,12 +896,7 @@ impl RoleService for Maintenance {
             card_reindex,
             gal,
             threads,
-            consume(
-                self.events.clone(),
-                self.sinks.clone(),
-                self.signals.clone(),
-                ctx.shutdown.clone(),
-            ),
+            futures::future::try_join_all(journal),
         );
         for (what, done) in [
             ("blob-gc", gc),
@@ -907,6 +913,10 @@ impl RoleService for Maintenance {
             if let Err(e) = done {
                 return Err(tp_contracts::Error::Internal(format!("{what}: {e}")));
             }
+        }
+        // Читатели журнала завершаются только с остановкой роли; отказ задачи — внутренняя ошибка.
+        if let Err(e) = journal {
+            return Err(tp_contracts::Error::Internal(format!("journal: {e}")));
         }
         Ok(())
     }
@@ -1094,7 +1104,7 @@ mod tests {
             store: Arc::new(MemBlobStore::default()),
             leases: Arc::new(leases),
             holder: "node-a/1".into(),
-            events,
+            events: vec![events],
             sinks: vec![sink.clone()],
             signals: LogSignals {
                 bus: Arc::new(tp_cluster::LocalBus::new(
@@ -1224,12 +1234,12 @@ mod tests {
             store: Arc::new(MemBlobStore::default()),
             leases: Arc::new(leases.clone()),
             holder: "node-a/1".into(),
-            events: EventConsumer::new(
+            events: vec![EventConsumer::new(
                 Arc::new(MemEventLog::new(1)) as Arc<dyn EventLog>,
                 Arc::new(leases.clone()),
                 "node-a/1",
                 tp_meta::events::EventsConfig::default(),
-            ),
+            )],
             sinks: Vec::new(),
             signals: LogSignals {
                 bus: Arc::new(tp_cluster::LocalBus::new(
@@ -1547,12 +1557,12 @@ mod tests {
             store: Arc::new(MemBlobStore::default()),
             leases: Arc::new(leases.clone()),
             holder: "node-a/1".into(),
-            events: EventConsumer::new(
+            events: vec![EventConsumer::new(
                 Arc::new(MemEventLog::new(1)) as Arc<dyn EventLog>,
                 Arc::new(leases),
                 "node-a/1",
                 tp_meta::events::EventsConfig::default(),
-            ),
+            )],
             sinks: Vec::new(),
             signals: LogSignals {
                 bus: Arc::new(tp_cluster::LocalBus::new(
