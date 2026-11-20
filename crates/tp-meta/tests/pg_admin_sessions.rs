@@ -198,9 +198,11 @@ async fn migration_applies_over_previous_and_is_idempotent() {
         .await
         .expect("count");
     assert_eq!(applied, schema::migrator().iter().count() as i64);
-    common::conn(&pool)
+    common::conn(pool)
         .await
-        .execute(AssertSqlSafe(String::from("DROP TABLE IF EXISTS admin_sessions")))
+        .execute(AssertSqlSafe(String::from(
+            "DROP TABLE IF EXISTS admin_sessions",
+        )))
         .await
         .expect("drop");
     sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 5")
