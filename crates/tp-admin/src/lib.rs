@@ -23,6 +23,8 @@
 //! - [`branding`] — брендинг заказчика: уровни установки и организации, знак, открытый маршрут для экрана входа;
 //! - [`trust`] — политика доверия «кто — кому — что»: уровни установка → организация → группа, домены-партнёры;
 //! - [`threads`] — беседы учётных записей: беседа письма, удержание целиком и выгрузка (решение 125);
+//! - [`risk`] — справочник аномалий и TI: каталог признаков уровней, пороги, пакеты поставщика,
+//!   источники TI, срабатывания (решение 126);
 //! - [`sieve`] — правила Sieve и автоответ учётной записи, скрипт организации: проверка текста до записи;
 //! - `extract` — разбор тела, строки и пути запроса (`Json`, `Query`, `Path`): отказ — 400 problem+json с полем;
 //! - `cors` — CORS `/api/v1/*` для консоли на отдельном веб-сервере (`admin.console.cors_origins`);
@@ -48,6 +50,7 @@ pub mod mailboxes;
 pub mod queue;
 pub mod resources;
 pub mod retention;
+pub mod risk;
 pub mod server;
 pub mod sharing;
 pub mod sieve;
@@ -76,5 +79,11 @@ pub use journal::{
 pub use server::{Admin, AdminConfig, AdminRole, Deps, RoleBinding};
 pub use sharing::SharingStores;
 pub use sieve::{OrgScriptCheck, ScriptCheck, ScriptError};
+pub use risk::{
+    HitView, HitsView, ListVersionView, MemRiskNode, NewTiSourceBody, PackageEntryView,
+    PackageReportView, PackagesView, RiskApiConfig, RiskNode, RiskProblem, SignalBody, SignalView,
+    SignalsView, SourcesView, ThresholdLevels, ThresholdsBody, ThresholdsView, TiSourceBody,
+    TiSourceView, UsageView,
+};
 pub use threads::{ThreadHoldBody, ThreadHoldView, ThreadHoldsView, ThreadView};
 pub use trust::{TrustBody, TrustProblem, TrustView};
