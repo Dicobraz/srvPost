@@ -30,6 +30,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "risk catalog and threat intelligence (META-87)",
         include_str!("../migrations/0003_risk.sql"),
     ),
+    (
+        4,
+        "gal book version (META-90)",
+        include_str!("../migrations/0004_gal_version.sql"),
+    ),
 ];
 
 /// Мигратор схемы ядра.

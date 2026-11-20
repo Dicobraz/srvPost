@@ -356,6 +356,14 @@ impl Directory for FakeDirectory {
     async fn units(&self, tenant: TenantId) -> Result<Vec<DirUnit>> {
         Ok(self.with(tenant, |d| d.units.clone()))
     }
+
+    /// Версия книги (META-90): последний номер изменения строк книги — учётных записей, групп и
+    /// почтовых контактов.
+    async fn gal_version(&self, tenant: TenantId) -> Result<Option<i64>> {
+        Ok(Some(self.with(tenant, |d| {
+            d.accounts.seq.max(d.groups.seq).max(d.contacts.seq) as i64
+        })))
+    }
 }
 
 // ---------- SASL ----------

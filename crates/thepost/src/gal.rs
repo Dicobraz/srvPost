@@ -7,7 +7,10 @@
 //! LDAP опрашивается, своей синхронизации каталога в узле нет, Admin API об изменении учётных записей и групп не
 //! сообщает, вида «каталог изменился» у шины нет. Поэтому новая,
 //! изменённая, удалённая или скрытая из GAL учётная запись (группа) видна в книге не позже чем через период.
-//! Неизменный каталог книгу не меняет: `sync_gal` с прежним набором ничего не пишет и `GalChanged` не публикует.
+//! Каталог с версией книги (PostgreSQL, `Directory::gal_version` — триггеры изменений строк книги, META-90)
+//! пересобирается только при её изменении: контроль — одна скалярная величина вместо выгрузки; версия недоступна
+//! (LDAP) — полная выгрузка на каждый цикл, как прежде. Неизменный каталог книгу не меняет: `sync_gal` с прежним
+//! набором ничего не пишет и `GalChanged` не публикует.
 //!
 //! В кластере книгу организации пишет один узел — держатель лизы [`GalSync::lease_name`]; остальные узлы с ролью
 //! maintenance ждут её истечения. Ошибка каталога или хранилища — в журнал, книга прежняя, повтор — через период.
@@ -46,6 +49,8 @@ pub struct GalSync {
     leases: Arc<dyn LeaseStore>,
     holder: String,
     interval: Duration,
+    /// Версия книги (META-90): версия каталога, с которой книга собрана; каталог без версии — `None`.
+    built: std::sync::Mutex<Option<i64>>,
 }
 
 impl std::fmt::Debug for GalSync {
@@ -54,6 +59,7 @@ impl std::fmt::Debug for GalSync {
             .field("tenant", &self.tenant)
             .field("holder", &self.holder)
             .field("interval", &self.interval)
+            .field("built", &self.built.lock().expect("версия книги"))
             .finish_non_exhaustive()
     }
 }
@@ -78,6 +84,7 @@ impl GalSync {
             leases,
             holder,
             interval,
+            built: std::sync::Mutex::new(None),
         }
     }
 
@@ -105,11 +112,26 @@ impl GalSync {
             if !self.lead(&name, &mut lease).await {
                 continue;
             }
+            // Контроль книги (META-90): версия каталога не изменилась с последней сборки — выгрузки нет.
+            // Каталог без версии (`None`) — полная выгрузка на каждый цикл; недоступность СУБД — как ошибка
+            // выгрузки: книга прежняя, повтор через период.
+            let built = self.built.lock().expect("версия книги").clone();
+            let version = match self.source.directory.gal_version(self.tenant).await {
+                Ok(Some(v)) if built == Some(v) => continue,
+                Ok(version) => version,
+                Err(e) => {
+                    tracing::warn!(error = %e, "книга GAL не обновлена: повтор через maintenance.gal_interval");
+                    continue;
+                }
+            };
             tokio::select! {
                 () = shutdown.cancelled() => break,
                 done = tp_dav::gal::sync(&self.source, self.dav.as_ref(), self.tenant, &self.cfg) => {
-                    if let Err(e) = done {
-                        tracing::warn!(error = %e, "книга GAL не обновлена: повтор через maintenance.gal_interval");
+                    match done {
+                        Ok(_) => *self.built.lock().expect("версия книги") = version,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "книга GAL не обновлена: повтор через maintenance.gal_interval");
+                        }
                     }
                 }
             }
@@ -263,9 +285,13 @@ impl EventBus for GalPush {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use tp_contracts::auth::{DirAccount, DirOrg};
+    use tp_contracts::auth::{
+        DirAccount, DirAlias, DirContact, DirCursor, DirDomain, DirGroup, DirOrg, DirPage,
+        Directory,
+    };
     use tp_contracts::dav::{CollectionId, gal_changed};
     use tp_contracts::{AccountId, ModSeq, TenantId};
     use tp_testkit::{FakeDirectory, MemAddressBook, MemDav, MemGroups, MemLease};
@@ -382,6 +408,117 @@ mod tests {
                 .is_some(),
             "после остановки лиза отдана"
         );
+    }
+
+    /// Каталог с счётчиком порций книги — контроль «без изменений — скана нет» (META-90) поверх [`FakeDirectory`].
+    struct Counting {
+        inner: FakeDirectory,
+        /// Сколько порций (учётные записи, группы, контакты) запрошено.
+        pages: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Directory for Counting {
+        async fn accounts_since(
+            &self,
+            tenant: TenantId,
+            cursor: Option<&DirCursor>,
+            limit: usize,
+        ) -> Result<DirPage<DirAccount>> {
+            self.pages.fetch_add(1, Ordering::SeqCst);
+            self.inner.accounts_since(tenant, cursor, limit).await
+        }
+
+        async fn groups_since(
+            &self,
+            tenant: TenantId,
+            cursor: Option<&DirCursor>,
+            limit: usize,
+        ) -> Result<DirPage<DirGroup>> {
+            self.pages.fetch_add(1, Ordering::SeqCst);
+            self.inner.groups_since(tenant, cursor, limit).await
+        }
+
+        async fn aliases(&self, tenant: TenantId) -> Result<Vec<DirAlias>> {
+            self.inner.aliases(tenant).await
+        }
+
+        async fn domains(&self, tenant: TenantId) -> Result<Vec<DirDomain>> {
+            self.inner.domains(tenant).await
+        }
+
+        async fn gal_attributes(&self, tenant: TenantId) -> Result<Vec<String>> {
+            self.inner.gal_attributes(tenant).await
+        }
+
+        async fn contacts_since(
+            &self,
+            tenant: TenantId,
+            cursor: Option<&DirCursor>,
+            limit: usize,
+        ) -> Result<DirPage<DirContact>> {
+            self.pages.fetch_add(1, Ordering::SeqCst);
+            self.inner.contacts_since(tenant, cursor, limit).await
+        }
+
+        async fn gal_version(&self, tenant: TenantId) -> Result<Option<i64>> {
+            self.inner.gal_version(tenant).await
+        }
+    }
+
+    /// META-90: контроль книги — версия каталога: без изменения версии скана нет, книга не пересобирается;
+    /// изменение учётной записи поднимает версию, контроль ловит — книга пересобирается.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rebuilds_on_version_change_only() {
+        let tenant = TenantId::new();
+        let dir = FakeDirectory::default();
+        dir.upsert_account(tenant, account("u-ivan", "Иван Петров", false));
+        let pages = Arc::new(AtomicUsize::new(0));
+        let dav = MemDav::new();
+        let sync = Arc::new(GalSync::new(
+            GalDeps {
+                directory: Arc::new(Counting {
+                    inner: dir.clone(),
+                    pages: pages.clone(),
+                }),
+                groups: None,
+                contacts: None,
+            },
+            Arc::new(dav.clone()),
+            tenant,
+            DavConfig::default(),
+            Arc::new(MemLease::default()),
+            "node-a/1".into(),
+            Duration::from_millis(20),
+        ));
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn({
+            let (sync, shutdown) = (sync.clone(), shutdown.clone());
+            async move { sync.run(shutdown).await }
+        });
+
+        wait_book(&dav, tenant, &["u-ivan.vcf"]).await;
+        let built = pages.load(Ordering::SeqCst);
+        assert!(built > 0, "книга собрана выгрузкой каталога");
+
+        // Версия каталога не меняется — скана нет.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            pages.load(Ordering::SeqCst),
+            built,
+            "без изменения версии книга не пересобирается"
+        );
+
+        // Изменение учётной записи — новая версия, пересборка книги.
+        dir.upsert_account(tenant, account("u-oleg", "Олег Смирнов", false));
+        wait_book(&dav, tenant, &["u-ivan.vcf", "u-oleg.vcf"]).await;
+        assert!(
+            pages.load(Ordering::SeqCst) > built,
+            "по изменившейся версии книга пересобрана"
+        );
+
+        shutdown.cancel();
+        task.await.expect("join");
     }
 
     /// APP-49: системный `GalChanged` организации приходит в подписку её учётной записи как `DavChanged` адресной

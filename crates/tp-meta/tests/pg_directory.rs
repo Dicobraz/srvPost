@@ -484,3 +484,97 @@ async fn contacts_in_directory() {
     let (groups, _) = all_groups(&meta, tenant).await;
     assert_eq!(groups[0].members, vec![ivan.to_string()]);
 }
+
+/// META-90: версия книги организации — монотонный счётчик триггеров строк книги: строки ещё нет — `None`;
+/// учётная запись, оргатрибуты, группа рассылки и почтовый контакт поднимают версию; контроль ловит изменение
+/// прежним курсором (`Conflict`), без изменений — пустая порция с прежним курсором.
+#[tokio::test]
+async fn gal_version_bumps_on_book_changes() {
+    let Some(meta) = common::meta().await else {
+        return;
+    };
+    let tenant = common::tenant(meta.pool()).await;
+    let (domain, name) = common::domain(meta.pool(), tenant).await;
+
+    // Строки версии нет: организация ещё не меняла строки книги.
+    assert_eq!(meta.gal_version(tenant).await.expect("gal_version"), None);
+
+    let (none, _) = all_accounts(&meta, tenant, 10).await;
+    assert!(none.is_empty());
+
+    // Учётная запись — строка книги: появилась строка версии, счётчик вырос.
+    let ivan = create(&meta, tenant, domain, &format!("ivan@{name}"), &[]).await;
+    assert_eq!(
+        meta.gal_version(tenant).await.expect("gal_version"),
+        Some(1)
+    );
+    let (_, cursor) = all_accounts(&meta, tenant, 10).await;
+
+    // Неизменный каталог: пустая порция с прежним курсором.
+    let same = meta
+        .accounts_since(tenant, Some(&cursor), 10)
+        .await
+        .expect("accounts_since");
+    assert!(same.changes.is_empty() && !same.has_more);
+    assert_eq!(same.next, cursor);
+
+    // Оргатрибуты учётной записи — тоже строка книги: версия выросла, прежний курсор — полная выгрузка.
+    meta.set_org(
+        tenant,
+        ivan,
+        OrgAttributes {
+            title: Some("Инженер".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("set_org");
+    assert_eq!(
+        meta.gal_version(tenant).await.expect("gal_version"),
+        Some(2)
+    );
+    assert!(matches!(
+        meta.accounts_since(tenant, Some(&cursor), 10).await,
+        Err(Error::Conflict)
+    ));
+
+    // Группа рассылки и почтовый контакт — строки книги: создание и изменение поднимают версию.
+    let staff = group(
+        tenant,
+        "Сотрудники",
+        &format!("staff@{name}"),
+        Vec::new(),
+        false,
+    );
+    meta.put(staff.clone()).await.expect("put");
+    let partner = contact(
+        tenant,
+        "Партнёр",
+        &format!("desk@{name}"),
+        Vec::new(),
+        false,
+    );
+    meta.put_contact(partner.clone())
+        .await
+        .expect("put_contact");
+    assert_eq!(
+        meta.gal_version(tenant).await.expect("gal_version"),
+        Some(4)
+    );
+    meta.put(DistributionGroup {
+        hidden_from_gal: true,
+        ..staff
+    })
+    .await
+    .expect("hide group");
+    meta.put_contact(MailContact {
+        hidden_from_gal: true,
+        ..partner
+    })
+    .await
+    .expect("hide contact");
+    assert_eq!(
+        meta.gal_version(tenant).await.expect("gal_version"),
+        Some(6)
+    );
+}
