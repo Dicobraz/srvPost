@@ -87,3 +87,18 @@ A-записи трёх ВМ данных, сертификат клиентск
 7. `thepost verify` после возврата всех ВМ — расхождений нет.
 8. Одновременный отказ двух ВМ данных → недоступность (ожидаемо, приложение З.2); после возврата — работа без ручных
    действий, кроме `volume.fix.replication`.
+
+## Итог волны deploy-24 (DEP-31, DEP-30; 2026-11-20)
+- `{{ ansible_managed }}` в `copy: content` («Write keepalived.conf») заменён текстом — вне шаблона переменная
+  не определена (Ansible 2.17+): `# Ansible: deploy/ansible/small-enterprise.yml — не править вручную.`
+  (текст — как в drop-in задачах роли `thepost`, DEP-15).
+- Фоновые чтения (DEP-30): узлы mailbox получают `database.read_replica` — второй узел данных из `small_pg_hosts`
+  (при установке standby; порог отставания — умолчание узла 30 с). Отказ этого узла (шаг 6) приёмке не мешает:
+  реплика недоступна — фоновые чтения автоматически идут на primary.
+- Статические проверки (ansible-core 2.18, community.postgresql 5.1.1): YAML (safe_load) `small-enterprise.yml` и
+  `inventory-small.example.yml` — без ошибок; `ansible-playbook … --syntax-check` — без ошибок; аудит параметров
+  `community.postgresql` по задачам плейбука (`postgresql_user`, `postgresql_privs`, `postgresql_schema`,
+  `postgresql_query`: `login_db`/`login_port`, `no_password_changes`, пустой `query_result` в 5.x) — расхождений нет.
+- Прогон раздела «стенд (5 ВМ)» выше (шаги 1–8) в этой волне не выполнялся — стенд с пятью ВМ поднимается
+  координатором/владельцем; шаги и ожидаемые итоги — как записано выше, включая переключение СУБД ≤ 30 с
+  (`tp_db_failover_last_switch_seconds`) и возврат копий SeaweedFS (`volume.fix.replication`).

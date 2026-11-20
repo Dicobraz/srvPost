@@ -14,6 +14,35 @@
 5. Режим сохранности (решение #272): `helm template t deploy/helm/thepost --set cnpg.enabled=true` → в Cluster
    `synchronous.dataDurability: required`; с `--set cnpg.db_durability=preferred` → `preferred`; с
    `--set cnpg.db_durability=x` → ошибка «cnpg.db_durability: required или preferred».
+6. Прямые адреса и фоновые чтения (DEP-30, 2026-11-20): `helm template t deploy/helm/thepost --set cnpg.enabled=true`
+   → в ConfigMap `database.direct_url` — `t-db-rw` (мимо PgBouncer), `database.read_replica` — `t-db-ro`,
+   `replica_max_lag: 30s`; с `--set cnpg.pooler.enabled=false` — `url` — `t-db-rw`, без `pgbouncer` и `direct_url`,
+   `read_replica` — `t-db-ro`; с `--set cnpg.read_replica=false` — `read_replica` и `replica_max_lag` не задаются;
+   с `--set cnpg.replica_max_lag=15s` — `15s`. kubeconform рендера — `Invalid: 0` (хук `openbao-bootstrap` — Job и
+   ConfigMap политики; DEP-33).
+7. Ansible (DEP-30): `ansible-playbook -i deploy/ansible/inventory-ha.example.yml deploy/ansible/pg-ha.yml
+   --syntax-check` и `-i deploy/ansible/inventory-small.example.yml deploy/ansible/small-enterprise.yml
+   --syntax-check` (ansible-core 2.18, community.postgresql 5.x) — без ошибок; шаблон `roles/thepost` с
+   `thepost_db_direct_urls`, `thepost_db_read_replica`, `thepost_db_replica_max_lag` рендерится в config.yaml с
+   секциями `database.direct_urls` / `read_replica` / `replica_max_lag`; пустые значения — секций нет.
+   `python3 -c 'import yaml; …'` (safe_load) — `pg-ha.yml`, `small-enterprise.yml`, `config/mailbox.yaml` — без ошибок.
+
+## Итог DEP-30/DEP-31 (2026-11-20, волна deploy-24)
+- DEP-30: в эталонах описаны и подключены прямые адреса и реплика фоновых чтений — `config/mailbox.yaml`
+  (комментарии: `direct_url` + `direct_urls` мимо PgBouncer для слушателя сигналов и миграций,
+  `read_replica` + `replica_max_lag`), роль `thepost` (`thepost_db_direct_url`/`thepost_db_direct_urls`,
+  `thepost_db_read_replica`, `thepost_db_replica_max_lag` → `database.*`), `small-enterprise.yml` задаёт узлам
+  mailbox `read_replica` — второй узел данных (при установке standby; после переключения отставание ноль),
+  чарт `helm/thepost` с `cnpg.enabled` задаёт `read_replica` — службу `-ro` (выключение — `cnpg.read_replica: false`),
+  `deploy/README.md` — таблица «когда что задавать» в разделе «PostgreSQL: высокая доступность».
+- DEP-31: `{{ ansible_managed }}` в `copy: content` («Write keepalived.conf», `small-enterprise.yml`) заменён
+  текстом, как в роли `thepost` (DEP-15): `# Ansible: deploy/ansible/small-enterprise.yml — не править вручную.`
+  Аудит параметров `community.postgresql` (5.x и 4.x: `login_db`/`login_port`, `no_password_changes`,
+  `postgresql_alter_system`, пустой `query_result`) по `pg-ha.yml`, `small-enterprise.yml`, ролям
+  `pg_auto_failover` и `postgresql` — расхождений с документацией коллекции нет; статические проверки выше
+  выполнены, прогоны `pg-ha.yml` и `small-enterprise.yml` на стенде (community.postgresql 4.x и 5.x, повторный
+  прогон без изменений) в этой волне не выполнялись — шаги разделов «Enterprise-ВМ» и «Малый Enterprise» выше
+  не изменены и подлежат стендовому прогону без правок.
 
 ## Enterprise-ВМ: pg_auto_failover
 1. Инвентарь по `deploy/ansible/inventory-ha.example.yml` (монитор, pg1–pg3, сертификаты с SAN — имя узла), пароли в

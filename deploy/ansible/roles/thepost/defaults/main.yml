@@ -53,6 +53,23 @@ thepost_db_url: >-
 # Сроки повтора и поиска primary — thepost_db_failover (database.failover, например { retry_for: 30s }).
 thepost_db_urls: []
 thepost_db_failover: {}
+# Прямые адреса мимо PgBouncer (database.direct_url, database.direct_urls) — слушатель сигналов (LISTEN/NOTIFY,
+# bus.kind: postgres) и миграции: через PgBouncer в режиме transaction они не работают. Задавать — только когда
+# thepost_db_url указывает на PgBouncer (thepost_db_url — PgBouncer, прямые адреса — узлы данных кластера или
+# VIP/DNS за primary); один адрес — thepost_db_direct_url, несколько (поиск primary) — thepost_db_direct_urls.
+# Без PgBouncer не задаются: поиск primary идёт по thepost_db_url и thepost_db_urls. Пароль — тот же
+# (database.password); TLS и роль слушателя — из первого прямого адреса (thepost_db_direct_url или первый в
+# списке) — параметры sslmode/sslrootcert из thepost_db_url к прямым адресам не переносятся.
+thepost_db_direct_url: ""
+thepost_db_direct_urls: []
+# Реплика для фоновых чтений (database.read_replica): экспорт, отчёты, eDiscovery, verify, первичная индексация —
+# на реплике, если отставание не больше порога (database.replica_max_lag, thepost_db_replica_max_lag, пусто —
+# умолчание узла 30s); отставание больше, неизвестно или реплика недоступна — на primary. Enterprise-ВМ — адрес
+# узла данных, обычно реплики (после переключения роли узлов меняются: адрес на primary — отставание ноль).
+# Пароль — тот же (database.password); роль, хост и БД — из адреса; TLS — в самом адресе (sslmode и sslrootcert
+# из thepost_db_url к адресам urls и read_replica не переносятся). Пусто — фоновые чтения на primary.
+thepost_db_read_replica: ""
+thepost_db_replica_max_lag: ""
 thepost_secrets_url: "{{ openbao_api_addr | default('https://localhost:8200') }}"
 thepost_secrets_role_id_file: "{{ openbao_thepost_role_id_file | default('/etc/thepost/openbao/role_id') }}"
 thepost_secrets_secret_id_file: >-

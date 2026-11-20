@@ -6,6 +6,9 @@
 #   ansible-playbook -i <инвентарь> deploy/ansible/pg-ha.yml --ask-vault-pass
 # Пример инвентаря — deploy/ansible/inventory-ha.example.yml; переменные — defaults ролей pg_auto_failover и postgresql.
 # Узлы thepost находят primary сами: database.url + database.urls — адреса узлов данных (deploy/config/mailbox.yaml).
+# За PgBouncer (transaction) узлу нужны прямые адреса слушателя сигналов и миграций: database.direct_url +
+# database.direct_urls — те же узлы данных или VIP/DNS за primary; фоновые чтения (экспорт, отчёты, verify,
+# индексация) — database.read_replica с порогом отставания replica_max_lag (deploy/README.md).
 # Повторный прогон ничего не меняет; на работающем кластере primary не перезапускается.
 ---
 # Синхронизация времени — до остальных ролей (решение 2026-11-11 №25).

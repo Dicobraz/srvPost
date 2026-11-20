@@ -248,6 +248,11 @@
     thepost_db_urls: >-
       {{ small_pg_hosts[1:] | map('regex_replace', '^', 'postgres://thepost@') | map('regex_replace', '$', ':5432/thepost')
          | list }}
+    # Фоновые чтения (экспорт, отчёты, eDiscovery, verify, индексация) — на узле данных, при установке standby
+    # (small_pg_hosts[1], database.read_replica): порог отставания — умолчание узла 30 с (replica_max_lag). После
+    # переключения узел может стать primary — отставание ноль, чтение остаётся на нём; узел недоступен — на primary.
+    # TLS — в адресе реплики (sslmode и sslrootcert из url к адресам urls и read_replica не переносятся).
+    thepost_db_read_replica: "postgres://thepost@{{ small_pg_hosts[1] }}:5432/thepost?{{ small_db_tls }}"
     thepost_db_failover: { retry_initial: 100ms, retry_max: 2s, retry_for: 30s, probe_timeout: 3s }
     thepost_secrets_url: "{{ small_openbao_url }}"
     # Ключ TLS (секрет thepost/tls) записывается через узел инициализации OpenBao.
@@ -344,7 +349,7 @@
           ansible.builtin.copy:
             dest: /etc/keepalived/keepalived.conf
             content: |
-              # {{ ansible_managed }}
+              # Ansible: deploy/ansible/small-enterprise.yml — не править вручную.
               # Малый Enterprise: виртуальный адрес узлов mailbox; переходит, если thepost на узле не работает.
               global_defs {
                 enable_script_security

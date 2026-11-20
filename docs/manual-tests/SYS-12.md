@@ -40,5 +40,13 @@
 ## Не проверено
 - Ubuntu 24.04 на ВМ (не в контейнере) — поведение Landlock и systemd-resolved то же, ядро — своё (6.8, ABI 4:
   `privileges.landlock` — `WARN abi=4`, чтение файлов ограничивается так же).
-- `deploy/config/edge.yaml` (роль edge с локальным BLOB) под ограничениями не запускается: seccomp запрещает `mkdir`
-  каталога `.tmp`, Landlock — запись в каталог BLOB (у edge нет прав на данные). Вне SYS-12 — отдельная задача.
+
+## Пресет edge (DEP-34, 2026-11-20)
+Записанный выше отказ касался только пресета `deploy/config/edge.yaml` с локальным BLOB (`file:///var/lib/thepost/edge`):
+seccomp запрещал `mkdir` каталога `.tmp`, Landlock — запись в каталог BLOB (у роли edge прав на данные нет). По SRS 2.6
+у узла edge нет ни BLOB, ни очереди — локальное хранилище из пресета убрано (DEP-34), оба препятствия устранены:
+адресов слоя данных (`database`, `blob`) в конфигурации узла edge быть не должно, узлу без ролей со слоем данных
+они не требуются.
+Проверка запуска `edge.yaml` под `seccomp: enforce` и Landlock — по SYS-07, раздел «Узел edge» (`roles: [edge]`,
+секция `confine` по умолчанию; в журнале — «ограничения ролей применены», `Seccomp: 2`, `NoNewPrivs: 1`; `strace`
+во время приёма — `mkdir`/`mkdirat`/`unlinkat` нет).

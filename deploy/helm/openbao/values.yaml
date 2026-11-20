@@ -3,8 +3,9 @@
 #   helm install openbao openbao/openbao --version 0.30.6 -n openbao --create-namespace -f deploy/helm/openbao/values.yaml
 # До установки — секрет openbao-tls (tls.crt, tls.key, ca.crt; SAN: openbao, openbao.openbao.svc,
 # openbao-{0,1,2}.openbao-internal, 127.0.0.1 — для bao внутри пода) и способ распечатывания (seal ниже).
-# После — bao operator init и deploy/helm/openbao/bootstrap.sh (KV, политика и Kubernetes auth для thepost).
-# Описание — deploy/README.md.
+# После — bao operator init (ключи восстановления и root-токен — администратору). Настройку KV thepost,
+# политики thepost и Kubernetes auth делает Job Helm-хука чарта thepost (openbaoBootstrap, DEP-33) — прежний
+# сценарий deploy/helm/openbao/bootstrap.sh удалён (CI-05, решение 6). Описание — deploy/README.md.
 
 global:
   tlsDisable: false
