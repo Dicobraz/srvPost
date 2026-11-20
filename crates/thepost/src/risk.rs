@@ -179,7 +179,7 @@ fn decode_key(value: &str) -> Option<Vec<u8>> {
         return None;
     }
     // Hex: чётное число шестнадцатеричных цифр (многобайтовые символы не проходят).
-    let hex = v.len() % 2 == 0 && v.bytes().all(|b| b.is_ascii_hexdigit());
+    let hex = v.len().is_multiple_of(2) && v.bytes().all(|b| b.is_ascii_hexdigit());
     if hex {
         let bytes = (0..v.len() / 2)
             .map(|i| u8::from_str_radix(&v[i * 2..i * 2 + 2], 16))
@@ -1524,7 +1524,7 @@ impl RiskEnviron for NodeEnviron {
                         .map_err(|e| Error::internal(format!("risk: память беседы: {e}")))?;
                 facts
                     .and_then(|v| serde_json::from_value(v).ok())
-                    .unwrap_or_else(ThreadFacts::new)
+                    .unwrap_or_default()
             }
         };
         // Чтение: транзакция откатывается (sqlx делает это при drop).

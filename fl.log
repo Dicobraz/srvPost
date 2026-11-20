@@ -1,0 +1,483 @@
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	﻿2026-11-20T19:47:22.6661311Z ##[group]Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6662143Z ^[[36;1mcargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6689016Z shell: /usr/bin/bash -e {0}
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6689420Z env:
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6689718Z   CARGO_TERM_COLOR: always
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6690135Z   CARGO_INCREMENTAL: 0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6691078Z   RUSTFLAGS: -D warnings
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6692030Z   TEST_DATABASE_URL: ***localhost:5432/postgres
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6692481Z   CACHE_ON_FAILURE: false
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:22.6692831Z ##[endgroup]
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:26.0973702Z ^[[1m^[[92m    Updating^[[0m crates.io index
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:28.2017585Z ^[[1m^[[92m Downloading^[[0m crates ...
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:29.4154733Z ^[[1m^[[92m  Downloaded^[[0m clap v4.6.9
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:29.4207189Z ^[[1m^[[92m  Downloaded^[[0m clap_derive v4.6.9
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:29.4220693Z ^[[1m^[[92m  Downloaded^[[0m rand v0.10.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:29.4245097Z ^[[1m^[[92m  Downloaded^[[0m syn v3.0.10
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:29.4313934Z ^[[1m^[[92m  Downloaded^[[0m uuid v1.29.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:29.4334081Z ^[[1m^[[92m  Downloaded^[[0m zip v9.8.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:30.1036130Z ^[[1m^[[92m   Compiling^[[0m syn v3.0.10
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:30.1114851Z ^[[1m^[[92m   Compiling^[[0m uuid v1.29.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:47:30.1171964Z ^[[1m^[[92m   Compiling^[[0m rand v0.10.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:00.7808184Z ^[[1m^[[92m   Compiling^[[0m synstructure v0.14.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:00.7844692Z ^[[1m^[[92m   Compiling^[[0m serde_derive_internals v0.30.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:01.4535249Z ^[[1m^[[92m   Compiling^[[0m proptest v1.12.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:01.4644662Z ^[[1m^[[92m   Compiling^[[0m darling_core v0.24.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:01.5021030Z ^[[1m^[[92m   Compiling^[[0m serde_derive v1.0.229
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:01.7754361Z ^[[1m^[[92m   Compiling^[[0m zerofrom-derive v0.1.8
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:04.1003000Z ^[[1m^[[92m   Compiling^[[0m thiserror-impl v2.0.21
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:09.7939767Z ^[[1m^[[92m   Compiling^[[0m yoke-derive v0.8.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:19.4000622Z ^[[1m^[[92m   Compiling^[[0m displaydoc v0.2.7
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:19.4002669Z ^[[1m^[[92m   Compiling^[[0m zerofrom v0.1.8
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:19.4003723Z ^[[1m^[[92m   Compiling^[[0m zerovec-derive v0.11.7
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:19.4140115Z ^[[1m^[[92m   Compiling^[[0m serde v1.0.229
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:19.4759799Z ^[[1m^[[92m   Compiling^[[0m thiserror v2.0.21
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:19.5182810Z ^[[1m^[[92m   Compiling^[[0m futures-macro v0.3.34
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:19.9263676Z ^[[1m^[[92m   Compiling^[[0m yoke v0.8.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:20.0927922Z ^[[1m^[[92m   Compiling^[[0m futures-util v0.3.34
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:20.1079465Z ^[[1m^[[92m   Compiling^[[0m tokio-macros v2.7.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:20.1184924Z ^[[1m^[[92m   Compiling^[[0m zerotrie v0.2.5
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:20.3084112Z ^[[1m^[[92m   Compiling^[[0m zerovec v0.11.9
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:20.4504154Z ^[[1m^[[92m   Compiling^[[0m async-trait v0.1.92
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:20.4600470Z ^[[1m^[[92m   Compiling^[[0m tokio v1.54.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:20.9540150Z ^[[1m^[[92m   Compiling^[[0m tinystr v0.8.5
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:21.1025290Z ^[[1m^[[92m   Compiling^[[0m icu_locale_core v2.4.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:21.1235716Z ^[[1m^[[92m   Compiling^[[0m potential_utf v0.1.6
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:21.1926059Z ^[[1m^[[92m   Compiling^[[0m icu_collections v2.4.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:21.7598423Z ^[[1m^[[92m   Compiling^[[0m ref-cast-impl v1.0.27
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:22.0265287Z ^[[1m^[[92m   Compiling^[[0m ref-cast v1.0.27
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:22.0710466Z ^[[1m^[[92m   Compiling^[[0m schemars_derive v1.2.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:22.6574843Z ^[[1m^[[92m   Compiling^[[0m icu_provider v2.4.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:22.9223800Z ^[[1m^[[92m   Compiling^[[0m icu_properties v2.4.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:23.2283485Z ^[[1m^[[92m   Compiling^[[0m icu_normalizer v2.4.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:23.4182373Z ^[[1m^[[92m   Compiling^[[0m futures-executor v0.3.34
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:23.6355435Z ^[[1m^[[92m   Compiling^[[0m futures v0.3.34
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:23.6691931Z ^[[1m^[[92m   Compiling^[[0m schemars v1.2.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:23.6731202Z ^[[1m^[[92m   Compiling^[[0m chrono v0.4.45
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:24.3101436Z ^[[1m^[[92m   Compiling^[[0m idna_adapter v1.2.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:24.3695889Z ^[[1m^[[92m   Compiling^[[0m idna v1.1.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:24.9829005Z ^[[1m^[[92m   Compiling^[[0m url v2.5.8
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:25.3264719Z ^[[1m^[[92m   Compiling^[[0m hashify v0.3.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:25.5657357Z ^[[1m^[[92m   Compiling^[[0m either v1.19.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:25.7464840Z ^[[1m^[[92m   Compiling^[[0m chrono-tz v0.10.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:25.8064989Z ^[[1m^[[92m   Compiling^[[0m jmap-tools v0.1.8
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:26.1502989Z ^[[1m^[[92m   Compiling^[[0m serde_yaml_ng v0.10.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:26.7305041Z ^[[1m^[[92m   Compiling^[[0m mail-parser v1.0.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:27.5240924Z ^[[1m^[[92m   Compiling^[[0m tokio-util v0.7.20
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:28.5432835Z ^[[1m^[[92m   Compiling^[[0m tp-contracts v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-contracts)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:29.3874669Z ^[[1m^[[92m   Compiling^[[0m tokio-stream v0.1.19
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:30.0434984Z ^[[1m^[[92m   Compiling^[[0m calcard v0.3.14
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:30.4065038Z ^[[1m^[[92m   Compiling^[[0m smallvec v1.16.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:32.1784560Z ^[[1m^[[92m   Compiling^[[0m parking_lot_core v0.9.12
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:32.3321411Z ^[[1m^[[92m   Compiling^[[0m parking_lot v0.12.5
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:32.6504786Z ^[[1m^[[92m   Compiling^[[0m futures-intrusive v0.5.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:33.1204534Z ^[[1m^[[92m   Compiling^[[0m ipnet v2.12.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:33.7545400Z ^[[1m^[[92m   Compiling^[[0m sqlx-core v0.9.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:37.1282198Z ^[[1m^[[92m   Compiling^[[0m sqlx-postgres v0.9.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:37.6544714Z ^[[1m^[[92m   Compiling^[[0m h2 v0.4.20
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:40.2825035Z ^[[1m^[[92m   Compiling^[[0m tp-testkit v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-testkit)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:42.3399628Z ^[[1m^[[92m   Compiling^[[0m sqlx-macros-core v0.9.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:43.2006449Z ^[[1m^[[92m   Compiling^[[0m tokio-rustls v0.26.6
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:43.4104920Z ^[[1m^[[92m   Compiling^[[0m hyper v1.12.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:43.9427476Z ^[[1m^[[92m   Compiling^[[0m tower v0.5.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:44.3754731Z ^[[1m^[[92m   Compiling^[[0m sqlx-macros v0.9.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:44.4054656Z ^[[1m^[[92m   Compiling^[[0m tower-http v0.6.11
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:44.6992112Z ^[[1m^[[92m   Compiling^[[0m sqlx v0.9.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:44.7691903Z ^[[1m^[[92m   Compiling^[[0m tp-meta v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-meta)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:44.9456612Z ^[[1m^[[92m   Compiling^[[0m hyper-util v0.1.21
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:45.1839306Z ^[[1m^[[92m   Compiling^[[0m serde_urlencoded v0.7.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:45.3712262Z ^[[1m^[[92m   Compiling^[[0m moka v0.12.16
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:46.8270812Z ^[[1m^[[92m   Compiling^[[0m hyper-rustls v0.27.10
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:47.0355308Z ^[[1m^[[92m   Compiling^[[0m reqwest v0.13.5
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:47.0784505Z ^[[1m^[[92m   Compiling^[[0m tungstenite v0.29.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:48.0377839Z ^[[1m^[[92m   Compiling^[[0m tokio-tungstenite v0.29.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:48.2371099Z ^[[1m^[[92m   Compiling^[[0m axum v0.8.9
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:51.5134827Z ^[[1m^[[92m   Compiling^[[0m opentelemetry v0.33.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:52.5781430Z ^[[1m^[[92m   Compiling^[[0m itertools v0.14.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:52.6534913Z ^[[1m^[[92m   Compiling^[[0m opentelemetry_sdk v0.33.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:53.9947906Z ^[[1m^[[92m   Compiling^[[0m prost-derive v0.14.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:55.3092650Z ^[[1m^[[92m   Compiling^[[0m prost v0.14.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:55.6363813Z ^[[1m^[[92m   Compiling^[[0m opentelemetry-proto v0.33.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:57.0575088Z ^[[1m^[[92m   Compiling^[[0m opentelemetry-http v0.33.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:57.5231322Z ^[[1m^[[92m   Compiling^[[0m opentelemetry-otlp v0.33.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:57.7264773Z ^[[1m^[[92m   Compiling^[[0m landlock v0.4.7
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:58.0985029Z ^[[1m^[[92m   Compiling^[[0m quick-xml v0.41.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:48:58.4973683Z ^[[1m^[[92m   Compiling^[[0m tp-sys v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-sys)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:00.0105428Z ^[[1m^[[92m   Compiling^[[0m object_store v0.14.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:00.0184693Z ^[[1m^[[92m   Compiling^[[0m tracing-serde v0.2.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:00.1291256Z ^[[1m^[[92m   Compiling^[[0m tracing-subscriber v0.3.23
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:02.4174626Z ^[[1m^[[92m   Compiling^[[0m asn1-rs v0.7.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:03.8164734Z ^[[1m^[[92m   Compiling^[[0m prometheus-client-derive-encode v0.5.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:04.1021946Z ^[[1m^[[92m   Compiling^[[0m prometheus-client v0.25.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:04.6438902Z ^[[1m^[[92m   Compiling^[[0m tracing-opentelemetry v0.34.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:05.0824906Z ^[[1m^[[92m   Compiling^[[0m instant-acme v0.8.5
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:05.4755319Z ^[[1m^[[92m   Compiling^[[0m oid-registry v0.8.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:05.7894839Z ^[[1m^[[92m   Compiling^[[0m der-parser v10.0.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:06.3850439Z ^[[1m^[[92m   Compiling^[[0m tp-blob v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-blob)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:07.8312220Z ^[[1m^[[92m   Compiling^[[0m bytemuck_derive v1.12.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:08.8594375Z ^[[1m^[[92m   Compiling^[[0m zip v9.8.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:11.1205433Z ^[[1m^[[92m   Compiling^[[0m tp-mailstore v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-mailstore)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:11.7955430Z ^[[1m^[[92m   Compiling^[[0m bytemuck v1.25.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:11.8622509Z ^[[1m^[[92m   Compiling^[[0m tp-platform v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-platform)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:12.0891402Z ^[[1m^[[92m   Compiling^[[0m x509-parser v0.18.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:14.2505126Z ^[[1m^[[92m   Compiling^[[0m darling_macro v0.24.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:14.4544876Z ^[[1m^[[92m   Compiling^[[0m darling v0.24.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:14.4932468Z ^[[1m^[[92m   Compiling^[[0m simple_asn1 v0.6.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:14.8624867Z ^[[1m^[[92m   Compiling^[[0m jsonwebtoken v11.1.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:15.2374636Z ^[[1m^[[92m   Compiling^[[0m ldap3 v0.12.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:16.2881576Z ^[[1m^[[92m   Compiling^[[0m rsasl v2.3.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:16.9774946Z ^[[1m^[[92m   Compiling^[[0m image v0.25.10
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:17.2434400Z ^[[1m^[[92m   Compiling^[[0m tp-auth v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-auth)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:21.9834829Z ^[[1m^[[92m   Compiling^[[0m utoipa-gen v6.0.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:24.6644968Z ^[[1m^[[92m   Compiling^[[0m prefix-trie v0.8.4
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:25.0326329Z ^[[1m^[[92m   Compiling^[[0m kasuari v0.4.13
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:25.2153181Z ^[[1m^[[92m   Compiling^[[0m instability v0.3.14
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:25.5451629Z ^[[1m^[[92m   Compiling^[[0m ratatui-core v0.1.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:25.6204789Z ^[[1m^[[92m   Compiling^[[0m hickory-proto v0.26.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:27.3554678Z ^[[1m^[[92m   Compiling^[[0m tantivy-common v0.27.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:27.6934791Z ^[[1m^[[92m   Compiling^[[0m utoipa v6.0.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:27.8888963Z ^[[1m^[[92m   Compiling^[[0m safe_arch v1.2.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:29.1344643Z ^[[1m^[[92m   Compiling^[[0m hickory-net v0.26.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:29.5233289Z ^[[1m^[[92m   Compiling^[[0m ratatui-widgets v0.3.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:31.3475289Z ^[[1m^[[92m   Compiling^[[0m tp-admin v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-admin)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:31.3864686Z ^[[1m^[[92m   Compiling^[[0m hickory-resolver v0.26.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:31.4727498Z ^[[1m^[[92m   Compiling^[[0m palette v0.7.7
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:32.3036744Z ^[[1m^[[92m   Compiling^[[0m wide v1.7.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:33.9437050Z ^[[1m^[[92m   Compiling^[[0m prettyplease v0.3.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:34.6936185Z ^[[1m^[[92m   Compiling^[[0m tantivy-stacker v0.27.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:34.8575217Z ^[[1m^[[92m   Compiling^[[0m bon-macros v3.10.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:37.0249599Z ^[[1m^[[92m   Compiling^[[0m tantivy-sstable v0.27.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:37.7594630Z ^[[1m^[[92m   Compiling^[[0m ratatui-crossterm v0.1.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:37.8812358Z ^[[1m^[[92m   Compiling^[[0m ratatui-macros v0.7.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:37.9119427Z ^[[1m^[[92m   Compiling^[[0m typetag-impl v0.2.23
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:38.3594738Z ^[[1m^[[92m   Compiling^[[0m imap-types v2.0.0-alpha.8
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:38.8464949Z ^[[1m^[[92m   Compiling^[[0m quantette v0.6.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:38.9184943Z ^[[1m^[[92m   Compiling^[[0m bon v3.10.3
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:38.9614608Z ^[[1m^[[92m   Compiling^[[0m typetag v0.2.23
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:39.4024846Z ^[[1m^[[92m   Compiling^[[0m tantivy-columnar v0.27.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:40.7385250Z ^[[1m^[[92m   Compiling^[[0m icy_sixel v0.5.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:41.0285290Z ^[[1m^[[92m   Compiling^[[0m ratatui v0.30.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:41.0348839Z ^[[1m^[[92m   Compiling^[[0m mail-auth v0.14.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:41.1615155Z ^[[1m^[[92m   Compiling^[[0m tp-dav v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-dav)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:44.0125019Z ^[[1m^[[92m   Compiling^[[0m tp-sieve v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-sieve)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:45.2344997Z ^[[1m^[[92m   Compiling^[[0m tantivy-query-grammar v0.27.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:46.9084759Z ^[[1m^[[92m   Compiling^[[0m sketches-ddsketch v0.4.2
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:47.2914712Z ^[[1m^[[92m   Compiling^[[0m tantivy-tokenizer-api v0.7.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:47.3675481Z ^[[1m^[[92m   Compiling^[[0m serde-tuple-vec-map v1.0.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:47.3865084Z ^[[1m^[[92m   Compiling^[[0m calamine v0.38.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:47.4129099Z ^[[1m^[[92m   Compiling^[[0m tantivy v0.27.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:48.7235212Z ^[[1m^[[92m   Compiling^[[0m ratatui-image v11.1.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:49.8082094Z ^[[1m^[[92m   Compiling^[[0m tp-admin-client v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-admin-client)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:49.8936188Z ^[[1m^[[92m   Compiling^[[0m publicsuffix v2.3.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:49.9774837Z ^[[1m^[[92m   Compiling^[[0m lopdf v0.46.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:51.0595390Z ^[[1m^[[92m   Compiling^[[0m mail-send v0.7.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:51.5864911Z ^[[1m^[[92m   Compiling^[[0m imap-codec v2.0.0-alpha.10
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:55.7395045Z ^[[1m^[[92m   Compiling^[[0m mail-auth v0.15.1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:49:58.3569398Z ^[[1m^[[92m   Compiling^[[0m tp-smtp v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-smtp)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:00.0959944Z ^[[1m^[[92m   Compiling^[[0m tp-search v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-search)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:03.3864791Z ^[[1m^[[92m   Compiling^[[0m tp-jmap v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-jmap)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:07.8667807Z ^[[1m^[[92m   Compiling^[[0m tp-tui v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-tui)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:12.6193292Z ^[[1m^[[92m   Compiling^[[0m tp-imap v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-imap)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:13.9543457Z ^[[1m^[[92m   Compiling^[[0m tp-webmail v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-webmail)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:14.4125321Z ^[[1m^[[92m   Compiling^[[0m tp-cluster v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-cluster)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:16.6194828Z ^[[1m^[[92m   Compiling^[[0m clap_derive v4.6.9
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:16.8004938Z ^[[1m^[[92m   Compiling^[[0m insta v1.49.0
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:18.1964478Z ^[[1m^[[92m   Compiling^[[0m clap v4.6.9
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:18.2244714Z ^[[1m^[[92m   Compiling^[[0m thepost v0.2.1 (/home/runner/work/srvPost/srvPost/crates/thepost)
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1845893Z ^[[1m^[[91merror^[[0m^[[1m: unused variable: `blob`^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1847129Z    ^[[1m^[[94m--> ^[[0mcrates/thepost/src/risk/tests.rs:265:27
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1848326Z     ^[[1m^[[94m|^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1849204Z ^[[1m^[[94m265^[[0m ^[[1m^[[94m|^[[0m fn cache(store: &MemRisk, blob: &MemBlobStore) -> Arc<RiskCache> {
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1850609Z     ^[[1m^[[94m|^[[0m                           ^[[1m^[[91m^^^^^[[0m ^[[1m^[[91mhelp: if this is intentional, prefix it with an underscore: `_blob`^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1851549Z     ^[[1m^[[94m|^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1852289Z     ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `-D unused-variables` implied by `-D warnings`
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1853905Z     ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: to override `-D warnings` add `#[allow(unused_variables)]`
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:34.1854515Z 
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:37.9537824Z ^[[1m^[[91merror^[[0m: could not compile `thepost` (lib test) due to 1 previous error
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:37.9539222Z ^[[1m^[[33mwarning^[[0m: build failed, waiting for other jobs to finish...
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9208695Z ^[[1m^[[33mwarning^[[0m^[[1m: unused dependency `hex`^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9209531Z   ^[[1m^[[94m--> ^[[0mcrates/tp-blob/Cargo.toml:21:1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9210314Z    ^[[1m^[[94m|^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9210825Z ^[[1m^[[94m21^[[0m ^[[1m^[[94m|^[[0m hex.workspace = true
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9211576Z    ^[[1m^[[94m|^[[0m ^[[1m^[[33m^^^^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9212080Z    ^[[1m^[[94m|^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9220734Z    ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `cargo::unused_dependencies` is set to `warn` by default
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9221471Z ^[[1m^[[96mhelp^[[0m: consider removing the dependency on `hex`
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9222284Z ^[[1m^[[33mwarning^[[0m: `tp-blob` (manifest) generated 1 warning
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9222891Z ^[[1m^[[33mwarning^[[0m^[[1m: unused dependency `tp-platform`^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9223719Z   ^[[1m^[[94m--> ^[[0mcrates/tp-dav/Cargo.toml:15:1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9224316Z    ^[[1m^[[94m|^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9224915Z ^[[1m^[[94m15^[[0m ^[[1m^[[94m|^[[0m tp-platform.workspace = true
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9225368Z    ^[[1m^[[94m|^[[0m ^[[1m^[[33m^^^^^^^^^^^^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9225819Z    ^[[1m^[[94m|^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9226474Z    ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `cargo::unused_dependencies` is set to `warn` by default
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9227107Z ^[[1m^[[96mhelp^[[0m: consider removing the dependency on `tp-platform`
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9227673Z ^[[1m^[[33mwarning^[[0m: `tp-dav` (manifest) generated 1 warning
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9228193Z ^[[1m^[[33mwarning^[[0m^[[1m: unused dependency `mail-builder`^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9228677Z   ^[[1m^[[94m--> ^[[0mcrates/tp-sieve/Cargo.toml:20:1
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9229095Z    ^[[1m^[[94m|^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9229583Z ^[[1m^[[94m20^[[0m ^[[1m^[[94m|^[[0m mail-builder.workspace = true
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9230189Z    ^[[1m^[[94m|^[[0m ^[[1m^[[33m^^^^^^^^^^^^^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9230553Z    ^[[1m^[[94m|^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9231054Z    ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `cargo::unused_dependencies` is set to `warn` by default
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9231648Z ^[[1m^[[96mhelp^[[0m: consider removing the dependency on `mail-builder`
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9232231Z ^[[1m^[[33mwarning^[[0m: `tp-sieve` (manifest) generated 1 warning
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9772419Z ^[[31;1merror^[[0m: command `^[[1m/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo '--color=always' test --no-run '--message-format=json-render-diagnostics' --workspace '--features=thepost/webmail' --locked^[[0m` exited with code ^[[1m101^[[0m
+test	Run cargo nextest run --workspace --locked --profile ci --no-tests=pass --features thepost/webmail	2026-11-20T19:50:55.9799910Z ##[error]Process completed with exit code 101.
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	﻿2026-11-20T19:47:27.6133872Z ##[group]Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:27.6134749Z ^[[36;1mcargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:27.6170994Z shell: /usr/bin/bash -e {0}
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:27.6171272Z env:
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:27.6171493Z   CARGO_TERM_COLOR: always
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:27.6171768Z   CARGO_INCREMENTAL: 0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:27.6172009Z   RUSTFLAGS: -D warnings
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:27.6172258Z   CACHE_ON_FAILURE: false
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:27.6172605Z ##[endgroup]
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:28.8720997Z ^[[1m^[[92m    Updating^[[0m crates.io index
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:30.1815257Z ^[[1m^[[92m Downloading^[[0m crates ...
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.2275508Z ^[[1m^[[92m  Downloaded^[[0m clap v4.6.9
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.2372885Z ^[[1m^[[92m  Downloaded^[[0m clap_derive v4.6.9
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.2397630Z ^[[1m^[[92m  Downloaded^[[0m rand v0.10.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.2438496Z ^[[1m^[[92m  Downloaded^[[0m syn v3.0.10
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.2546938Z ^[[1m^[[92m  Downloaded^[[0m uuid v1.29.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.2577709Z ^[[1m^[[92m  Downloaded^[[0m zip v9.8.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.4315612Z ^[[1m^[[92m   Compiling^[[0m syn v3.0.10
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.4427920Z ^[[1m^[[92m    Checking^[[0m uuid v1.29.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:32.4505234Z ^[[1m^[[92m    Checking^[[0m rand v0.10.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:33.9603059Z ^[[1m^[[92m    Checking^[[0m proptest v1.12.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:34.4879209Z ^[[1m^[[92m    Checking^[[0m zip v9.8.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:36.0249599Z ^[[1m^[[92m   Compiling^[[0m synstructure v0.14.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:36.5044893Z ^[[1m^[[92m   Compiling^[[0m serde_derive_internals v0.30.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:36.9253915Z ^[[1m^[[92m   Compiling^[[0m darling_core v0.24.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:37.2423970Z ^[[1m^[[92m   Compiling^[[0m prettyplease v0.3.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:37.4705473Z ^[[1m^[[92m   Compiling^[[0m serde_derive v1.0.229
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:37.4706671Z ^[[1m^[[92m   Compiling^[[0m zerofrom-derive v0.1.8
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:38.0434507Z ^[[1m^[[92m   Compiling^[[0m thiserror-impl v2.0.21
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:38.8073341Z ^[[1m^[[92m   Compiling^[[0m yoke-derive v0.8.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:39.1493863Z ^[[1m^[[92m   Compiling^[[0m displaydoc v0.2.7
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:39.6890355Z ^[[1m^[[92m   Compiling^[[0m zerovec-derive v0.11.7
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:39.7153974Z ^[[1m^[[92m    Checking^[[0m thiserror v2.0.21
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:39.7643795Z ^[[1m^[[92m    Checking^[[0m zerofrom v0.1.8
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:39.8306524Z ^[[1m^[[92m   Compiling^[[0m futures-macro v0.3.34
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:39.8423853Z ^[[1m^[[92m    Checking^[[0m yoke v0.8.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:39.9853945Z ^[[1m^[[92m   Compiling^[[0m tokio-macros v2.7.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:40.2914591Z ^[[1m^[[92m    Checking^[[0m serde v1.0.229
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:40.4586668Z ^[[1m^[[92m    Checking^[[0m futures-util v0.3.34
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:40.4703434Z ^[[1m^[[92m    Checking^[[0m tokio v1.54.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:40.5937231Z ^[[1m^[[92m    Checking^[[0m zerovec v0.11.9
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:40.7353896Z ^[[1m^[[92m    Checking^[[0m zerotrie v0.2.5
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:40.9473803Z ^[[1m^[[92m   Compiling^[[0m async-trait v0.1.92
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:41.0643908Z ^[[1m^[[92m    Checking^[[0m tinystr v0.8.5
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:41.1933999Z ^[[1m^[[92m    Checking^[[0m icu_locale_core v2.4.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:41.6973967Z ^[[1m^[[92m    Checking^[[0m potential_utf v0.1.6
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:41.7714053Z ^[[1m^[[92m    Checking^[[0m icu_collections v2.4.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:41.8754799Z ^[[1m^[[92m    Checking^[[0m icu_provider v2.4.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:42.0903764Z ^[[1m^[[92m    Checking^[[0m icu_normalizer v2.4.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:42.3438157Z ^[[1m^[[92m    Checking^[[0m icu_properties v2.4.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:42.5993368Z ^[[1m^[[92m   Compiling^[[0m ref-cast-impl v1.0.27
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:42.7432623Z ^[[1m^[[92m    Checking^[[0m futures-executor v0.3.34
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:42.8304106Z ^[[1m^[[92m    Checking^[[0m futures v0.3.34
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:42.8704836Z ^[[1m^[[92m   Compiling^[[0m schemars_derive v1.2.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:42.9254596Z ^[[1m^[[92m    Checking^[[0m ref-cast v1.0.27
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:42.9734068Z ^[[1m^[[92m   Compiling^[[0m either v1.19.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:43.1874477Z ^[[1m^[[92m    Checking^[[0m chrono v0.4.45
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:43.4286657Z ^[[1m^[[92m    Checking^[[0m idna_adapter v1.2.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:43.5013938Z ^[[1m^[[92m    Checking^[[0m idna v1.1.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:43.6913880Z ^[[1m^[[92m    Checking^[[0m url v2.5.8
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:44.0820462Z ^[[1m^[[92m   Compiling^[[0m hashify v0.3.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:44.1664322Z ^[[1m^[[92m    Checking^[[0m chrono-tz v0.10.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:44.2834079Z ^[[1m^[[92m    Checking^[[0m schemars v1.2.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:44.5783780Z ^[[1m^[[92m    Checking^[[0m tokio-util v0.7.20
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:44.8637148Z ^[[1m^[[92m    Checking^[[0m jmap-tools v0.1.8
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:45.0264084Z ^[[1m^[[92m    Checking^[[0m tp-contracts v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-contracts)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:45.3863797Z ^[[1m^[[92m    Checking^[[0m mail-parser v1.0.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:45.9094101Z ^[[1m^[[92m    Checking^[[0m serde_yaml_ng v0.10.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:46.8573781Z ^[[1m^[[92m    Checking^[[0m tokio-stream v0.1.19
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:47.1813943Z ^[[1m^[[92m   Compiling^[[0m smallvec v1.16.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:48.3217581Z ^[[1m^[[92m   Compiling^[[0m parking_lot_core v0.9.12
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:48.8454391Z ^[[1m^[[92m   Compiling^[[0m parking_lot v0.12.5
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:49.1193962Z ^[[1m^[[92m   Compiling^[[0m futures-intrusive v0.5.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:49.3434169Z ^[[1m^[[92m    Checking^[[0m calcard v0.3.14
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:49.5833852Z ^[[1m^[[92m    Checking^[[0m sqlx-core v0.9.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:51.5680815Z ^[[1m^[[92m    Checking^[[0m sqlx-postgres v0.9.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:54.2793747Z ^[[1m^[[92m    Checking^[[0m ipnet v2.12.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:54.4814533Z ^[[1m^[[92m    Checking^[[0m tokio-rustls v0.26.6
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:54.4954609Z ^[[1m^[[92m    Checking^[[0m h2 v0.4.20
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:54.6653889Z ^[[1m^[[92m    Checking^[[0m tower v0.5.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:55.1952149Z ^[[1m^[[92m    Checking^[[0m tp-testkit v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-testkit)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:55.3778646Z ^[[1m^[[92m    Checking^[[0m tower-http v0.6.11
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:55.7085263Z ^[[1m^[[92m    Checking^[[0m serde_urlencoded v0.7.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:55.8683966Z ^[[1m^[[92m    Checking^[[0m moka v0.12.16
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:57.2703748Z ^[[1m^[[92m    Checking^[[0m tungstenite v0.29.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:57.6734050Z ^[[1m^[[92m    Checking^[[0m tokio-tungstenite v0.29.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:57.8553979Z ^[[1m^[[92m    Checking^[[0m opentelemetry v0.33.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:58.1633739Z ^[[1m^[[92m   Compiling^[[0m sqlx-macros-core v0.9.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:58.3615238Z ^[[1m^[[92m    Checking^[[0m hyper v1.12.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:59.1634018Z ^[[1m^[[92m   Compiling^[[0m itertools v0.14.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:47:59.3745693Z ^[[1m^[[92m    Checking^[[0m hyper-util v0.1.21
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:00.5751174Z ^[[1m^[[92m   Compiling^[[0m prost-derive v0.14.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:00.6443407Z ^[[1m^[[92m    Checking^[[0m hyper-rustls v0.27.10
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:00.6543630Z ^[[1m^[[92m   Compiling^[[0m sqlx-macros v0.9.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:00.7733959Z ^[[1m^[[92m    Checking^[[0m reqwest v0.13.5
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:01.0553749Z ^[[1m^[[92m    Checking^[[0m sqlx v0.9.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:01.1345544Z ^[[1m^[[92m    Checking^[[0m tp-meta v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-meta)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:01.6914359Z ^[[1m^[[92m    Checking^[[0m axum v0.8.9
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:02.1692300Z ^[[1m^[[92m    Checking^[[0m prost v0.14.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:02.4592269Z ^[[1m^[[92m    Checking^[[0m opentelemetry_sdk v0.33.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:04.4883915Z ^[[1m^[[92m    Checking^[[0m opentelemetry-proto v0.33.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:04.7064043Z ^[[1m^[[92m    Checking^[[0m opentelemetry-http v0.33.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:04.9716303Z ^[[1m^[[92m    Checking^[[0m quick-xml v0.41.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:05.0428231Z ^[[1m^[[92m    Checking^[[0m landlock v0.4.7
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:05.1353721Z ^[[1m^[[92m    Checking^[[0m opentelemetry-otlp v0.33.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:05.3054030Z ^[[1m^[[92m    Checking^[[0m tp-sys v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-sys)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:05.6533867Z ^[[1m^[[92m    Checking^[[0m tracing-serde v0.2.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:05.7413828Z ^[[1m^[[92m    Checking^[[0m tracing-subscriber v0.3.23
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:06.0253907Z ^[[1m^[[92m   Compiling^[[0m darling_macro v0.24.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:06.1581259Z ^[[1m^[[92m    Checking^[[0m object_store v0.14.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:06.2614520Z ^[[1m^[[92m    Checking^[[0m asn1-rs v0.7.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:06.7183836Z ^[[1m^[[92m   Compiling^[[0m bytemuck_derive v1.12.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:07.1381792Z ^[[1m^[[92m   Compiling^[[0m darling v0.24.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:07.1894429Z ^[[1m^[[92m   Compiling^[[0m itertools v0.13.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:07.7734439Z ^[[1m^[[92m    Checking^[[0m bytemuck v1.25.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:08.0134517Z ^[[1m^[[92m   Compiling^[[0m prometheus-client-derive-encode v0.5.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:08.1983885Z ^[[1m^[[92m   Compiling^[[0m bindgen v0.71.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:08.3014126Z ^[[1m^[[92m    Checking^[[0m prometheus-client v0.25.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:08.5970201Z ^[[1m^[[92m    Checking^[[0m oid-registry v0.8.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:08.7983865Z ^[[1m^[[92m    Checking^[[0m der-parser v10.0.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:09.1535307Z ^[[1m^[[92m    Checking^[[0m tracing-opentelemetry v0.34.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:09.3784255Z ^[[1m^[[92m    Checking^[[0m instant-acme v0.8.5
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:09.7414115Z ^[[1m^[[92m    Checking^[[0m tp-blob v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-blob)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:10.1424520Z ^[[1m^[[92m    Checking^[[0m x509-parser v0.18.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:10.9274331Z ^[[1m^[[92m    Checking^[[0m tp-platform v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-platform)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:12.1451688Z ^[[1m^[[92m    Checking^[[0m tp-mailstore v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-mailstore)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:13.6964110Z ^[[1m^[[92m   Compiling^[[0m libgssapi-sys v0.3.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:13.7824091Z ^[[1m^[[92m    Checking^[[0m simple_asn1 v0.6.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:13.9233925Z ^[[1m^[[92m    Checking^[[0m jsonwebtoken v11.1.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:14.6833671Z ^[[1m^[[92m    Checking^[[0m ldap3 v0.12.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:15.0996293Z ^[[1m^[[92m    Checking^[[0m prefix-trie v0.8.4
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:15.3572928Z ^[[1m^[[92m    Checking^[[0m rsasl v2.3.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:15.5694105Z ^[[1m^[[92m    Checking^[[0m kasuari v0.4.13
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:15.6914086Z ^[[1m^[[92m    Checking^[[0m hickory-proto v0.26.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:15.7368803Z ^[[1m^[[92m    Checking^[[0m ratatui-core v0.1.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:15.9653920Z ^[[1m^[[92m    Checking^[[0m libgssapi v0.11.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:16.2073769Z ^[[1m^[[92m    Checking^[[0m image v0.25.10
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:16.5873999Z ^[[1m^[[92m   Compiling^[[0m instability v0.3.14
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:17.0014598Z ^[[1m^[[92m   Compiling^[[0m utoipa-gen v6.0.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:17.4944519Z ^[[1m^[[92m    Checking^[[0m tp-auth v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-auth)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:17.6953962Z ^[[1m^[[92m    Checking^[[0m hickory-net v0.26.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:19.3944608Z ^[[1m^[[92m    Checking^[[0m safe_arch v1.2.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:19.5223115Z ^[[1m^[[92m    Checking^[[0m tantivy-common v0.27.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:19.8133911Z ^[[1m^[[92m    Checking^[[0m hickory-resolver v0.26.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:19.9174024Z ^[[1m^[[92m    Checking^[[0m wide v1.7.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:20.3694060Z ^[[1m^[[92m    Checking^[[0m ratatui-widgets v0.3.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:20.7523747Z ^[[1m^[[92m    Checking^[[0m palette v0.7.7
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:21.2343910Z ^[[1m^[[92m    Checking^[[0m ratatui-macros v0.7.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:21.2864016Z ^[[1m^[[92m    Checking^[[0m tantivy-sstable v0.27.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:21.6473896Z ^[[1m^[[92m    Checking^[[0m tantivy-stacker v0.27.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:21.7523795Z ^[[1m^[[92m    Checking^[[0m ratatui-crossterm v0.1.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:21.8632583Z ^[[1m^[[92m   Compiling^[[0m bon-macros v3.10.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:22.5824034Z ^[[1m^[[92m    Checking^[[0m utoipa v6.0.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:24.5394264Z ^[[1m^[[92m    Checking^[[0m tp-admin v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-admin)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:25.7532799Z ^[[1m^[[92m   Compiling^[[0m typetag-impl v0.2.23
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:25.7640415Z ^[[1m^[[92m    Checking^[[0m quantette v0.6.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:25.9303843Z ^[[1m^[[92m    Checking^[[0m bon v3.10.3
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:25.9824132Z ^[[1m^[[92m    Checking^[[0m ratatui v0.30.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:26.0703980Z ^[[1m^[[92m    Checking^[[0m tantivy-columnar v0.27.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:26.1973789Z ^[[1m^[[92m    Checking^[[0m typetag v0.2.23
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:26.4894495Z ^[[1m^[[92m    Checking^[[0m icy_sixel v0.5.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:26.5584092Z ^[[1m^[[92m    Checking^[[0m mail-auth v0.14.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:26.6463832Z ^[[1m^[[92m    Checking^[[0m imap-types v2.0.0-alpha.8
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:26.9311332Z ^[[1m^[[92m    Checking^[[0m serde-tuple-vec-map v1.0.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:26.9863814Z ^[[1m^[[92m    Checking^[[0m sketches-ddsketch v0.4.2
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:27.1864633Z ^[[1m^[[92m    Checking^[[0m tantivy-tokenizer-api v0.7.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:27.2684117Z ^[[1m^[[92m    Checking^[[0m tantivy-query-grammar v0.27.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:27.8783964Z ^[[1m^[[92m    Checking^[[0m imap-codec v2.0.0-alpha.10
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:28.2273875Z ^[[1m^[[92m    Checking^[[0m tantivy v0.27.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:28.3195074Z ^[[1m^[[92m    Checking^[[0m mail-send v0.7.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:28.7115304Z ^[[1m^[[92m    Checking^[[0m ratatui-image v11.1.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:29.0063835Z ^[[1m^[[92m    Checking^[[0m mail-auth v0.15.1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:30.1054338Z ^[[1m^[[92m    Checking^[[0m tp-dav v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-dav)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:30.9134179Z ^[[1m^[[92m    Checking^[[0m tp-sieve v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-sieve)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:32.4058250Z ^[[1m^[[92m    Checking^[[0m publicsuffix v2.3.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:32.5004693Z ^[[1m^[[92m    Checking^[[0m calamine v0.38.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:32.5413853Z ^[[1m^[[92m    Checking^[[0m lopdf v0.46.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:33.8593967Z ^[[1m^[[92m   Compiling^[[0m clap_derive v4.6.9
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:35.4753674Z ^[[1m^[[92m    Checking^[[0m clap v4.6.9
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:35.5173999Z ^[[1m^[[92m    Checking^[[0m tp-jmap v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-jmap)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:35.7424164Z ^[[1m^[[92m    Checking^[[0m tp-smtp v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-smtp)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:35.7894395Z ^[[1m^[[92m    Checking^[[0m tp-admin-client v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-admin-client)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:35.9444108Z ^[[1m^[[92m    Checking^[[0m tp-search v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-search)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:36.3994084Z ^[[1m^[[92m    Checking^[[0m tp-tui v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-tui)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:37.7184139Z ^[[1m^[[92m    Checking^[[0m tp-imap v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-imap)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:37.7774227Z ^[[1m^[[92m    Checking^[[0m tp-cluster v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-cluster)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:38.8484033Z ^[[1m^[[92m    Checking^[[0m tp-webmail v0.2.1 (/home/runner/work/srvPost/srvPost/crates/tp-webmail)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:39.0554146Z ^[[1m^[[92m    Checking^[[0m insta v1.49.0
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:45.7874059Z ^[[1m^[[92m    Checking^[[0m thepost v0.2.1 (/home/runner/work/srvPost/srvPost/crates/thepost)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7364566Z ^[[1m^[[91merror^[[0m^[[1m: manual implementation of `.is_multiple_of()`^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7403529Z    ^[[1m^[[94m--> ^[[0mcrates/thepost/src/risk.rs:182:15
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7404469Z     ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7433690Z ^[[1m^[[94m182^[[0m ^[[1m^[[94m|^[[0m     let hex = v.len() % 2 == 0 && v.bytes().all(|b| b.is_ascii_hexdigit());
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7443726Z     ^[[1m^[[94m|^[[0m               ^[[1m^[[91m^^^^^^^^^^^^^^^^^[[0m ^[[1m^[[91mhelp: replace with: `v.len().is_multiple_of(2)`^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7463191Z     ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7493782Z     ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.100.0/index.html#manual_is_multiple_of
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7507912Z     ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `-D clippy::manual-is-multiple-of` implied by `-D warnings`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7533427Z     ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: to override `-D warnings` add `#[allow(clippy::manual_is_multiple_of)]`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7552846Z 
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7583738Z ^[[1m^[[91merror^[[0m^[[1m: this expression creates a reference which is immediately dereferenced by the compiler^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7593127Z     ^[[1m^[[94m--> ^[[0mcrates/thepost/src/risk.rs:1502:45
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7623027Z      ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7643672Z ^[[1m^[[94m1502^[[0m ^[[1m^[[94m|^[[0m         let mut tx = tp_meta::schema::begin(&meta.pool(), tenant).await?;
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7673478Z      ^[[1m^[[94m|^[[0m                                             ^[[1m^[[91m^^^^^^^^^^^^^[[0m ^[[1m^[[91mhelp: change this to: `meta.pool()`^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7683320Z      ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7763973Z      ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.100.0/index.html#needless_borrow
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7783577Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `-D clippy::needless-borrow` implied by `-D warnings`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7813788Z      ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7822706Z 
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7853324Z ^[[1m^[[91merror^[[0m^[[1m: use of `unwrap_or_else` to construct default value^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7873287Z     ^[[1m^[[94m--> ^[[0mcrates/thepost/src/risk.rs:1527:22
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7883000Z      ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7913470Z ^[[1m^[[94m1527^[[0m ^[[1m^[[94m|^[[0m                     .unwrap_or_else(ThreadFacts::new)
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7943426Z      ^[[1m^[[94m|^[[0m                      ^[[1m^[[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[[0m ^[[1m^[[91mhelp: try: `unwrap_or_default()`^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7963135Z      ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.7973670Z      ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.100.0/index.html#unwrap_or_default
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.8003472Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `-D clippy::unwrap-or-default` implied by `-D warnings`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.8023601Z      ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: to override `-D warnings` add `#[allow(clippy::unwrap_or_default)]`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:57.8032700Z 
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:58.4984042Z ^[[1m^[[91merror^[[0m: could not compile `thepost` (lib) due to 3 previous errors
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:58.4984855Z ^[[1m^[[33mwarning^[[0m: build failed, waiting for other jobs to finish...
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7560740Z ^[[1m^[[91merror^[[0m^[[1m: unused variable: `blob`^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7561731Z    ^[[1m^[[94m--> ^[[0mcrates/thepost/src/risk/tests.rs:265:27
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7562804Z     ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7563906Z ^[[1m^[[94m265^[[0m ^[[1m^[[94m|^[[0m fn cache(store: &MemRisk, blob: &MemBlobStore) -> Arc<RiskCache> {
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7565340Z     ^[[1m^[[94m|^[[0m                           ^[[1m^[[91m^^^^^[[0m ^[[1m^[[91mhelp: if this is intentional, prefix it with an underscore: `_blob`^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7566375Z     ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7567127Z     ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `-D unused-variables` implied by `-D warnings`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7568208Z     ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: to override `-D warnings` add `#[allow(unused_variables)]`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:48:59.7568893Z 
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3908970Z ^[[1m^[[91merror^[[0m: could not compile `thepost` (lib test) due to 4 previous errors
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3914175Z ^[[1m^[[33mwarning^[[0m^[[1m: unused dependency `tp-platform`^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3914646Z   ^[[1m^[[94m--> ^[[0mcrates/tp-dav/Cargo.toml:15:1
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3914990Z    ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3915455Z ^[[1m^[[94m15^[[0m ^[[1m^[[94m|^[[0m tp-platform.workspace = true
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3915990Z    ^[[1m^[[94m|^[[0m ^[[1m^[[33m^^^^^^^^^^^^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3916279Z    ^[[1m^[[94m|^[[0m
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3916846Z    ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: `cargo::unused_dependencies` is set to `warn` by default
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3917390Z ^[[1m^[[96mhelp^[[0m: consider removing the dependency on `tp-platform`
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.3918262Z ^[[1m^[[33mwarning^[[0m: `tp-dav` (manifest) generated 1 warning
+clippy	Run cargo clippy --workspace --all-targets --locked --features thepost/gssapi,thepost/webmail	2026-11-20T19:49:02.4667308Z ##[error]Process completed with exit code 101.
+gate	Run r='success success failure failure success success skipped skipped skipped success'	﻿2026-11-20T19:51:20.5061294Z ##[group]Run r='success success failure failure success success skipped skipped skipped success'
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5063522Z ^[[36;1mr='success success failure failure success success skipped skipped skipped success'^[[0m
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5065084Z ^[[36;1mecho "$r"^[[0m
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5066428Z ^[[36;1m# Ручной стоп владельца (решение 2026-11-14): метка owner-review — PR ждёт владельца; снять метку — gate заново.^[[0m
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5068045Z ^[[36;1mif [ "false" = true ]; then^[[0m
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5069607Z ^[[36;1m  echo "::error::метка owner-review — PR ждёт решения владельца"; exit 1^[[0m
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5070980Z ^[[36;1mfi^[[0m
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5071953Z ^[[36;1mcase " $r " in *" failure "*|*" cancelled "*) exit 1;; esac^[[0m
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5518830Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5520001Z env:
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5520463Z   CARGO_TERM_COLOR: always
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5520979Z   CARGO_INCREMENTAL: 0
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5521536Z   RUSTFLAGS: -D warnings
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5522093Z ##[endgroup]
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5741094Z success success failure failure success success skipped skipped skipped success
+gate	Run r='success success failure failure success success skipped skipped skipped success'	2026-11-20T19:51:20.5760592Z ##[error]Process completed with exit code 1.

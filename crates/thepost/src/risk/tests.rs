@@ -262,7 +262,7 @@ fn package_plain(key: &KeyPair, version: u64) -> Vec<u8> {
 }
 
 /// Кэш справочника над `MemRisk` без шины (тесты).
-fn cache(store: &MemRisk, blob: &MemBlobStore) -> Arc<RiskCache> {
+fn cache(store: &MemRisk, _blob: &MemBlobStore) -> Arc<RiskCache> {
     Arc::new(RiskCache::new(
         Arc::new(store.clone()),
         None,
