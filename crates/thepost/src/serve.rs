@@ -838,7 +838,7 @@ impl RoleSetup<'_> {
                 // (решение 2026-11-20); выключенный модуль `modules.webmail` маршрутов не добавляет.
                 #[cfg(feature = "webmail")]
                 {
-                    router = crate::webmail::merge(router, &self.cfg)?;
+                    router = crate::webmail::merge(router, self.cfg)?;
                 }
                 let service = HttpRole::new(
                     role,
