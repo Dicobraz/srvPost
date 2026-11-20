@@ -1399,7 +1399,7 @@ expression: meta
       }
     ]
   },
-  "preview": "",
+  "preview": "bottom",
   "thread_key": "<corpus-055@example.com>",
-  "has_attachment": true
+  "has_attachment": false
 }
