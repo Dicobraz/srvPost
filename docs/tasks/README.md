@@ -284,9 +284,9 @@
 | [DEP-32](DEP-32.md) | «малый Enterprise» на 5 ВМ и отказ одной ВМ | deploy | A | deploy-24 | ready | DEP-10,DEP-31 |
 | [DEP-33](DEP-33.md) | OpenBao в Kubernetes без `bootstrap.sh` | deploy | A | deploy-24 | ready | DEP-10 |
 | [DEP-34](DEP-34.md) | пресет edge по SRS 2.6: без BLOB и очереди | deploy | A | deploy-24 | ready | SYS-12 |
-| [DEPS-09](DEPS-09.md) | mail-parser 1.0 в коде крейтов | deps | B | deps-09 | ready | — |
+| [DEPS-09](DEPS-09.md) | mail-parser 1.0 в коде крейтов | deps | B | deps-09 | done | — |
 | [CLU-18](CLU-18.md) | идентичность узла — только URI `thepost:node:<id>` | cluster | A | cluster-13 | todo | DEP-22 |
-| [CTR-71](CTR-71.md) | ключ подписчика шарда — всегда `<имя>@<шард>` | contracts | B | contracts-47 | ready | — |
+| [CTR-71](CTR-71.md) | ключ подписчика шарда — всегда `<имя>@<шард>` | contracts | B | contracts-47 | done | — |
 | [DEP-47](DEP-47.md) | Helm: порты из конфигурации узла | deploy | A | deploy-34 | ready | — |
 | [FIX-04](FIX-04.md) | GC BLOB по всем шардам в узле | app | A | app-52 | done | BLOB-15 |
 | [META-73](META-73.md) | GC: кандидаты после отбора занятых, ближайший срок одним запросом | meta | A | meta-47 | done | BLOB-15 |
@@ -491,8 +491,8 @@
 | [SMTP-30](SMTP-30.md) | исход Moderate правил потока — в очередь модерации | smtp | A | smtp-11 | done | CTR-43,SMTP-22 |
 | [CTR-49](CTR-49.md) | учётная запись в очереди и учёте BLOB, сигнал ShardsChanged | contracts | B | contracts-36 | done | CTR-35 |
 | [CTR-50](CTR-50.md) | подключение отключённого ящика — опция «оставить» / «удалить» содержимое | contracts | B | contracts-36 | done | CTR-35 |
-| [DEPS-06](DEPS-06.md) | HTTP/2 для межузловых вызовов — фичи axum и reqwest | deps | B | deps-06 | ready | CLU-14 |
-| [CLU-15](CLU-15.md) | Rpc — h2 в ALPN | cluster | A | cluster-10 | todo | DEPS-06 |
+| [DEPS-06](DEPS-06.md) | HTTP/2 для межузловых вызовов — фичи axum и reqwest | deps | B | deps-06 | done | CLU-14 |
+| [CLU-15](CLU-15.md) | Rpc — h2 в ALPN | cluster | A | cluster-10 | ready | DEPS-06 |
 | [DEP-22](DEP-22.md) | сертификаты узлов с URI thepost:node:<id> | deploy | A | deploy-20 | ready | CLU-14 |
 | [PLT-24](PLT-24.md) | ключи TLS из OpenBao | platform | A | platform-14 | done | PLT-23 |
 | [PLT-26](PLT-26.md) | внутренние сертификаты движком PKI OpenBao | platform | A | platform-16 | done | PLT-24 |
@@ -573,7 +573,7 @@
 | [CTR-82](CTR-82.md) | вошедший пользователь в `Outbound::submit` — права отправителя через группы | contracts | B | contracts-54 | done | — |
 | [META-78](META-78.md) | пересчёт поисковых строк контактов, записанных до миграции 0030 | meta | A | meta-51 | done | DAV-24 |
 | [APP-63](APP-63.md) | пересчёт поисковых строк старых контактов в узле | app | A | app-58 | done | META-78 |
-| [META-79](META-79.md) | срок следующего прохода GC BLOB по всем шардам | meta | A | meta-52 | ready | — |
+| [META-79](META-79.md) | срок следующего прохода GC BLOB по всем шардам | meta | A | meta-52 | done | — |
 | [APP-64](APP-64.md) | POP3 сверяет сеансы с хранилищем после потери сигнала блокировки | app | A | app-59 | done | — |
 | [DAV-33](DAV-33.md) | импорт 8-битных vCard (2.1 и 3.0 с CHARSET без ENCODING) | dav | A | dav-11 | done | — |
 | [SYS-15](SYS-15.md) | в журнал — только смена лимитов ресурсов узла | sys | A | sys-10 | done | SYS-06 |
@@ -604,7 +604,7 @@
 | [TUI-03](TUI-03.md) | раскладки главных разделов | tui | A | tui-02 | done | TUI-02 |
 | [TUI-04](TUI-04.md) | конфигурация узла в текстовом интерфейсе | tui | A | tui-02 | done | TUI-02,DEP-55 |
 | [TUI-05](TUI-05.md) | подкоманда `thepost admin tui` в узле | app | A | app-65 | done | TUI-01 |
-| [CI-16](CI-16.md) | покрытие Admin API тремя клиентами | ci | B | ci-14 | ready | TUI-02 |
+| [CI-16](CI-16.md) | покрытие Admin API тремя клиентами | ci | B | ci-14 | done | TUI-02 |
 | [DOC-08](DOC-08.md) | руководство по текстовому интерфейсу | docs | A | docs-08 | done | TUI-03,TUI-04 |
 | [DES-01](DES-01.md) | файл токенов фирменного стиля и проверка контраста в CI | design | B | design-01 | done | — |
 | [DEPS-15](DEPS-15.md) | зависимости картинок и мыши текстового интерфейса — `ratatui-image`, `evdev` | deps | B | deps-15 | done | DEPS-14 |
@@ -1034,3 +1034,4 @@
 | [WEB-08](WEB-08.md) | # WEB-08. Мобильный layout + PWA |  |  | — |
 | [WEB-09](WEB-09.md) | кэш чтения и очередь исходящих |  |  | — |
 | [WEB-10](WEB-10.md) | # WEB-10. SAML 2.0 SP в tp-auth (после v1) |  |  | — |
+| [WEB-11](WEB-11.md) | web/dist в образе, webmail-check образом, архив выпуска |  |  | — |
