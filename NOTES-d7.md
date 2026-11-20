@@ -26,7 +26,46 @@ Guard по диску: < 3 ГБ свободно на C: — СТОП. Фоно�
   томов/ФС, не физические устройства).
 
 ## Прогон A — SSD одним томом
-(пока не выполнен)
+(выполняется; ниже — подготовка и дымовой прогон)
+
+### Подготовка прогонов (чекпоинт 2, 2026-11-20 ~09:20–10:45 UTC)
+- Конфигурация узла с доверием генератору — `deploy/compose/d7/config-d7.yaml` (копия пресета all +
+  `ratelimit.trusted: ["172.16.0.0/12"]`, `smtp.screen.exempt` — то же) и `smtp.queue.relay: "d7sink:2525"`
+  (smtp-sink — контейнер d7gen с postfix'овским `smtp-sink`, файл письма — в томе d7stand `sink/`, счёт — сверке).
+  Без этого SMTP-экран (умолчания: max_rate 60/мин на адрес) и ratelimit.ip (burst 60) блокируют генератор
+  (200 IDLE + зонды раз в 1 с идут с одного адреса) — повтор DEP-13 2026-11-18 (421×267).
+- Генератор: образ `d7gen:local` (python:3.12-slim + postfix (smtp-source) + swaks + curl + k6 v1.0.0 из
+  образа grafana/k6 + docker CLI из docker:cli; обёртка `podman → docker` для imaptest (образ
+  dovecot/imaptest:latest) — run-scenario.sh запускает его через сокет Docker, `--network host` переписывается
+  в сеть compose `thepost_default`; том d7stand смонтирован по пути демона — пути -v совпадают).
+  `stand.env` — `deploy/compose/d7/stand.env`: SMB_HOST=thepost, DOMAIN=example.test, USERS=50, 200 IDLE × 40 с,
+  PROBE_INTERVAL=1, TAIL_MAX=300, профиль **speed** (рабочие пороги Д.7 — как в отчёте эталона beta.5;
+  profile=thresholds — это пороги Д.5, строки скорости «справочно», для сравнения с beta.5 нужен speed).
+- Provision ВНУТРИ узла (rootfs read-only → скрипт через `docker exec -i bash -s`, аргументы как в provision.yml):
+  `provision-accounts.sh /tmp/d7state example.test user 50 probe1 probe2 probe3 big bruteforce` →
+  **created=55 existing=0 issued=55 skipped=0 total=55**; accounts + ca.pem — в том d7stand (`etc/`).
+- Наполнение Д.12: `make-corpus.py` (200 × 75 KB, вложения 20 % × 500 KB, дубли 30 % → 89 МБ), `fill.py`
+  50 × 100 + big 10 000 → **planned=15000 delivered=15000 failed=0 retries=0 in 385s**, видимость ok (выборка 20
+  ящиков + big 10 000); календари/контакты — `fill-dav.py` (Д.21): 15 000 событий + 5 000 карточек,
+  **failed=0**, видимость ok. Состояние — fill-state.json / fill-dav-state.json в томе.
+- Срезы узла: smb-sampler.py (из stand_generator/files) — в контейнере узла (`/tmp`), пишет раз в 5 с
+  в том (метрики tp_db_pool_* у beta.5 есть: pool_max=33; tp_db_commit_*/notify/listeners в /metrics
+  **нет** — строки 6/7/17 Д.7 будут «не измерялось», как и часть эталона). COMMIT-латентность — журнал
+  PostgreSQL (`log_min_duration_statement=100ms`, `log_lock_waits=on` — ALTER SYSTEM + reload) + сэмплер
+  pg_stat_activity с хоста раз в 1 с (активные операторы дольше 50 мс).
+- Грабли (решены): (1) MSYS Git Bash переделывает аргументы `/stand/...` в Windows-пути — все docker-вызовы
+  обёрнуты `MSYS_NO_PATHCONV=1`; (2) run-scenario.sh требует `/etc/thepost-stand/stand.env` — биндится из тома
+  (путь демона); (3) `-I` у python3 убирает каталог скрипта из sys.path — fill-dav.py импортирует fill.py,
+  запускать без `-I`; (4) Docker Desktop VM перезапустилась в 10:07 (все контейнеры Exited 255 разом) —
+  стек поднят заново (тома целы), настройки PG сохранились.
+
+### Дымовой прогон d7a1-0953 (конвейер проверен целиком; обрыв VM на финальной сверке)
+Нагрузка 300 с прошла полностью: 200 IDLE × 40 с (IMAP + push), imaptest clients=30, k6 push 15 + dav.js,
+зонды раз в 1 с, сверка: **принято 639 = ящики 568 + sink 71, потеряно 0**; DAV-зонды 6/0. Зонды (весь прогон,
+без срезов узла — они погибли с VM): JMAP query/get p95 **146/340 мс**, SELECT 10k p95 **25 мс**, SMTP 250
+p95 **3.01 с** (n=259), доставка p95 3.61 с (n=50, отказов 2), сигнал IMAP/push p99 377/668 мс (отказов 9/2),
+FTS p95 352 мс, индексация p95 9.43 с (не найдено 1). Официальным прогоном A не считается (нет срезов узла
+и criteria на момент обрыва); подготовка по нему доведена — см. прогоны A ниже.
 
 ## Прогон B — pg_wal на отдельном томе
 (пока не выполнен)
