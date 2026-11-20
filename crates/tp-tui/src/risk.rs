@@ -1537,7 +1537,7 @@ pub fn command(t: &Risk) -> String {
             Some(id) => format!("thepost admin risk signals set {id} {org}"),
             None => format!("thepost admin risk signals list {org}"),
         },
-        Tab::Thresholds => format!("thepost admin risk thresholds show {org}"),
+        Tab::Thresholds => format!("thepost admin risk thresholds set {org}"),
         Tab::Packages => {
             if let Some(ver) = t
                 .report
@@ -2474,6 +2474,11 @@ pub(crate) mod tests {
         assert_eq!(form.value("tag"), Some("1"), "предзаполнено действующими");
         assert_eq!(form.value("junk"), Some("6"));
         assert_eq!(form.focus, 0, "курсор на поле junk");
+        assert_eq!(
+            app.command_line(),
+            format!("thepost admin risk thresholds set --org {ORG}"),
+            "строка CLI соответствует действию"
+        );
         // Значение выше базового: 12 вместо 6.
         app.on_key(key(KeyCode::Backspace));
         for c in "12".chars() {
@@ -2487,11 +2492,6 @@ pub(crate) mod tests {
         assert_eq!(
             req.body,
             Some(json!({"tag": 1, "junk": 12, "quarantine": 10, "reject": 15}))
-        );
-        assert_eq!(
-            app.command_line(),
-            format!("thepost admin risk thresholds set --org {ORG}"),
-            "строка CLI соответствует действию"
         );
         // Организация подняла порог (действие позже) — 422, текст у поля junk.
         app.on_result(
