@@ -9,6 +9,7 @@ mod account_state;
 pub mod accounts;
 pub mod acl;
 mod address_book;
+pub mod admin_sessions;
 pub mod admin_tokens;
 pub mod app_passwords;
 mod archive;

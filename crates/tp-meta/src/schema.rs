@@ -40,6 +40,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "calendar publications and partner availability (META-34)",
         include_str!("../migrations/0005_calendar_publications.sql"),
     ),
+    (
+        6,
+        "admin api sessions (META-64)",
+        include_str!("../migrations/0006_admin_sessions.sql"),
+    ),
 ];
 
 /// Мигратор схемы ядра.
