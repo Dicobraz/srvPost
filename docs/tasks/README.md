@@ -718,8 +718,8 @@
 | [PLT-39](PLT-39.md) | ACME — окно продления от сервера (ARI, RFC 9773) | platform | A | platform-26 | done | PLT-37 |
 | [APP-81](APP-81.md) | doctor — предупреждение о коротком сертификате TLS | app | A | app-80 | done | PLT-37 |
 | [DOC-15](DOC-15.md) | INSTALL — выпуск сертификата виден со всех точек наблюдения | docs | A | docs-15 | done | — |
-| [PLT-40](PLT-40.md) | короткие сертификаты (доля срока, doctor, ARI) |  |  | platform-28 | ready | — |
-| [SC-081](SC-081.md) | — | — | — | platform-28 | ready | — |
+| [PLT-40](PLT-40.md) | короткие сертификаты (доля срока, doctor, ARI) |  |  | platform-28 | done | — |
+| [SC-081](SC-081.md) | — | — | — | platform-28 | done | — |
 
 ## Ф2. Совместная работа (≈5 мес.)
 
@@ -1024,3 +1024,13 @@
 | [SMTP-48](SMTP-48.md) | iTIP — письмо с несколькими заголовками `From` не применяется | smtp | A | SMTP-33 |
 | [SMTP-49](SMTP-49.md) | тип отправителя письма с iTIP — по пути и домену `From` | smtp | B | CTR-92,SMTP-33,SMTP-36 |
 | [TUI-11](TUI-11.md) | атомарная запись config.yaml из текстового интерфейса | tui | A | TUI-04 |
+| [WEB-01](WEB-01.md) | полоса mod-webmail, SPA встроен в бинарь |  |  | — |
+| [WEB-02](WEB-02.md) | OIDC PKCE из SPA + app-password, жизнь сессии |  |  | — |
+| [WEB-03](WEB-03.md) | ящик, потоки, санитайзер, живой push |  |  | — |
+| [WEB-04](WEB-04.md) | rich text, вложения, undo-send |  |  | — |
+| [WEB-05](WEB-05.md) | # WEB-05. Поиск и фильтры |  |  | — |
+| [WEB-06](WEB-06.md) | минимум — просмотр и приём встреч |  |  | — |
+| [WEB-07](WEB-07.md) | # WEB-07. Контакты и GAL |  |  | — |
+| [WEB-08](WEB-08.md) | # WEB-08. Мобильный layout + PWA |  |  | — |
+| [WEB-09](WEB-09.md) | кэш чтения и очередь исходящих |  |  | — |
+| [WEB-10](WEB-10.md) | # WEB-10. SAML 2.0 SP в tp-auth (после v1) |  |  | — |
