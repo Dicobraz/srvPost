@@ -183,6 +183,24 @@ pub struct Services {
     /// хранилище записей с индексом (бакет BLOB-18 + `PgJournal`, двухфазная запись); `None` — секция
     /// `journal` (APP-83) выключена, этапа нет, поведение прежнее.
     pub journal: Option<crate::journal::NodeJournal>,
+    /// Справочник аномалий (APP-78, решение 126): `RiskStore` `PgMeta` (META-87) под кэшем узла —
+    /// один `Arc` для доставки SMTP и Sieve (через доставку, SMTP-52/SIEVE-15), Admin API (ADM-51)
+    /// и роли обновления; сброс кэша по `risk_changed` и `Resync` ([`RiskCache::watch`], запуск —
+    /// `serve`), публикация сигнала после собственных записей.
+    pub risk: Arc<crate::risk::RiskCache>,
+    /// Секция `risk` на момент запуска (источник обновления, `auto_activate`, срок «только отчёт»);
+    /// её перечитывает `serve` (`apply_risk`) в кэш без перезапуска.
+    pub risk_section: crate::sections::RiskSection,
+    /// Проверка пакетов поставщика (подпись, lint, пробный прогон).
+    pub risk_verifier: Arc<crate::risk::Verifier>,
+    /// Установка пакетов (BLOB, версии списков — к активации).
+    pub risk_installer: Arc<crate::risk::Installer>,
+    /// Операции узла для Admin API (ADM-51): проверка пакетов, импорт и обновление списков TI.
+    pub risk_admin: Arc<crate::risk::AdminNode>,
+    /// Данные детекторов каталога для доставки (память бесед, списки TI, PSL — [`crate::risk::NodeEnviron`]).
+    pub risk_environ: Arc<crate::risk::NodeEnviron>,
+    /// Проверка каталога на smtp-in ([`tp_smtp::risk::Risk`], SMTP-52): `Delivery::with_risk`.
+    pub risk_check: Arc<tp_smtp::risk::Risk>,
 }
 
 impl std::fmt::Debug for Services {
@@ -508,6 +526,43 @@ impl Services {
         // отдельный бакет/каталог) и индекс `PgJournal` (META-88) на пуле узла.
         let journal = crate::journal::NodeJournal::open(cfg, &meta, Some(&secrets)).await?;
 
+        // Справочник аномалий (APP-78, решение 126): `RiskStore` `PgMeta` (META-87) под кэшем узла
+        // (сброс по `risk_changed` и `Resync` — [`crate::risk::RiskCache::watch`], запуск — `serve`;
+        // публикация сигнала после собственных записей). Один `Arc` у доставки SMTP и Sieve (через
+        // доставку), Admin API (ADM-51) и роли обновления. Данные детекторов (память бесед, списки
+        // TI, Public Suffix List пакета) — [`crate::risk::NodeEnviron`]; проверка каталога smtp-in —
+        // [`tp_smtp::risk::Risk`] (SMTP-52, `Delivery::with_risk`).
+        let risk_section = crate::risk::section_of(cfg);
+        let risk = Arc::new(crate::risk::RiskCache::new(
+            Arc::new(meta.clone()),
+            Some(bus.clone()),
+            risk_section.clone(),
+        ));
+        let risk_verifier = Arc::new(crate::risk::Verifier::new(
+            &risk_section,
+            crate::risk::node_version(),
+        )?);
+        let risk_installer = Arc::new(crate::risk::Installer::new(risk.clone(), blob.clone()));
+        let risk_admin = Arc::new(crate::risk::AdminNode::new(
+            risk_verifier.clone(),
+            risk_installer.clone(),
+            risk.clone(),
+            blob.clone(),
+            &risk_section,
+            secrets.clone(),
+        ));
+        let risk_environ = Arc::new(crate::risk::NodeEnviron::new(
+            meta.clone(),
+            blob.clone(),
+            risk.clone(),
+        ));
+        let risk_check = Arc::new(tp_smtp::risk::Risk::new(
+            smtp.risk.clone(),
+            risk.clone(),
+            risk_environ.clone(),
+            Some(smtp_metrics.clone()),
+        ));
+
         Ok(Self {
             tenant,
             meta,
@@ -546,6 +601,13 @@ impl Services {
             itip,
             trust,
             journal,
+            risk,
+            risk_section,
+            risk_verifier,
+            risk_installer,
+            risk_admin,
+            risk_environ,
+            risk_check,
         })
     }
 
@@ -627,7 +689,11 @@ impl Services {
             .with_sent_log(Arc::new(self.meta.clone()) as Arc<dyn SentLog>)
             // Политика доверия (APP-76, решение 124): тип абонента, действующая матрица получателя,
             // домены-партнёры и автопересылки — тот же кэш узла, что у iTIP, DAV, JMAP и Admin API.
-            .with_trust(Arc::clone(&self.trust) as Arc<dyn TrustStore>);
+            .with_trust(Arc::clone(&self.trust) as Arc<dyn TrustStore>)
+            // Каталог признаков (APP-78, SMTP-52): детекторы и балл по действующему каталогу
+            // организации получателя (`RiskCache` — сброс по `risk_changed`); данные детекторов —
+            // память бесед, списки TI и PSL пакета (`NodeEnviron`). Секция `smtp.risk.enabled`.
+            .with_risk(self.risk_check.clone());
         // Этап журналирования (SMTP-53, APP-84): секция `journal` выключена — этап не ставится
         // (нулевое поведение прежнее); включена — этап JOURNAL перед Sieve ящика.
         Ok(match &self.journal {
@@ -982,7 +1048,14 @@ impl Services {
             // Сессии Admin API — в основной БД (APP-50, CTR-61, решение 77): сессия видна всем узлам
             // роли admin и переживает перезапуск узла; истёкшие удаляет шаг очистки роли maintenance
             // (`crate::roles::Purge`). Без него — память узла.
-            .with_sessions(Arc::new(self.meta.clone()) as Arc<dyn AdminSessions>);
+            .with_sessions(Arc::new(self.meta.clone()) as Arc<dyn AdminSessions>)
+            // Справочник аномалий (ADM-51, APP-78): хранилище под кэшем узла (пакеты, политики,
+            // источники, срабатывания) и операции узла — проверка пакета (подпись, lint, пробный
+            // прогон), импорт и обновление списков TI; без этого маршруты справочника — 503.
+            .with_risk(
+                Arc::clone(&self.risk) as Arc<dyn tp_contracts::risk::RiskStore>,
+                Arc::clone(&self.risk_admin) as Arc<dyn tp_admin::risk::RiskNode>,
+            );
         // Журнал переписки (ADM-52): хранилище узла — тот же индекс с бакетом, что у этапа конвейера
         // доставки (APP-84); секция `journal` выключена — журнал не подключён, маршруты отвечают 503.
         Ok(match &self.journal {
@@ -1005,6 +1078,25 @@ impl Services {
             Some(self.secrets.clone()),
             Arc::new(controller),
         ))))
+    }
+
+    /// Обновление пакета поставщика — шаг роли maintenance (APP-78): раз в `risk.update.interval`
+    /// узел с лизой берёт пакет с `risk.update.url` или из `risk.update.dir`, при пустом хранилище —
+    /// первый пакет из поставки (`risk.package.dir`, DEP-57); проверенный — ставит и активирует при
+    /// `risk.update.auto_activate`, иначе ждёт администратора.
+    pub fn risk_update(
+        &self,
+        leases: Arc<dyn tp_contracts::lease::LeaseStore>,
+        holder: String,
+    ) -> crate::risk::RiskUpdate {
+        crate::risk::RiskUpdate::new(
+            self.risk_section.clone(),
+            self.risk_verifier.clone(),
+            self.risk_installer.clone(),
+            self.risk.clone(),
+            leases,
+            holder,
+        )
     }
 
     /// Индексатор журнала событий (подписчик `indexer`).

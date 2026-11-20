@@ -119,6 +119,10 @@ pub struct Maintenance {
     /// Фоновая привязка существующих писем к беседам по `thread_key` (APP-77, META-86); `None` — не
     /// выполняется (тесты без PostgreSQL).
     pub threads: Option<ThreadBinder>,
+    /// Обновление пакета поставщика справочника аномалий (`risk.update.*`, APP-78): при пустом
+    /// хранилище — первый пакет из поставки, далее — источник обновления; `None` — не выполняется
+    /// (тесты).
+    pub risk_update: Option<crate::risk::RiskUpdate>,
 }
 
 /// Показатели проверки целостности BLOB по расписанию для `/metrics` (`crate::metrics::register_verify`).
@@ -831,6 +835,12 @@ impl RoleService for Maintenance {
             let token = ctx.shutdown.clone();
             tokio::spawn(async move { threads.run(token).await })
         });
+        // Обновление пакета поставщика справочника аномалий (APP-78): первый проход при запуске
+        // (первый пакет из поставки при пустом хранилище), затем по периоду; один узел — держатель лизы.
+        let risk_update = self.risk_update.clone().map(|update| {
+            let token = ctx.shutdown.clone();
+            tokio::spawn(async move { update.run(token).await })
+        });
         // Чтение журнала событий — по потребителю каждого шарда (APP-47); ошибки разделов — в журнал узла.
         let journal = self.events.iter().map(|events| {
             let (events, sinks, signals, token) = (
@@ -890,6 +900,12 @@ impl RoleService for Maintenance {
                 None => Ok(()),
             }
         };
+        let risk_update = async move {
+            match risk_update {
+                Some(task) => task.await,
+                None => Ok(()),
+            }
+        };
         let (
             gc,
             orphans,
@@ -901,6 +917,7 @@ impl RoleService for Maintenance {
             card_reindex,
             gal,
             threads,
+            risk_update,
             journal,
         ) = tokio::join!(
             gc,
@@ -913,6 +930,7 @@ impl RoleService for Maintenance {
             card_reindex,
             gal,
             threads,
+            risk_update,
             futures::future::try_join_all(journal),
         );
         for (what, done) in [
@@ -926,6 +944,7 @@ impl RoleService for Maintenance {
             ("card-reindex", card_reindex),
             ("gal", gal),
             ("thread-bind", threads),
+            ("risk-update", risk_update),
         ] {
             if let Err(e) = done {
                 return Err(tp_contracts::Error::Internal(format!("{what}: {e}")));
@@ -1142,6 +1161,7 @@ mod tests {
             card_reindex: None,
             gal: None,
             threads: None,
+            risk_update: None,
         };
         let (ctx, shutdown, ready) = ctx();
         let task = tokio::spawn(async move { role.run(ctx).await });
@@ -1277,6 +1297,7 @@ mod tests {
             card_reindex: None,
             gal: None,
             threads: None,
+            risk_update: None,
         };
         let (ctx, shutdown, _ready) = ctx();
         let task = tokio::spawn(async move { role.run(ctx).await });
@@ -1644,6 +1665,7 @@ mod tests {
             card_reindex: None,
             gal: None,
             threads: None,
+            risk_update: None,
         };
         let (ctx, shutdown, _ready) = ctx();
         let task = tokio::spawn(async move { role.run(ctx).await });

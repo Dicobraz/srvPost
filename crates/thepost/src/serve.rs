@@ -381,6 +381,19 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         services.trust.clone(),
         aux.clone(),
     ));
+    // Кэш справочника аномалий (APP-78, решение 126) — сброс по `risk_changed` и `Resync`; срок
+    // «только отчёт» (`risk.report_only_days`) — из перечитанной секции `risk`, без перезапуска.
+    tokio::spawn(
+        services
+            .risk
+            .clone()
+            .watch(bus.clone(), aux.clone(), events_cfg.retry_min),
+    );
+    tokio::spawn(apply_risk(
+        reloader.subscribe(),
+        services.risk.clone(),
+        aux.clone(),
+    ));
     // Изменение книги GAL — в JMAP push учётных записей организации (APP-49).
     if cfg.roles().contains(Role::Jmap) {
         tokio::spawn(
@@ -520,6 +533,10 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         holder.clone(),
         maintenance_cfg.gal_interval,
     ));
+    // Обновление пакета поставщика справочника аномалий (APP-78): при пустом хранилище — первый
+    // пакет из поставки (`risk.package.dir`, DEP-57), далее — источник обновления (`risk.update.*`);
+    // один узел — держатель лизы.
+    let risk_update = Some(services.risk_update(leases.clone(), holder.clone()));
     let maintenance = Maintenance {
         index: Arc::new(blob_index.clone()),
         store: blob.clone(),
@@ -581,6 +598,7 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
             tenant: services.tenant,
             interval: maintenance_cfg.purge_interval,
         }),
+        risk_update,
     };
     let mut setup = RoleSetup {
         cfg: &cfg,
@@ -1064,6 +1082,29 @@ async fn apply_trust(
         match section {
             Ok(section) => trust.update((*section).clone()),
             Err(e) => tracing::warn!(error = %e, "секция trust не применена"),
+        }
+    }
+}
+
+/// Секция `risk` справочника аномалий из перечитанной конфигурации (APP-78): срок «только отчёт»
+/// (`risk.report_only_days`) действует без перезапуска; источник обновления и период — роль
+/// maintenance, требует перезапуска.
+async fn apply_risk(
+    mut rx: tokio::sync::watch::Receiver<Arc<Config>>,
+    risk: Arc<crate::risk::RiskCache>,
+    shutdown: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            changed = rx.changed() => if changed.is_err() { return },
+        }
+        let section = rx
+            .borrow_and_update()
+            .section::<crate::sections::RiskSection>(sections::RISK);
+        match section {
+            Ok(section) => risk.update_section((*section).clone()),
+            Err(e) => tracing::warn!(error = %e, "секция risk не применена"),
         }
     }
 }

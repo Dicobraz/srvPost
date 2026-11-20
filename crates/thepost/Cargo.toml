@@ -49,14 +49,20 @@ clap.workspace = true
 futures.workspace = true
 mail-auth.workspace = true
 mail-parser.workspace = true
+base64.workspace = true
+ipnet.workspace = true
 prometheus-client.workspace = true
+publicsuffix.workspace = true
 reqwest.workspace = true
 ring.workspace = true
 rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
+time.workspace = true
 tokio.workspace = true
+uuid.workspace = true
 tracing.workspace = true
 winnow.workspace = true
 x509-parser.workspace = true
@@ -64,7 +70,6 @@ zip.workspace = true
 
 [dev-dependencies]
 tp-testkit.workspace = true
-base64.workspace = true
 tempfile.workspace = true
 # Записи журнала переписки в тестах CLI (`journal_commands_against_admin_api`, ADM-52).
 time.workspace = true
