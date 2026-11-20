@@ -3488,66 +3488,63 @@
         "type": "object"
       },
       "SourceKind": {
-        "description": "Вид доверенного источника: шлюз перед продуктом или приложение без SASL (только у источника организации).",
+        "description": "Доставка и параметры источника TI.",
         "oneOf": [
           {
-            "description": "Внешний MTA перед продуктом.",
+            "description": "Фид по HTTP(S).",
             "properties": {
-              "gateway": {
-                "description": "Внешний MTA перед продуктом.",
+              "http": {
+                "description": "Фид по HTTP(S).",
                 "properties": {
-                  "authserv_id": {
-                    "description": "authserv-id доверенных `Authentication-Results` шлюза; `null` — не доверять.",
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "xclient": {
-                    "description": "Принимать исходного клиента из `XCLIENT`/`XFORWARD`.",
-                    "type": "boolean"
+                  "url": {
+                    "description": "Адрес.",
+                    "type": "string"
                   }
                 },
                 "required": [
-                  "xclient"
+                  "url"
                 ],
                 "type": "object"
               }
             },
             "required": [
-              "gateway"
+              "http"
             ],
             "type": "object"
           },
           {
-            "description": "Устройство или система без SASL.",
+            "description": "Коллекция TAXII 2.1.",
             "properties": {
-              "application": {
-                "description": "Устройство или система без SASL.",
+              "taxii": {
+                "description": "Коллекция TAXII 2.1.",
                 "properties": {
-                  "external": {
-                    "description": "Разрешены внешние получатели.",
-                    "type": "boolean"
+                  "api_root": {
+                    "description": "API root.",
+                    "type": "string"
                   },
-                  "senders": {
-                    "description": "Разрешённые адреса отправителя (`user@example.org` или `@example.org`; не пусто).",
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
+                  "collection": {
+                    "description": "Коллекция.",
+                    "type": "string"
                   }
                 },
                 "required": [
-                  "senders",
-                  "external"
+                  "api_root",
+                  "collection"
                 ],
                 "type": "object"
               }
             },
             "required": [
-              "application"
+              "taxii"
             ],
             "type": "object"
+          },
+          {
+            "description": "Файл в каталоге импорта (закрытый контур).",
+            "enum": [
+              "file"
+            ],
+            "type": "string"
           }
         ]
       },
@@ -4945,18 +4942,27 @@
           {
             "description": "Совпадение поля письма со списком TI.",
             "properties": {
-              "field": {
-                "$ref": "#/components/schemas/Field",
-                "description": "Поле письма."
-              },
-              "list": {
-                "description": "Список.",
-                "type": "string"
+              "list_match": {
+                "description": "Совпадение поля письма со списком TI.",
+                "properties": {
+                  "field": {
+                    "$ref": "#/components/schemas/Field",
+                    "description": "Поле письма."
+                  },
+                  "list": {
+                    "description": "Список.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "list",
+                  "field"
+                ],
+                "type": "object"
               }
             },
             "required": [
-              "list",
-              "field"
+              "list_match"
             ],
             "type": "object"
           }
@@ -5130,13 +5136,22 @@
           {
             "description": "Отклонён при проверке — отчёт в `report`.",
             "properties": {
-              "report": {
-                "description": "Отчёт проверки (что не так).",
-                "type": "string"
+              "rejected": {
+                "description": "Отклонён при проверке — отчёт в `report`.",
+                "properties": {
+                  "report": {
+                    "description": "Отчёт проверки (что не так).",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "report"
+                ],
+                "type": "object"
               }
             },
             "required": [
-              "report"
+              "rejected"
             ],
             "type": "object"
           }
@@ -5155,72 +5170,11 @@
         "description": "Происхождение данных источника — для журнала и отчётов (решение 126 к).",
         "enum": [
           "vendor",
-          "gossopka",
-          "fincert",
+          "gos_sopka",
+          "fin_cert",
           "own"
         ],
         "type": "string"
-      },
-      "SourceKind": {
-        "description": "Доставка и параметры источника TI.",
-        "oneOf": [
-          {
-            "description": "Фид по HTTP(S).",
-            "properties": {
-              "http": {
-                "description": "Фид по HTTP(S).",
-                "properties": {
-                  "url": {
-                    "description": "Адрес.",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "url"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "http"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "Коллекция TAXII 2.1.",
-            "properties": {
-              "taxii": {
-                "description": "Коллекция TAXII 2.1.",
-                "properties": {
-                  "api_root": {
-                    "description": "API root.",
-                    "type": "string"
-                  },
-                  "collection": {
-                    "description": "Коллекция.",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "api_root",
-                  "collection"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "taxii"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "Файл в каталоге импорта (закрытый контур).",
-            "enum": [
-              "file"
-            ],
-            "type": "string"
-          }
-        ]
       },
       "FeedFormat": {
         "description": "Формат фида источника TI.",
@@ -5609,7 +5563,6 @@
             ]
           }
         },
-        "required": [],
         "type": "object"
       },
       "SignalsView": {

@@ -3832,10 +3832,13 @@ export interface components {
         Field: "sender_ip" | "link_domain" | "link_url" | "from_domain" | "attachment_sha256";
         /** @description Детектор признака — типизированный Rust-код с параметрами (решение 126 г). */
         Detector: "thread_new_attachment_type" | "encrypted_archive" | "disk_image_or_shortcut" | "thread_new_link_domain" | "reply_to_changed" | {
-            /** @description Поле письма. */
-            field: components["schemas"]["Field"];
-            /** @description Список. */
-            list: string;
+            /** @description Совпадение поля письма со списком TI. */
+            list_match: {
+                /** @description Поле письма. */
+                field: components["schemas"]["Field"];
+                /** @description Список. */
+                list: string;
+            };
         };
         /**
          * @description Собственное действие признака (от мягкого к строгому).
@@ -3899,8 +3902,11 @@ export interface components {
         };
         /** @description Состояние хранимого пакета. */
         PackageState: "active" | "previous" | {
-            /** @description Отчёт проверки (что не так). */
-            report: string;
+            /** @description Отклонён при проверке — отчёт в `report`. */
+            rejected: {
+                /** @description Отчёт проверки (что не так). */
+                report: string;
+            };
         };
         /**
          * @description Уровень источника TI (решение 126 е–з).
@@ -3911,7 +3917,7 @@ export interface components {
          * @description Происхождение данных источника — для журнала и отчётов (решение 126 к).
          * @enum {string}
          */
-        TiOrigin: "vendor" | "gossopka" | "fincert" | "own";
+        TiOrigin: "vendor" | "gos_sopka" | "fin_cert" | "own";
         /** @description Доставка и параметры источника TI. */
         SourceKind: {
             /** @description Фид по HTTP(S). */
