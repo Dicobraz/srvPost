@@ -36,7 +36,9 @@ export function SharingPolicyForm() {
   const { mutate, mutation } = useCustomMutation<Policy, HttpError, Policy>();
   const [form] = Form.useForm<Values>();
   const scope = Form.useWatch("scope", form);
-  if (query.isLoading || !result.data) return null;
+  // Ошибка запроса (404/403) у Refine — `result.data` пустой объект, а не undefined: без проверки `scope`
+  // `toValues` роняет весь экран. Форма — только по пришедшей политике.
+  if (query.isLoading || !result.data?.scope) return null;
   const initial = toValues(result.data);
   return (
     <Form<Values>

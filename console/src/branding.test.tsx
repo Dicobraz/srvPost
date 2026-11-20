@@ -16,9 +16,10 @@ const noPalette = { palette: { light: {}, dark: {}, cli: {} } };
 const org = () => ({ id: ORG, default: true, policy: empty, effective: empty });
 const levelForm = async (name: string) => await screen.findByRole("form", { name });
 // Брендинг живёт в меню пользователя (FIX-24), не на странице «Организация»: открыть панель настроек.
+// Имя пункта — с подписью иконки, поэтому совпадение по части имени.
 const openSettings = async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Меню пользователя" }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Настройки интерфейса" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Настройки интерфейса/ }));
   await screen.findByRole("dialog");
 };
 
