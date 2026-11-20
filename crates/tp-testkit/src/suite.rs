@@ -115,8 +115,8 @@ impl Wait for RealTime {
 // ---------- Разделы журнала по шардам ----------
 
 /// Набор проверок `PartitionAssigner` при текущем составе (CTR-34): каждый раздел `0..partitions` каждого шарда
-/// `shards` (и [`ShardId::MAIN`]) назначен ровно одному узлу состава, списки — по возрастанию, один шард —
-/// прежнее назначение `assigned`, узел вне состава — пусто.
+/// `shards` (и [`ShardId::MAIN`]) назначен ровно одному узлу состава, списки — по возрастанию, узел вне
+/// состава — пусто.
 pub fn partition_assigner(a: &dyn PartitionAssigner, shards: &[ShardId], partitions: u32) {
     let members = a.members().borrow().clone();
     assert!(!members.is_empty(), "состав не пуст");
@@ -128,16 +128,6 @@ pub fn partition_assigner(a: &dyn PartitionAssigner, shards: &[ShardId], partiti
         for node in &members {
             let mine = a.assigned_sharded(subscriber, node, &wanted, partitions);
             assert!(mine.windows(2).all(|w| w[0] < w[1]), "по возрастанию");
-            let main: Vec<Partition> = a
-                .assigned_sharded(subscriber, node, &[ShardId::MAIN], partitions)
-                .into_iter()
-                .map(|p| p.index)
-                .collect();
-            assert_eq!(
-                main,
-                a.assigned(subscriber, node, partitions),
-                "один шард — прежнее назначение"
-            );
             all.extend(mine);
         }
         all.sort();

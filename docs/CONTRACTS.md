@@ -231,9 +231,9 @@ watch::Receiver<Vec<NodeId>>` (новое значение — пересчит�
 `index` = `partition_of`, шард — по справочнику шардов; порядок — шард, затем раздел; `Display` — `"{shard}/{index}"`). Журналы шардов —
 `ShardEventLogs`: `shards()` (по возрастанию, всегда с `ShardId::MAIN`), `log(shard) -> Option<Arc<dyn EventLog>>`, `partitions()`
 (одинаково для всех шардов); один журнал — `SingleShard`. Назначение пар — `PartitionAssigner::assigned_sharded(subscriber, &NodeId,
-shards, N) -> Vec<ShardPartition>` (метод по умолчанию): раздел шарда назначается по ключу `shard_subscriber(subscriber, shard)` — для
-шарда 0 само имя, иначе `"{subscriber}@{shard}"`; лиза раздела — `events/{ключ}/{index}`. Каждый раздел каждого шарда — ровно одному
-узлу состава; один шард — прежние назначение и имена лиз. In-memory — `MemShardedEventLog` (`place` — справочник), `MemPartitionAssigner`;
+shards, N) -> Vec<ShardPartition>` (метод по умолчанию): раздел шарда назначается по ключу `shard_subscriber(subscriber, shard)` —
+`"{subscriber}@{shard}"`, основной шард — `"{subscriber}@0"` (CTR-71); лиза раздела — `events/{ключ}/{index}`. Каждый раздел каждого
+шарда — ровно одному узлу состава. In-memory — `MemShardedEventLog` (`place` — справочник), `MemPartitionAssigner`;
 наборы `suite::partition_assigner`, `suite::shard_event_logs`. Сигнал `LogAppended { partition }` пока без шарда.
 
 ## Membership
@@ -1635,3 +1635,9 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   `RulesInput` (вызывающие — `tp-smtp`, `tp-sieve`, `tp-testkit` — переведены в этом же PR). In-memory — `MemRisk`;
   набор `suite::risk`. PostgreSQL — META-87, детекторы — SMTP-52, `vnd.thepost.risk` — SIEVE-15, узел пакетов — APP-78,
   Admin API — ADM-51.
+- 2026-11-20 — CTR-71 (волна contracts-47, решения 93, 105): ключ подписчика шарда — всегда
+  `shard_subscriber(subscriber, shard)` = `"{subscriber}@{shard}"`, для основного шарда — `"{subscriber}@0"`
+  (особый случай «для шарда 0 — само имя» удалён). Ключи назначения разделов и имена лиз основного шарда меняются
+  с `events/{subscriber}/{index}` на `events/{subscriber}@0/{index}`; прежние лизы не переносятся — разделы
+  берутся под новыми именами (совместимость не нужна, решение 93). Комментарии `tp-meta` — в META при следующей
+  правке.
