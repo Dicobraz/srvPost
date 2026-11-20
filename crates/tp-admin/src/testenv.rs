@@ -217,6 +217,8 @@ pub struct Stores {
     pub sync_gate: MemSyncGate,
     /// Календари и адресные книги, права на коллекции.
     pub dav: MemDav,
+    /// Справочник аномалий и TI (`Admin::with_risk`, ADM-51).
+    pub risk: MemRisk,
 }
 
 impl Stores {
