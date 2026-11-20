@@ -6217,7 +6217,7 @@ dependencies = [
  "imap-codec",
  "insta",
  "mail-parser 1.0.1",
- "nom 7.1.3",
+ "nom 8.0.0",
  "proptest",
  "rustls",
  "rustls-pemfile",
