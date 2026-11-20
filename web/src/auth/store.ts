@@ -66,15 +66,17 @@ function makeChannel(): Channel | null {
 
 /** Состояние входа вкладки: сессия, подписки, соседи; канал — наружу и от соседей. */
 export class AuthStore {
-  /** Идентификатор вкладки: время старта (старейший — обновляющий) + случайная добавка. */
-  readonly id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  /** Идентификатор вкладки: время старта (старейший — обновляющий) + случайная добавка;
+   * тестам передаётся явный, чтобы порядок «старейшин» не зависел от совпадения миллисекунд. */
+  readonly id: string;
 
   private session: Session | null = null;
   private readonly peers = new Map<string, { seen: number; holds: string | null }>();
   private readonly listeners = new Set<() => void>();
   private readonly channel: Channel | null;
 
-  constructor(channel: Channel | null = makeChannel()) {
+  constructor(channel: Channel | null = makeChannel(), id?: string) {
+    this.id = id ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     this.channel = channel;
     if (channel) {
       channel.onmessage = (event) => this.receive(event.data);
