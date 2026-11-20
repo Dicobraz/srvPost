@@ -390,7 +390,7 @@ pub enum PackageAction {
 
 /// Действия с источниками TI.
 #[derive(Debug, Clone, Subcommand)]
-pub enum SourceAction {
+pub enum RiskSourceAction {
     /// Источники: уровень, доставка, формат, TTL, лицензия.
     List,
     /// Новый источник. Файл — JSON источника (`id`, `tier`, `kind`, `format`, `ttl`, …); ключ —
@@ -1052,7 +1052,7 @@ pub enum DomainAction {
 
 /// Действия с доверенными источниками организации.
 #[derive(Debug, Clone, Subcommand)]
-pub enum RiskSourceAction {
+pub enum SourceAction {
     /// Доверенные источники организации.
     List,
     /// Создание или замена источника: откуда (сети или сертификат клиента) и кто (шлюз или приложение).

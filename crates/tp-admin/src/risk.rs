@@ -865,7 +865,7 @@ pub struct UsageParams {
 }
 
 /// Учёт источника по организации: суммы обращений и совпадений (MSSP, решение 126 е).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct UsageTotalView {
     /// Организация (UUID).
     pub tenant: String,
@@ -876,7 +876,7 @@ pub struct UsageTotalView {
 }
 
 /// Учёт источника: суммы по организациям с `since`, по возрастанию организации.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct UsageView {
     /// Источник.
     pub source: String,
