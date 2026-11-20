@@ -2258,7 +2258,7 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use serde_json::{Value, json};
     use tower::ServiceExt;
-    use tp_contracts::risk::{Detector, Hit, HitSource, PackageState, Semver};
+    use tp_contracts::risk::{Detector, Hit, HitSource, PackageState, Semver, Verdict};
 
     use super::*;
     use crate::testenv::{Env, config};
@@ -2535,7 +2535,7 @@ mod tests {
         let bytes = serde_json::to_vec(&second).expect("json");
 
         // Загрузка — 202 и отчёт: пакет поставлен, но не активен.
-        let (s, _, b) = upload(&env, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &bytes).await;
+        let (s, b) = upload(&env, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &bytes).await;
         assert_eq!(s, StatusCode::ACCEPTED, "{b}");
         assert_eq!(b["version"], json!(2));
         assert_eq!(b["key_id"], json!("vendor"));
@@ -2605,7 +2605,7 @@ mod tests {
 
         // Чужая подпись — 422 с причиной; тот же номер повторно — 422 (не растёт).
         let stranger = manifest(3, 8, "stranger");
-        let (s, _, b) = upload(
+        let (s, b) = upload(
             &env,
             RISK_PACKAGES_ROUTE,
             "root",
@@ -2619,7 +2619,7 @@ mod tests {
             "{}",
             b["detail"]
         );
-        let (s, _, b) = upload(&env, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &bytes).await;
+        let (s, b) = upload(&env, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &bytes).await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
         assert!(
             b["detail"]
@@ -2631,7 +2631,7 @@ mod tests {
         );
 
         // Тип не тот — 415; больше предела — 413.
-        let (s, _, _) = upload(
+        let (s, _) = upload(
             &env,
             RISK_PACKAGES_ROUTE,
             "root",
@@ -2648,7 +2648,7 @@ mod tests {
         };
         let small = Env::with(cfg, Vec::new());
         let big = vec![b'x'; 2048];
-        let (s, _, _) = upload(&small, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &big).await;
+        let (s, _) = upload(&small, RISK_PACKAGES_ROUTE, "root", OCTET_STREAM, &big).await;
         assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
 
         // Права: организация и оператор пакетов не касаются.
@@ -2657,7 +2657,7 @@ mod tests {
                 .call("GET", RISK_PACKAGES_ROUTE, Some(token), None)
                 .await;
             assert_eq!(s, StatusCode::FORBIDDEN, "{token}");
-            let (s, _, _) = upload(&env, RISK_PACKAGES_ROUTE, token, OCTET_STREAM, &bytes).await;
+            let (s, _) = upload(&env, RISK_PACKAGES_ROUTE, token, OCTET_STREAM, &bytes).await;
             assert_eq!(s, StatusCode::FORBIDDEN, "{token}");
         }
         // Установка и активация — в журнале аудита.
@@ -2773,7 +2773,7 @@ mod tests {
 
         // Импорт файла списка — версия становится текущей; тип не тот — 415.
         let list: &[u8] = b"1.2.3.4\n5.6.7.8\n\n9.9.9.9\n";
-        let (s, _, b) = upload(
+        let (s, b) = upload(
             &env,
             "/api/v1/risk/sources/feodo/import",
             "root",
@@ -2785,7 +2785,7 @@ mod tests {
         assert_eq!(b["entries"], json!(3), "пустые строки не считаются");
         assert_eq!(b["list"], json!("feodo"));
         assert_eq!(b["sha256"].as_str().map(str::len), Some(64), "hex");
-        let (s, _, _) = upload(
+        let (s, _) = upload(
             &env,
             "/api/v1/risk/sources/feodo/import",
             "root",

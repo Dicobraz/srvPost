@@ -358,6 +358,8 @@ pub struct Env {
     pub journal: MemJournal,
     /// Беседы учётных записей (`Admin::with_threads`) — то же хранилище, что у приёма писем.
     pub threads: MemThreads,
+    /// Справочник аномалий и TI (`Admin::with_risk`, ADM-51) — то же хранилище, что у узла.
+    pub risk: MemRisk,
     pub admin: Arc<Admin>,
     pub router: Router,
     pub other_tenant: TenantId,
