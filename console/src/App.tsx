@@ -20,7 +20,7 @@ import { ContactCreate, ContactEdit, ContactList } from "./pages/contacts";
 import { DeliveryPage } from "./pages/delivery";
 import { DisabledPage } from "./pages/disabled";
 import { GroupCreate, GroupEdit, GroupList } from "./pages/groups";
-import { JournalPage } from "./pages/journal";
+import { JournalPage, JournalRulesPage } from "./pages/journal";
 import { LoginPage } from "./pages/login";
 import { MailboxAuditPage } from "./pages/mailbox-audit";
 import { ModerationPage } from "./pages/moderation";
@@ -117,6 +117,9 @@ export function App() {
               { name: "audit", list: "/audit", meta: { label: "Журнал аудита" } },
               // Отдельно от журналов доставки и аудита: содержимое писем — только аудитору журнала (UI-25).
               { name: "journal", list: "/journal", meta: { label: "Журнал переписки" } },
+              // Правила журналирования (UI-26, решение #171): ведёт администратор организации —
+              // аудитор журнала правил не видит (узел отвечает 403, раздел — другая роль).
+              { name: "journal-rules", list: "/journal-rules", meta: { label: "Правила журналирования" } },
               { name: "mailbox-audit", list: "/mailbox-audit", meta: { label: "Аудит ящиков" } },
             ]}
             // Без внешних обращений (SRS 5.2): телеметрия Refine выключена.
@@ -169,6 +172,7 @@ export function App() {
                 <Route path="/delivery" element={<DeliveryPage />} />
                 <Route path="/audit" element={<AuditPage />} />
                 <Route path="/journal" element={<JournalPage />} />
+                <Route path="/journal-rules" element={<JournalRulesPage />} />
                 <Route path="/mailbox-audit" element={<MailboxAuditPage />} />
                 <Route path="*" element={<ErrorComponent />} />
               </Route>

@@ -140,6 +140,8 @@ test("прочие роли: журнала в меню нет, прямой а�
   const items = (await screen.findAllByRole("menuitem")).map((m) => m.textContent);
   expect(items).toContain("Журнал аудита");
   expect(items).not.toContain("Журнал переписки");
+  // Управление правилами журналирования (UI-26) — администратору организации виден, содержимого журнала нет.
+  expect(items).toContain("Правила журналирования");
   expect(calls.some((c) => c.path.startsWith(`${BASE}/journal`))).toBe(false);
 
   cleanup();
@@ -155,4 +157,158 @@ test("роли: журнал переписки — только аудитор�
   expect(allowed(["journal_auditor"], "organization", "list")).toBe(false);
   expect(allowed(["journal_auditor"], "audit", "list")).toBe(false);
   expect(allowed(["journal_auditor"], "accounts", "list")).toBe(false);
+});
+
+// Правила журналирования (UI-26): цель «группа Поддержка» с участником ivan, ящики — по имени входа.
+const RULES: Schemas["JournalRuleView"][] = [
+  { id: "mb-ivan", tenant: ORG, scope: { mailbox: "acc1" }, direction: "both", enabled: true },
+  { id: "grp-support", tenant: ORG, scope: { group: "grp1" }, direction: "in", enabled: true },
+  { id: "org-all", tenant: ORG, scope: "org", direction: "both", enabled: true },
+  { id: "mb-off", tenant: ORG, scope: { mailbox: "acc2" }, direction: "out", enabled: false },
+];
+
+const ruleRoutes = {
+  [`GET ${BASE}/journal/rules`]: { body: { rules: RULES } },
+  [`GET ${BASE}/groups`]: {
+    body: [
+      { id: "grp1", name: "Поддержка", members: [{ account: "acc1" }], senders: "anyone", moderators: [], hidden_from_gal: false, names: {} },
+    ],
+  },
+  [`GET ${BASE}/accounts`]: { body: [{ id: "acc1", login: "ivan@example.org" }, { id: "acc2", login: "maria@example.org" }] },
+};
+
+test("правила журналирования: список в порядке наследования — цель по имени, направление, источник значения", async () => {
+  const calls = open("/journal-rules", ruleRoutes, ["organization_admin"]);
+  // Цели — по имени группы и имени входа ящика (не UUID); порядок строк — ящик > группа > организация.
+  expect(await screen.findByText("ящик ivan@example.org")).toBeTruthy();
+  expect(screen.getByText("группа Поддержка")).toBeTruthy();
+  expect(screen.getByText("организация")).toBeTruthy();
+  expect(screen.getByText("входящие (In)")).toBeTruthy();
+  // «Источник значения» (UI-23): включённое правило — источник для своей цели…
+  expect(screen.getByText("источник: ящик")).toBeTruthy();
+  expect(screen.getByText("источник: группа")).toBeTruthy();
+  expect(screen.getByText("источник: организация")).toBeTruthy();
+  // …выключенное — что действует вместо: ящик без включённого правила журналирует правило организации.
+  expect(screen.getByText("выключено — действует org-all (источник: организация)")).toBeTruthy();
+  expect(sent(calls, "GET", `${BASE}/journal/rules`)).toHaveLength(1);
+});
+
+test("правило: добавление в окне — PUT journal/rules/{id} с целью, направлением и включением", async () => {
+  const calls = open(
+    "/journal-rules",
+    { ...ruleRoutes, [`PUT ${BASE}/journal/rules/grp-news`]: (c) => ({ body: c.body }) },
+    ["organization_admin"],
+  );
+  fireEvent.click((await buttons("Добавить правило"))[0]);
+  fireEvent.change(screen.getByLabelText("Идентификатор правила"), { target: { value: "grp-news" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Группа рассылки" }));
+  fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Группа цели" }));
+  fireEvent.click(await screen.findByTitle("Поддержка"));
+  fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(sent(calls, "PUT", `${BASE}/journal/rules/grp-news`)).toHaveLength(1));
+  expect(sent(calls, "PUT", `${BASE}/journal/rules/grp-news`)[0].body).toEqual({
+    scope: { group: "grp1" },
+    direction: "both",
+    enabled: true,
+  });
+  expect(await screen.findByText("Правило журналирования создано")).toBeTruthy();
+  // После записи список перечитывается.
+  await waitFor(() => expect(sent(calls, "GET", `${BASE}/journal/rules`)).toHaveLength(2));
+});
+
+test("правило: изменение — PUT по тому же идентификатору, идентификатор недоступен", async () => {
+  const calls = open(
+    "/journal-rules",
+    { ...ruleRoutes, [`PUT ${BASE}/journal/rules/mb-ivan`]: (c) => ({ body: c.body }) },
+    ["organization_admin"],
+  );
+  expect(await screen.findByText("ящик ivan@example.org")).toBeTruthy();
+  fireEvent.click((await buttons("Изменить"))[0]);
+  const id = screen.getByLabelText("Идентификатор правила") as HTMLInputElement;
+  expect(id.disabled).toBe(true);
+  expect(id.value).toBe("mb-ivan");
+  // Цель — как в правиле: ящик; меняется направление.
+  expect(screen.getByRole("radio", { name: "Ящик" })).toBeTruthy();
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Направление" }));
+  fireEvent.click(await screen.findByTitle("исходящие (Out)"));
+  fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(sent(calls, "PUT", `${BASE}/journal/rules/mb-ivan`)).toHaveLength(1));
+  expect(sent(calls, "PUT", `${BASE}/journal/rules/mb-ivan`)[0].body).toEqual({
+    scope: { mailbox: "acc1" },
+    direction: "out",
+    enabled: true,
+  });
+});
+
+test("правило: удаление с подтверждением — DELETE journal/rules/{id}", async () => {
+  const calls = open(
+    "/journal-rules",
+    { ...ruleRoutes, [`DELETE ${BASE}/journal/rules/mb-ivan`]: { body: RULES[0] } },
+    ["organization_admin"],
+  );
+  expect(await screen.findByText("ящик ivan@example.org")).toBeTruthy();
+  fireEvent.click((await buttons("Удалить"))[0]);
+  expect(await screen.findByText("Удалить правило mb-ivan?")).toBeTruthy();
+  fireEvent.click((await buttons("Удалить")).at(-1) as HTMLButtonElement);
+  await waitFor(() => expect(sent(calls, "DELETE", `${BASE}/journal/rules/mb-ivan`)).toHaveLength(1));
+  expect(await screen.findByText("Правило mb-ivan удалено")).toBeTruthy();
+});
+
+test("правило: отказ узла — текст RFC 9457 у формы; дубликат цели с направлением — подсказка", async () => {
+  const calls = open(
+    "/journal-rules",
+    {
+      ...ruleRoutes,
+      [`PUT ${BASE}/journal/rules/org-both`]: {
+        status: 409,
+        body: {
+          status: 409,
+          title: "Conflict",
+          detail: "организация уже журналируется правилом org-all (оба) — измените или удалите его",
+        },
+      },
+    },
+    ["organization_admin"],
+  );
+  expect(await screen.findByText("организация")).toBeTruthy();
+  fireEvent.click((await buttons("Добавить правило"))[0]);
+  fireEvent.change(screen.getByLabelText("Идентификатор правила"), { target: { value: "org-both" } });
+  fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  expect(await screen.findByText(/уже журналируется правилом org-all/)).toBeTruthy();
+  // Окно открыто — правило не создано, список не перечитан.
+  expect(screen.getByLabelText("Идентификатор правила")).toBeTruthy();
+  expect(sent(calls, "GET", `${BASE}/journal/rules`)).toHaveLength(1);
+});
+
+test("правила и роли: администратору организации — управление, аудитору журнала — нет (узел отвечает 403)", async () => {
+  const calls = open("/journal-rules", ruleRoutes, ["journal_auditor"]);
+  expect(await screen.findByText("Нет доступа")).toBeTruthy();
+  // Правила аудитор журнала не запрашивает: раздел скрыт.
+  expect(sent(calls, "GET", `${BASE}/journal/rules`)).toHaveLength(0);
+
+  cleanup();
+  const menu = open(
+    "/",
+    {
+      [`GET ${BASE}/journal`]: { body: { entries: [], next: null } },
+      [`GET ${BASE}/journal/verify`]: { body: { records: 0, ok: true, broken_at: null } },
+    },
+    ["journal_auditor"],
+  );
+  await screen.findByText("Журнал переписки");
+  fireEvent.click(screen.getByRole("button", { name: "bars" }));
+  const items = (await screen.findAllByRole("menuitem")).map((m) => m.textContent);
+  expect(items).toContain("Журнал переписки");
+  expect(items).not.toContain("Правила журналирования");
+  expect(sent(menu, "GET", `${BASE}/journal/rules`)).toHaveLength(0);
+});
+
+test("роли правил журналирования: администраторам — управление, оператору — чтение, аудиторам — нет", () => {
+  expect(allowed(["organization_admin"], "journal-rules", "list")).toBe(true);
+  expect(allowed(["organization_admin"], "journal-rules", "delete")).toBe(true);
+  expect(allowed(["installation_admin"], "journal-rules", "create")).toBe(true);
+  expect(allowed(["operator"], "journal-rules", "list")).toBe(true);
+  expect(allowed(["operator"], "journal-rules", "delete")).toBe(false);
+  expect(allowed(["journal_auditor"], "journal-rules", "list")).toBe(false);
+  expect(allowed(["auditor"], "journal-rules", "list")).toBe(false);
 });
