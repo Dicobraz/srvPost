@@ -17,6 +17,7 @@ pub mod modules;
 pub mod openapi;
 pub mod profile_signer;
 pub mod protocols;
+pub mod risk;
 pub mod roles;
 pub mod rpc_services;
 pub mod secrets;

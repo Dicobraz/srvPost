@@ -411,6 +411,8 @@ pub async fn check(
     internal_pki(cfg, SystemTime::now(), report).await;
     dav_well_known(cfg, report);
     admin_audit(cfg, store.as_ref(), cause, report).await;
+    // Справочник аномалий (APP-78): ключи подписи пакетов, источник обновления, состояние пакетов.
+    crate::risk::doctor_risk(cfg, db.as_ref(), report).await;
     journal(cfg, store.as_ref(), db.as_ref(), cause, None, false, report).await;
     if let Some(pool) = db {
         pool.close().await;

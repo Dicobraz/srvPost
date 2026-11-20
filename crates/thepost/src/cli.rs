@@ -75,6 +75,12 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Пакеты признаков поставщика: проверка и сборка (APP-78, DEP-57).
+    Risk {
+        /// Действие.
+        #[command(subcommand)]
+        action: RiskAction,
+    },
     /// Администрирование: первый администратор (локальный сокет узла) и команды Admin API.
     Admin {
         /// Подключение к Admin API.
@@ -154,6 +160,36 @@ pub enum ConfigAction {
         /// Цвет вывода.
         #[command(flatten)]
         color: ColorArgs,
+    },
+}
+
+/// Действия с пакетами признаков поставщика (APP-78, DEP-57).
+#[derive(Debug, Subcommand)]
+pub enum RiskAction {
+    /// Проверка пакета без установки: подпись доверенным ключом (`risk.trusted_keys`), lint,
+    /// пробный прогон на образцах — тот же отчёт, что видит Admin API при загрузке пакета.
+    /// СУБД не нужна (действующий каталог не читается — всё считается добавленным).
+    Verify {
+        /// Файл пакета (ZIP: manifest.json, manifest.sig, sources.json, списки и образцы).
+        file: PathBuf,
+        /// Цвет вывода.
+        #[command(flatten)]
+        color: ColorArgs,
+    },
+    /// Сборка и подпись пакета из каталога с `manifest.json` (DEP-57): хэши списков и образцов
+    /// заполняются по файлам, канонический JSON манифеста подписывается Ed25519, рядом — архив ZIP.
+    Pack {
+        /// Файл `manifest.json` (пути списков, образцов и `sources.json` — относительно него).
+        #[arg(long)]
+        manifest: PathBuf,
+        /// Ключ подписи: `SecretRef` (секрет хранилища по config.yaml) или файл (base64/hex seed
+        /// 32 байта либо DER PKCS#8).
+        #[arg(long)]
+        key: String,
+        /// Файл пакета для записи (по умолчанию — `<каталог>/risk-v<версия>.zip`; имя файла с
+        /// номером версии — источник `risk.update.dir`).
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -371,6 +407,7 @@ pub async fn run(cli: Cli) -> i32 {
             api,
             action: AdminAction::Tui { theme },
         } => admin_tui(&path, api, theme).await,
+        Command::Risk { action } => risk_command(&path, action).await,
         Command::Serve => serve_until_signal(path).await,
         Command::SearchExtract => {
             // Подпроцесс запускается до рантайма (`main`): сюда приходит только вызов из кода.
@@ -513,6 +550,97 @@ async fn serve_until_signal(path: PathBuf) -> i32 {
 fn fail(e: &Error) -> i32 {
     eprintln!("thepost: {}", error_text(e));
     1
+}
+
+/// Загружает config.yaml (для `risk.trusted_keys` и хранилища секретов `--key SecretRef`).
+async fn load_config(path: &Path) -> tp_contracts::Result<tp_platform::Config> {
+    let registry = sections::registry()?;
+    let p = path.to_owned();
+    tokio::task::spawn_blocking(move || registry.load(&p))
+        .await
+        .map_err(|_| Error::internal("чтение конфигурации прервано"))?
+}
+
+/// `thepost risk verify|pack` (APP-78, DEP-57). `verify` — та же проверка, что у Admin API перед
+/// установкой (подпись, lint, пробный прогон; отчёт «что изменится» — без СУБД всё считается
+/// добавленным), 0 — пакет принят; `pack` — сборка и подпись пакета, ключ — `SecretRef` (секрет
+/// хранилища из config.yaml) или файл.
+async fn risk_command(config: &Path, action: RiskAction) -> i32 {
+    match action {
+        RiskAction::Verify { file, color } => {
+            let bytes = match std::fs::read(&file) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("thepost: risk verify: {}: {e}", file.display());
+                    return 1;
+                }
+            };
+            let cfg = match load_config(config).await {
+                Ok(cfg) => cfg,
+                Err(e) => return fail(&e),
+            };
+            let section = crate::risk::section_of(&cfg);
+            let verifier = match crate::risk::Verifier::new(&section, crate::risk::node_version()) {
+                Ok(verifier) => verifier,
+                Err(e) => return fail(&e),
+            };
+            match verifier.verify(&bytes, None) {
+                Ok(verified) => {
+                    let theme = color.theme();
+                    style::print(theme, &crate::risk::verify_report_text(&verified));
+                    0
+                }
+                Err(e) => {
+                    eprintln!("thepost: risk verify: {}", error_text(&e));
+                    1
+                }
+            }
+        }
+        RiskAction::Pack { manifest, key, out } => {
+            let cfg = match load_config(config).await {
+                Ok(cfg) => cfg,
+                Err(e) => return fail(&e),
+            };
+            let secrets = match secrets::store(&cfg, None).await {
+                Ok(secrets) => secrets,
+                Err(e) => return fail(&e),
+            };
+            let signing = match crate::risk::signing_key_value(&key, secrets.as_ref()).await {
+                Ok(key) => key,
+                Err(e) => return fail(&e),
+            };
+            match crate::risk::pack(&manifest, &signing) {
+                Ok((bytes, signed)) => {
+                    let out = out.unwrap_or_else(|| {
+                        let dir = manifest
+                            .parent()
+                            .filter(|p| !p.as_os_str().is_empty())
+                            .unwrap_or_else(|| Path::new("."));
+                        dir.join(format!("risk-v{}.zip", signed.version))
+                    });
+                    match std::fs::write(&out, &bytes) {
+                        Ok(()) => {
+                            println!(
+                                "✓ пакет версии {} подписан и записан: {} ({} байт)",
+                                signed.version,
+                                out.display(),
+                                bytes.len()
+                            );
+                            0
+                        }
+                        Err(e) => {
+                            eprintln!("thepost: risk pack: {}: {e}", out.display());
+                            1
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("thepost: risk pack: {}", error_text(&e));
+                    1
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
