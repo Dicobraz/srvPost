@@ -12,7 +12,7 @@
 | Этап | Содержание | Волны | Карточки | Статус | Критерий завершения |
 |---|---|---|---|---|---|
 | Ф0. Основа | Платформа, хранилище метаданных и BLOB, CI, стенд SMB | 38/38 | 87/87 | ✅ готово | Узел SMB запускается из одного бинарного файла; метаданные и BLOB с тестами; CI ≤ 7 мин; стенд SMB поднимается |
-| Ф1. MVP SMB | SMTP с очередью и Milter, IMAP, JMAP Mail, поиск, LDAP, Kerberos, OAUTHBEARER, корзина, Admin API, CLI | 340/356 | 457/480 | в работе, 95 % карточек | Почта SMB целиком на стенде: приём и отправка, IMAP и JMAP, поиск, вход; проверка клиентами Thunderbird и Postman; нагрузка Д.6 для SMB |
+| Ф1. MVP SMB | SMTP с очередью и Milter, IMAP, JMAP Mail, поиск, LDAP, Kerberos, OAUTHBEARER, корзина, Admin API, CLI | 345/356 | 469/480 | в работе, 98 % карточек | Почта SMB целиком на стенде: приём и отправка, IMAP и JMAP, поиск, вход; проверка клиентами Thunderbird и Postman; нагрузка Д.6 для SMB |
 | Ф2. Совместная работа | CalDAV, CardDAV, JMAP Calendars и Contacts, scheduling, free/busy, Sieve, веб-консоль администратора | 157/166 | 227/238 | в работе, 95 % карточек | Календари, контакты, правила и автоответы проверены клиентами; консоль администратора покрывает Admin API |
 | Ф3. Enterprise | S3, кластерные роли, межузловое взаимодействие, edge, шарды, Legal Hold, экспорт и импорт | 11/11 | 14/14 | ✅ готово | Схемы Enterprise-ВМ и Enterprise-K8s (приложение З) на стенде; переключение СУБД ≤ 30 с; нагрузка Д.6 для Enterprise |
 | Ф4. Выпуск | Стабилизация, аудит безопасности, фаззинг парсеров, документация администратора | 2/2 | 2/2 | ✅ готово | Аудит безопасности без открытых критичных находок; фаззинг парсеров; документация; выпуск 1.0 |
@@ -331,9 +331,9 @@ Admin API — 500), `smtp-17` (FIX-01) → `app-44` (FIX-02, одобрение 
 | Волна | Карточки | Класс | Ждёт | Поток |
 |---|---|---|---|---|
 | ✅ sys-08 | SYS-13 | A | — | 2 |
-| app-40 | APP-45, APP-46, APP-47, APP-48 | A | cluster-09, app-17, meta-13, meta-14, meta-25, sys-08 | 2 |
+| ✅ app-40 | APP-45, APP-46, APP-47, APP-48 | A | cluster-09, app-17, meta-13, meta-14, meta-25, sys-08 | 2 |
 | ✅ meta-38 | META-61, META-62 | A | meta-13, meta-24 | 3 |
-| deploy-24 | DEP-30, DEP-31, DEP-32, DEP-33, DEP-34 | A | deploy-07, deploy-15, sys-07, meta-25 | 4 |
+| ✅ deploy-24 | DEP-30, DEP-31, DEP-32, DEP-33, DEP-34 | A | deploy-07, deploy-15, sys-07, meta-25 | 4 |
 | ✅ deps-09 (выполнена #208 — прямая миграция mail-parser 1.0.1; ветка x/deps-09 с mail-parser-1 отклонена, решение 93) | DEPS-09 | B | deps-02 | 1 |
 | cluster-13 | CLU-18 | A | deploy-20 | 4 |
 | ✅ contracts-47 (ветка `x/contracts-47`) | CTR-71 | B | contracts-22 | 1 |
@@ -352,7 +352,7 @@ Admin API — 500), `smtp-17` (FIX-01) → `app-44` (FIX-02, одобрение 
 
 | Волна | Карточки | Класс | Ждёт | Поток |
 |---|---|---|---|---|
-| contracts-43 (ветка `x/contracts-43`) | CTR-61 | B | contracts-29 | 1 |
+| ✅ contracts-43 (ветка `x/contracts-43`) | CTR-61 | B | contracts-29 | 1 |
 | meta-40 (ветка `x/meta-40`) | META-64 | B | contracts-43 | 3 |
 | admin-18 | ADM-28 | A | contracts-43 | 3 |
 | app-42 | APP-50 | A | meta-40, admin-18 | 2 |
@@ -371,13 +371,13 @@ Admin API — 500), `smtp-17` (FIX-01) → `app-44` (FIX-02, одобрение 
 | ✅ jmap-14 | JMAP-14 (этап 2) | A | jmap-02 | 3 |
 | ✅ imap-06 | IMAP-15 | A | imap-02, contracts-23 | 2 |
 | ✅ admin-05 | ADM-10 | A | admin-02, contracts-23 | 3 |
-| app-08 | APP-12 | A | meta-15, auth-05, mailstore-10, smtp-07, jmap-08, imap-06, admin-05 | 2 |
+| ✅ app-08 | APP-12 | A | meta-15, auth-05, mailstore-10, smtp-07, jmap-08, imap-06, admin-05 | 2 |
 
 ### Решение 2026-11-04: внешние встречи — API занятости и публикации — этап 3
 
 | Волна | Карточки | Класс | Ждёт | Поток |
 |---|---|---|---|---|
-| contracts-24 (ветка `x/contracts-24`) | CTR-36 | B | contracts-23 | 1 |
+| ✅ contracts-24 (ветка `x/contracts-24`) | CTR-36 | B | contracts-23 | 1 |
 | meta-16 | META-34 | A | meta-15, contracts-24 | 3 |
 | ✅ jmap-09 | JMAP-19, JMAP-20 | A | jmap-08, contracts-24 (и JMAP Calendars, Ф2) | 3 |
 
