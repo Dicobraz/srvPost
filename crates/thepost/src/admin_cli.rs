@@ -2742,7 +2742,7 @@ async fn thread_command(
                 })
                 .collect();
             let text = if rows.is_empty() {
-                format!("{}", style::more(args.theme(), "Удержанных бесед нет."))
+                style::more(args.theme(), "Удержанных бесед нет.")
             } else {
                 style::table(
                     args.theme(),
@@ -4574,7 +4574,7 @@ mod tests {
                     .expect("запись")
                     .name()
                     .expect("имя")
-                    .to_owned()
+                    .into_owned()
             })
             .collect();
         names.sort();

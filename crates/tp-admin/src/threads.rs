@@ -787,7 +787,7 @@ mod tests {
                     .expect("запись")
                     .name()
                     .expect("имя")
-                    .to_owned()
+                    .into_owned()
             })
             .collect()
     }
