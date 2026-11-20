@@ -5300,10 +5300,14 @@ mod tests {
         .await
         .expect("signals reset");
         assert!(out.contains("сброшено"), "{out}");
-        // Организация мягче — ошибка с подсказкой; строже — ок.
-        let err = exec(
+        // Организация мягче — ошибка с подсказкой; строже — ок (уровень организации — с --org).
+        let org_args = ApiArgs {
+            org: Some(TenantId::DEFAULT.to_string()),
+            ..ApiArgs::default()
+        };
+        let err = execute(
             &org,
-            false,
+            &org_args,
             ApiAction::Risk {
                 action: Box::new(RiskAction::Signals {
                     action: Box::new(SignalsAction::Set {
@@ -5320,10 +5324,6 @@ mod tests {
         .await
         .expect_err("мягче");
         assert!(err.contains("422"), "{err}");
-        let org_args = ApiArgs {
-            org: Some(TenantId::DEFAULT.to_string()),
-            ..ApiArgs::default()
-        };
         let out = execute(
             &org,
             &org_args,
