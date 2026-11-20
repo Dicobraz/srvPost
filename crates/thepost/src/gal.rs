@@ -115,7 +115,7 @@ impl GalSync {
             // Контроль книги (META-90): версия каталога не изменилась с последней сборки — выгрузки нет.
             // Каталог без версии (`None`) — полная выгрузка на каждый цикл; недоступность СУБД — как ошибка
             // выгрузки: книга прежняя, повтор через период.
-            let built = self.built.lock().expect("версия книги").clone();
+            let built = *self.built.lock().expect("версия книги");
             let version = match self.source.directory.gal_version(self.tenant).await {
                 Ok(Some(v)) if built == Some(v) => continue,
                 Ok(version) => version,
