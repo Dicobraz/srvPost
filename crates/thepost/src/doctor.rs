@@ -5,7 +5,8 @@
 //! минимальные привилегии процесса (PLT-16): учётная запись, capabilities, no_new_privs, seccomp, Landlock;
 //! DNS почтового домена (MX, SPF, DKIM, DMARC, MTA-STS, PTR), сертификаты и PROXY v2 — `doctor_dns` (APP-06);
 //! сроки внутренних сертификатов (CA СУБД и OpenBao, сертификат узла от них) — `pki.*` (APP-25); короткий
-//! сертификат узла (срок меньше двух окон продления) — предупреждение о смене режима (APP-81); приёмники экспорта
+//! сертификат узла (срок меньше двух окон продления) — предупреждение о смене режима (APP-81) с приписками
+//! о наступившем окне продления и об окне, которое может пропустить проверка (PLT-40); приёмники экспорта
 //! журнала аудита — `admin.audit.syslog`, `admin.audit.otlp` (APP-59);
 //! журнал переписки (APP-82, SRS 4.9) — хеш-цепочка индекса и сверка с хранилищем записей (`journal.chain`,
 //! `journal.index`), прогноз объёма на срок блокировки (`journal.retention`), предупреждение SMB о локальном
@@ -1579,32 +1580,51 @@ fn pki_expiry(not_after: SystemTime, now: SystemTime, renew: &str) -> (Status, S
 const DAY: Duration = Duration::from_secs(86_400);
 
 /// Предупреждение о коротком сертификате узла (APP-81): срок жизни меньше `2 ×` максимального окна
-/// продления (`acme.renew_before`, 30 сут.) — окно режется до трети срока (правило PLT-37:
-/// `min(renew_before, треть срока)`), продление начинается через `срок − окно` после выпуска, обращения
-/// к серверу частые. Короткий сертификат — норма нового графика CA/B Forum (ballot SC-081v3: 47 сут. с
-/// 03.2029, профиль Let's Encrypt — 6 сут.), поэтому тон — предупреждение о смене режима обслуживания,
-/// а не ошибка: при `acme.enabled` продлением занимается узел, иначе перевыпуск — вручную или внешним
-/// средством. `None` — срок не короткий, `notBefore`/`notAfter` нестандартны или окно не уместилось.
-fn short_cert_note(cfg: &Config, c: &PemCerts) -> Option<String> {
+/// продления (`acme.renew_before`, 30 сут.) — окно режется до доли срока (правило PLT-37/PLT-40:
+/// `min(renew_before, acme.renew_share × срок)`), продление начинается через `срок − окно` после выпуска,
+/// обращения к серверу частые. Короткий сертификат — норма нового графика CA/B Forum (ballot SC-081v3:
+/// 47 сут. с 03.2029, профиль Let's Encrypt — 6 сут.), поэтому тон — предупреждение о смене режима
+/// обслуживания, а не ошибка: при `acme.enabled` продлением занимается узел, иначе перевыпуск — вручную
+/// или внешним средством. PLT-40: сертификат уже старше точки продления (до конца срока меньше окна) —
+/// приписка о пропущенном продлении; окно короче `acme.check_interval` — календарная проверка может его
+/// пропустить. `None` — срок не короткий, `notBefore`/`notAfter` нестандартны или окно не уместилось.
+fn short_cert_note(cfg: &Config, c: &PemCerts, now: SystemTime) -> Option<String> {
     let acme = cfg.section::<AcmeConfig>("acme").unwrap_or_default();
     let lifetime = c.not_after.duration_since(c.not_before).ok()?;
     if lifetime >= acme.renew_before.checked_mul(2)? {
         return None;
     }
-    // Эффективное окно — как у узла (PLT-37): продление начинается, когда до конца остаётся меньше окна.
-    let window = acme.renew_before.min(lifetime / 3);
+    // Эффективное окно — как у узла (PLT-37/PLT-40): продление начинается, когда до конца остаётся меньше окна.
+    let window = acme.renewal_window(lifetime);
     let days = |d: Duration| usize::try_from(d.as_secs() / DAY.as_secs()).unwrap_or(0);
     let who = if acme.enabled {
         "продлением занимается узел (встроенный ACME)"
     } else {
         "автоматическое продление не настроено: перевыпуск — вручную или внешним средством"
     };
-    Some(format!(
+    let mut note = format!(
         "сертификат живёт {}, продление начнётся через {} после выпуска — частые обращения к серверу; \
          ожидаемо при переходе CA на короткие сертификаты; {who}",
         plural(days(lifetime), "день", "дня", "дней"),
         plural(days(lifetime - window), "день", "дня", "дней"),
-    ))
+    );
+    // PLT-40: сертификат старше точки продления — окно перевыпуска уже наступило.
+    let left = c.not_after.duration_since(now).unwrap_or(Duration::ZERO);
+    if left <= window {
+        note.push_str(&format!(
+            "; продление опаздывает: окно перевыпуска началось {} назад",
+            plural(days(window - left), "день", "дня", "дней"),
+        ));
+    }
+    // PLT-40: окно короче периода проверки — календарное продление может его пропустить.
+    if window < acme.check_interval {
+        note.push_str(&format!(
+            "; окно продления ({}) короче периода проверки ({}): проверка может его пропустить",
+            tp_contracts::config::duration::format(window),
+            tp_contracts::config::duration::format(acme.check_interval),
+        ));
+    }
+    Some(note)
 }
 
 /// Срок CA из файла `path` (проверка `id`); субъекты CA — для сопоставления с издателем сертификата узла.
@@ -1810,7 +1830,8 @@ pub async fn internal_keys(
 /// (`pki.secrets_ca`) и сертификат узла `tls.cert_file`, если его выпустил один из этих CA (`pki.node`;
 /// сертификат другого издателя — проверка `tls.certificate`). `WARN` — за [`PKI_WARN_BEFORE`], `FAIL` — после
 /// срока. Короткий сертификат узла — предупреждение о частых продлениях (APP-81, [`short_cert_note`]) —
-/// читается и у другого издателя: срок меньше двух окон продления означает смену режима обслуживания.
+/// читается и у другого издателя: срок меньше двух окон продления означает смену режима обслуживания;
+/// там же — приписки PLT-40 о наступившем окне продления и об окне, которое может пропустить проверка.
 pub async fn internal_pki(cfg: &Config, now: SystemTime, report: &mut Report) {
     let mut issuers = Vec::new();
     match database_ca(cfg) {
@@ -1839,13 +1860,13 @@ pub async fn internal_pki(cfg: &Config, now: SystemTime, report: &mut Report) {
     match node {
         Ok(c) if !issuers.is_empty() && issuers.contains(&c.issuer) => {
             let (status, msg) = pki_expiry(c.not_after, now, PKI_RENEW_CERT);
-            let msg = match short_cert_note(cfg, &c) {
+            let msg = match short_cert_note(cfg, &c, now) {
                 Some(note) => format!("{msg}; {note}"),
                 None => msg,
             };
             report.push(id, status, shown, msg);
         }
-        Ok(c) => match short_cert_note(cfg, &c) {
+        Ok(c) => match short_cert_note(cfg, &c, now) {
             Some(note) => report.push(id, Status::Warn, shown, note),
             None => report.push(id, Status::Skipped, shown, no_issuer),
         },
@@ -3049,6 +3070,61 @@ mod tests {
         assert_eq!(
             r.get("pki.node").expect("node").message,
             "выпущен не внутренним CA: срок — проверка tls.certificate"
+        );
+    }
+
+    /// PLT-40: короткий сертификат старше точки продления (до конца срока меньше окна) — приписка о
+    /// пропущенном продлении; окно продления короче `acme.check_interval` — приписка о том, что
+    /// календарная проверка может его пропустить. Внутри срока приписок нет.
+    #[tokio::test]
+    async fn short_certificate_overdue_or_unreachable_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let short = dir.path().join("short.pem");
+        std::fs::write(&short, SHORT).expect("short");
+        let cert = pem_certs(SHORT).expect("short");
+        // 47 сут. от 2026-01-01: окно продления — 15⅔ сут. (правило PLT-37), продление — с 2026-02-01.
+        let yaml = |extra: &str| {
+            format!(
+                "domain: example.org\nprofile: dev\ndatabase:\n  url: postgres://x@y/z?sslmode=disable\n  tls: {{ allow_plaintext: true }}\n\
+                 blob:\n  url: file:///tmp/b\ntls:\n  cert_file: \"{}/short.pem\"\nacme:\n  enabled: true\n  domains: [mx.example.org]\n{extra}",
+                dir.path().display().to_string().replace('\\', "/")
+            )
+        };
+        let report = |yaml: String, now: SystemTime| async move {
+            let cfg = sections::registry()
+                .expect("registry")
+                .parse(&yaml, Vec::new())
+                .expect("config");
+            pki_report(&cfg, now).await
+        };
+
+        // Сертификат старше точки продления: до конца 10 сут. < окна 15⅔ — окно началось 5 сут. назад.
+        let r = report(yaml(""), cert.not_after - Duration::from_secs(10 * 86_400)).await;
+        let node = r.get("pki.node").expect("pki.node");
+        assert_eq!(node.status, Status::Warn, "{r:?}");
+        assert!(
+            node.message.contains("продление опаздывает"),
+            "{}",
+            node.message
+        );
+        assert!(
+            node.message.contains("началось 5 дней назад"),
+            "{}",
+            node.message
+        );
+
+        // Окно 15⅔ сут. короче периода проверки 30 сут. — проверка может его пропустить.
+        let r = report(yaml("  check_interval: 30d\n"), cert.not_before + DAY).await;
+        let node = r.get("pki.node").expect("pki.node");
+        assert!(
+            node.message.contains("короче периода проверки"),
+            "{}",
+            node.message
+        );
+        assert!(
+            !node.message.contains("продление опаздывает"),
+            "{}",
+            node.message
         );
     }
 

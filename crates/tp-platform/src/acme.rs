@@ -1,7 +1,7 @@
 //! Встроенный клиент ACME для профиля SMB (SRS 6.2): выпуск сертификата по HTTP-01 (ответ на проверку отдаёт
-//! служебный HTTP — [`challenge_router`]), продление, когда осталось меньше `min(renew_before, трети срока
-//! жизни)` (сроки публичных сертификатов сокращаются — ballot SC-081v3; cert-manager и Caddy — по той же доле),
-//! перечитывание [`TlsCerts`] без перезапуска.
+//! служебный HTTP — [`challenge_router`]), продление, когда осталось меньше `min(renew_before, доли срока
+//! жизни)` (`acme.renew_share`, по умолчанию ⅓ — сроки публичных сертификатов сокращаются, ballot SC-081v3;
+//! cert-manager и Caddy — по той же доле), перечитывание [`TlsCerts`] без перезапуска.
 //!
 //! Окно продления, подсказанное сервером (ARI, RFC 9773), важнее календаря: для выпущенного сертификата
 //! (серийный номер + идентификатор ключа уполномоченного CA из цепочки — [`certificate_identifier`]) сервер
@@ -47,7 +47,7 @@ use tp_contracts::secrets::{Secret, SecretRef, SecretStore};
 use crate::tls::{TlsCerts, TlsConfig};
 
 /// Секция `acme`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AcmeConfig {
     /// Встроенный клиент ACME включён (SMB). Enterprise — файлы или секреты Kubernetes (cert-manager).
@@ -60,10 +60,15 @@ pub struct AcmeConfig {
     pub domains: Vec<String>,
     /// Каталог состояния: учётная запись ACME и список доменов последнего выпуска.
     pub state_dir: PathBuf,
-    /// Максимальное окно продления: осталось меньше `min(renew_before, трети срока жизни)` сертификата (`30d`).
+    /// Максимальное окно продления: осталось меньше `min(renew_before, доли срока жизни)` сертификата (`30d`).
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]
     pub renew_before: Duration,
+    /// Доля срока жизни сертификата в окне продления: окно — `min(renew_before, renew_share × срок)` (`0.34` ≈
+    /// треть; короткие сертификаты — ballot SC-081v3, профиль Let's Encrypt на 6 дней — продлеваются на заметной
+    /// доле срока, а не за фиксированные 30 дней). Значение из `(0, 1]`.
+    #[serde(deserialize_with = "share")]
+    pub renew_share: f64,
     /// Период проверки срока действия (`12h`).
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]
@@ -87,10 +92,39 @@ impl Default for AcmeConfig {
             domains: Vec::new(),
             state_dir: PathBuf::from("/var/lib/thepost/acme"),
             renew_before: Duration::from_secs(30 * 86_400),
+            renew_share: 1.0 / 3.0,
             check_interval: Duration::from_secs(12 * 3600),
             retry_interval: Duration::from_secs(3600),
             order_timeout: Duration::from_secs(300),
         }
+    }
+}
+
+/// Доля срока для окна продления (`acme.renew_share`): число из `(0, 1]`, другое — ошибка разбора секции.
+fn share<'de, D>(d: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = f64::deserialize(d)?;
+    if value.is_finite() && value > 0.0 && value <= 1.0 {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::invalid_value(
+            serde::de::Unexpected::Float(value),
+            &"a share of the certificate lifetime in (0, 1]",
+        ))
+    }
+}
+
+impl AcmeConfig {
+    /// Эффективное окно продления для срока жизни `lifetime` (PLT-37, PLT-40): `min(renew_before,
+    /// renew_share × срок)`; срок не определён (`ZERO` — `notBefore` не разобрался) — фиксированное
+    /// `renew_before`.
+    pub fn renewal_window(&self, lifetime: Duration) -> Duration {
+        if lifetime.is_zero() {
+            return self.renew_before;
+        }
+        self.renew_before.min(lifetime.mul_f64(self.renew_share))
     }
 }
 
@@ -282,12 +316,7 @@ impl Acme {
         let lifetime = not_before
             .and_then(|nb| not_after.duration_since(nb).ok())
             .unwrap_or(Duration::ZERO);
-        let window = if lifetime.is_zero() {
-            self.cfg.renew_before
-        } else {
-            self.cfg.renew_before.min(lifetime / 3)
-        };
-        Ok(now + window >= not_after)
+        Ok(now + self.cfg.renewal_window(lifetime) >= not_after)
     }
 
     /// Окно продления от сервера (ARI): `Some(true)` — проверка попала в подсказанное окно (`start <= now <
@@ -1709,6 +1738,7 @@ mod tests {
         .expect("parse");
         assert!(cfg.enabled);
         assert_eq!(cfg.renew_before, Duration::from_secs(30 * 86_400));
+        assert_eq!(cfg.renew_share, 1.0 / 3.0);
         assert!(
             cfg.directory_url
                 .starts_with("https://acme-v02.api.letsencrypt.org")
@@ -1724,5 +1754,69 @@ mod tests {
         assert_eq!(cfg.order_timeout, Duration::from_secs(120));
         assert!(serde_yaml_ng::from_str::<AcmeConfig>("check_interval: 3600").is_err());
         assert!(serde_yaml_ng::from_str::<AcmeConfig>("renew_before_days: 30").is_err());
+
+        // Доля срока для окна продления (PLT-40): из (0, 1]; ноль, доля больше срока и NaN — ошибка разбора.
+        let cfg: AcmeConfig = serde_yaml_ng::from_str("renew_share: 0.5\n").expect("share");
+        assert_eq!(cfg.renew_share, 0.5);
+        for bad in [
+            "renew_share: 0\n",
+            "renew_share: 1.5\n",
+            "renew_share: -0.5\n",
+            "renew_share: .nan\n",
+        ] {
+            assert!(serde_yaml_ng::from_str::<AcmeConfig>(bad).is_err(), "{bad}");
+        }
+        // Эффективное окно: min(renew_before, доля × срок); срок не определён — renew_before.
+        let day = Duration::from_secs(86_400);
+        assert_eq!(
+            cfg.renewal_window(Duration::ZERO),
+            Duration::from_secs(30 * 86_400)
+        );
+        assert_eq!(
+            cfg.renewal_window(90 * day),
+            30 * day,
+            "доля 0.5 × 90 > renew_before"
+        );
+        assert_eq!(
+            cfg.renewal_window(47 * day),
+            23 * day + Duration::from_secs(43_200),
+            "половина срока 47 сут."
+        );
+    }
+
+    /// Доля срока настраивается (`acme.renew_share`, PLT-40): ½ для 47-дневного сертификата — продление
+    /// при остатке ≤ 23½ сут. (⅔ срока), а не при ⅓.
+    #[tokio::test]
+    async fn renew_share_sets_the_window() {
+        let dir = TempDir::new("acme-share");
+        let (acme, _mock, tls, _keys) = setup(&dir.0, None);
+        let acme = Acme {
+            cfg: AcmeConfig {
+                renew_share: 0.5,
+                ..acme.cfg.clone()
+            },
+            ..acme
+        };
+        std::fs::create_dir_all(dir.0.join("tls")).expect("dir");
+        std::fs::create_dir_all(dir.0.join("acme")).expect("dir");
+        std::fs::write(dir.0.join("acme/domains"), DOMAIN).expect("domains");
+        std::fs::write(
+            &tls.cert_file,
+            cert_chain(&[1], utc(2026, 1, 1), utc(2026, 2, 17)),
+        )
+        .expect("cert");
+        assert!(
+            !acme
+                .needs_renewal_at(civil(2026, 1, 24))
+                .await
+                .expect("check"),
+            "остаток 24 сут. больше половины срока"
+        );
+        assert!(
+            acme.needs_renewal_at(civil(2026, 1, 25))
+                .await
+                .expect("check"),
+            "остаток 23 сут. не больше половины срока"
+        );
     }
 }
