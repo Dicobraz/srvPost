@@ -20,10 +20,10 @@
   --own:#D7E2EA;
   --catblue:#4687D8; --catblue-bg:#DFF0FF; --catblue-tx:#234E82;
   --catgreen:#5F983A; --catgreen-bg:#E5F4DD; --catgreen-tx:#34591B;
-  --catpur:#A569BF; --catpur-bg:#EFEAF9; --catpur-tx:#4F3487;
+  --catpink:#E4107F; --catpink-bg:#FCE4EF; --catpink-tx:#8C0B4E;
   --catgraph:#5A5A5A; --catgraph-bg:#EBEBEB; --catgraph-tx:#3D3D3D;
   --catgray:#B7B7B7; --catgray-bg:#F5F5F5; --catgray-tx:#616161;
-  --iblue:#2F6DB5; --igreen:#3D8556; --iamber:#A0761A; --ired:#B5403B;
+  --iblue:#2F6DB5; --ipink:#C2477F; --igreen:#3D8556; --iamber:#A0761A; --ired:#B5403B;
 }
 *{box-sizing:border-box;margin:0}
 html,body{width:1440px;height:900px;overflow:hidden}
@@ -43,6 +43,7 @@ body{
 .sec.on{background:var(--panel);outline:1px solid var(--stroke)}
 .sec.off{color:var(--t2);opacity:.55}
 .sec .i{color:var(--iblue)}
+.sec.c-cal .i{color:var(--ipink)}
 .sec.off .i{color:var(--t2)}
 .tsep{width:1px;height:20px;background:var(--stroke);margin:0 8px}
 .tabs{display:flex;align-items:flex-end;gap:2px;height:100%;flex:1;min-width:0}
@@ -147,7 +148,7 @@ body{
 .inv{border:1px solid var(--stroke);border-radius:8px;padding:8px 14px;margin-bottom:8px;background:var(--panel)}
 .inv .ih{display:flex;align-items:center;gap:8px;margin-bottom:5px}
 .inv .ih .ttl{font-weight:600;font-size:13.5px}
-.inv .ih .i{color:var(--iblue)}
+.inv .ih .i{color:var(--ipink)}
 .inv .det{color:var(--t2);font-size:12.5px;line-height:18px}
 .inv .det b{color:var(--t1);font-weight:600}
 .day{display:flex;gap:10px;margin:6px 0 7px;align-items:stretch}
@@ -229,7 +230,7 @@ table.spec tr.total td{font-weight:600;background:var(--hover)}
 
 <!-- Заголовок окна: значок → разделы (Ctrl+1..4) → вкладки → шестерёнка → кнопки окна -->
 <div class="title">
-  <svg class="logo" viewBox="0 0 22 22"><rect x="1" y="3" width="20" height="4.2" rx="2.1" fill="#0067C0"/><rect x="1" y="9" width="20" height="4.2" rx="2.1" fill="#177CAA"/><rect x="1" y="15" width="13" height="4.2" rx="2.1" fill="#7CC4F0"/></svg>
+  <svg class="logo" viewBox="0 0 22 22"><rect x="1" y="3" width="20" height="4.2" rx="2.1" fill="#0067C0"/><rect x="1" y="9" width="20" height="4.2" rx="2.1" fill="#177CAA"/><rect x="1" y="15" width="13" height="4.2" rx="2.1" fill="#E4107F"/></svg>
   <div class="secs">
     <div class="sec on" title="Почта (Ctrl+1)"><svg class="i"><use href="#i-mail"/></svg></div>
     <div class="sec c-cal" title="Календарь (Ctrl+2)"><svg class="i"><use href="#i-cal"/></svg></div>
@@ -289,9 +290,9 @@ table.spec tr.total td{font-weight:600;background:var(--hover)}
         <div class="l1"><svg class="i xs" style="color:var(--t2)"><use href="#i-thread"/></svg><span class="from">Сергей Ким</span><span class="st">Ждём ответа</span><span class="time">09:30</span></div>
         <div class="l2"><span class="subj">Re: план на неделю</span></div>
       </div>
-      <div class="msg cat" style="--catcol:var(--catpur)">
+      <div class="msg cat" style="--catcol:var(--catpink)">
         <div class="l1"><span class="from">Анна Лебедева</span><span class="duelbl"><svg class="i xs"><use href="#i-clock"/></svg>До ср</span><span class="time">Вчера</span></div>
-        <div class="l2"><span class="subj">Тендер: вопросы по заявке</span><span class="chip" style="--cchip-bg:var(--catpur-bg);--cchip-tx:var(--catpur-tx)">Тендеры</span></div>
+        <div class="l2"><span class="subj">Тендер: вопросы по заявке</span><span class="chip" style="--cchip-bg:var(--catpink-bg);--cchip-tx:var(--catpink-tx)">Тендеры</span></div>
       </div>
       <div class="msg unread">
         <div class="l1"><span class="from">Мария Волкова, Сергей Ким</span><span class="unread-badge">2</span><span class="time">Вчера</span></div>
@@ -303,7 +304,7 @@ table.spec tr.total td{font-weight:600;background:var(--hover)}
       </div>
       <div class="msg">
         <div class="l1"><span class="from">Дмитрий Орлов</span><span class="time">пн 11:20</span></div>
-        <div class="l2"><svg class="i xs" style="color:var(--iblue)"><use href="#i-cal"/></svg><span class="subj">Ревью релиза: перенос на 16:00</span></div>
+        <div class="l2"><svg class="i xs" style="color:var(--ipink)"><use href="#i-cal"/></svg><span class="subj">Ревью релиза: перенос на 16:00</span></div>
       </div>
       <div class="msg">
         <div class="l1"><span class="from">Сервис-деск</span><span class="time">пн 09:12</span></div>
