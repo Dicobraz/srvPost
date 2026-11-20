@@ -1199,8 +1199,8 @@ impl StartupSection {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct MaintenanceSection {
-    /// Период очистки по сроку надгробий DAV, журнала автоответов, журнала доставки и токенов `admin init`
-    /// (`1h`); первый проход — при запуске роли.
+    /// Период очистки по сроку надгробий DAV, журнала автоответов, журнала доставки, истёкших сессий
+    /// Admin API и токенов `admin init` (`1h`); первый проход — при запуске роли.
     /// Требует перезапуска.
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]

@@ -1,8 +1,9 @@
 //! Сервисы ролей ядра (SRS 2.1): maintenance — GC и «сироты» BLOB под лизой лидера, истечение срока корзины
 //! (`tp-mailstore`: таймер на ближайший срок → точка принятия решений → окончательное удаление), подписчики
 //! журнала событий (по сигналам, [`crate::log_reader`]), очистка по сроку надгробий DAV, журнала автоответов,
-//! журнала доставки, токенов `admin init` и применённых сообщений входящих планирования
-//! ([`Purge`], решение 2026-11-11 п. 65, APP-53), проверка целостности BLOB по расписанию под лизой лидера
+//! журнала доставки, истёкших сессий Admin API, токенов `admin init` и применённых сообщений входящих
+//! планирования ([`Purge`], решение 2026-11-11 п. 65, APP-53, APP-50), проверка целостности BLOB по расписанию
+//! под лизой лидера
 //! ([`ScheduledVerify`], APP-44), однократный пересчёт поисковых строк старых контактов в фоне (APP-63),
 //! окончательное удаление отключённых ящиков по сроку под лизой лидера ([`run_disabled`], APP-67); роли протоколов,
 //! ещё не реализованные в этой сборке, — заглушки, готовые сразу (Ф0).
@@ -18,6 +19,7 @@ use tp_blob::{
     GcConfig, GcWorker, Now, OrphanConfig, OrphanMetrics, OrphanSweeper, Verifier, VerifyReport,
     system_now,
 };
+use tp_contracts::admin_session::AdminSessions;
 use tp_contracts::admin_token::LocalAdminTokens;
 use tp_contracts::blob::{BlobIndex, BlobStore};
 use tp_contracts::dav::CardSearch;
@@ -318,13 +320,15 @@ impl ScheduledVerify {
 /// завершённые и отменённые отправки JMAP старше `meta.submissions.retention`, аудит ящиков старше
 /// `meta.mailbox_audit.retention`, записи об отправленных письмах старше `smtp.reply.max_age`
 /// (`SentLog::purge_before`, APP-77) — сроки знает [`PgMeta`]; токены `admin init`, истёкшие раньше
-/// `maintenance.admin_token_retention` назад; применённые сервером сообщения входящих планирования старше
+/// `maintenance.admin_token_retention` назад; истёкшие сессии Admin API из основной БД
+/// (`AdminSessions::purge_expired`, APP-50); применённые сервером сообщения входящих планирования старше
 /// `dav.schedule_processed_ttl` ([`ItipPurge`], APP-53). Удаление по сроку идемпотентно, повтор удаляет только
 /// оставшееся: как и истечение корзины, работает на каждом узле с ролью без лизы.
 #[derive(Clone)]
 pub struct Purge {
     /// Метаданные: шаги `purge_dav_tombstones`, `purge_vacation_log`, `purge_expired_delivery`,
-    /// `expire_old_submissions`, `purge_expired_mailbox_audit`, `purge_sent_log` и `LocalAdminTokens::prune`.
+    /// `expire_old_submissions`, `purge_expired_mailbox_audit`, `purge_sent_log`,
+    /// `LocalAdminTokens::prune` и `AdminSessions::purge_expired`.
     pub meta: PgMeta,
     /// Период (`maintenance.purge_interval`); первый проход — при запуске роли.
     pub interval: Duration,
@@ -512,13 +516,15 @@ pub struct Purged {
     pub sent_log: Result<u64>,
     /// Токены `admin init`.
     pub admin_tokens: Result<u64>,
+    /// Истёкшие сессии Admin API (`AdminSessions::purge_expired`, APP-50, решение 77).
+    pub admin_sessions: Result<u64>,
     /// Применённые сообщения входящих планирования ([`ItipPurge`]); `None` — шага нет.
     pub itip_processed: Option<Result<u64>>,
 }
 
 impl Purged {
     /// Шаги прохода — значения метки `step` показателей [`PurgeProbe`], в порядке [`Purged::steps`].
-    pub const STEPS: [&'static str; 8] = [
+    pub const STEPS: [&'static str; 9] = [
         "purge_dav_tombstones",
         "purge_vacation_log",
         "purge_expired_delivery",
@@ -526,6 +532,7 @@ impl Purged {
         "purge_expired_mailbox_audit",
         "purge_sent_log",
         "prune_admin_tokens",
+        "purge_admin_sessions",
         "purge_processed_itip",
     ];
 
@@ -545,6 +552,7 @@ impl Purged {
             audit,
             sent_log,
             tokens,
+            sessions,
             itip,
         ] = Self::STEPS;
         let mut steps = vec![
@@ -555,6 +563,7 @@ impl Purged {
             (audit, sections(&self.mailbox_audit)),
             (sent_log, counted(&self.sent_log)),
             (tokens, counted(&self.admin_tokens)),
+            (sessions, counted(&self.admin_sessions)),
         ];
         steps.extend(self.itip_processed.as_ref().map(|r| (itip, counted(r))));
         steps
@@ -627,6 +636,7 @@ impl Purge {
             mailbox_audit: self.meta.purge_expired_mailbox_audit().await,
             sent_log: self.purge_sent_log().await,
             admin_tokens: self.prune_admin_tokens().await,
+            admin_sessions: self.purge_admin_sessions().await,
             itip_processed: match &self.itip {
                 Some(itip) => Some(itip.step(&self.meta).await),
                 None => None,
@@ -661,6 +671,13 @@ impl Purge {
             tp_contracts::Error::invalid("maintenance.admin_token_retention вне диапазона")
         })?;
         LocalAdminTokens::prune(&self.meta, before).await
+    }
+
+    /// Удаляет истёкшие сессии Admin API (`AdminSessions::purge_expired`, APP-50, решение 77): сессии
+    /// в основной БД общие для всех узлов роли `admin`, чтение истёкшую не возвращает, но строка
+    /// остаётся до очистки — порциями по индексу срока.
+    async fn purge_admin_sessions(&self) -> Result<u64> {
+        AdminSessions::purge_expired(&self.meta, (system_now())()).await
     }
 
     /// Удаляет записи об отправленных письмах старше `smtp.reply.max_age` ([`Purge::sent_max_age`]) по всем
@@ -1293,7 +1310,8 @@ mod tests {
     }
 
     /// APP-32, APP-39: проход очистки удаляет надгробия DAV, записи журнала автоответов и журнала доставки старше
-    /// срока из `meta` и токены `admin init`, истёкшие раньше `admin_token_retention`; свежие остаются; роль maintenance выполняет проход при запуске. Отдельная база: очистка — по всем организациям.
+    /// срока из `meta`, токены `admin init`, истёкшие раньше `admin_token_retention`, и истёкшие сессии Admin API
+    /// (APP-50); свежие остаются; роль maintenance выполняет проход при запуске. Отдельная база: очистка — по всем организациям.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn purge_removes_expired_records() {
         use tp_contracts::admin_token::LocalAdminToken;
@@ -1460,6 +1478,39 @@ mod tests {
         };
         assert_eq!(token_ids().await.len(), 3);
 
+        // APP-50: сессии Admin API — истёкшая и действующая (в хранилище — хэш значения, hex SHA-256).
+        use tp_contracts::admin_session::AdminSession;
+        let session = |hash: char, expires_at| AdminSession {
+            hash: std::iter::repeat_n(hash, 64).collect(),
+            principal: tp_contracts::auth::Principal {
+                tenant,
+                account: account.id,
+                login: "admin@purge.test".into(),
+                groups: std::collections::BTreeSet::new(),
+                scopes: None,
+            },
+            roles: vec!["installation_admin".into()],
+            expires_at,
+        };
+        AdminSessions::put(&meta, session('a', now - day))
+            .await
+            .expect("put истёкшей сессии");
+        AdminSessions::put(&meta, session('b', now + day))
+            .await
+            .expect("put действующей сессии");
+        let sessions = || {
+            let pool = pool.clone();
+            async move {
+                let mut tx = tp_meta::schema::begin(&pool, tenant).await.expect("begin");
+                let (n,): (i64,) = sqlx::query_as("SELECT count(*) FROM admin_sessions")
+                    .fetch_one(&mut *tx)
+                    .await
+                    .expect("count");
+                n
+            }
+        };
+        assert_eq!(sessions().await, 2);
+
         // APP-77: записи об отправленном старше `smtp.reply.max_age` (30 сут) — шаг `purge_sent_log`
         // удаляет, свежая на месте (признак ответа по старой записи не выдаётся).
         use tp_contracts::reply::{MessageIdHash, SentLog, SentRecord};
@@ -1510,6 +1561,11 @@ mod tests {
         done.delivery_log.expect("delivery");
         assert_eq!(done.sent_log.expect("sent_log"), 1);
         assert_eq!(done.admin_tokens.expect("tokens"), 1);
+        assert_eq!(
+            done.admin_sessions.expect("sessions"),
+            1,
+            "истёкшая сессия Admin API удалена, действующая на месте"
+        );
         assert!(
             SentLog::by_tag(&meta, tenant, &[1u8; 16])
                 .await
@@ -1535,6 +1591,11 @@ mod tests {
             "токен, истёкший раньше срока хранения, удалён; остальные на месте"
         );
         assert_eq!(tombstones().await, 1, "свежее надгробие на месте");
+        assert_eq!(
+            sessions().await,
+            1,
+            "истёкшая сессия Admin API удалена, действующая на месте"
+        );
         assert!(
             meta.seen(scope, "fresh@example.net", "", day)
                 .await
