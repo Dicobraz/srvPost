@@ -955,7 +955,7 @@
 | [CTR-95](CTR-95.md) | контракт каталога признаков и источников TI — признаки, уровни, пакет поставщика, источники | contracts | B | contracts-66 | done | CTR-94 |
 | [META-87](META-87.md) | каталог признаков и TI в PostgreSQL — `RiskStore` в `PgMeta`: пакеты, политика, источники, учёт | meta | A | meta-60 | done | CTR-95 |
 | [SIEVE-15](SIEVE-15.md) | расширение `vnd.thepost.risk` — `signal`, `environment "vnd.thepost.*"`, `extlists`, `:regex` | sieve | A | sieve-08 | done | CTR-95,DEPS-19,SIEVE-14 |
-| [SMTP-52](SMTP-52.md) | детекторы каталога признаков и применение балла на smtp-in | smtp | A | smtp-32 | ready | CTR-95,DEPS-19,SMTP-51 |
+| [SMTP-52](SMTP-52.md) | детекторы каталога признаков и применение балла на smtp-in | smtp | A | smtp-32 | done | CTR-95,DEPS-19,SMTP-51 |
 | [ADM-51](ADM-51.md) | каталог признаков и TI в Admin API — признаки, пороги, пакеты, источники, срабатывания; CLI | admin | B | admin-37 | ready | CTR-95,ADM-44 |
 | [UI-24](UI-24.md) | консоль — экран «Признаки риска»: каталог, пороги, пакеты, источники TI, срабатывания | console | A | console-15 | todo | ADM-51 |
 | [TUI-10](TUI-10.md) | текстовый интерфейс — раздел «Признаки риска»: каталог, пороги, пакеты, источники | tui | A | tui-07 | todo | TUI-09,ADM-51 |
@@ -1024,3 +1024,13 @@
 | [SMTP-48](SMTP-48.md) | iTIP — письмо с несколькими заголовками `From` не применяется | smtp | A | SMTP-33 |
 | [SMTP-49](SMTP-49.md) | тип отправителя письма с iTIP — по пути и домену `From` | smtp | B | CTR-92,SMTP-33,SMTP-36 |
 | [TUI-11](TUI-11.md) | атомарная запись config.yaml из текстового интерфейса | tui | A | TUI-04 |
+| [WEB-01](WEB-01.md) | полоса mod-webmail, SPA встроен в бинарь |  |  | — |
+| [WEB-02](WEB-02.md) | OIDC PKCE из SPA + app-password, жизнь сессии |  |  | — |
+| [WEB-03](WEB-03.md) | ящик, потоки, санитайзер, живой push |  |  | — |
+| [WEB-04](WEB-04.md) | rich text, вложения, undo-send |  |  | — |
+| [WEB-05](WEB-05.md) | # WEB-05. Поиск и фильтры |  |  | — |
+| [WEB-06](WEB-06.md) | минимум — просмотр и приём встреч |  |  | — |
+| [WEB-07](WEB-07.md) | # WEB-07. Контакты и GAL |  |  | — |
+| [WEB-08](WEB-08.md) | # WEB-08. Мобильный layout + PWA |  |  | — |
+| [WEB-09](WEB-09.md) | кэш чтения и очередь исходящих |  |  | — |
+| [WEB-10](WEB-10.md) | # WEB-10. SAML 2.0 SP в tp-auth (после v1) |  |  | — |
