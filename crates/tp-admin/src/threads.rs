@@ -461,10 +461,8 @@ fn stub_eml(m: &Message) -> Vec<u8> {
     };
     let mut out = String::new();
     for (name, value) in [
-        (
-            "Message-ID",
-            e.message_id.as_deref().map(|id| format!("<{id}>")),
-        ),
+        // `Envelope::message_id` хранит идентификатор уже в угловых скобках (tp-mailstore).
+        ("Message-ID", e.message_id.clone()),
         ("From", (!e.from.is_empty()).then(|| address(&e.from))),
         ("To", (!e.to.is_empty()).then(|| address(&e.to))),
         ("Subject", e.subject.clone()),
@@ -658,9 +656,11 @@ mod tests {
             4,
             "два удержания, снятие, повтор снятия: {log:?}"
         );
-        assert_eq!((log[0].method.as_str(), log[0].status), ("PUT", 200));
-        assert_eq!(log[0].actor_login, "admin@example.org");
-        assert_eq!(log[0].tenant, Some(TenantId::DEFAULT));
+        // Неудачная попытка (пустое основание) тоже в журнале — первой записью.
+        assert_eq!((log[0].method.as_str(), log[0].status), ("PUT", 400));
+        assert_eq!((log[1].method.as_str(), log[1].status), ("PUT", 200));
+        assert_eq!(log[1].actor_login, "admin@example.org");
+        assert_eq!(log[1].tenant, Some(TenantId::DEFAULT));
         assert!(log.iter().all(|r| r.content_messages.is_none()));
         assert!(
             log.iter()
@@ -840,10 +840,10 @@ mod tests {
             assert_eq!(list.len(), 2, "{token}: {b}");
             assert_eq!(list[0]["account"], one.account.to_string(), "{b}");
             assert_eq!(list[0]["thread"], held[0].1, "{b}");
-            assert_eq!(list[0]["reason"], "дело №1");
-            assert_eq!(list[0]["by"], "admin@example.org");
-            assert_eq!(list[1]["reason"], "дело №2");
-            let at = |v: &Value| v["at"].as_str().expect("at").to_owned();
+            assert_eq!(list[0]["hold"]["reason"], "дело №1");
+            assert_eq!(list[0]["hold"]["by"], "admin@example.org");
+            assert_eq!(list[1]["hold"]["reason"], "дело №2");
+            let at = |v: &Value| v["hold"]["at"].as_str().expect("at").to_owned();
             assert!(at(&list[0]) <= at(&list[1]), "в порядке удержания");
         }
         for token in ["journal", "user", "auditor"] {
