@@ -401,7 +401,7 @@ impl ItipPurge {
 /// Первый проход — при запуске роли, затем с периодом [`ThreadBinder::interval`] (`maintenance.purge_interval`):
 /// узел с ролью обслуживает ящики и после перезапуска дообрабатывает оставшееся; привязка идемпотентна,
 /// работает на каждом узле с ролью без лизы.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ThreadBinder {
     /// Хранилище бесед (`PgMeta`): порция фоновой привязки по `thread_key`.
     pub meta: PgMeta,
@@ -409,6 +409,15 @@ pub struct ThreadBinder {
     pub tenant: TenantId,
     /// Период проходов; уже привязанное письмо не переносится (привязка неизменяема, RFC 8621 §3).
     pub interval: Duration,
+}
+
+impl std::fmt::Debug for ThreadBinder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThreadBinder")
+            .field("tenant", &self.tenant)
+            .field("interval", &self.interval)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Учётных записей в одной странице обхода [`ThreadBinder`].
