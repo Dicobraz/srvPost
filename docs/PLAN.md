@@ -907,12 +907,12 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | docs-12 | DOC-12 | A | app-73 | 1 |
 | ✅ deps-18 (ветка `x/deps-18`) | DEPS-18 | B | — | 1 |
 | ✅ contracts-65 (ветка `x/contracts-65`) | CTR-94 | B | contracts-64 | 1 |
-| meta-59 | META-86 | A | contracts-65 | 3 |
+| ✅ meta-59 (#175) | META-86 | A | contracts-65 | 3 |
 | ✅ mailstore-15 (ветка `x/mailstore-15`) | MS-21 | A | contracts-65 | 1 |
 | ✅ smtp-31 (#176) | SMTP-51 | A | contracts-65, deps-18, smtp-30 | 4 |
 | ✅ jmap-31 | JMAP-48 | A | contracts-65, mailstore-15 | 3 |
 | ✅ jmap-33 | JMAP-49 | A | contracts-35, jmap-19 (после волны закрыть issue #46) | 3 |
-| admin-36 (ветка `x/admin-36`) | ADM-50 | B | contracts-65, admin-30 | 3 |
+| ✅ admin-36 (#186) | ADM-50 | B | contracts-65, admin-30 | 3 |
 | app-74 | APP-77 | A | meta-59, mailstore-15, smtp-31, jmap-31, admin-36 | 2 |
 | ✅ deploy-43 (#190) | DEP-56 | A | smtp-31 | 1 |
 | docs-13 | DOC-13 | A | app-74, deploy-43 | 1 |
