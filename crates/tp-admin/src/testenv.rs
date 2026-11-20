@@ -26,8 +26,8 @@ use tp_contracts::{AccountId, DomainId, GroupId, MessageId, Result, TenantId};
 use tp_testkit::{
     Clock, FakeAuthenticator, MemAppPasswords, MemAuditLog, MemBlobIndex, MemBlobStore,
     MemBranding, MemDeliveryLog, MemEventBus, MemGroups, MemJournal, MemLocalAdminTokens,
-    MemMetadata, MemPolicies, MemQueue, MemQuota, MemSieve, MemThreads, MemTransport, MemTrash,
-    SystemClock,
+    MemMetadata, MemPolicies, MemQueue, MemQuota, MemRisk, MemSieve, MemThreads, MemTransport,
+    MemTrash, SystemClock,
 };
 use tp_testkit::{MemAddressBook, MemDav, MemMailboxAudit, MemSenderLists, MemSyncGate, MemTrust};
 
@@ -217,6 +217,8 @@ pub struct Stores {
     pub sync_gate: MemSyncGate,
     /// Календари и адресные книги, права на коллекции.
     pub dav: MemDav,
+    /// Справочник аномалий и TI (`Admin::with_risk`, ADM-51).
+    pub risk: MemRisk,
 }
 
 impl Stores {
@@ -259,6 +261,7 @@ impl Stores {
             mailbox_audit: MemMailboxAudit::new(),
             sync_gate: MemSyncGate::new(),
             dav: MemDav::new(),
+            risk: MemRisk::new(Arc::new(SystemClock)),
         }
     }
 
@@ -357,6 +360,8 @@ pub struct Env {
     pub journal: MemJournal,
     /// Беседы учётных записей (`Admin::with_threads`) — то же хранилище, что у приёма писем.
     pub threads: MemThreads,
+    /// Справочник аномалий и TI (`Admin::with_risk`, ADM-51) — то же хранилище, что у узла.
+    pub risk: MemRisk,
     pub admin: Arc<Admin>,
     pub router: Router,
     pub other_tenant: TenantId,
@@ -480,6 +485,7 @@ impl Env {
             true,
             true,
             true,
+            true,
         )
     }
 
@@ -490,6 +496,7 @@ impl Env {
             Vec::new(),
             true,
             false,
+            true,
             true,
             true,
             true,
@@ -510,6 +517,7 @@ impl Env {
             true,
             true,
             true,
+            true,
         )
     }
 
@@ -522,6 +530,7 @@ impl Env {
             true,
             true,
             false,
+            true,
             true,
             true,
             true,
@@ -540,6 +549,7 @@ impl Env {
             false,
             true,
             true,
+            true,
         )
     }
 
@@ -554,6 +564,7 @@ impl Env {
             true,
             true,
             false,
+            true,
             true,
         )
     }
@@ -570,11 +581,28 @@ impl Env {
             true,
             true,
             false,
+            true,
+        )
+    }
+
+    /// Без справочника аномалий и TI (его маршруты — 503).
+    pub fn without_risk() -> Self {
+        Self::build(
+            config(),
+            Vec::new(),
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
         )
     }
 
     pub fn with(cfg: AdminConfig, modules: Vec<Arc<dyn AdminRoutes>>) -> Self {
-        Self::build(cfg, modules, true, true, true, true, true, true, true)
+        Self::build(cfg, modules, true, true, true, true, true, true, true, true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -588,6 +616,7 @@ impl Env {
         with_branding: bool,
         with_journal: bool,
         with_threads: bool,
+        with_risk: bool,
     ) -> Self {
         let auth = FakeAuthenticator::default();
         let other_tenant = TenantId::new();
@@ -657,6 +686,15 @@ impl Env {
         } else {
             admin
         };
+        // Справочник аномалий: хранилище tp-testkit, проверка пакета и коннекторы — память tp-admin.
+        let admin = if with_risk {
+            admin.with_risk(
+                Arc::new(stores.risk.clone()),
+                Arc::new(crate::risk::MemRiskNode::default()),
+            )
+        } else {
+            admin
+        };
         let sieve = MemSieve::new();
         // Объекты писем почтового хранилища — и как объекты очереди модерации: тот же BLOB, что у `store`
         // (выгрузка беседы читает скрытые письма по объектам, ADM-50).
@@ -684,6 +722,7 @@ impl Env {
             mailbox_audit,
             sync_gate,
             dav,
+            risk,
             ..
         } = stores;
         Self {
@@ -707,6 +746,7 @@ impl Env {
             mailbox_audit,
             sync_gate,
             dav,
+            risk,
             queue,
             branding,
             brand_blobs,

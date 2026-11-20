@@ -128,10 +128,12 @@ impl AdminRole {
         ]
         .contains(&route);
         let cluster = route.starts_with(crate::transport::CLUSTER_PREFIX);
-        // Брендинг установки и политика доверия установки — уровень инсталляции (ADM-48, ADM-49): администратору
-        // организации и оператору нельзя.
+        // Брендинг установки, политика доверия установки и справочник аномалий уровня установки
+        // (ADM-48, ADM-49, ADM-51): администратору организации и оператору нельзя — организация работает
+        // с `/api/v1/orgs/{org}/risk/…`.
         let installation = route.starts_with(crate::branding::BRANDING_PREFIX)
-            || route.starts_with(crate::trust::INSTALLATION_TRUST);
+            || route.starts_with(crate::trust::INSTALLATION_TRUST)
+            || route.starts_with(crate::risk::RISK_PREFIX);
         // Содержимое журнала переписки — только роли «аудитор журнала» (SRS 4.9, 5.2; ADM-52): прочим
         // администраторам нельзя. Правила журналирования — не содержимое (ADM-53): ими управляет
         // администратор организации, аудитор журнала их не видит.
@@ -227,6 +229,8 @@ pub struct AdminConfig {
     /// Вход администратора по паролю (`POST /api/v1/session` с телом [`crate::init::PasswordLogin`], решение 117):
     /// не задано — включён без `admin.oidc` и выключен с ним ([`AdminConfig::password_login_enabled`]).
     pub password_login: Option<bool>,
+    /// Справочник аномалий и TI ([`crate::risk`], ADM-51): пределы загрузки файлов.
+    pub risk: crate::risk::RiskApiConfig,
 }
 
 impl Default for AdminConfig {
@@ -248,6 +252,7 @@ impl Default for AdminConfig {
             console: ConsoleConfig::default(),
             oidc: None,
             password_login: None,
+            risk: crate::risk::RiskApiConfig::default(),
         }
     }
 }
@@ -280,6 +285,7 @@ impl AdminConfig {
         }
         self.audit.check()?;
         self.journal_archive.check()?;
+        self.risk.check()?;
         self.init.check()?;
         self.console.check()?;
         if let Some(o) = &self.oidc {
@@ -439,6 +445,9 @@ pub struct Admin {
     /// Беседы учётных записей ([`crate::threads`]; CTR-94): беседа письма, удержание, выгрузка; `None` — не
     /// подключено (маршруты — 503) — привязку писем ведёт приём (MS-21), сюда — то же хранилище.
     pub(crate) threads: Option<Arc<dyn ThreadStore>>,
+    /// Справочник аномалий и TI ([`crate::risk`], ADM-51): признаки, пороги, пакеты, источники,
+    /// срабатывания; `None` — не подключено (маршруты — 503).
+    pub(crate) risk: Option<crate::risk::RiskStores>,
     /// Организации инсталляции: без модуля «Мультитенантность» — только организация по умолчанию (решение 10).
     /// Маршрут `/api/v1/orgs/{org}/...` другой организации — 404 ([`guard`]).
     pub(crate) organizations: BTreeSet<TenantId>,
@@ -503,6 +512,7 @@ impl Admin {
             journal_rules: None,
             trust: None,
             threads: None,
+            risk: None,
             organizations: BTreeSet::from([TenantId::DEFAULT]),
         })
     }
@@ -582,6 +592,7 @@ impl Admin {
         api = crate::journal::routes(api);
         api = crate::trust::routes(api);
         api = crate::threads::routes(api);
+        api = crate::risk::routes(api, self.cfg.risk.max_package_bytes);
         for m in &self.d.modules {
             let prefix = m.prefix().to_owned();
             let handler = {
@@ -950,6 +961,7 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     api.merge(crate::journal::Doc::openapi());
     api.merge(crate::trust::Doc::openapi());
     api.merge(crate::threads::Doc::openapi());
+    api.merge(crate::risk::Doc::openapi());
     CommonErrors.modify(&mut api);
     api
 }

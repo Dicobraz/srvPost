@@ -391,6 +391,43 @@ impl Client {
             .map(|(_, bytes)| bytes)
     }
 
+    /// Запрос `op` с телом-файлом (`application/octet-stream`: пакет поставщика, список TI — ADM-51);
+    /// ответ 2xx — структура `R`, отказ — [`Error::Api`].
+    pub async fn call_octet<R: DeserializeOwned>(
+        &self,
+        op: Op,
+        params: &[&str],
+        body: Vec<u8>,
+    ) -> Result<R> {
+        let url = self.url(op, params, &[])?;
+        let method = Method::from_bytes(op.method.as_bytes()).map_err(|e| e.to_string())?;
+        let mut req = self.http.request(method, url);
+        if let Some(token) = &self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| format!("Admin API {}: {e}", self.base))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Admin API: ответ: {e}",))?
+            .to_vec();
+        if !status.is_success() {
+            return Err(problem(op, status, &bytes));
+        }
+        serde_json::from_slice(&bytes).map_err(|e| {
+            Error::Client(format!(
+                "{} {}: ответ не по спецификации Admin API: {e}",
+                op.method, op.path
+            ))
+        })
+    }
+
     /// Загрузка знака (PNG-файл) уровню установки или организации (`PUT …/branding/logo`).
     pub async fn put_branding_logo(
         &self,

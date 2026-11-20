@@ -35,6 +35,11 @@ use tp_admin::delivery::{DeliveryParams, DeliveryResults};
 use tp_admin::groups::{GroupInfo, GroupPatch, NewGroup};
 use tp_admin::resources::{NewResource, ResourceInfo, ResourcePatch, ResourceTypeBody};
 use tp_admin::retention::{PageQuery, RestoredMessage, TrashPage};
+use tp_admin::risk::{
+    HitsView, ListVersionView, NewTiSourceBody, PackageEntryView, PackageReportView, PackagesView,
+    SignalBody, SignalView, SignalsView, SourcesView, ThresholdsBody, ThresholdsView, TiSourceBody,
+    TiSourceView, UsageView,
+};
 use tp_admin::server::WhoAmI;
 use tp_admin::sieve::{Script, ScriptBody, ScriptText, VacationBody};
 use tp_admin::threads::{
@@ -264,6 +269,190 @@ pub enum ApiAction {
         #[command(subcommand)]
         action: Box<TrustAction>,
     },
+    /// Признаки риска и TI: каталог и пороги уровней, пакеты поставщика, источники TI, срабатывания
+    /// (пороги и признаки: установка — без ключей, организация — с --org; пакеты и источники — установка).
+    Risk {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<RiskAction>,
+    },
+}
+
+/// Действия со справочником аномалий и TI.
+#[derive(Debug, Clone, Subcommand)]
+pub enum RiskAction {
+    /// Каталог признаков: вес, действие, режим, источник значения; «осиротевшие» изменения — с пометкой.
+    Signals {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<SignalsAction>,
+    },
+    /// Пороги действий: баллы, с которых действуют действия (без --org — установка).
+    Thresholds {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<ThresholdsAction>,
+    },
+    /// Пакеты поставщика (администратор установки): список, загрузка файла, активация, откат.
+    Package {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<PackageAction>,
+    },
+    /// Источники TI (администратор установки): список, добавление, замена, удаление, импорт, обновление, учёт.
+    Source {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<RiskSourceAction>,
+    },
+    /// Журнал срабатываний организации (применённые и «только отчёт»).
+    Hits(HitsArgs),
+}
+
+/// Действия с каталогом признаков.
+#[derive(Debug, Clone, Subcommand)]
+pub enum SignalsAction {
+    /// Действующий каталог уровня (без --org — установка, с --org — организация).
+    List,
+    /// Изменение признака поставщика `tp.*` (вес, действие, режим; организация — только строже) или
+    /// свой признак `org.*` (задаётся целиком).
+    Set {
+        /// Признак: `tp.encrypted_archive` или свой `org.rule-name`.
+        id: String,
+        /// Вес, 0–100.
+        #[arg(long)]
+        weight: Option<u16>,
+        /// Собственное действие: none, tag, junk, quarantine, reject.
+        #[arg(long)]
+        action: Option<String>,
+        /// Режим: report (только журнал), enforce (применять).
+        #[arg(long)]
+        mode: Option<String>,
+        /// Детектор (только свой признак `org.*`): thread_new_attachment_type, encrypted_archive,
+        /// disk_image_or_shortcut, thread_new_link_domain, reply_to_changed, list_match.
+        #[arg(long)]
+        detector: Option<String>,
+        /// Порог силы срабатывания, 0–100 (только свой признак).
+        #[arg(long)]
+        threshold: Option<u8>,
+    },
+    /// Сброс изменения уровня (у пакета — значение пакета) или удаление своего признака `org.*`.
+    Reset {
+        /// Признак.
+        id: String,
+    },
+}
+
+/// Действия с порогами действий.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ThresholdsAction {
+    /// Пороги уровня: свои, действующие и уровень-источник.
+    Show,
+    /// Замена порогов уровня целиком (все четыре).
+    Set {
+        /// Балл пометки письма.
+        #[arg(long)]
+        tag: u32,
+        /// Балл перемещения в «Спам».
+        #[arg(long)]
+        junk: u32,
+        /// Балл карантина.
+        #[arg(long)]
+        quarantine: u32,
+        /// Балл отказа.
+        #[arg(long)]
+        reject: u32,
+    },
+}
+
+/// Действия с пакетами поставщика.
+#[derive(Debug, Clone, Subcommand)]
+pub enum PackageAction {
+    /// Хранимые пакеты: активный и прошлые, по убыванию номера.
+    List,
+    /// Загрузка файла пакета (закрытый контур): проверка (подпись, пробный прогон) и постановка —
+    /// без активации; отчёт — что изменится.
+    Import {
+        /// Файл пакета поставщика.
+        file: PathBuf,
+    },
+    /// Активация поставленного пакета (номер строго больше действующего).
+    Activate {
+        /// Номер версии.
+        version: u64,
+    },
+    /// Откат на хранимую версию.
+    Rollback {
+        /// Номер версии.
+        version: u64,
+    },
+}
+
+/// Действия с источниками TI.
+#[derive(Debug, Clone, Subcommand)]
+pub enum RiskSourceAction {
+    /// Источники: уровень, доставка, формат, TTL, лицензия.
+    List,
+    /// Новый источник. Файл — JSON источника (`id`, `tier`, `kind`, `format`, `ttl`, …); ключ —
+    /// `{"secret": "путь#поле"}`.
+    Add {
+        /// Файл с источником (JSON, UTF-8); `-` — stdin.
+        #[arg(long, value_name = "ПУТЬ")]
+        file: PathBuf,
+    },
+    /// Замена источника целиком. Файл — JSON параметров без идентификатора.
+    Set {
+        /// Источник.
+        id: String,
+        /// Файл с параметрами (JSON, UTF-8); `-` — stdin.
+        #[arg(long, value_name = "ПУТЬ")]
+        file: PathBuf,
+    },
+    /// Удаление источника.
+    Rm {
+        /// Источник.
+        id: String,
+    },
+    /// Импорт файла списка источника (закрытый контур).
+    Import {
+        /// Источник.
+        id: String,
+        /// Файл списка (формат источника).
+        file: PathBuf,
+    },
+    /// Обновление источника сейчас (коннектор узла).
+    Refresh {
+        /// Источник.
+        id: String,
+    },
+    /// Учёт источника по организациям (MSSP): суммы обращений и совпадений.
+    Usage {
+        /// Источник.
+        id: String,
+        /// Учёт с этого момента (RFC 3339).
+        #[arg(long)]
+        since: Option<String>,
+    },
+}
+
+/// Параметры журнала срабатываний.
+#[derive(Debug, Clone, Args)]
+pub struct HitsArgs {
+    /// Только этот признак.
+    #[arg(long)]
+    pub signal: Option<String>,
+    /// Режим: report — только отчёт, enforce — применённые.
+    #[arg(long)]
+    pub mode: Option<String>,
+    /// Начало интервала (RFC 3339).
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Конец интервала (RFC 3339), не включительно.
+    #[arg(long)]
+    pub until: Option<String>,
+    /// Не больше N записей.
+    #[arg(long)]
+    pub limit: Option<usize>,
 }
 
 /// Действия с политикой доверия.
@@ -1460,6 +1649,7 @@ pub async fn execute(client: &Client, args: &ApiArgs, action: ApiAction) -> CliR
         ApiAction::Resources { action } => resource_command(client, args, *action).await,
         ApiAction::Branding { action } => branding_command(client, args, *action).await,
         ApiAction::Trust { action } => trust_command(client, args, *action).await,
+        ApiAction::Risk { action } => risk_command(client, args, *action).await,
         ApiAction::Trash { action } => trash_command(client, args, action).await,
         ApiAction::Audit { action } => audit_command(client, args, *action).await,
         ApiAction::Delivery { action } => delivery_command(client, args, *action).await,
@@ -2334,6 +2524,490 @@ async fn trust_command(client: &Client, args: &ApiArgs, action: TrustAction) -> 
                 }
             }
         }
+    }
+}
+
+/// `thepost admin risk …` (ADM-51): признаки и пороги уровней (установка без `--org`, организация с
+/// ним), пакеты поставщика, источники TI и журнал срабатываний организации.
+async fn risk_command(client: &Client, args: &ApiArgs, action: RiskAction) -> CliResult<String> {
+    match action {
+        RiskAction::Signals { action } => {
+            let level = risk_level(args)?;
+            match *action {
+                SignalsAction::List => {
+                    let (op, _, params) = signal_ops(&level);
+                    let p = params.iter().map(String::as_str).collect::<Vec<_>>();
+                    let v: SignalsView = client.call(op, &p, &[], NO_BODY).await?;
+                    let rows: Vec<Vec<String>> = v
+                        .signals
+                        .iter()
+                        .map(|s| {
+                            vec![
+                                s.id.clone(),
+                                signal_detector_text(s),
+                                optional(s.weight.as_ref()),
+                                optional(s.action.as_ref()),
+                                optional(s.mode.as_ref()),
+                                signal_source_text(s),
+                            ]
+                        })
+                        .collect();
+                    out(
+                        args,
+                        &v,
+                        style::table(
+                            args.theme(),
+                            &[
+                                "ПРИЗНАК",
+                                "ДЕТЕКТОР",
+                                "ВЕС",
+                                "ДЕЙСТВИЕ",
+                                "РЕЖИМ",
+                                "ИСТОЧНИК",
+                            ],
+                            &rows,
+                        ),
+                    )
+                }
+                SignalsAction::Set {
+                    id,
+                    weight,
+                    action: act,
+                    mode,
+                    detector,
+                    threshold,
+                } => {
+                    let body = SignalBody {
+                        weight,
+                        action: act.as_deref().map(risk_action_arg).transpose()?,
+                        mode: mode.as_deref().map(mode_arg).transpose()?,
+                        detector: detector.as_deref().map(detector_arg).transpose()?,
+                        threshold,
+                    };
+                    let (_, op, mut params) = signal_ops(&level);
+                    params.push(id.clone());
+                    let p = params.iter().map(String::as_str).collect::<Vec<_>>();
+                    let v: SignalView =
+                        client.call(op, &p, &[], Some(&body)).await.map_err(|e| {
+                            e.hint(
+                                422,
+                                "организация может только ужесточить (risk signals list)",
+                            )
+                        })?;
+                    out(args, &v, signal_record(&v))
+                }
+                SignalsAction::Reset { id } => {
+                    let (_, _, mut params) = signal_ops(&level);
+                    params.push(id.clone());
+                    let p = params.iter().map(String::as_str).collect::<Vec<_>>();
+                    let op = match &level {
+                        RiskLevel::Installation => RISK_SIGNAL_RESET,
+                        RiskLevel::Org(_) => ORG_RISK_SIGNAL_RESET,
+                    };
+                    let v: SignalView = client.call(op, &p, &[], NO_BODY).await?;
+                    out(args, &v, format!("Изменение признака {id} сброшено.\n"))
+                }
+            }
+        }
+        RiskAction::Thresholds { action } => {
+            let level = risk_level(args)?;
+            let (get, put): (Op, Op) = match &level {
+                RiskLevel::Installation => (RISK_THRESHOLDS_GET, RISK_THRESHOLDS_PUT),
+                RiskLevel::Org(_) => (ORG_RISK_THRESHOLDS_GET, ORG_RISK_THRESHOLDS_PUT),
+            };
+            let params = level.params();
+            let p = params.iter().map(String::as_str).collect::<Vec<_>>();
+            match *action {
+                ThresholdsAction::Show => {
+                    let v: ThresholdsView = client.call(get, &p, &[], NO_BODY).await?;
+                    out(args, &v, thresholds_record(&v))
+                }
+                ThresholdsAction::Set {
+                    tag,
+                    junk,
+                    quarantine,
+                    reject,
+                } => {
+                    let body = ThresholdsBody {
+                        tag,
+                        junk,
+                        quarantine,
+                        reject,
+                    };
+                    let v: ThresholdsView =
+                        client.call(put, &p, &[], Some(&body)).await.map_err(|e| {
+                            e.hint(422, "пороги растут с действием и не мягче уровня выше")
+                        })?;
+                    out(args, &v, thresholds_record(&v))
+                }
+            }
+        }
+        RiskAction::Package { action } => match *action {
+            PackageAction::List => {
+                let v: PackagesView = client.call(RISK_PACKAGES_LIST, &[], &[], NO_BODY).await?;
+                let rows: Vec<Vec<String>> = v
+                    .packages
+                    .iter()
+                    .map(|p| vec![p.version.to_string(), package_state_text(p)])
+                    .collect();
+                out(
+                    args,
+                    &v,
+                    style::table(args.theme(), &["ВЕРСИЯ", "СОСТОЯНИЕ"], &rows),
+                )
+            }
+            PackageAction::Import { file } => {
+                let bytes = input_bytes(file).await?;
+                let r: PackageReportView = client
+                    .call_octet(RISK_PACKAGE_IMPORT, &[], bytes)
+                    .await
+                    .map_err(|e| {
+                        e.hint(
+                            422,
+                            "подпись, lint и номер версии пакета (risk package list)",
+                        )
+                    })?;
+                let u = &r.update;
+                let text = format!(
+                    "{}Пакет версии {} проверен и поставлен, не активен: thepost admin risk package activate {}\n",
+                    record(&[
+                        ("Версия", r.version.to_string()),
+                        ("Ключ подписи", r.key_id.clone()),
+                        ("Образцов прогона", r.samples.to_string()),
+                        ("Признаков", r.signals.to_string()),
+                        (
+                            "Изменится",
+                            format!(
+                                "добавлено {}, изменено {}, удалено {}, осиротевших изменений {}",
+                                u.added.len(),
+                                u.changed.len(),
+                                u.removed.len(),
+                                u.orphaned_overrides.len()
+                            )
+                        ),
+                    ]),
+                    r.version,
+                    r.version
+                );
+                out(args, &r, text)
+            }
+            PackageAction::Activate { version } => {
+                let v: PackagesView = client
+                    .call(RISK_PACKAGE_ACTIVATE, &[&version.to_string()], &[], NO_BODY)
+                    .await
+                    .map_err(|e| e.hint(422, "номер версии только растёт (risk package list)"))?;
+                out(args, &v, format!("Пакет версии {version} активирован.\n"))
+            }
+            PackageAction::Rollback { version } => {
+                let v: PackagesView = client
+                    .call(RISK_PACKAGE_ROLLBACK, &[&version.to_string()], &[], NO_BODY)
+                    .await?;
+                out(args, &v, format!("Откат на пакет версии {version}.\n"))
+            }
+        },
+        RiskAction::Source { action } => match *action {
+            RiskSourceAction::List => {
+                let v: SourcesView = client.call(RISK_SOURCES_LIST, &[], &[], NO_BODY).await?;
+                let rows: Vec<Vec<String>> = v
+                    .sources
+                    .iter()
+                    .map(|s| {
+                        vec![
+                            s.id.clone(),
+                            s.tier.to_string(),
+                            source_kind_text(s),
+                            json_field(s, "format"),
+                            json_field(s, "ttl"),
+                        ]
+                    })
+                    .collect();
+                out(
+                    args,
+                    &v,
+                    style::table(
+                        args.theme(),
+                        &["ИСТОЧНИК", "УРОВЕНЬ", "ДОСТАВКА", "ФОРМАТ", "TTL"],
+                        &rows,
+                    ),
+                )
+            }
+            RiskSourceAction::Add { file } => {
+                let text = input_text(file).await?;
+                let body: NewTiSourceBody =
+                    serde_json::from_str(&text).map_err(|e| format!("источник TI (JSON): {e}"))?;
+                let v: TiSourceView = client
+                    .call(RISK_SOURCE_CREATE, &[], &[], Some(&body))
+                    .await
+                    .map_err(|e| {
+                        e.hint(
+                            400,
+                            "ключ — ссылка {\"secret\": \"путь#поле\"}; bundled — только пакетом",
+                        )
+                    })?;
+                out(args, &v, source_record(&v))
+            }
+            RiskSourceAction::Set { id, file } => {
+                let text = input_text(file).await?;
+                let body: TiSourceBody =
+                    serde_json::from_str(&text).map_err(|e| format!("источник TI (JSON): {e}"))?;
+                let v: TiSourceView = client
+                    .call(RISK_SOURCE_PUT, &[&id], &[], Some(&body))
+                    .await?;
+                out(args, &v, source_record(&v))
+            }
+            RiskSourceAction::Rm { id } => {
+                let v: TiSourceView = client
+                    .call(RISK_SOURCE_DELETE, &[&id], &[], NO_BODY)
+                    .await?;
+                out(args, &v, format!("Источник {id} удалён.\n"))
+            }
+            RiskSourceAction::Import { id, file } => {
+                let bytes = input_bytes(file).await?;
+                let v: ListVersionView =
+                    client.call_octet(RISK_SOURCE_IMPORT, &[&id], bytes).await?;
+                out(args, &v, list_version_record(&v))
+            }
+            RiskSourceAction::Refresh { id } => {
+                let v: ListVersionView = client
+                    .call(RISK_SOURCE_REFRESH, &[&id], &[], NO_BODY)
+                    .await?;
+                out(args, &v, list_version_record(&v))
+            }
+            RiskSourceAction::Usage { id, since } => {
+                let query = since
+                    .as_deref()
+                    .map(|sv| vec![("since".to_owned(), sv.to_owned())])
+                    .unwrap_or_default();
+                let v: UsageView = client
+                    .call(RISK_SOURCE_USAGE, &[&id], &query, NO_BODY)
+                    .await?;
+                let rows: Vec<Vec<String>> = v
+                    .usage
+                    .iter()
+                    .map(|u| vec![u.tenant.clone(), u.lookups.to_string(), u.hits.to_string()])
+                    .collect();
+                out(
+                    args,
+                    &v,
+                    style::table(
+                        args.theme(),
+                        &["ОРГАНИЗАЦИЯ", "ОБРАЩЕНИЯ", "СОВПАДЕНИЯ"],
+                        &rows,
+                    ),
+                )
+            }
+        },
+        RiskAction::Hits(hits) => {
+            let org = client.org(args.org.clone()).await?;
+            let params: serde_json::Value = serde_json::json!({
+                "signal": hits.signal, "mode": hits.mode, "since": hits.since,
+                "until": hits.until, "limit": hits.limit,
+            });
+            let v: HitsView = client
+                .call(ORG_RISK_HITS, &[&org], &query(&params)?, NO_BODY)
+                .await?;
+            let rows: Vec<Vec<String>> = v
+                .hits
+                .iter()
+                .map(|h| {
+                    vec![
+                        json_field(h, "at"),
+                        h.signal.clone(),
+                        h.message.clone(),
+                        h.strength.to_string(),
+                        h.weight.to_string(),
+                        h.mode.to_string(),
+                    ]
+                })
+                .collect();
+            let mut text = style::table(
+                args.theme(),
+                &["МОМЕНТ", "ПРИЗНАК", "ПИСЬМО", "СИЛА", "ВЕС", "РЕЖИМ"],
+                &rows,
+            );
+            if let Some(next) = &v.next {
+                text.push_str(&style::more(
+                    args.theme(),
+                    &format!("Есть ещё. Следующая страница: те же условия и --until {next}"),
+                ));
+            }
+            out(args, &v, text)
+        }
+    }
+}
+
+/// Уровень команд `risk` без `--org`/`THEPOST_ADMIN_ORG` — установка, с ними — организация (как у
+/// брендинга и политики доверия).
+fn risk_level(args: &ApiArgs) -> CliResult<RiskLevel> {
+    Ok(match setting(args.org.clone(), ENV_ORG) {
+        None => RiskLevel::Installation,
+        Some(o) => {
+            let org = o
+                .parse::<tp_contracts::TenantId>()
+                .map_err(|e| format!("организация {o:?}: {e}"))?;
+            RiskLevel::Org(org.to_string())
+        }
+    })
+}
+
+/// Уровень справочника для команд `risk`.
+enum RiskLevel {
+    /// Уровень установки.
+    Installation,
+    /// Уровень организации (UUID).
+    Org(String),
+}
+
+impl RiskLevel {
+    /// Параметры пути маршрутов уровня.
+    fn params(&self) -> Vec<String> {
+        match self {
+            RiskLevel::Installation => Vec::new(),
+            RiskLevel::Org(org) => vec![org.clone()],
+        }
+    }
+}
+
+/// Операции признака уровня: `PUT` и параметры пути (`DELETE` — рядом).
+fn signal_ops(level: &RiskLevel) -> (Op, Op, Vec<String>) {
+    let params = level.params();
+    match level {
+        RiskLevel::Installation => (RISK_SIGNALS_LIST, RISK_SIGNAL_PUT, params),
+        RiskLevel::Org(_) => (ORG_RISK_SIGNALS_LIST, ORG_RISK_SIGNAL_PUT, params),
+    }
+}
+
+/// Собственное действие признака из аргумента (none, tag, junk, quarantine, reject).
+fn risk_action_arg(raw: &str) -> CliResult<tp_contracts::risk::RiskAction> {
+    serde_json::from_value(serde_json::json!(raw))
+        .map_err(|e| format!("действие {raw:?}: none, tag, junk, quarantine, reject ({e})"))
+}
+
+/// Режим признака из аргумента (report, enforce).
+fn mode_arg(raw: &str) -> CliResult<tp_contracts::risk::Mode> {
+    serde_json::from_value(serde_json::json!(raw))
+        .map_err(|e| format!("режим {raw:?}: report или enforce ({e})"))
+}
+
+/// Детектор своего признака из аргумента.
+fn detector_arg(raw: &str) -> CliResult<tp_contracts::risk::Detector> {
+    serde_json::from_value(serde_json::json!(raw)).map_err(|e| format!("детектор {raw:?}: {e}"))
+}
+
+/// Признак — строки «подпись: значение».
+fn signal_record(s: &SignalView) -> String {
+    record(&[
+        ("Признак", s.id.clone()),
+        ("Детектор", signal_detector_text(s)),
+        ("Вес", optional(s.weight.as_ref())),
+        ("Порог силы", optional(s.threshold.as_ref())),
+        ("Действие", optional(s.action.as_ref())),
+        ("Режим", optional(s.mode.as_ref())),
+        ("Источник значения", signal_source_text(s)),
+    ])
+}
+
+/// Детектор признака для таблицы и записи; осиротевшее изменение — пометка.
+fn signal_detector_text(s: &SignalView) -> String {
+    if let Some(d) = &s.detector {
+        return serde_json::to_value(d).map_or_else(|_| "—".to_owned(), |v| value_text(&v));
+    }
+    if s.orphaned {
+        "осиротевшее изменение".to_owned()
+    } else {
+        "—".to_owned()
+    }
+}
+
+/// Источник значения признака для таблицы.
+fn signal_source_text(s: &SignalView) -> String {
+    match &s.source {
+        None => "пакет".to_owned(),
+        Some(tp_contracts::risk::RiskLevel::Installation) => "установка".to_owned(),
+        Some(tp_contracts::risk::RiskLevel::Org(_)) => "организация".to_owned(),
+    }
+}
+
+/// Состояние пакета по-русски.
+fn package_state_text(p: &PackageEntryView) -> String {
+    match &p.state {
+        tp_contracts::risk::PackageState::Active => "действующий".to_owned(),
+        tp_contracts::risk::PackageState::Previous => "прошлый".to_owned(),
+        tp_contracts::risk::PackageState::Rejected { report } => format!("отклонён: {report}"),
+    }
+}
+
+/// Доставка источника для таблицы.
+fn source_kind_text(s: &TiSourceView) -> String {
+    match &s.kind {
+        tp_contracts::risk::SourceKind::Http { url } => url.clone(),
+        tp_contracts::risk::SourceKind::Taxii { api_root, .. } => api_root.clone(),
+        tp_contracts::risk::SourceKind::File => "файл".to_owned(),
+    }
+}
+
+/// Источник TI — строки «подпись: значение».
+fn source_record(s: &TiSourceView) -> String {
+    record(&[
+        ("Источник", s.id.clone()),
+        ("Уровень", s.tier.to_string()),
+        ("Доставка", source_kind_text(s)),
+        ("Формат", json_field(s, "format")),
+        ("TTL", json_field(s, "ttl")),
+        (
+            "Ключ",
+            s.key
+                .as_ref()
+                .map(|k| k.to_string())
+                .unwrap_or_else(|| "—".to_owned()),
+        ),
+        ("Происхождение", s.origin.to_string()),
+    ])
+}
+
+/// Версия списка — строки «подпись: значение».
+fn list_version_record(v: &ListVersionView) -> String {
+    record(&[
+        ("Список", v.list.clone()),
+        ("Источник", v.source.clone()),
+        ("SHA-256", v.sha256.clone()),
+        ("Записей", v.entries.to_string()),
+        ("Загружен", json_field(v, "fetched_at")),
+    ])
+}
+
+/// Пороги — строки «подпись: значение».
+fn thresholds_record(v: &ThresholdsView) -> String {
+    record(&[
+        (
+            "Свои",
+            v.own
+                .as_ref()
+                .map(|t| {
+                    format!(
+                        "пометка {}, спам {}, карантин {}, отказ {}",
+                        t.tag, t.junk, t.quarantine, t.reject
+                    )
+                })
+                .unwrap_or_else(|| "—".to_owned()),
+        ),
+        (
+            "Действующие",
+            format!(
+                "пометка {}, спам {}, карантин {}, отказ {}",
+                v.effective.tag, v.effective.junk, v.effective.quarantine, v.effective.reject
+            ),
+        ),
+        ("Источник", thresholds_source_text(v)),
+    ])
+}
+
+/// Источник действующих порогов по-русски.
+fn thresholds_source_text(v: &ThresholdsView) -> String {
+    match &v.source {
+        None => "константы каталога".to_owned(),
+        Some(tp_contracts::risk::RiskLevel::Installation) => "установка".to_owned(),
+        Some(tp_contracts::risk::RiskLevel::Org(_)) => "организация".to_owned(),
     }
 }
 
@@ -3359,6 +4033,22 @@ async fn input_text(file: PathBuf) -> CliResult<String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Файл целиком байтами (пакет поставщика, список TI); `-` — stdin.
+async fn input_bytes(file: PathBuf) -> CliResult<Vec<u8>> {
+    tokio::task::spawn_blocking(move || {
+        if file.as_os_str() == "-" {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::stdin(), &mut bytes)
+                .map_err(|e| format!("stdin: {e}"))?;
+            Ok(bytes)
+        } else {
+            std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 const DOMAIN_COLUMNS: &[&str] = &["ИДЕНТИФИКАТОР", "ДОМЕН", "ВИД"];
 
 /// Текущий администратор — строки «подпись: значение».
@@ -3627,6 +4317,85 @@ mod tests {
                 file: ref f,
             } if f.as_os_str() == "-"
         ));
+        let cli = Cli::try_parse_from([
+            "thepost",
+            "admin",
+            "risk",
+            "signals",
+            "set",
+            "tp.encrypted_archive",
+            "--weight",
+            "9",
+        ])
+        .expect("risk signals set");
+        let Command::Admin { action, .. } = cli.command else {
+            panic!("{:?}", cli.command)
+        };
+        let AdminAction::Api(ApiAction::Risk { action }) = action else {
+            panic!("{action:?}")
+        };
+        let RiskAction::Signals { action } = *action else {
+            panic!("{action:?}")
+        };
+        let SignalsAction::Set {
+            ref id,
+            weight: Some(9),
+            ..
+        } = *action
+        else {
+            panic!("{action:?}")
+        };
+        assert_eq!(id, "tp.encrypted_archive");
+        for args in [
+            &["thepost", "admin", "risk", "signals", "list"][..],
+            &[
+                "thepost",
+                "admin",
+                "--org",
+                "00000000-0000-0000-0000-000000000001",
+                "risk",
+                "signals",
+                "list",
+            ],
+            &["thepost", "admin", "risk", "signals", "reset", "org.x"],
+            &["thepost", "admin", "risk", "thresholds", "show"],
+            &[
+                "thepost",
+                "admin",
+                "risk",
+                "thresholds",
+                "set",
+                "--tag",
+                "2",
+                "--junk",
+                "7",
+                "--quarantine",
+                "11",
+                "--reject",
+                "16",
+            ],
+            &["thepost", "admin", "risk", "package", "list"],
+            &["thepost", "admin", "risk", "package", "import", "pkg.json"],
+            &["thepost", "admin", "risk", "package", "activate", "2"],
+            &["thepost", "admin", "risk", "package", "rollback", "1"],
+            &["thepost", "admin", "risk", "source", "list"],
+            &["thepost", "admin", "risk", "source", "add", "--file", "-"],
+            &[
+                "thepost", "admin", "risk", "source", "set", "feodo", "--file", "-",
+            ],
+            &["thepost", "admin", "risk", "source", "rm", "feodo"],
+            &[
+                "thepost", "admin", "risk", "source", "import", "feodo", "list.txt",
+            ],
+            &["thepost", "admin", "risk", "source", "refresh", "feodo"],
+            &["thepost", "admin", "risk", "source", "usage", "feodo"],
+            &["thepost", "admin", "risk", "hits"],
+            &[
+                "thepost", "admin", "risk", "hits", "--signal", "tp.x", "--mode", "report",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
+        }
         // Пароль — не аргумент: только --user и --password-stdin; без --user (и без --oidc) — ошибка разбора.
         let cli = Cli::try_parse_from([
             "thepost",
@@ -4250,6 +5019,11 @@ mod tests {
                 // Беседы и объекты писем — те же, что у приёма писем (MS-21): выгрузка беседы читает
                 // скрытые письма по объектам (ADM-50).
                 .with_threads(Arc::new(threads.clone()))
+                // Справочник аномалий (ADM-51): хранилище tp-testkit, проверка пакета — память tp-admin.
+                .with_risk(
+                    Arc::new(tp_testkit::MemRisk::new(Arc::new(SystemClock))),
+                    Arc::new(tp_admin::risk::MemRiskNode::default()),
+                )
                 .with_held_blobs(Arc::new(blobs.clone()))
                 .with_sieve(Arc::new(MemSieve::new()), check_script)
                 .with_org_script_check(check_org_script)
@@ -4406,6 +5180,344 @@ mod tests {
             ..ApiArgs::default()
         };
         execute(c, &args, action).await
+    }
+
+    /// Приёмка ADM-51: команды `thepost admin risk …` против Admin API — каталог, изменение и сброс
+    /// признака (организация мягче — ошибка 422), пороги, пакет (загрузка с отчётом, активация, откат),
+    /// источник TI (добавление, импорт, обновление, удаление), срабатывания организации.
+    #[tokio::test]
+    async fn risk_commands_against_admin_api() {
+        let (_admin, url, _, _, _) = admin_api().await;
+        let root = client(&url, "oidc");
+        let org = client(&url, "org");
+
+        // Пакет версии 1 — файлом; отчёт показывает, что изменится; активация — отдельное действие.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package = dir.path().join("package.json");
+        let manifest = tp_contracts::risk::PackageManifest {
+            format: tp_contracts::risk::PACKAGE_FORMAT,
+            version: 1,
+            created: time::OffsetDateTime::UNIX_EPOCH,
+            min_node: tp_contracts::risk::Semver::new(0, 1, 0),
+            key_id: "vendor".to_owned(),
+            signals: vec![tp_contracts::risk::Signal {
+                id: tp_contracts::risk::SignalId::new("tp.encrypted_archive").expect("id"),
+                detector: tp_contracts::risk::Detector::EncryptedArchive,
+                weight: 6,
+                threshold: 0,
+                action: tp_contracts::risk::RiskAction::None,
+                mode: tp_contracts::risk::Mode::Enforce,
+                origin: tp_contracts::risk::Origin::Vendor,
+                since: time::OffsetDateTime::UNIX_EPOCH,
+            }],
+            lists: Vec::new(),
+            samples: Vec::new(),
+        };
+        std::fs::write(&package, serde_json::to_vec(&manifest).expect("json")).expect("write");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Package {
+                    action: Box::new(PackageAction::Import {
+                        file: package.clone(),
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("package import");
+        assert!(out.contains("проверен и поставлен, не активен"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Package {
+                    action: Box::new(PackageAction::Activate { version: 1 }),
+                }),
+            },
+        )
+        .await
+        .expect("package activate");
+        assert!(out.contains("активирован"), "{out}");
+        let out = exec(
+            &root,
+            true,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Package {
+                    action: Box::new(PackageAction::List),
+                }),
+            },
+        )
+        .await
+        .expect("package list");
+        assert!(out.contains("\"active\""), "{out}");
+
+        // Каталог и изменение признака установки; свой признак организации.
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::List),
+                }),
+            },
+        )
+        .await
+        .expect("signals list");
+        assert!(out.contains("tp.encrypted_archive"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::Set {
+                        id: "tp.encrypted_archive".to_owned(),
+                        weight: Some(3),
+                        action: None,
+                        mode: None,
+                        detector: None,
+                        threshold: None,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("signals set");
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Вес: 3"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::Reset {
+                        id: "tp.encrypted_archive".to_owned(),
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("signals reset");
+        assert!(out.contains("сброшено"), "{out}");
+        // Организация мягче — ошибка с подсказкой; строже — ок (уровень организации — с --org).
+        let org_args = ApiArgs {
+            org: Some(TenantId::DEFAULT.to_string()),
+            ..ApiArgs::default()
+        };
+        let err = execute(
+            &org,
+            &org_args,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::Set {
+                        id: "tp.encrypted_archive".to_owned(),
+                        weight: Some(1),
+                        action: None,
+                        mode: None,
+                        detector: None,
+                        threshold: None,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect_err("мягче");
+        assert!(err.contains("422"), "{err}");
+        let out = execute(
+            &org,
+            &org_args,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Signals {
+                    action: Box::new(SignalsAction::Set {
+                        id: "tp.encrypted_archive".to_owned(),
+                        weight: Some(9),
+                        action: None,
+                        mode: None,
+                        detector: None,
+                        threshold: None,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("строже");
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Вес: 9"), "{out}");
+
+        // Пороги: показ и замена установки; организация видит действующими пороги установки.
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Thresholds {
+                    action: Box::new(ThresholdsAction::Set {
+                        tag: 2,
+                        junk: 7,
+                        quarantine: 11,
+                        reject: 16,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("thresholds set");
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("отказ 16"), "{out}");
+        let out = execute(
+            &org,
+            &org_args,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Thresholds {
+                    action: Box::new(ThresholdsAction::Show),
+                }),
+            },
+        )
+        .await
+        .expect("org thresholds");
+        assert!(out.contains("установка"), "{out}");
+
+        // Источник TI: добавление из файла, список, импорт списка, обновление, учёт, удаление.
+        let source = dir.path().join("source.json");
+        std::fs::write(
+            &source,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": "feodo", "tier": "customer_key",
+                "kind": {"http": {"url": "https://feodo.tracker.abuse.ch/ipblocklist/"}},
+                "format": "txt", "ttl": "1h",
+                "stale": {"reduce": {"percent": 50}},
+                "license": {"terms_url": "https://abuse.ch/terms/", "commercial": true},
+                "tenants": "all", "key": {"secret": "thepost/db#api_key"},
+                "auth": {"header": {"name": "Auth-Key"}}, "origin": "vendor"
+            }))
+            .expect("json"),
+        )
+        .expect("write");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(RiskSourceAction::Add { file: source }),
+                }),
+            },
+        )
+        .await
+        .expect("source add");
+        assert!(out.contains("feodo"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(RiskSourceAction::List),
+                }),
+            },
+        )
+        .await
+        .expect("source list");
+        assert!(out.contains("customer_key"), "{out}");
+        let list = dir.path().join("list.txt");
+        std::fs::write(&list, b"1.2.3.4\n5.6.7.8\n").expect("write");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(RiskSourceAction::Import {
+                        id: "feodo".to_owned(),
+                        file: list,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("source import");
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Записей: 2"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(RiskSourceAction::Refresh {
+                        id: "feodo".to_owned(),
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("source refresh");
+        assert!(out.contains("feodo"), "{out}");
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(RiskSourceAction::Usage {
+                        id: "feodo".to_owned(),
+                        since: None,
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("source usage");
+        // учёт в CLI-тесте пуст (записи пишет конвейер узла) — таблица с заголовком или «нет записей»
+        assert!(
+            out.contains("ОРГАНИЗАЦИЯ") || out.contains("нет записей"),
+            "{out}"
+        );
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Source {
+                    action: Box::new(RiskSourceAction::Rm {
+                        id: "feodo".to_owned(),
+                    }),
+                }),
+            },
+        )
+        .await
+        .expect("source rm");
+        assert!(out.contains("удалён"), "{out}");
+
+        // Срабатывания организации: пустой журнал — пустая таблица.
+        let out = execute(
+            &org,
+            &org_args,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Hits(HitsArgs {
+                    signal: None,
+                    mode: None,
+                    since: None,
+                    until: None,
+                    limit: None,
+                })),
+            },
+        )
+        .await
+        .expect("hits");
+        // журнал срабатываний в CLI-тесте пуст (записи пишет конвейер узла)
+        assert!(
+            out.contains("ПРИЗНАК") || out.contains("нет записей"),
+            "{out}"
+        );
+
+        // Откат пакета — на хранимую версию.
+        let out = exec(
+            &root,
+            false,
+            ApiAction::Risk {
+                action: Box::new(RiskAction::Package {
+                    action: Box::new(PackageAction::Rollback { version: 1 }),
+                }),
+            },
+        )
+        .await
+        .expect("package rollback");
+        assert!(out.contains("Откат"), "{out}");
     }
 
     /// Имена входа `account list --json` без `--login`.

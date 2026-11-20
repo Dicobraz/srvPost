@@ -4884,6 +4884,1341 @@
           "messages"
         ],
         "type": "object"
+      },
+      "Origin": {
+        "description": "Происхождение признака: поставщик или администратор.",
+        "enum": [
+          "vendor",
+          "admin"
+        ],
+        "type": "string"
+      },
+      "Field": {
+        "description": "Поле письма детектора совпадения со списком TI.",
+        "enum": [
+          "sender_ip",
+          "link_domain",
+          "link_url",
+          "from_domain",
+          "attachment_sha256"
+        ],
+        "type": "string"
+      },
+      "Detector": {
+        "description": "Детектор признака — типизированный Rust-код с параметрами (решение 126 г).",
+        "oneOf": [
+          {
+            "description": "Новый для беседы тип вложения.",
+            "enum": [
+              "thread_new_attachment_type"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Архив с паролем.",
+            "enum": [
+              "encrypted_archive"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Образ диска или ярлык: ISO, IMG, VHD, LNK.",
+            "enum": [
+              "disk_image_or_shortcut"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Ссылка на новый для беседы домен.",
+            "enum": [
+              "thread_new_link_domain"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Смена `Reply-To` относительно беседы.",
+            "enum": [
+              "reply_to_changed"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Совпадение поля письма со списком TI.",
+            "properties": {
+              "list_match": {
+                "description": "Совпадение поля письма со списком TI.",
+                "properties": {
+                  "field": {
+                    "$ref": "#/components/schemas/Field",
+                    "description": "Поле письма."
+                  },
+                  "list": {
+                    "description": "Список.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "list",
+                  "field"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "list_match"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RiskAction": {
+        "description": "Собственное действие признака (от мягкого к строгому).",
+        "enum": [
+          "none",
+          "tag",
+          "junk",
+          "quarantine",
+          "reject"
+        ],
+        "type": "string"
+      },
+      "Mode": {
+        "description": "Режим признака: «только отчёт» или «применять».",
+        "enum": [
+          "report",
+          "enforce"
+        ],
+        "type": "string"
+      },
+      "RiskLevel": {
+        "description": "Уровень политики справочника: установка → организация.",
+        "oneOf": [
+          {
+            "description": "Установка — меняет значения как угодно.",
+            "enum": [
+              "installation"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Организация (UUID) — только в сторону строгости.",
+            "properties": {
+              "org": {
+                "description": "Организация (UUID) — только в сторону строгости.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "org"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Thresholds": {
+        "description": "Пороги действий: балл, с которого действует действие (константы контракта — 1, 6, 10, 15).",
+        "properties": {
+          "junk": {
+            "description": "В папку «Спам».",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quarantine": {
+            "description": "В карантин.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reject": {
+            "description": "Отказ.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tag": {
+            "description": "Пометка письма.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tag",
+          "junk",
+          "quarantine",
+          "reject"
+        ],
+        "type": "object"
+      },
+      "PolicyViolation": {
+        "description": "Несоответствие политики организации базовым значениям: организация смягчила признак.",
+        "properties": {
+          "base": {
+            "description": "Базовое значение (уровней ниже).",
+            "type": "string"
+          },
+          "field": {
+            "description": "Поле: `weight`, `action`, `mode`.",
+            "type": "string"
+          },
+          "signal": {
+            "description": "Признак.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Заданное значение.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal",
+          "field",
+          "value",
+          "base"
+        ],
+        "type": "object"
+      },
+      "UpdateReport": {
+        "description": "Итог обновления пакета: что изменится при активации.",
+        "properties": {
+          "added": {
+            "description": "Добавленные признаки (приходят в режиме «только отчёт»).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "changed": {
+            "description": "Изменённые пакетом.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "orphaned_overrides": {
+            "description": "Изменения администратора признаков, которых больше нет в пакете.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "description": "Удалённые из пакета без изменений администратора.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "added",
+          "removed",
+          "changed",
+          "orphaned_overrides"
+        ],
+        "type": "object"
+      },
+      "PackageState": {
+        "description": "Состояние хранимого пакета.",
+        "oneOf": [
+          {
+            "description": "Действующий каталог пакета.",
+            "enum": [
+              "active"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Хранимый для отката.",
+            "enum": [
+              "previous"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Отклонён при проверке — отчёт в `report`.",
+            "properties": {
+              "rejected": {
+                "description": "Отклонён при проверке — отчёт в `report`.",
+                "properties": {
+                  "report": {
+                    "description": "Отчёт проверки (что не так).",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "report"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "rejected"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Tier": {
+        "description": "Уровень источника TI (решение 126 е–з).",
+        "enum": [
+          "bundled",
+          "customer_key",
+          "import"
+        ],
+        "type": "string"
+      },
+      "TiOrigin": {
+        "description": "Происхождение данных источника — для журнала и отчётов (решение 126 к).",
+        "enum": [
+          "vendor",
+          "gos_sopka",
+          "fin_cert",
+          "own"
+        ],
+        "type": "string"
+      },
+      "FeedFormat": {
+        "description": "Формат фида источника TI.",
+        "oneOf": [
+          {
+            "description": "Простой текст: индикатор в строке.",
+            "enum": [
+              "txt"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "CSV; `column` — колонка с индикатором.",
+            "properties": {
+              "csv": {
+                "description": "CSV; `column` — колонка с индикатором.",
+                "properties": {
+                  "column": {
+                    "description": "Имя колонки.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "column"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "csv"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "RPZ (Response Policy Zone).",
+            "enum": [
+              "rpz"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Фид MISP (manifest.json + CSV).",
+            "enum": [
+              "misp_feed"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "STIX 2.1 (в том числе по TAXII).",
+            "enum": [
+              "stix21"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "StaleAction": {
+        "description": "Действие при устаревании источника («отключить» нет).",
+        "oneOf": [
+          {
+            "description": "Снизить вес признаков источника на `percent` процентов.",
+            "properties": {
+              "reduce": {
+                "description": "Снизить вес признаков источника на `percent` процентов.",
+                "properties": {
+                  "percent": {
+                    "description": "Процент снижения, 0–100.",
+                    "format": "int32",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "percent"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "reduce"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Перевести признаки в «только отчёт».",
+            "enum": [
+              "report"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "License": {
+        "description": "Лицензия источника TI: условия и атрибуция.",
+        "properties": {
+          "attribution": {
+            "description": "Атрибуция (ссылка, дата, ©); `null` — не требуется.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commercial": {
+            "description": "Коммерческое использование разрешено условиями.",
+            "type": "boolean"
+          },
+          "terms_url": {
+            "description": "Адрес условий использования.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "terms_url",
+          "commercial"
+        ],
+        "type": "object"
+      },
+      "Tenants": {
+        "description": "Организации, которым доступен источник.",
+        "oneOf": [
+          {
+            "description": "Все организации установки.",
+            "enum": [
+              "all"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Только перечисленные (UUID).",
+            "properties": {
+              "only": {
+                "description": "Только перечисленные (UUID).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "only"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SecretRef": {
+        "description": "Ссылка на поле секрета в хранилище (`<путь>#<поле>`); значение ключа API не принимает и не отдаёт.",
+        "properties": {
+          "secret": {
+            "description": "Ссылка `<путь>#<поле>`, например `thepost/db#api_key`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret"
+        ],
+        "type": "object"
+      },
+      "HttpAuth": {
+        "description": "Авторизация источника TI: секрет — из ссылки `key`.",
+        "oneOf": [
+          {
+            "description": "Без авторизации.",
+            "enum": [
+              "none"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Свой заголовок; имя здесь, значение — секрет.",
+            "properties": {
+              "header": {
+                "description": "Свой заголовок; имя здесь, значение — секрет.",
+                "properties": {
+                  "name": {
+                    "description": "Имя заголовка (`X-Api-Key` у RST Cloud, `Auth-Key` у abuse.ch).",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "header"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Basic; пользователь здесь, пароль — секрет.",
+            "properties": {
+              "basic": {
+                "description": "Basic; пользователь здесь, пароль — секрет.",
+                "properties": {
+                  "user": {
+                    "description": "Имя пользователя (Kaspersky TAXII: `taxii`).",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "user"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "basic"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Bearer-токен из секрета.",
+            "enum": [
+              "bearer"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Сертификат клиента из секрета.",
+            "enum": [
+              "client_cert"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "Tlp": {
+        "description": "Маркировка TLP версии списка из источника.",
+        "enum": [
+          "clear",
+          "green",
+          "amber",
+          "amber_strict",
+          "red"
+        ],
+        "type": "string"
+      },
+      "SignalView": {
+        "description": "Признак действующего каталога: значение и уровень-источник. У «осиротевшего» изменения (признака\nбольше нет в пакете поставщика, решение 126 в) детектор, порог и дата — `null`: известно только\nсамо изменение.",
+        "properties": {
+          "action": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RiskAction",
+                "description": "Собственное действие."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detector": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Detector",
+                "description": "Детектор; `null` — осиротевшее изменение."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "description": "Идентификатор: `tp.*` — поставщик, `org.*` — администратор.",
+            "type": "string"
+          },
+          "mode": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Mode",
+                "description": "Режим: «только отчёт» или «применять»."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin": {
+            "$ref": "#/components/schemas/Origin",
+            "description": "Происхождение значения: поставщик или администратор."
+          },
+          "orphaned": {
+            "description": "Осиротевшее изменение: признака нет в действующем пакете (решение 126 в).",
+            "type": "boolean"
+          },
+          "since": {
+            "description": "Дата появления признака (UTC).",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RiskLevel",
+                "description": "Уровень, давший отличие от пакета; `null` — признак пакета без изменений."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threshold": {
+            "description": "Порог силы срабатывания детектора, 0–100; `null` — осиротевшее изменение.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "weight": {
+            "description": "Вес в балле письма, 0–100.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "origin",
+          "orphaned"
+        ],
+        "type": "object"
+      },
+      "SignalBody": {
+        "additionalProperties": false,
+        "description": "Изменение признака каталога: у признака поставщика (`tp.*`) — вес, действие и режим (незаданные\nнаследуются пакетом); свой признак (`org.*`) задаётся целиком — детектор, вес, порог, действие и\nрежим обязательны.",
+        "properties": {
+          "action": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RiskAction",
+                "description": "Собственное действие."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detector": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Detector",
+                "description": "Детектор (только свой признак `org.*`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Mode",
+                "description": "Режим."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threshold": {
+            "description": "Порог силы срабатывания, 0–100 (только свой признак).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "weight": {
+            "description": "Вес, 0–100.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SignalsView": {
+        "description": "Действующий каталог: признаки по возрастанию идентификатора; «осиротевшие» изменения — в общем\nсписке с признаком `orphaned`.",
+        "properties": {
+          "signals": {
+            "description": "Признаки каталога.",
+            "items": {
+              "$ref": "#/components/schemas/SignalView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "signals"
+        ],
+        "type": "object"
+      },
+      "ThresholdsBody": {
+        "additionalProperties": false,
+        "description": "Пороги действий уровня целиком: баллы, с которых действуют действия.",
+        "properties": {
+          "junk": {
+            "description": "Балл перемещения в «Спам».",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quarantine": {
+            "description": "Балл карантина.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reject": {
+            "description": "Балл отказа.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tag": {
+            "description": "Балл пометки письма.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tag",
+          "junk",
+          "quarantine",
+          "reject"
+        ],
+        "type": "object"
+      },
+      "ThresholdsView": {
+        "description": "Пороги уровня: свои (уровень не задан — `null`), действующие и уровень-источник.",
+        "properties": {
+          "effective": {
+            "$ref": "#/components/schemas/Thresholds",
+            "description": "Действующие пороги."
+          },
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Thresholds",
+                "description": "Пороги уровня; `null` — уровень не задан (действует уровень выше и константы контракта)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RiskLevel",
+                "description": "Уровень, давший действующие пороги; `null` — константы контракта."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "effective"
+        ],
+        "type": "object"
+      },
+      "PackageEntryView": {
+        "description": "Хранимый пакет: номер и состояние.",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/PackageState",
+            "description": "Состояние: активный, прошлый, отклонённый с отчётом."
+          },
+          "version": {
+            "description": "Номер версии (только растёт).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "state"
+        ],
+        "type": "object"
+      },
+      "PackagesView": {
+        "description": "Хранимые пакеты: действующий и N прошлых, по убыванию номера (`risk.package.keep`).",
+        "properties": {
+          "packages": {
+            "description": "Пакеты.",
+            "items": {
+              "$ref": "#/components/schemas/PackageEntryView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "packages"
+        ],
+        "type": "object"
+      },
+      "PackageReportView": {
+        "description": "Отчёт проверки загруженного пакета (решение 126 б): подпись, пробный прогон и что изменится — до\nактивации. Пакет поставлен (202), но не активен.",
+        "properties": {
+          "key_id": {
+            "description": "Ключ подписи (подпись Ed25519 проверил узел, APP-78).",
+            "type": "string"
+          },
+          "samples": {
+            "description": "Прогнано образцов пакета (пробный прогон).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signals": {
+            "description": "Признаков в пакете.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "update": {
+            "$ref": "#/components/schemas/UpdateReport",
+            "description": "Что изменится при активации (новые признаки приходят в режиме «только отчёт»)."
+          },
+          "version": {
+            "description": "Номер версии проверенного пакета.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "key_id",
+          "samples",
+          "signals",
+          "update"
+        ],
+        "type": "object"
+      },
+      "TiSourceBody": {
+        "additionalProperties": false,
+        "description": "Источник TI без идентификатора (тело `PUT`): вид, доставка, формат, TTL, действие при устаревании,\nлицензия, организации, ключ-ссылка и авторизация.",
+        "properties": {
+          "auth": {
+            "$ref": "#/components/schemas/HttpAuth",
+            "description": "Авторизация (секрет — из `key`)."
+          },
+          "format": {
+            "$ref": "#/components/schemas/FeedFormat",
+            "description": "Формат."
+          },
+          "key": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SecretRef",
+                "description": "Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TiSourceKind",
+            "description": "Доставка."
+          },
+          "license": {
+            "$ref": "#/components/schemas/License",
+            "description": "Лицензия."
+          },
+          "origin": {
+            "$ref": "#/components/schemas/TiOrigin",
+            "description": "Происхождение — для журнала и отчётов."
+          },
+          "stale": {
+            "$ref": "#/components/schemas/StaleAction",
+            "description": "Действие при устаревании («отключить» нет)."
+          },
+          "tenants": {
+            "$ref": "#/components/schemas/Tenants",
+            "description": "Организации, которым доступен."
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier",
+            "description": "Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400)."
+          },
+          "ttl": {
+            "description": "Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`).",
+            "example": "1h",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier",
+          "kind",
+          "format",
+          "ttl",
+          "stale",
+          "license",
+          "tenants",
+          "auth",
+          "origin"
+        ],
+        "type": "object"
+      },
+      "NewTiSourceBody": {
+        "additionalProperties": false,
+        "description": "Новый источник TI (тело `POST`): идентификатор и параметры.",
+        "properties": {
+          "auth": {
+            "$ref": "#/components/schemas/HttpAuth",
+            "description": "Авторизация (секрет — из `key`)."
+          },
+          "format": {
+            "$ref": "#/components/schemas/FeedFormat",
+            "description": "Формат."
+          },
+          "id": {
+            "description": "Идентификатор: `[a-z0-9._-]`, до 64 символов.",
+            "type": "string"
+          },
+          "key": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SecretRef",
+                "description": "Ключ (токен, сертификат) — ссылка на хранилище секретов; значение ключа не принимает и не отдаёт."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TiSourceKind",
+            "description": "Доставка."
+          },
+          "license": {
+            "$ref": "#/components/schemas/License",
+            "description": "Лицензия."
+          },
+          "origin": {
+            "$ref": "#/components/schemas/TiOrigin",
+            "description": "Происхождение — для журнала и отчётов."
+          },
+          "stale": {
+            "$ref": "#/components/schemas/StaleAction",
+            "description": "Действие при устаревании («отключить» нет)."
+          },
+          "tenants": {
+            "$ref": "#/components/schemas/Tenants",
+            "description": "Организации, которым доступен."
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier",
+            "description": "Уровень: ключ заказчика или импорт (`bundled` — только пакетом поставщика, 400)."
+          },
+          "ttl": {
+            "description": "Срок жизни данных (TTL): старше — устаревший (`1h`, `30m`).",
+            "example": "1h",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tier",
+          "kind",
+          "format",
+          "ttl",
+          "stale",
+          "license",
+          "tenants",
+          "auth",
+          "origin"
+        ],
+        "type": "object"
+      },
+      "TiSourceView": {
+        "description": "Источник TI в ответе API (ключ — только ссылка, значения не отдаёт).",
+        "properties": {
+          "auth": {
+            "$ref": "#/components/schemas/HttpAuth",
+            "description": "Авторизация."
+          },
+          "format": {
+            "$ref": "#/components/schemas/FeedFormat",
+            "description": "Формат."
+          },
+          "id": {
+            "description": "Идентификатор.",
+            "type": "string"
+          },
+          "key": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SecretRef",
+                "description": "Ключ — ссылка на хранилище секретов; значение не отдаётся."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TiSourceKind",
+            "description": "Доставка."
+          },
+          "license": {
+            "$ref": "#/components/schemas/License",
+            "description": "Лицензия."
+          },
+          "origin": {
+            "$ref": "#/components/schemas/TiOrigin",
+            "description": "Происхождение."
+          },
+          "stale": {
+            "$ref": "#/components/schemas/StaleAction",
+            "description": "Действие при устаревании."
+          },
+          "tenants": {
+            "$ref": "#/components/schemas/Tenants",
+            "description": "Организации, которым доступен."
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier",
+            "description": "Уровень: в поставке, ключ заказчика, импорт."
+          },
+          "ttl": {
+            "description": "Срок жизни данных (TTL).",
+            "example": "1h",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tier",
+          "kind",
+          "format",
+          "ttl",
+          "stale",
+          "license",
+          "tenants",
+          "auth",
+          "origin"
+        ],
+        "type": "object"
+      },
+      "SourcesView": {
+        "description": "Источники TI по идентификатору.",
+        "properties": {
+          "sources": {
+            "description": "Источники.",
+            "items": {
+              "$ref": "#/components/schemas/TiSourceView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "type": "object"
+      },
+      "ListVersionView": {
+        "description": "Версия списка TI, ставшая текущей (импорт или обновление).",
+        "properties": {
+          "blob": {
+            "description": "Ссылка на объект содержимого в BLOB.",
+            "type": "string"
+          },
+          "entries": {
+            "description": "Число записей.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fetched_at": {
+            "description": "Момент загрузки (UTC).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "list": {
+            "description": "Список.",
+            "type": "string"
+          },
+          "sha256": {
+            "description": "SHA-256 содержимого (hex).",
+            "type": "string"
+          },
+          "source": {
+            "description": "Источник.",
+            "type": "string"
+          },
+          "tlp": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Tlp",
+                "description": "Маркировка TLP из источника; `null` — маркировки нет."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "list",
+          "source",
+          "sha256",
+          "blob",
+          "entries",
+          "fetched_at"
+        ],
+        "type": "object"
+      },
+      "UsageTotalView": {
+        "description": "Учёт источника по организации: суммы обращений и совпадений (MSSP, решение 126 е).",
+        "properties": {
+          "hits": {
+            "description": "Совпадения.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lookups": {
+            "description": "Обращения (проверки полей письма по спискам источника).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tenant": {
+            "description": "Организация (UUID).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "lookups",
+          "hits"
+        ],
+        "type": "object"
+      },
+      "UsageView": {
+        "description": "Учёт источника: суммы по организациям с `since`, по возрастанию организации.",
+        "properties": {
+          "since": {
+            "description": "Начало периода (UTC).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "source": {
+            "description": "Источник.",
+            "type": "string"
+          },
+          "usage": {
+            "description": "Суммы по организациям.",
+            "items": {
+              "$ref": "#/components/schemas/UsageTotalView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "source",
+          "since",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "HitView": {
+        "description": "Срабатывание признака в журнале организации.",
+        "properties": {
+          "at": {
+            "description": "Момент (UTC).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "message": {
+            "description": "Письмо (SHA-256, hex).",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/Mode",
+            "description": "Режим признака при срабатывании: `report` — только журнал."
+          },
+          "signal": {
+            "description": "Признак.",
+            "type": "string"
+          },
+          "strength": {
+            "description": "Сила срабатывания, 0–100.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "weight": {
+            "description": "Вес признака при срабатывании.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message",
+          "signal",
+          "strength",
+          "weight",
+          "mode",
+          "at"
+        ],
+        "type": "object"
+      },
+      "HitsView": {
+        "description": "Страница журнала срабатываний: свежие первыми; срабатывания одного момента (одно письмо —\nнесколько признаков) не разрезаются страницей.",
+        "properties": {
+          "hits": {
+            "description": "Срабатывания страницы.",
+            "items": {
+              "$ref": "#/components/schemas/HitView"
+            },
+            "type": "array"
+          },
+          "next": {
+            "description": "Конец интервала следующей страницы (`until`, RFC 3339); `null` — записей больше нет.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hits"
+        ],
+        "type": "object"
+      },
+      "RiskProblem": {
+        "description": "Отказ записи признака: организация мягче установки (RFC 9457 с расширением `errors`).",
+        "properties": {
+          "detail": {
+            "description": "Несоответствия по-русски, через «; ».",
+            "type": "string"
+          },
+          "errors": {
+            "description": "Несоответствия: организация смягчила признак.",
+            "items": {
+              "$ref": "#/components/schemas/PolicyViolation"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "Код HTTP (422).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "Краткое описание кода.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "title",
+          "detail",
+          "errors"
+        ],
+        "type": "object"
+      },
+      "TiSourceKind": {
+        "description": "Доставка и параметры источника TI (зеркало `tp_contracts::risk::SourceKind`; имя `TiSourceKind` —\nне пересекается с видом доверенного источника транспорта).",
+        "oneOf": [
+          {
+            "description": "Фид по HTTP(S).",
+            "properties": {
+              "http": {
+                "description": "Фид по HTTP(S).",
+                "properties": {
+                  "url": {
+                    "description": "Адрес.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "http"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Коллекция TAXII 2.1.",
+            "properties": {
+              "taxii": {
+                "description": "Коллекция TAXII 2.1.",
+                "properties": {
+                  "api_root": {
+                    "description": "API root.",
+                    "type": "string"
+                  },
+                  "collection": {
+                    "description": "Коллекция.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "api_root",
+                  "collection"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "taxii"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Файл в каталоге импорта (закрытый контур).",
+            "enum": [
+              "file"
+            ],
+            "type": "string"
+          }
+        ]
       }
     },
     "securitySchemes": {
@@ -14425,6 +15760,1780 @@
         "summary": "Удержанные беседы организации: кто, когда и основание, в порядке удержания. Удержания меняет только Admin API — список строится по журналу аудита операций удержания и сверяется с хранилищем бесед.",
         "tags": [
           "threads"
+        ]
+      }
+    },
+    "/api/v1/risk/signals": {
+      "get": {
+        "operationId": "list_installation_signals",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Действующий каталог уровня установки: активный пакет поставщика с изменениями установки, без\nполитик организаций; «осиротевшие» изменения — с признаком `orphaned`. Только администратор установки.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/signals/{id}": {
+      "delete": {
+        "operationId": "reset_installation_signal",
+        "parameters": [
+          {
+            "description": "Признак: `tp.*` — поставщика, `org.*` — свой",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Сброс изменения уровня установки (у пакета — значение пакета) или удаление своего признака\n`org.*`. Изменения на уровне нет — 404.",
+        "tags": [
+          "risk"
+        ]
+      },
+      "put": {
+        "operationId": "put_installation_signal",
+        "parameters": [
+          {
+            "description": "Признак: `tp.*` — поставщика, `org.*` — свой",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskProblem"
+                }
+              }
+            },
+            "description": "вес выше предела"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Изменение признака поставщика (`tp.*`: вес, действие, режим) или свой признак (`org.*`, целиком) —\nсоздание тем же `PUT`. Установка меняет значения как угодно; вес выше предела — 422.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/thresholds": {
+      "get": {
+        "operationId": "get_installation_thresholds",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThresholdsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Пороги действий установки: свои, действующие и уровень-источник. Только администратор установки.",
+        "tags": [
+          "risk"
+        ]
+      },
+      "put": {
+        "operationId": "put_installation_thresholds",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThresholdsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThresholdsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "пороги не растут с действием"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Замена порогов установки целиком: баллы, с которых действуют действия (пометка, «Спам», карантин,\nотказ). Порядок нарушен — 422.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/packages": {
+      "get": {
+        "operationId": "list_packages",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackagesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Хранимые пакеты поставщика: действующий и N прошлых (`risk.package.keep`), по убыванию номера.\nТолько администратор установки.",
+        "tags": [
+          "risk"
+        ]
+      },
+      "post": {
+        "operationId": "upload_package",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Файл пакета поставщика (подпись Ed25519, до admin.risk.max_package_bytes)",
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageReportView"
+                }
+              }
+            },
+            "description": "пакет проверен и поставлен, не активен"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "больше admin.risk.max_package_bytes"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не application/octet-stream"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "чужая подпись, lint или номер не растёт"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Загрузка файла пакета поставщика (закрытый контур, офлайн-импорт): проверка узла — подпись Ed25519\nдоверенным ключом, lint и пробный прогон на образцах (APP-78). Проверен — пакет поставлен (202) и\nне активен; отчёт (что изменится — новые признаки в «только отчёт») виден до активации. Чужая\nподпись, непрошедший lint или не растущий номер — 422 с причиной; тип не тот — 415; больше\n`admin.risk.max_package_bytes` — 413.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/packages/{version}/activate": {
+      "post": {
+        "operationId": "activate_package",
+        "parameters": [
+          {
+            "description": "Номер версии поставленного пакета",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackagesView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "номер не растёт"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Активация поставленного пакета: номер строго больше действующего (не растёт — 422), нет пакета —\n404. Прошлые сверх `risk.package.keep` удаляются.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/packages/{version}/rollback": {
+      "post": {
+        "operationId": "rollback_package",
+        "parameters": [
+          {
+            "description": "Номер версии отката (хранимой)",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackagesView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Откат на хранимую версию (действующий и N прошлых): нет — 404. Номер новой поставки всё равно\nтолько растёт.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/sources": {
+      "get": {
+        "operationId": "list_ti_sources",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Источники TI установки по идентификатору: в поставке (пакетом), «ключ заказчика» и импорт. Только\nадминистратор установки.",
+        "tags": [
+          "risk"
+        ]
+      },
+      "post": {
+        "operationId": "create_source",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTiSourceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TiSourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Новый источник TI: коннектор «ключ заказчика» (фид своим ключом) или импорт (txt, CSV, RPZ, MISP,\nTAXII/STIX). Ключ — только ссылка на хранилище секретов (`{\"secret\": \"путь#поле\"}`); значение\nключа в теле — 400. Уровень «в поставке» создаёт только пакет поставщика — 400. Недопустимый\nисточник (TTL, запрещённые фиды) — 400.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/sources/{id}": {
+      "delete": {
+        "operationId": "delete_source",
+        "parameters": [
+          {
+            "description": "Источник TI",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TiSourceView"
+                }
+              }
+            },
+            "description": "удалённый источник"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Удаление источника TI; нет — 404. Источник «в поставке» ведёт пакет поставщика — 400. Версии\nсписков и учёт остаются.",
+        "tags": [
+          "risk"
+        ]
+      },
+      "get": {
+        "operationId": "get_source",
+        "parameters": [
+          {
+            "description": "Источник TI",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TiSourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Источник TI; нет — 404.",
+        "tags": [
+          "risk"
+        ]
+      },
+      "put": {
+        "operationId": "put_source",
+        "parameters": [
+          {
+            "description": "Источник TI",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TiSourceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TiSourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Замена источника целиком (без идентификатора — он в пути). Источник «в поставке» меняет только\nпакет поставщика — 400; ключ — только ссылка на хранилище секретов (значение — 400).",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/sources/{id}/import": {
+      "post": {
+        "operationId": "import_source",
+        "parameters": [
+          {
+            "description": "Источник TI",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Файл списка TI (формат источника, до admin.risk.max_package_bytes)",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListVersionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "больше admin.risk.max_package_bytes"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не application/octet-stream"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Импорт файла списка источника (закрытый контур): разбор формата делает узел (APP-78), версия\nстановится текущей. Источника нет — 404; тип не тот — 415; больше `admin.risk.max_package_bytes` — 413.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/sources/{id}/refresh": {
+      "post": {
+        "operationId": "refresh_source",
+        "parameters": [
+          {
+            "description": "Источник TI",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListVersionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Обновление источника сейчас (коннектор узла, APP-79): выгрузка фида, версия списка становится\nтекущей. Источника нет — 404; ошибка выгрузки — как есть.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/risk/sources/{id}/usage": {
+      "get": {
+        "operationId": "source_usage",
+        "parameters": [
+          {
+            "description": "Источник TI",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Учёт с этого момента (RFC 3339), включительно; по умолчанию — весь учёт.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "не администратор установки"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Учёт источника по организациям (MSSP): суммы обращений и совпадений с `since` (сутки периода\nскладываются). Источника нет — 404.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/risk/signals": {
+      "get": {
+        "operationId": "list_org_signals",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalsView"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Действующий каталог организации: пакет поставщика, изменения установки и организации; по признаку\n`source` — уровень, давший отличие. Администраторы и оператор (чтение).",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/risk/signals/{id}": {
+      "delete": {
+        "operationId": "reset_org_signal",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Признак: `tp.*` — поставщика, `org.*` — свой",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Сброс изменения уровня организации — действуют установка и пакет; удаление своего признака\n`org.*`. Изменения на уровне нет — 404.",
+        "tags": [
+          "risk"
+        ]
+      },
+      "put": {
+        "operationId": "put_org_signal",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Признак: `tp.*` — поставщика, `org.*` — свой",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskProblem"
+                }
+              }
+            },
+            "description": "организация мягче установки"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Изменение признака поставщика или свой признак уровня организации — только в сторону строгости:\nвес не ниже, действие не мягче, «применять» вместо «только отчёт». Мягче — 422 problem+json с\n`errors: [{signal, field, value, base}]` и пояснением по-русски.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/risk/thresholds": {
+      "get": {
+        "operationId": "get_org_thresholds",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThresholdsView"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Пороги организации: свои (`null` — не заданы), действующие и уровень-источник.",
+        "tags": [
+          "risk"
+        ]
+      },
+      "put": {
+        "operationId": "put_org_thresholds",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThresholdsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThresholdsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "порог выше базового или порядок нарушен"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Замена порогов организации целиком — только не мягче установки: порог выше базового (действие\nпозже) — 422 с пояснением.",
+        "tags": [
+          "risk"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/risk/hits": {
+      "get": {
+        "operationId": "list_risk_hits",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Только этот признак (`tp.*`, `org.*`).",
+            "in": "query",
+            "name": "signal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Режим: `report` — только отчёт, `enforce` — применённые.",
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Начало интервала (RFC 3339), включительно.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Конец интервала (RFC 3339), не включительно; продолжение страницы — её `next`.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Размер страницы (по умолчанию и наибольший — из конфигурации).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HitsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Журнал срабатываний организации (свежие первыми, постранично): применённые и «только отчёт»\n(решение 126 а). Условия — по «и»: признак, режим, интервал. Продолжение — `next` следующего\nзапроса (как `until`); срабатывания одного момента (письмо — несколько признаков) не разрезаются\nстраницей. Администраторы и оператор (только `GET`).",
+        "tags": [
+          "risk"
         ]
       }
     }

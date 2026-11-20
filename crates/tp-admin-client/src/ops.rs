@@ -427,6 +427,121 @@ pub const ACCOUNT_TRUST_GET: Op = Op {
     method: "GET",
     path: "/api/v1/orgs/{org}/accounts/{account}/trust",
 };
+/// Каталог признаков установки (ADM-51).
+pub const RISK_SIGNALS_LIST: Op = Op {
+    method: "GET",
+    path: "/api/v1/risk/signals",
+};
+/// Изменение признака установки или свой признак `org.*`.
+pub const RISK_SIGNAL_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/risk/signals/{id}",
+};
+/// Сброс изменения признака установки.
+pub const RISK_SIGNAL_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/risk/signals/{id}",
+};
+/// Действующий каталог признаков организации.
+pub const ORG_RISK_SIGNALS_LIST: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/risk/signals",
+};
+/// Изменение признака организации (только строже) или свой признак `org.*`.
+pub const ORG_RISK_SIGNAL_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/orgs/{org}/risk/signals/{id}",
+};
+/// Сброс изменения признака организации.
+pub const ORG_RISK_SIGNAL_RESET: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/orgs/{org}/risk/signals/{id}",
+};
+/// Пороги действий установки.
+pub const RISK_THRESHOLDS_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/risk/thresholds",
+};
+/// Замена порогов установки.
+pub const RISK_THRESHOLDS_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/risk/thresholds",
+};
+/// Пороги организации.
+pub const ORG_RISK_THRESHOLDS_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/risk/thresholds",
+};
+/// Замена порогов организации.
+pub const ORG_RISK_THRESHOLDS_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/orgs/{org}/risk/thresholds",
+};
+/// Пакеты поставщика (активный и прошлые).
+pub const RISK_PACKAGES_LIST: Op = Op {
+    method: "GET",
+    path: "/api/v1/risk/packages",
+};
+/// Загрузка файла пакета (проверка и постановка, не активация).
+pub const RISK_PACKAGE_IMPORT: Op = Op {
+    method: "POST",
+    path: "/api/v1/risk/packages",
+};
+/// Активация пакета.
+pub const RISK_PACKAGE_ACTIVATE: Op = Op {
+    method: "POST",
+    path: "/api/v1/risk/packages/{version}/activate",
+};
+/// Откат пакета.
+pub const RISK_PACKAGE_ROLLBACK: Op = Op {
+    method: "POST",
+    path: "/api/v1/risk/packages/{version}/rollback",
+};
+/// Источники TI.
+pub const RISK_SOURCES_LIST: Op = Op {
+    method: "GET",
+    path: "/api/v1/risk/sources",
+};
+/// Новый источник TI.
+pub const RISK_SOURCE_CREATE: Op = Op {
+    method: "POST",
+    path: "/api/v1/risk/sources",
+};
+/// Источник TI.
+pub const RISK_SOURCE_GET: Op = Op {
+    method: "GET",
+    path: "/api/v1/risk/sources/{id}",
+};
+/// Замена источника TI.
+pub const RISK_SOURCE_PUT: Op = Op {
+    method: "PUT",
+    path: "/api/v1/risk/sources/{id}",
+};
+/// Удаление источника TI.
+pub const RISK_SOURCE_DELETE: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/risk/sources/{id}",
+};
+/// Импорт файла списка источника.
+pub const RISK_SOURCE_IMPORT: Op = Op {
+    method: "POST",
+    path: "/api/v1/risk/sources/{id}/import",
+};
+/// Обновление источника сейчас.
+pub const RISK_SOURCE_REFRESH: Op = Op {
+    method: "POST",
+    path: "/api/v1/risk/sources/{id}/refresh",
+};
+/// Учёт источника по организациям.
+pub const RISK_SOURCE_USAGE: Op = Op {
+    method: "GET",
+    path: "/api/v1/risk/sources/{id}/usage",
+};
+/// Журнал срабатываний организации.
+pub const ORG_RISK_HITS: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/risk/hits",
+};
 
 /// Все операции клиента (сверка со спецификацией OpenAPI — тест).
 pub const OPERATIONS: &[Op] = &[
@@ -513,6 +628,29 @@ pub const OPERATIONS: &[Op] = &[
     GROUP_TRUST_PUT,
     GROUP_TRUST_RESET,
     ACCOUNT_TRUST_GET,
+    RISK_SIGNALS_LIST,
+    RISK_SIGNAL_PUT,
+    RISK_SIGNAL_RESET,
+    ORG_RISK_SIGNALS_LIST,
+    ORG_RISK_SIGNAL_PUT,
+    ORG_RISK_SIGNAL_RESET,
+    RISK_THRESHOLDS_GET,
+    RISK_THRESHOLDS_PUT,
+    ORG_RISK_THRESHOLDS_GET,
+    ORG_RISK_THRESHOLDS_PUT,
+    RISK_PACKAGES_LIST,
+    RISK_PACKAGE_IMPORT,
+    RISK_PACKAGE_ACTIVATE,
+    RISK_PACKAGE_ROLLBACK,
+    RISK_SOURCES_LIST,
+    RISK_SOURCE_CREATE,
+    RISK_SOURCE_GET,
+    RISK_SOURCE_PUT,
+    RISK_SOURCE_DELETE,
+    RISK_SOURCE_IMPORT,
+    RISK_SOURCE_REFRESH,
+    RISK_SOURCE_USAGE,
+    ORG_RISK_HITS,
 ];
 
 #[cfg(test)]
