@@ -1006,7 +1006,7 @@ mod tests {
         assert_eq!(smtp.batv.valid_for, Duration::from_secs(5 * 24 * 3600));
         assert_eq!(smtp.batv.exempt.len(), 2);
         // Умолчания: 30 дней, BATV — журнал и 7 дней.
-        let base = registry().parse(&BASE, Vec::new()).expect("parse");
+        let base = registry().parse(BASE, Vec::new()).expect("parse");
         let smtp = base.section::<SmtpConfig>("smtp").expect("smtp");
         assert_eq!(smtp.reply, ReplyConfig::default());
         assert_eq!(smtp.reply.max_age, Duration::from_secs(30 * 24 * 3600));

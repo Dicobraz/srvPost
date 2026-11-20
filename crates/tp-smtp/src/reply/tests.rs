@@ -428,9 +428,9 @@ async fn batv_open_strips_valid_only() {
             "{plain}"
         );
     }
-    // Плохой номер ключа — не подтверждается.
+    // Плохой номер ключа — не подтверждается (значение метки — ровно 10 знаков: K не цифра).
     assert_eq!(
-        batv.open("prvs=X0123456789=alice@example.org", now())
+        batv.open("prvs=X012345678=alice@example.org", now())
             .await
             .expect("open"),
         Some(BatvAddress::Invalid("bad key number"))
@@ -485,7 +485,10 @@ fn base32_roundtrip() {
             .collect();
         let encoded = base32(&data);
         assert!(!encoded.contains('='), "{encoded}");
-        assert!(base32_ok(&encoded), "{encoded}");
+        if len > 0 {
+            // Пустая строка — не base32-поле метки (base32_ok без данных отвергает её по дизайну).
+            assert!(base32_ok(&encoded), "{encoded}");
+        }
         assert_eq!(base32_decode(&encoded), Some(data.clone()), "{encoded}");
         // Без учёта регистра.
         assert_eq!(base32_decode(&encoded.to_lowercase()), Some(data.clone()));
@@ -530,7 +533,7 @@ fn header_helpers() {
 #[test]
 fn split_mark_shape() {
     // Payload настоящей метки — 64 байта (nonce, значение, время, имитоприставка).
-    let wire = base32(&vec![7u8; NONCE_LEN + TAG_LEN + TIME_LEN + 16]);
+    let wire = base32(&[7u8; NONCE_LEN + TAG_LEN + TIME_LEN + 16]);
     let (id, domain, decoded) =
         split_mark(&format!("<tp1.a1.b9.{wire}@example.org>")).expect("mark");
     assert_eq!(id, "a1.b9", "id ключа может содержать точки");
