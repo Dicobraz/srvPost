@@ -282,6 +282,18 @@ pub enum Effect {
     Branding(BrandingFetch),
     /// Запрос к Admin API; ответ — [`App::on_result`] с тем же номером.
     Call(u64, Request),
+    /// Загрузить файл с узла в Admin API (`application/octet-stream`: пакет поставщика, список TI —
+    /// ADM-51); ответ — [`App::on_result`] с тем же номером (TUI-10).
+    Import {
+        /// Номер ответа.
+        id: u64,
+        /// Операция (`upload_package`, `import_source`).
+        op: &'static Operation,
+        /// Параметры пути.
+        params: Vec<String>,
+        /// Путь к файлу на узле.
+        path: String,
+    },
     /// Прочитать `config.yaml` узла; ответ — [`App::on_config`].
     ConfigLoad,
     /// Записать значение параметра конфигурации узла; ответ — [`App::on_config_saved`].
@@ -411,6 +423,8 @@ pub enum View {
     Config(ConfigView),
     /// Раздел «Доверие»: матрица функций × типов абонентов (TUI-09).
     Trust(crate::trust::Trust),
+    /// Раздел «Признаки риска»: каталог, пороги, пакеты, источники, срабатывания (TUI-10).
+    Risk(crate::risk::Risk),
 }
 
 /// Конфигурация узла: дерево параметров схемы со значениями файла.
@@ -467,7 +481,7 @@ impl View {
         match self {
             Self::List(l) => l.layout,
             Self::Card(c) => c.back.as_ref().and_then(|b| b.layout),
-            Self::Info { .. } | Self::Config(_) | Self::Trust(_) => None,
+            Self::Info { .. } | Self::Config(_) | Self::Trust(_) | Self::Risk(_) => None,
         }
     }
 }
@@ -534,6 +548,38 @@ pub enum Overlay {
     TrustDomain(crate::trust::DomainInput),
     /// Подтверждение сброса уровня политики доверия (TUI-09).
     TrustConfirm(Request),
+    /// Форма изменения признака каталога (TUI-10).
+    RiskSignalEdit {
+        /// Форма `PUT` признака.
+        form: Box<Form>,
+    },
+    /// Форма замены порогов (TUI-10).
+    RiskThresholds {
+        /// Форма `PUT` порогов.
+        form: Box<Form>,
+    },
+    /// Форма фильтра срабатываний (TUI-10).
+    RiskFilter {
+        /// Форма параметров запроса.
+        form: Box<Form>,
+    },
+    /// Импорт файла с узла: пакет поставщика или список источника TI (TUI-10).
+    RiskImport {
+        /// Что импортируем.
+        what: crate::risk::ImportWhat,
+        /// Путь к файлу на узле.
+        path: String,
+        /// Ошибка у поля пути.
+        error: Option<String>,
+    },
+    /// Подтверждение действия раздела «Признаки риска»: сброс признака, активация или откат пакета
+    /// (TUI-10).
+    RiskConfirm {
+        /// Запрос.
+        req: Box<Request>,
+        /// Ответ в пути.
+        p: crate::risk::Pending,
+    },
 }
 
 /// Состояние основного экрана.
@@ -617,7 +663,8 @@ pub(crate) enum Nav {
     Reload,
 }
 
-/// Запрос в пути; раздел «Доверие» оборачивает свои в [`Pending::Trust`] (`crate::trust::Pending`).
+/// Запрос в пути; раздел «Доверие» оборачивает свои в [`Pending::Trust`] (`crate::trust::Pending`),
+/// раздел «Признаки риска» — в [`Pending::Risk`] (`crate::risk::Pending`).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Pending {
     Orgs,
@@ -638,6 +685,9 @@ pub(crate) enum Pending {
     /// Раздел «Доверие»: чтение уровня, запись клетки и доменов, сброс, выбор группы или учётной записи
     /// (TUI-09).
     Trust(crate::trust::Pending),
+    /// Раздел «Признаки риска»: данные вкладок, запись признака и порогов, пакеты, источники,
+    /// срабатывания (TUI-10).
+    Risk(crate::risk::Pending),
 }
 
 /// Запросы в пути и строка состояния.
@@ -659,6 +709,14 @@ impl Bus {
         self.seq += 1;
         self.pending.insert(self.seq, p);
         Effect::Call(self.seq, req)
+    }
+
+    /// Запрос-файл без `Request` (пакет поставщика, список TI — TUI-10): ответ придёт на тот же номер,
+    /// файл читает запускающий код ([`Effect::Import`]).
+    pub(crate) fn call_import(&mut self, p: Pending) -> u64 {
+        self.seq += 1;
+        self.pending.insert(self.seq, p);
+        self.seq
     }
 
     fn load(
@@ -744,6 +802,11 @@ impl App {
             && m.overlay.is_none()
         {
             return crate::trust::key_labels(t);
+        }
+        if let View::Risk(t) = &m.view
+            && m.overlay.is_none()
+        {
+            return crate::risk::key_labels(t);
         }
         let Some(l) = m.view.layout().filter(|_| m.overlay.is_none()) else {
             return KEYS;
@@ -939,6 +1002,17 @@ impl App {
                 }
             };
         }
+        // Раздел «Признаки риска»: данные вкладок, запись признака и порогов, пакеты, источники,
+        // срабатывания (TUI-10).
+        if let Pending::Risk(p) = p {
+            return match result {
+                Ok(page) => crate::risk::on_ok(m, &mut self.bus, p, page),
+                Err(e) => {
+                    crate::risk::on_err(m, &mut self.bus, p, &e);
+                    Vec::new()
+                }
+            };
+        }
         let page = match result {
             Ok(page) => page,
             Err(e) => {
@@ -1012,8 +1086,9 @@ impl App {
                     None => Vec::new(),
                 }
             }
-            // Запросы «Доверия» разобраны раньше (ветка Pending::Trust выше).
-            Pending::Trust(_) => Vec::new(),
+            // Запросы «Доверия» и «Признаков риска» разобраны раньше (ветки Pending::Trust и
+            // Pending::Risk выше).
+            Pending::Trust(_) | Pending::Risk(_) => Vec::new(),
         }
     }
 
@@ -1065,6 +1140,15 @@ fn main_command(m: &Main) -> String {
                 return crate::trust::command(t);
             }
         }
+        // Формы раздела «Признаки риска» — команды записи признака, порогов и фильтра; подтверждение —
+        // команда действия (TUI-10).
+        Some(Overlay::RiskSignalEdit { form })
+        | Some(Overlay::RiskThresholds { form })
+        | Some(Overlay::RiskFilter { form }) => return show(&form.preview()),
+        Some(Overlay::RiskConfirm { req, .. }) => return show(req),
+        Some(Overlay::RiskImport { what, .. }) => {
+            return crate::risk::import_command(what);
+        }
         Some(Overlay::Help) | None => {}
     }
     if m.focus == Panel::Tree {
@@ -1092,6 +1176,7 @@ fn main_command(m: &Main) -> String {
         View::Card(c) => show(&c.req),
         View::Config(_) => "thepost config check".to_owned(),
         View::Trust(t) => crate::trust::command(t),
+        View::Risk(t) => crate::risk::command(t),
         View::Info { .. } => String::new(),
     }
 }
@@ -1321,6 +1406,10 @@ fn open_tree(m: &mut Main, bus: &mut Bus) -> Vec<Effect> {
             if s.op == crate::trust::SECTION_OP {
                 return crate::trust::open(m, bus);
             }
+            // Раздел «Признаки риска» — ручная раскладка вкладок ADM-51 (TUI-10).
+            if s.op == crate::risk::SECTION_OP {
+                return crate::risk::open(m, bus);
+            }
             match catalog().get(s.op) {
                 Some(op) => {
                     let ctx = m.ctx();
@@ -1464,6 +1553,7 @@ pub(crate) fn view_key(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect
         }
         View::Config(c) => config_key(c, bus, &mut m.overlay, key),
         View::Trust(_) => crate::trust::key(m, bus, key),
+        View::Risk(_) => crate::risk::key(m, bus, key),
         View::Info { .. } => Vec::new(),
     }
 }
@@ -1626,7 +1716,7 @@ fn list_action(m: &mut Main, bus: &mut Bus, key: KeyEvent) -> Vec<Effect> {
             },
             None => return Vec::new(),
         },
-        View::Info { .. } | View::Config(_) | View::Trust(_) => return Vec::new(),
+        View::Info { .. } | View::Config(_) | View::Trust(_) | View::Risk(_) => return Vec::new(),
     };
     let n = match key.code {
         KeyCode::Enter => 3,
@@ -1859,6 +1949,77 @@ fn overlay_key(m: &mut Main, bus: &mut Bus, ov: Overlay, key: KeyEvent) -> Vec<E
             },
             FormKey::Stay => {
                 m.overlay = Some(Overlay::TrustPick { what, form: f });
+                Vec::new()
+            }
+        },
+        Overlay::RiskSignalEdit { form: mut f } => match form_key(&mut f, key) {
+            FormKey::Cancel => Vec::new(),
+            FormKey::Submit => match f.request() {
+                Some(req) => {
+                    vec![bus.call(req, Pending::Risk(crate::risk::Pending::SaveSignal(f)))]
+                }
+                None => {
+                    m.overlay = Some(Overlay::RiskSignalEdit { form: f });
+                    Vec::new()
+                }
+            },
+            FormKey::Stay => {
+                m.overlay = Some(Overlay::RiskSignalEdit { form: f });
+                Vec::new()
+            }
+        },
+        Overlay::RiskThresholds { form: mut f } => match form_key(&mut f, key) {
+            FormKey::Cancel => Vec::new(),
+            FormKey::Submit => match f.request() {
+                Some(req) => {
+                    vec![bus.call(req, Pending::Risk(crate::risk::Pending::SaveThresholds(f)))]
+                }
+                None => {
+                    m.overlay = Some(Overlay::RiskThresholds { form: f });
+                    Vec::new()
+                }
+            },
+            FormKey::Stay => {
+                m.overlay = Some(Overlay::RiskThresholds { form: f });
+                Vec::new()
+            }
+        },
+        Overlay::RiskFilter { form: mut f } => match form_key(&mut f, key) {
+            FormKey::Cancel => Vec::new(),
+            FormKey::Submit => match f.request() {
+                Some(req) => {
+                    // Фильтр запоминается для строки CLI и следующих страниц.
+                    let filter = req.query.clone();
+                    if let View::Risk(t) = &mut m.view {
+                        t.hits_filter = filter;
+                        t.cur = 0;
+                        t.top = 0;
+                    }
+                    vec![bus.call(
+                        req,
+                        Pending::Risk(crate::risk::Pending::Hits { form: Some(f) }),
+                    )]
+                }
+                None => {
+                    m.overlay = Some(Overlay::RiskFilter { form: f });
+                    Vec::new()
+                }
+            },
+            FormKey::Stay => {
+                m.overlay = Some(Overlay::RiskFilter { form: f });
+                Vec::new()
+            }
+        },
+        Overlay::RiskImport { what, path, error } => {
+            crate::risk::import_key(m, bus, what, path, error, key)
+        }
+        Overlay::RiskConfirm { req, p } => match key.code {
+            KeyCode::Enter | KeyCode::Char('y' | 'д') => {
+                vec![bus.call(*req, Pending::Risk(p))]
+            }
+            KeyCode::Esc | KeyCode::Char('n' | 'н') => Vec::new(),
+            _ => {
+                m.overlay = Some(Overlay::RiskConfirm { req, p });
                 Vec::new()
             }
         },

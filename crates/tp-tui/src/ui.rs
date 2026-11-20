@@ -308,11 +308,19 @@ impl Painter<'_> {
             }
             Some(Overlay::TrustDomain(d)) => self.trust_domain(&body, d),
             Some(Overlay::TrustConfirm(req)) => self.trust_confirm(&body, req),
+            Some(Overlay::RiskSignalEdit { form }) => self.form(&body, form, "Изменение признака"),
+            Some(Overlay::RiskThresholds { form }) => self.form(&body, form, "Пороги действий"),
+            Some(Overlay::RiskFilter { form }) => self.form(&body, form, "Срабатывания — фильтр"),
+            Some(Overlay::RiskImport { what, path, error }) => {
+                self.risk_import(&body, what, path, error.as_ref());
+            }
+            Some(Overlay::RiskConfirm { req, p }) => self.risk_confirm(&body, req, p),
             None => match &m.view {
                 View::List(l) => self.list(&body, l),
                 View::Card(c) => self.card(&body, c),
                 View::Config(c) => self.config(&body, c),
                 View::Trust(t) => self.trust(&body, t),
+                View::Risk(t) => self.risk(&body, t),
                 View::Info { title, lines } => {
                     self.put(body.x0, 4, title, Role::Text);
                     for (i, l) in lines.iter().enumerate() {
@@ -871,6 +879,343 @@ impl Painter<'_> {
         );
     }
 
+    // ---------- Раздел «Признаки риска» (TUI-10) ----------
+
+    /// Вкладки раздела: активная — выделена, недоступные уровню доступа — приглушены.
+    fn risk_tabs(&mut self, b: &Body, t: &crate::risk::Risk) {
+        let mut x = b.x0;
+        for (tab, label) in crate::risk::TABS {
+            let w = label.chars().count() as u16;
+            let role = if t.tab == tab {
+                Role::Sel
+            } else if !crate::risk::reachable(tab, t.install) {
+                Role::Muted
+            } else {
+                Role::Text
+            };
+            if t.tab == tab {
+                self.fill(x, x + w - 1, 2, role);
+            }
+            self.put_n(x, 2, label, role, w);
+            x += w + 1;
+        }
+    }
+
+    /// Раздел «Признаки риска»: вкладки, таблица вкладки, подробности и подсказка.
+    fn risk(&mut self, b: &Body, t: &crate::risk::Risk) {
+        self.risk_tabs(b, t);
+        match t.tab {
+            crate::risk::Tab::Catalog => self.risk_table(
+                b,
+                t,
+                &["ПРИЗНАК", "ВЕС", "ДЕЙСТВИЕ", "ИСТ"],
+                &[
+                    crate::risk::ID_W,
+                    crate::risk::WEIGHT_W,
+                    crate::risk::ACTION_W,
+                    crate::risk::SRC_W,
+                ],
+                |row| {
+                    crate::risk::catalog_cells(row)
+                        .into_iter()
+                        .map(|s| (s, false))
+                        .collect()
+                },
+            ),
+            crate::risk::Tab::Thresholds => self.risk_thresholds(b, t),
+            crate::risk::Tab::Packages => {
+                if t.report.is_some() {
+                    self.risk_report(b, t);
+                } else {
+                    self.risk_table(
+                        b,
+                        t,
+                        &["ВЕРСИЯ", "СОСТОЯНИЕ"],
+                        &[crate::risk::VER_W, crate::risk::STATE_W],
+                        |row| {
+                            crate::risk::package_cells(row)
+                                .into_iter()
+                                .map(|s| (s, false))
+                                .collect()
+                        },
+                    );
+                }
+            }
+            crate::risk::Tab::Sources if t.usage.is_some() => self.risk_usage(b, t),
+            crate::risk::Tab::Sources => self.risk_table(
+                b,
+                t,
+                &["ИСТОЧНИК", "УРОВЕНЬ", "ФОРМАТ", "TTL", "СВЕЖЕСТЬ"],
+                &[
+                    crate::risk::SID_W,
+                    crate::risk::TIER_W,
+                    crate::risk::FORMAT_W,
+                    crate::risk::TTL_W,
+                    crate::risk::FRESH_W,
+                ],
+                |row| crate::risk::source_cells(t, row),
+            ),
+            crate::risk::Tab::Hits => self.risk_table(
+                b,
+                t,
+                &["МОМЕНТ", "ПРИЗНАК", "СИЛА", "ВЕС", "РЕЖИМ"],
+                &[
+                    crate::risk::AT_W,
+                    crate::risk::HSIG_W,
+                    crate::risk::STR_W,
+                    crate::risk::HW_W,
+                    crate::risk::HMODE_W,
+                ],
+                |row| {
+                    crate::risk::hit_cells(row)
+                        .into_iter()
+                        .map(|s| (s, false))
+                        .collect()
+                },
+            ),
+        }
+        if let Some(line) = crate::risk::detail_line(t) {
+            self.put_n(b.x0, 18, &line, Role::Text, b.width());
+        }
+        self.put_n(b.x0, 19, crate::risk::hint(t), Role::Muted, b.width());
+    }
+
+    /// Таблица вкладки: заголовки колонок, строки с курсором и прокруткой; «внимание» — цвет роли
+    /// для помеченных ячеек (устаревший источник).
+    fn risk_table(
+        &mut self,
+        b: &Body,
+        t: &crate::risk::Risk,
+        heads: &[&str],
+        widths: &[u16],
+        cells: impl Fn(&Value) -> Vec<(String, bool)>,
+    ) {
+        let mut x = b.x0;
+        for (head, w) in heads.iter().zip(widths) {
+            self.put_n(x, 3, head, Role::Head, *w);
+            x += w + 1;
+        }
+        let rows = t.rows();
+        if rows.is_empty() {
+            let text = if t.loading() {
+                "чтение…"
+            } else {
+                "Записей нет."
+            };
+            self.put(b.x0, 5, text, Role::Muted);
+            return;
+        }
+        let end = (t.top + crate::risk::VIS_ROWS).min(rows.len());
+        for (i, row) in rows[t.top..end].iter().enumerate() {
+            let y = 4 + i as u16;
+            let sel = t.top + i == t.cur;
+            let line = match (sel, b.active) {
+                (true, true) => Some(Role::Sel),
+                (true, false) => Some(Role::SelI),
+                _ => None,
+            };
+            if sel {
+                self.fill(b.x0 - 1, b.x1 + 1, y, line.unwrap_or(Role::Text));
+            }
+            let mut x = b.x0;
+            for ((text, warn), w) in cells(row).into_iter().zip(widths) {
+                let role = match line {
+                    Some(r) => r,
+                    None if warn => Role::Warn,
+                    None => Role::Text,
+                };
+                self.put_n(x, y, &text, role, *w);
+                x += w + 1;
+            }
+        }
+        self.scrollbar(b, rows.len(), t.top);
+    }
+
+    /// Вкладка порогов: заданные и действующие баллы действий, уровень и источник.
+    fn risk_thresholds(&mut self, b: &Body, t: &crate::risk::Risk) {
+        let Some(v) = t.thresholds.as_ref() else {
+            self.put(b.x0, 4, "чтение порогов…", Role::Muted);
+            return;
+        };
+        self.put_n(b.x0, 3, "Параметр", Role::Head, 12);
+        self.put_n(b.x0 + 13, 3, "Задано", Role::Head, 8);
+        self.put_n(b.x0 + 22, 3, "Действует", Role::Head, 8);
+        let own = v.get("own").filter(|o| o.is_object());
+        let eff = &v["effective"];
+        for (i, (label, name)) in [
+            ("пометка", "tag"),
+            ("в «Спам»", "junk"),
+            ("карантин", "quarantine"),
+            ("отказ", "reject"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 4 + i as u16;
+            let set = own
+                .and_then(|o| o.get(*name))
+                .map(|x| x.to_string())
+                .unwrap_or_else(|| "—".to_owned());
+            let act = eff
+                .get(*name)
+                .map(|x| x.to_string())
+                .unwrap_or_else(|| "—".to_owned());
+            self.put_n(b.x0, y, label, Role::Text, 12);
+            self.put_n(b.x0 + 13, y, &set, Role::Muted, 8);
+            self.put_n(b.x0 + 22, y, &act, Role::Text, 8);
+        }
+        self.put_n(
+            b.x0,
+            10,
+            &format!(
+                "Уровень: организация · пороги {}",
+                if own.is_some() {
+                    "заданы"
+                } else {
+                    "не заданы"
+                }
+            ),
+            Role::Muted,
+            b.width(),
+        );
+        self.put_n(
+            b.x0,
+            11,
+            &format!(
+                "Действует самое строгое действие по баллу; источник: {}",
+                crate::risk::threshold_source(v.get("source"))
+            ),
+            Role::Muted,
+            b.width(),
+        );
+    }
+
+    /// Отчёт проверки загруженного пакета — показан до активации (решение 126 б).
+    fn risk_report(&mut self, b: &Body, t: &crate::risk::Risk) {
+        let Some(rep) = t.report.as_ref() else {
+            return;
+        };
+        self.put_n(b.x0, 3, "Отчёт проверки пакета", Role::Head, b.width());
+        for (i, line) in crate::risk::report_lines(rep)
+            .into_iter()
+            .take(crate::risk::VIS_ROWS - 1)
+            .enumerate()
+        {
+            let role = if i == 0 { Role::Text } else { Role::Muted };
+            self.put_n(b.x0, 4 + i as u16, &line, role, b.width());
+        }
+    }
+
+    /// Учёт источника по организациям: обращения и совпадения (MSSP).
+    fn risk_usage(&mut self, b: &Body, t: &crate::risk::Risk) {
+        let Some(u) = t.usage.as_ref() else {
+            return;
+        };
+        let mut x = b.x0;
+        for (head, w) in [
+            ("ОРГАНИЗАЦИЯ", crate::risk::TENANT_W),
+            ("ОБР.", crate::risk::LOOKUPS_W),
+            ("СОВП.", crate::risk::UHITS_W),
+        ] {
+            self.put_n(x, 3, head, Role::Head, w);
+            x += w + 1;
+        }
+        let rows = u
+            .get("usage")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for (i, row) in rows.iter().enumerate().take(crate::risk::VIS_ROWS) {
+            let y = 4 + i as u16;
+            let mut x = b.x0;
+            for (text, w) in crate::risk::usage_cells(row).into_iter().zip([
+                crate::risk::TENANT_W,
+                crate::risk::LOOKUPS_W,
+                crate::risk::UHITS_W,
+            ]) {
+                self.put_n(x, y, &text, Role::Text, w);
+                x += w + 1;
+            }
+        }
+        let since = crate::risk::at_short(u.get("since").unwrap_or(&Value::Null));
+        self.put_n(
+            b.x0,
+            18,
+            &format!(
+                "Учёт с {}",
+                if since.is_empty() {
+                    "—".to_owned()
+                } else {
+                    since
+                }
+            ),
+            Role::Muted,
+            b.width(),
+        );
+    }
+
+    /// Окно импорта файла с узла: путь — полем ввода (закрытый контур по SSH).
+    fn risk_import(
+        &mut self,
+        b: &Body,
+        what: &crate::risk::ImportWhat,
+        path: &str,
+        error: Option<&String>,
+    ) {
+        let title = match what {
+            crate::risk::ImportWhat::Package => "Импорт пакета поставщика".to_owned(),
+            crate::risk::ImportWhat::Source(id) => format!("Импорт списка источника {id}"),
+        };
+        self.put_n(b.x0, 2, &title, Role::TitleA, b.width());
+        let lw: u16 = 12;
+        let vx = b.x0 + lw + 1;
+        let vw = b.x1 - vx + 1;
+        self.put_n(b.x0, 5, "Файл на узле", Role::Text, lw);
+        self.fill(vx, b.x1, 5, Role::Sel);
+        self.put_n(vx, 5, path, Role::Sel, vw);
+        if let Some(err) = error {
+            self.put_n(b.x0, 7, &format!("× {err}"), Role::Err, b.width());
+        }
+        self.put_n(
+            b.x0,
+            18,
+            "файл читается с узла и передаётся Admin API (octet-stream)",
+            Role::Muted,
+            b.width(),
+        );
+        self.put_n(
+            b.x0,
+            19,
+            "Enter — импортировать · Esc — отмена",
+            Role::Muted,
+            b.width(),
+        );
+    }
+
+    /// Подтверждение действия раздела: сброс признака, активация или откат пакета.
+    fn risk_confirm(&mut self, b: &Body, req: &engine::Request, p: &crate::risk::Pending) {
+        let (question, note) = crate::risk::confirm_text(p);
+        self.put(b.x0, 4, &format!("▲ {question}"), Role::Warn);
+        self.put_n(b.x0, 6, &req.op.title(), Role::Text, b.width());
+        for (i, (name, v)) in req.op.path_names().iter().zip(&req.params).enumerate() {
+            self.put_n(
+                b.x0,
+                8 + i as u16,
+                &format!("{name}: {v}"),
+                Role::Text,
+                b.width(),
+            );
+        }
+        self.put_n(b.x0, 18, note, Role::Muted, b.width());
+        self.put_n(
+            b.x0,
+            19,
+            "Enter — подтвердить · Esc — отмена",
+            Role::Muted,
+            b.width(),
+        );
+    }
+
     fn card(&mut self, b: &Body, c: &CardView) {
         let lines = card_lines(&c.value);
         let top = c.top.min(lines.len().saturating_sub(1));
@@ -1061,7 +1406,7 @@ impl Painter<'_> {
         let op = match &m.view {
             View::List(l) => Some(l.req.op),
             View::Card(c) => Some(c.req.op),
-            View::Info { .. } | View::Config(_) | View::Trust(_) => None,
+            View::Info { .. } | View::Config(_) | View::Trust(_) | View::Risk(_) => None,
         };
         if let Some(op) = op {
             for (i, l) in wrap(&op.summary.replace('\n', " "), b.width() as usize)
@@ -1129,6 +1474,14 @@ fn idle_status(app: &App) -> String {
             // Раздел «Доверие»: пояснение клетки под курсором (TUI-09).
             if let View::Trust(t) = &m.view {
                 let mut s = crate::trust::status(t);
+                if app.busy() {
+                    s.push_str(" · загрузка…");
+                }
+                return s;
+            }
+            // Раздел «Признаки риска»: пояснение строки под курсором (TUI-10).
+            if let View::Risk(t) = &m.view {
+                let mut s = crate::risk::status(t);
                 if app.busy() {
                     s.push_str(" · загрузка…");
                 }
@@ -1246,6 +1599,7 @@ mod tests {
     use crate::theme::{Brand, Mode};
     use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use serde_json::json;
+    use tp_admin::server::AdminRole;
 
     fn screen(app: &App) -> (Vec<String>, Buffer) {
         let mut term = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("терминал");
@@ -1289,8 +1643,9 @@ mod tests {
         assert!(rows[2].contains("▾ it-task.ru"));
         assert!(rows[3].contains("├ Учётные записи"));
         assert!(rows[10].contains("├ Доверие"));
-        assert!(rows[13].contains("├ Корзина"));
-        assert!(rows[14].contains("└ Очередь"));
+        assert!(rows[11].contains("├ Признаки риска"));
+        assert!(rows[14].contains("├ Корзина"));
+        assert!(rows[15].contains("└ Очередь"));
         assert!(rows[18].contains("◆ Конфигурация узла"));
         assert!(rows[2].contains("Адрес"), "{}", rows[2]);
         assert!(rows[3].contains("●"), "{}", rows[3]);
@@ -2133,5 +2488,364 @@ mod tests {
             rows[14]
         );
         assert!(rows[21].contains("× клетки выше потолка"), "{}", rows[21]);
+    }
+
+    // ---------- Раздел «Признаки риска» (TUI-10) ----------
+
+    /// Вошедший интерфейс с открытым разделом «Признаки риска» в режиме `mode`; ответ каталога — `view`.
+    fn with_risk_view(mode: Mode, view: serde_json::Value) -> App {
+        let mut app = App::new(
+            Theme::new(mode, Brand::default()),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let fx = app.on_login(Ok((who(), "node:9443".into())));
+        let ids: Vec<u64> = fx
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Call(id, _) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        app.on_result(
+            ids[0],
+            ok(json!([{"id": "00000000-0000-0000-0000-000000000001", "default": true}])),
+        );
+        app.on_result(ids[1], ok(json!([])));
+        let id = call(&section(&mut app, "Признаки риска"), "list_org_signals");
+        app.on_result(id, ok(view));
+        app
+    }
+
+    fn with_risk(mode: Mode) -> App {
+        with_risk_view(mode, crate::risk::tests::catalog_json())
+    }
+
+    /// Каталог 80×24: вкладки, колонки, знаки «только отчёт» и «осиротевшее», подробности, строка
+    /// состояния и команда CLI — без обрезки таблицы.
+    #[test]
+    fn risk_catalog_screen() {
+        let app = with_risk(Mode::Dark);
+        let (rows, _) = screen(&app);
+        assert!(rows[1].contains(" Признаки риска "), "{}", rows[1]);
+        // Вкладки: доступные и недоступные уровню (пакеты и источники — приглушены организации).
+        assert!(rows[2].contains("Каталог Пороги"), "{}", rows[2]);
+        assert!(
+            rows[2].contains("Пакеты") && rows[2].contains("Источники"),
+            "{}",
+            rows[2]
+        );
+        assert!(rows[2].contains("Срабатывания"), "{}", rows[2]);
+        // Колонки каталога и строки.
+        assert!(
+            rows[3].contains("ПРИЗНАК") && rows[3].contains("ВЕС") && rows[3].contains("ДЕЙСТВИЕ"),
+            "{}",
+            rows[3]
+        );
+        assert!(rows[4].contains("org.bad_sender"), "{}", rows[4]);
+        assert!(
+            rows[5].contains("tp.encrypted_archive") && rows[5].contains("карантин"),
+            "{}",
+            rows[5]
+        );
+        // «Только отчёт» — знак ▲, «осиротевшее» — знак ⊘.
+        assert!(rows[6].contains("▲пометка"), "{}", rows[6]);
+        assert!(rows[7].contains("⊘tp.removed_signal"), "{}", rows[7]);
+        // 80×24: таблица без обрезки.
+        for (y, row) in rows.iter().enumerate().take(16).skip(2) {
+            assert!(!row.contains('…'), "обрезка в строке {y}: {row}");
+        }
+        assert!(rows[18].contains("детектор"), "{}", rows[18]);
+        assert!(rows[19].contains("F4 — вес и действие"), "{}", rows[19]);
+        assert!(rows[21].contains("источник: организация"), "{}", rows[21]);
+        assert!(
+            rows[22].contains("$ thepost admin risk signals set org.bad_sender"),
+            "{}",
+            rows[22]
+        );
+        assert!(rows[23].contains("4Правка"), "{}", rows[23]);
+        assert!(rows[23].contains("8Сброс"), "{}", rows[23]);
+    }
+
+    /// «Только отчёт» в монохроме: знак виден, цвета нет (приёмка карточки).
+    #[test]
+    fn risk_marks_in_mono() {
+        let app = with_risk(Mode::Mono);
+        let (rows, buf) = screen(&app);
+        assert!(rows[6].contains("▲пометка"), "{}", rows[6]);
+        assert!(rows[7].contains("⊘"), "{}", rows[7]);
+        // В монохроме на весь экран ни одного цвета.
+        for cell in buf.content() {
+            assert_eq!(cell.fg, Color::Reset, "{cell:?}");
+            assert_eq!(cell.bg, Color::Reset, "{cell:?}");
+        }
+    }
+
+    /// Вкладка «Пороги» ←: заданные и действующие значения, подсказка правки.
+    #[test]
+    fn risk_thresholds_screen() {
+        let mut app = with_risk(Mode::Dark);
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "get_org_thresholds");
+        app.on_result(id, ok(crate::risk::tests::thresholds_json()));
+        let (rows, _) = screen(&app);
+        assert!(
+            rows[3].contains("Параметр") && rows[3].contains("Задано"),
+            "{}",
+            rows[3]
+        );
+        assert!(rows[4].contains("пометка"), "{}", rows[4]);
+        assert!(
+            rows[4].contains("1") && rows[7].contains("15"),
+            "{}",
+            rows[4]
+        );
+        assert!(rows[10].contains("не заданы"), "{}", rows[10]);
+        assert!(rows[19].contains("F4 — заменить пороги"), "{}", rows[19]);
+        assert!(
+            rows[22].contains("$ thepost admin risk thresholds set"),
+            "{}",
+            rows[22]
+        );
+    }
+
+    /// Вкладка «Пакеты» и отчёт проверки до активации (администратор установки); подтверждение
+    /// активации.
+    #[test]
+    fn risk_packages_report_screen() {
+        let mut app = App::new(
+            Theme::new(Mode::Dark, Brand::default()),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let mut admin = who();
+        admin.roles = vec![AdminRole::InstallationAdmin];
+        let fx = app.on_login(Ok((admin, "node:9443".into())));
+        let ids: Vec<u64> = fx
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Call(id, _) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        app.on_result(ids[0], ok(json!([{"id": "o1", "default": true}])));
+        app.on_result(ids[1], ok(json!([])));
+        let id = call(&section(&mut app, "Признаки риска"), "list_org_signals");
+        app.on_result(id, ok(crate::risk::tests::catalog_json()));
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "get_org_thresholds");
+        app.on_result(id, ok(crate::risk::tests::thresholds_json()));
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "list_packages");
+        app.on_result(id, ok(crate::risk::tests::packages_json()));
+        let (rows, _) = screen(&app);
+        assert!(rows[2].contains("Пакеты"), "{}", rows[2]);
+        assert!(
+            rows[3].contains("ВЕРСИЯ") && rows[3].contains("СОСТОЯНИЕ"),
+            "{}",
+            rows[3]
+        );
+        assert!(
+            rows[4].contains("2") && rows[4].contains("прошлый"),
+            "{}",
+            rows[4]
+        );
+        assert!(rows[5].contains("действующий"), "{}", rows[5]);
+        assert!(rows[19].contains("F7 — импорт файла"), "{}", rows[19]);
+        assert!(rows[23].contains("7Импорт"), "{}", rows[23]);
+        // Импорт файла с узла: окно с полем пути.
+        assert!(app.on_key(key(KeyCode::F(7))).is_empty());
+        for c in "/opt/pkgs/vendor-2.pkg".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        let fx = app.on_key(key(KeyCode::Enter));
+        let [Effect::Import { id, .. }] = fx.as_slice() else {
+            panic!("нет загрузки файла: {fx:?}");
+        };
+        let id = *id;
+        let fx = app.on_result(id, ok(crate::risk::tests::report_json()));
+        let id = call(&fx, "list_packages");
+        app.on_result(id, ok(crate::risk::tests::packages_json()));
+        // Отчёт проверки — до активации.
+        let (rows, _) = screen(&app);
+        assert!(rows[3].contains("Отчёт проверки пакета"), "{}", rows[3]);
+        assert!(rows[4].contains("версии 2"), "{}", rows[4]);
+        assert!(rows[4].contains("не активен"), "{}", rows[4]);
+        assert!(rows[5].contains("Ed25519"), "{}", rows[5]);
+        assert!(rows[6].contains("добавлено 1"), "{}", rows[6]);
+        assert!(rows[7].contains("Новые признаки"), "{}", rows[7]);
+        assert!(
+            rows[19].contains("F5 — активировать версию из отчёта"),
+            "{}",
+            rows[19]
+        );
+        assert!(
+            rows[22].contains("$ thepost admin risk package activate 2"),
+            "{}",
+            rows[22]
+        );
+        // Esc — отчёт закрыт, снова список версий.
+        assert!(app.on_key(key(KeyCode::Esc)).is_empty());
+        let (rows, _) = screen(&app);
+        assert!(rows[3].contains("ВЕРСИЯ"), "{}", rows[3]);
+        // Активация — подтверждение.
+        assert!(app.on_key(key(KeyCode::F(5))).is_empty());
+        let (rows, _) = screen(&app);
+        assert!(rows[4].contains("▲ Активировать пакет?"), "{}", rows[4]);
+        assert!(
+            rows[19].contains("Enter — подтвердить · Esc — отмена"),
+            "{}",
+            rows[19]
+        );
+        let id = call(&app.on_key(key(KeyCode::Enter)), "activate_package");
+        app.on_result(
+            id,
+            ok(json!({"packages": [
+                {"version": 2, "state": "active"},
+                {"version": 1, "state": "previous"},
+            ]})),
+        );
+        let (rows, _) = screen(&app);
+        assert!(rows[4].contains("действующий"), "{}", rows[4]);
+        assert!(rows[21].contains("пакет активирован"), "{}", rows[21]);
+    }
+
+    /// Устаревший источник — знак ▲ без цвета в монохроме; «обновить сейчас» перечитывает список.
+    #[test]
+    fn risk_stale_source_in_mono() {
+        let mut app = App::new(
+            Theme::new(Mode::Mono, Brand::default()),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let mut admin = who();
+        admin.roles = vec![AdminRole::InstallationAdmin];
+        let fx = app.on_login(Ok((admin, "node:9443".into())));
+        let ids: Vec<u64> = fx
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Call(id, _) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        app.on_result(ids[0], ok(json!([{"id": "o1", "default": true}])));
+        app.on_result(ids[1], ok(json!([])));
+        let id = call(&section(&mut app, "Признаки риска"), "list_org_signals");
+        app.on_result(id, ok(crate::risk::tests::catalog_json()));
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "get_org_thresholds");
+        app.on_result(id, ok(crate::risk::tests::thresholds_json()));
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "list_packages");
+        app.on_result(id, ok(crate::risk::tests::packages_json()));
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "list_ti_sources");
+        app.on_result(id, ok(crate::risk::tests::sources_json()));
+        let (rows, _) = screen(&app);
+        assert!(rows[2].contains("Источники"), "{}", rows[2]);
+        assert!(rows[4].contains("abuse_ch_feodo"), "{}", rows[4]);
+        // Свежести ещё нет — прочерк, знака нет.
+        assert!(rows[5].contains("own_list"), "{}", rows[5]);
+        assert!(!rows[5].contains('▲'), "{}", rows[5]);
+        // «Обновить сейчас»: момент загрузки в прошлом при TTL 30m — устарел.
+        assert!(app.on_key(key(KeyCode::Down)).is_empty());
+        let id = call(&app.on_key(key(KeyCode::F(5))), "refresh_source");
+        let fx = app.on_result(
+            id,
+            ok(crate::risk::tests::list_version_json(
+                "2020-01-01T00:00:00Z",
+            )),
+        );
+        let id = call(&fx, "list_ti_sources");
+        app.on_result(id, ok(crate::risk::tests::sources_json()));
+        // Клавиша сбрасывает сообщение строки состояния — покажется пояснение курсора.
+        assert!(app.on_key(key(KeyCode::Down)).is_empty());
+        let (rows, buf) = screen(&app);
+        // Знак ▲ без цвета (монохром).
+        assert!(rows[5].contains("▲устарел"), "{}", rows[5]);
+        for cell in buf.content() {
+            assert_eq!(cell.fg, Color::Reset, "{cell:?}");
+        }
+        assert!(rows[21].contains("устарел (TTL)"), "{}", rows[21]);
+        assert!(
+            rows[21].contains("признаки в «только отчёт»"),
+            "{}",
+            rows[21]
+        );
+    }
+
+    /// Вкладка «Срабатывания»: колонки, знак «только отчёт», фильтр и строка CLI.
+    #[test]
+    fn risk_hits_screen() {
+        let mut app = with_risk(Mode::Dark);
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "get_org_thresholds");
+        app.on_result(id, ok(crate::risk::tests::thresholds_json()));
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "list_risk_hits");
+        app.on_result(id, ok(crate::risk::tests::hits_json()));
+        // Клавиша сбрасывает сообщение о закрытых вкладках — покажется пояснение курсора.
+        assert!(app.on_key(key(KeyCode::Down)).is_empty());
+        let (rows, _) = screen(&app);
+        assert!(rows[2].contains("Срабатывания"), "{}", rows[2]);
+        assert!(
+            rows[3].contains("МОМЕНТ") && rows[3].contains("ПРИЗНАК"),
+            "{}",
+            rows[3]
+        );
+        assert!(rows[4].contains("2026-11-19 12:00"), "{}", rows[4]);
+        assert!(rows[5].contains("▲"), "{}", rows[5]);
+        assert!(rows[21].contains("сила 55 · вес 20"), "{}", rows[21]);
+        assert!(rows[21].contains("только отчёт"), "{}", rows[21]);
+        assert!(
+            rows[22].contains("$ thepost admin risk hits"),
+            "{}",
+            rows[22]
+        );
+        assert!(rows[23].contains("2Фильтр"), "{}", rows[23]);
+        // Фильтр — форма по схеме.
+        assert!(app.on_key(key(KeyCode::F(2))).is_empty());
+        let (rows, _) = screen(&app);
+        assert!(
+            rows.join("\n").contains("Срабатывания — фильтр"),
+            "{}",
+            rows[2]
+        );
+    }
+
+    /// Ввод пути к файлу с узла: окно импорта пакета у администратора установки.
+    #[test]
+    fn risk_import_screen() {
+        let mut app = App::new(
+            Theme::new(Mode::Dark, Brand::default()),
+            LoginForm::new("https://node:9443".into(), false),
+        );
+        let mut admin = who();
+        admin.roles = vec![AdminRole::InstallationAdmin];
+        let fx = app.on_login(Ok((admin, "node:9443".into())));
+        let ids: Vec<u64> = fx
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Call(id, _) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        app.on_result(ids[0], ok(json!([{"id": "o1", "default": true}])));
+        app.on_result(ids[1], ok(json!([])));
+        let id = call(&section(&mut app, "Признаки риска"), "list_org_signals");
+        app.on_result(id, ok(crate::risk::tests::catalog_json()));
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "get_org_thresholds");
+        app.on_result(id, ok(crate::risk::tests::thresholds_json()));
+        let fx = app.on_key(key(KeyCode::Right));
+        let id = call(&fx, "list_packages");
+        app.on_result(id, ok(crate::risk::tests::packages_json()));
+        assert!(app.on_key(key(KeyCode::F(7))).is_empty());
+        let (rows, _) = screen(&app);
+        assert!(rows[2].contains("Импорт пакета поставщика"), "{}", rows[2]);
+        assert!(rows[5].contains("Файл на узле"), "{}", rows[5]);
+        assert!(rows[18].contains("файл читается с узла"), "{}", rows[18]);
+        assert!(
+            rows[22].contains("$ thepost admin risk package import <файл>"),
+            "{}",
+            rows[22]
+        );
     }
 }
