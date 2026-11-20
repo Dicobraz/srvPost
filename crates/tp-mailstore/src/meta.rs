@@ -340,7 +340,7 @@ fn node(part: MessagePart<'_>, path: String, base: &str, depth: usize, b: &mut B
     }
 }
 
-fn attributes(attrs: impl Iterator<Item = (&str, &str)>) -> Vec<(String, String)> {
+fn attributes<'m>(attrs: impl Iterator<Item = (&'m str, &'m str)>) -> Vec<(String, String)> {
     attrs
         .map(|(name, value)| (name.to_ascii_lowercase(), value.to_owned()))
         .collect()
