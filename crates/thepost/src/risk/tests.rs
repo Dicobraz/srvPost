@@ -784,7 +784,6 @@ async fn pack_signs_and_verify_accepts_roundtrip() {
     )
     .expect("sources.json");
     // Манифест сборки: хэши списка ещё не заполнены (считает `pack`).
-    let zeros = [0u8; 32];
     let hex_zero = "0".repeat(64);
     let manifest = serde_json::json!({
         "format": 1,
