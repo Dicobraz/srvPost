@@ -16410,7 +16410,7 @@
     },
     "/api/v1/risk/sources": {
       "get": {
-        "operationId": "list_sources",
+        "operationId": "list_ti_sources",
         "responses": {
           "200": {
             "content": {

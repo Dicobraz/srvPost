@@ -1179,7 +1179,7 @@ export interface paths {
             cookie?: never;
         };
         /** Доверенные источники организации и версия снимка кластера. */
-        get: operations["list_sources"];
+        get: operations["list_ti_sources"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1760,7 +1760,7 @@ export interface paths {
          * Источники TI установки по идентификатору: в поставке (пакетом), «ключ заказчика» и импорт. Только
          *     администратор установки.
          */
-        get: operations["list_sources"];
+        get: operations["list_ti_sources"];
         put?: never;
         /**
          * Новый источник TI: коннектор «ключ заказчика» (фид своим ключом) или импорт (txt, CSV, RPZ, MISP,
@@ -9361,7 +9361,7 @@ export interface operations {
             };
         };
     };
-    list_sources: {
+    list_ti_sources: {
         parameters: {
             query?: never;
             header?: never;
@@ -11733,7 +11733,7 @@ export interface operations {
             };
         };
     };
-    list_sources: {
+    list_ti_sources: {
         parameters: {
             query?: never;
             header?: never;

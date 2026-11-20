@@ -504,7 +504,7 @@ impl From<&Signal> for SignalView {
 /// Изменение признака каталога: у признака поставщика (`tp.*`) — вес, действие и режим (незаданные
 /// наследуются пакетом); свой признак (`org.*`) задаётся целиком — детектор, вес, порог, действие и
 /// режим обязательны.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SignalBody {
     /// Детектор (только свой признак `org.*`).
@@ -1211,7 +1211,7 @@ pub(crate) fn routes(r: Router<Arc<Admin>>, max_bytes: usize) -> Router<Arc<Admi
         upload_package,
         activate_package,
         rollback_package,
-        list_sources,
+        list_ti_sources,
         create_source,
         get_source,
         put_source,
@@ -1339,7 +1339,7 @@ async fn base_catalog(store: &dyn RiskStore) -> Result<EffectiveCatalog> {
 }
 
 /// Каталог уровня и политика уровня (свои изменения и признаки; пустая — уровень не задан).
-async fn level(
+async fn level_state(
     a: &Admin,
     level: RiskLevel,
 ) -> std::result::Result<(EffectiveCatalog, RiskPolicy), Error> {
@@ -1372,7 +1372,7 @@ fn orphaned_view(level: RiskLevel, id: &SignalId, o: &SignalOverride) -> SignalV
 /// Действующий каталог уровня: признаки по возрастанию идентификатора, «осиротевшие» изменения — в
 /// общем списке.
 async fn signals_view(a: &Admin, level: RiskLevel) -> std::result::Result<SignalsView, Error> {
-    let (catalog, policy) = level(a, level).await?;
+    let (catalog, policy) = level_state(a, level).await?;
     let mut signals: Vec<SignalView> = catalog.signals.iter().map(SignalView::from).collect();
     for (id, o) in &policy.overrides {
         if catalog.get(id).is_none() {
@@ -1389,7 +1389,7 @@ async fn signal_view(
     level: RiskLevel,
     id: &SignalId,
 ) -> std::result::Result<SignalView, Error> {
-    let (catalog, policy) = level(a, level).await?;
+    let (catalog, policy) = level_state(a, level).await?;
     if let Some(entry) = catalog.get(id) {
         return Ok(SignalView::from(entry));
     }
@@ -1833,7 +1833,9 @@ async fn put_installation_thresholds(
     State(a): State<Arc<Admin>>,
     Json(body): Json<ThresholdsBody>,
 ) -> std::result::Result<Json<ThresholdsView>, RefusedResponse> {
-    put_thresholds(&a, RiskLevel::Installation, body).await
+    Ok(Json(
+        put_thresholds(&a, RiskLevel::Installation, body).await?,
+    ))
 }
 
 /// Пороги организации: свои (`null` — не заданы), действующие и уровень-источник.
@@ -1861,7 +1863,7 @@ async fn put_org_thresholds(
     Path(org): Path<TenantId>,
     Json(body): Json<ThresholdsBody>,
 ) -> std::result::Result<Json<ThresholdsView>, RefusedResponse> {
-    put_thresholds(&a, RiskLevel::Org(org), body).await
+    Ok(Json(put_thresholds(&a, RiskLevel::Org(org), body).await?))
 }
 
 // ---------- Маршруты: пакеты ----------
@@ -1886,9 +1888,8 @@ async fn list_packages(
 /// подпись, непрошедший lint или не растущий номер — 422 с причиной; тип не тот — 415; больше
 /// `admin.risk.max_package_bytes` — 413.
 #[utoipa::path(post, path = "/api/v1/risk/packages", tag = "risk",
-    request_body(content = "application/octet-stream",
-        description = "Файл пакета поставщика (подпись Ed25519, до admin.risk.max_package_bytes)",
-        content_type = "application/octet-stream"),
+    request_body(content = String, content_type = "application/octet-stream",
+        description = "Файл пакета поставщика (подпись Ed25519, до admin.risk.max_package_bytes)"),
     responses((status = 202, description = "пакет проверен и поставлен, не активен", body = PackageReportView),
         (status = 400, body = Problem), (status = 401, body = Problem),
         (status = 403, description = "не администратор установки", body = Problem),
@@ -1968,7 +1969,7 @@ async fn rollback_package(
 #[utoipa::path(get, path = "/api/v1/risk/sources", tag = "risk",
     responses((status = 200, body = SourcesView), (status = 401, body = Problem),
         (status = 403, description = "не администратор установки", body = Problem), (status = 503, body = Problem)))]
-async fn list_sources(
+async fn list_ti_sources(
     State(a): State<Arc<Admin>>,
 ) -> std::result::Result<Json<SourcesView>, Refused> {
     let sources = risk(&a)?.store.sources().await?;
@@ -2092,9 +2093,8 @@ fn bundled_refused_text(verb: &str) -> RefusedResponse {
 /// становится текущей. Источника нет — 404; тип не тот — 415; больше `admin.risk.max_package_bytes` — 413.
 #[utoipa::path(post, path = "/api/v1/risk/sources/{id}/import", tag = "risk",
     params(("id" = String, Path, description = "Источник TI")),
-    request_body(content = "application/octet-stream",
-        description = "Файл списка TI (формат источника, до admin.risk.max_package_bytes)",
-        content_type = "application/octet-stream"),
+    request_body(content = String, content_type = "application/octet-stream",
+        description = "Файл списка TI (формат источника, до admin.risk.max_package_bytes)"),
     responses((status = 200, body = ListVersionView), (status = 400, body = Problem), (status = 401, body = Problem),
         (status = 403, description = "не администратор установки", body = Problem), (status = 404, body = Problem),
         (status = 413, description = "больше admin.risk.max_package_bytes", body = Problem),
@@ -2148,7 +2148,7 @@ async fn source_usage(
 ) -> std::result::Result<Json<UsageView>, Refused> {
     let id = source_id(&id).map_err(|d| Refused::Problem(StatusCode::BAD_REQUEST, d))?;
     source_of(&a, &id).await?;
-    let stores = risk(a)?;
+    let stores = risk(&a)?;
     let since = q.since.unwrap_or(OffsetDateTime::UNIX_EPOCH);
     let entries: Vec<UsageEntry> = stores.store.usage(&id, since).await?;
     // Суммы по организациям: сутки периода складываются.
@@ -2187,7 +2187,7 @@ async fn list_risk_hits(
     Path(org): Path<TenantId>,
     Query(q): Query<HitsParams>,
 ) -> std::result::Result<Json<HitsView>, Refused> {
-    let stores = risk(a)?;
+    let stores = risk(&a)?;
     let signal = match q.signal.as_deref() {
         None | Some("") => None,
         Some(raw) => Some(SignalId::new(raw).map_err(|_| {
