@@ -137,13 +137,12 @@ export const QUICK_FILTERS: Array<{ kind: QuickFilterKind; label: string; iconVa
   { kind: "expire", label: "Истекают", iconVar: "--i-amber" },
 ];
 
-/** Метка срока в строке письма: «До ср» — короткое имя дня недели, «Просрочено 1 д». */
+/** Метка срока в строке письма: «До ср» — короткое имя дня недели, «Просрочено N д» — заливка. */
 export function dueLabel(lifecycle: Lifecycle, now: Date): { text: string; overdue: boolean } | null {
   const due = lifecycle.due;
   if (!due) return null;
-  if (due.general) return { text: "Срок", overdue: false };
   const at = due.at;
-  if (!at) return { text: "Срок", overdue: false };
+  if (!at) return { text: "Срок", overdue: false }; // только общее слово — без даты
   const days = overdueDays(at, now);
   if (days !== null) return { text: `Просрочено ${days} д`, overdue: true };
   const daysLeft = Math.ceil((at.getTime() - now.getTime()) / 86_400_000);
