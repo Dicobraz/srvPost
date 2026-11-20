@@ -441,7 +441,7 @@ impl Services {
         // (APP-77, SMTP-51): Message-ID без метки получает метку с ключом из секции `smtp.reply.keys`,
         // `MAIL FROM` — BATV-подпись, письмо с адресатами — запись в `SentLog` (`PgMeta`, META-86).
         let smtp = cfg.section::<SmtpConfig>(SMTP)?;
-        let reply = Arc::new(reply_marks(secrets.clone(), smtp));
+        let reply = Arc::new(reply_marks(secrets.clone(), &smtp));
         let routes = Arc::new(Routes::new(Arc::new(meta.clone())));
         let dkim = Arc::new(
             tp_smtp::dkim_sign::DkimSign::new(secrets.clone(), smtp.dkim.clone())

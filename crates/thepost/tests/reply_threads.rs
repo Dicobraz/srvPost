@@ -27,8 +27,10 @@ use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{self, ClientConfig, RootCertStore};
 use tp_contracts::TenantId;
+use tp_contracts::blob::BlobStore;
 use tp_contracts::meta::{
-    AccountKind, AccountScope, AccountUpsert, MailboxStore, MessageQuery, MessageStore, SpecialUse,
+    AccountKind, AccountScope, AccountStore, AccountUpsert, MailboxStore, MessageQuery,
+    MessageStore, SpecialUse,
 };
 use tp_contracts::role::CancellationToken;
 use tp_contracts::secrets::{SecretRef, SecretStore};
