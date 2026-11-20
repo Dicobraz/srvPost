@@ -368,7 +368,7 @@ mod tests {
     async fn passes_publications_suite() {
         let trust = Arc::new(MemTrust::new());
         let publ = MemCalendarPublications::new(trust.clone());
-        calendar_publications(&publ, &trust, &PublicationsFixture::new()).await;
+        calendar_publications(&publ, trust.as_ref(), &PublicationsFixture::new()).await;
     }
 
     #[tokio::test]
