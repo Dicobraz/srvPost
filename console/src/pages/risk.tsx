@@ -32,7 +32,7 @@ import {
   Upload,
 } from "antd";
 import type { Dayjs } from "dayjs";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 
 import { request, type Schemas } from "../api/client";
@@ -1134,6 +1134,9 @@ function SourcesTab() {
   const [versions, setVersions] = useState<Record<string, Schemas["ListVersionView"]>>({});
   const [modal, setModal] = useState<{ row?: Schemas["TiSourceView"] } | null>(null);
   const [usage, setUsage] = useState<string | null>(null);
+  // Текущий момент — для вывода «устарел»: чистота отрисовки (время снимается после монтирования).
+  const [now, setNow] = useState<number>();
+  useEffect(() => setNow(Date.now()), []);
   const { mutate: remove, mutation: removing } = useCustomMutation<Schemas["TiSourceView"], HttpError, undefined>();
 
   const known = (id: string) => versions[id];
@@ -1205,7 +1208,7 @@ function SourcesTab() {
             const v = known(s.id);
             if (!v) return <Typography.Text type="secondary">—</Typography.Text>;
             const limit = staleAt(v, s.ttl);
-            const stale = limit != null && limit < Date.now();
+            const stale = limit != null && now != null && limit < now;
             return <StatusTag role={stale ? "warn" : "ok"}>{`${stale ? "устарел" : "свежий"}: загружен ${when(v.fetched_at)}`}</StatusTag>;
           }}
         />
