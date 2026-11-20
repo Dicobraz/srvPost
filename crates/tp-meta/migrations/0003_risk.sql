@@ -42,7 +42,7 @@ BEGIN
     IF NEW.version <= coalesce(max_version, 0) THEN
         RAISE EXCEPTION 'номер пакета % не растёт (максимальный хранимый %)',
             NEW.version, max_version
-            USING ERRCODE '23514';
+            USING ERRCODE = '23514';
     END IF;
     RETURN NEW;
 END
