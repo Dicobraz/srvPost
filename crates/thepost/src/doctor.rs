@@ -1715,7 +1715,7 @@ pub async fn reply_keys(
     for key in &keys {
         match store.get(&key.secret).await {
             Ok(secret) => {
-                if secret.expose().as_bytes().len() < 32 {
+                if secret.expose().len() < 32 {
                     short.push(key.id.clone());
                 }
             }

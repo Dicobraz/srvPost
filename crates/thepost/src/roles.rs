@@ -401,7 +401,7 @@ impl ItipPurge {
 /// Первый проход — при запуске роли, затем с периодом [`ThreadBinder::interval`] (`maintenance.purge_interval`):
 /// узел с ролью обслуживает ящики и после перезапуска дообрабатывает оставшееся; привязка идемпотентна,
 /// работает на каждом узле с ролью без лизы.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ThreadBinder {
     /// Хранилище бесед (`PgMeta`): порция фоновой привязки по `thread_key`.
     pub meta: PgMeta,
