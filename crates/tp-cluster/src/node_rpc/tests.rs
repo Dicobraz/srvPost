@@ -437,6 +437,43 @@ async fn two_nodes_over_mtls() {
     }
 }
 
+/// TLS-рукопожатия на слушателе узла: (всего, из них `h2`).
+fn handshakes(rpc: &NodeRpc) -> (usize, usize) {
+    let (tls, h2) = (&rpc.inner.tls_handshakes, &rpc.inner.h2_handshakes);
+    (tls.load(Ordering::Relaxed), h2.load(Ordering::Relaxed))
+}
+
+/// CLU-15: два узла договариваются о `h2`; параллельные вызовы идут по одному TLS-соединению
+/// (пул reqwest мультиплексирует HTTP/2).
+#[tokio::test]
+async fn h2_and_one_connection_for_parallel_calls() {
+    let mut cluster = Cluster::new();
+    let cfg = config("permissions:\n  jmap: [search/*]\n", 16);
+    let a = cluster.start("a", tls("a"), &[Role::Jmap], &cfg).await;
+    let b = cluster.start("b", tls("b"), &[Role::Search], &cfg).await;
+    let echo = svc(Role::Search, "echo");
+    b.serve(echo.clone(), Arc::new(Echo("b"))).expect("echo");
+
+    // Первый вызов устанавливает соединение: ALPN даёт h2.
+    assert_eq!(
+        a.call(&echo, "k", Bytes::new(), LONG).await,
+        Ok(Bytes::from("b|a|k|"))
+    );
+    assert_eq!(handshakes(&b), (1, 1), "первое соединение — HTTP/2");
+
+    // Параллельные вызовы — по тому же соединению: новых TLS-рукопожатий нет.
+    let calls: Vec<_> = (0..16)
+        .map(|i| {
+            let (a, echo) = (a.clone(), echo.clone());
+            tokio::spawn(async move { a.call(&echo, &format!("k/{i}"), Bytes::new(), LONG).await })
+        })
+        .collect();
+    for call in calls {
+        call.await.expect("join").expect("call");
+    }
+    assert_eq!(handshakes(&b), (1, 1), "параллельные вызовы — одно соединение");
+}
+
 /// Недоступный узел маршрута — следующий; все недоступны — `Unavailable`; чужой УЦ и подмена узла — отказ.
 #[tokio::test]
 async fn unavailable_nodes_and_identity() {
