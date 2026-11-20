@@ -4775,6 +4775,115 @@
             "type": "object"
           }
         ]
+      },
+      "ThreadHoldBody": {
+        "additionalProperties": false,
+        "description": "Тело удержания беседы: основание.",
+        "properties": {
+          "reason": {
+            "description": "Основание (дело, требование, регламент): 1–1000 символов без управляющих ([`ThreadHold::validate`]).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ThreadHoldEntryView": {
+        "description": "Удержанная беседа организации.",
+        "properties": {
+          "account": {
+            "description": "Учётная запись (UUID).",
+            "type": "string"
+          },
+          "thread": {
+            "description": "Беседа (UUID).",
+            "type": "string"
+          },
+          "hold": {
+            "$ref": "#/components/schemas/ThreadHoldView",
+            "description": "Удержание."
+          }
+        },
+        "required": [
+          "account",
+          "thread",
+          "hold"
+        ],
+        "type": "object"
+      },
+      "ThreadHoldView": {
+        "description": "Удержание беседы в ответе API ([`ThreadHold`] контракта CTR-94; обе стороны serde).",
+        "properties": {
+          "by": {
+            "description": "Кто удержал (имя входа администратора).",
+            "type": "string"
+          },
+          "at": {
+            "description": "Когда установлено (UTC).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Основание (дело, требование, регламент).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "at",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ThreadHoldsView": {
+        "description": "Удержанные беседы организации.",
+        "properties": {
+          "holds": {
+            "description": "Удержанные беседы в порядке удержания (`at`).",
+            "items": {
+              "$ref": "#/components/schemas/ThreadHoldEntryView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "holds"
+        ],
+        "type": "object"
+      },
+      "ThreadView": {
+        "description": "Беседа письма: удержание и письма в порядке привязки.",
+        "properties": {
+          "thread": {
+            "description": "Беседа (UUID); `threadId` письма неизменяем (RFC 8621 §3).",
+            "type": "string"
+          },
+          "hold": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ThreadHoldView",
+                "description": "Удержание беседы (решение 125 е); `null` — не удержана."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "messages": {
+            "description": "Письма беседы в порядке привязки (до `admin.max_page_size`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "thread",
+          "messages"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -13912,6 +14021,410 @@
         "summary": "Создаёт или заменяет правило журналирования (замена целиком по идентификатору). Группа и ящик\nобласти должны существовать (422), та же цель с тем же направлением у другого правила — 409 с\nподсказкой; конвейер подхватывает изменение без перезапуска (SMTP-53). Изменение — в журнал аудита\nс парой «было → стало».",
         "tags": [
           "journal"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/accounts/{account}/threads": {
+      "get": {
+        "operationId": "find_thread",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Учётная запись (UUID)",
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Письмо учётной записи (UUID, из списков корзины и очереди модерации), чья беседа; без параметра — 400.",
+            "in": "query",
+            "name": "message_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Беседа письма: удержание и письма в порядке привязки; письма у учётной записи нет — 404.",
+        "tags": [
+          "threads"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/accounts/{account}/threads/{thread}/export": {
+      "get": {
+        "operationId": "export_thread",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Учётная запись (UUID)",
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Беседа (UUID)",
+            "in": "path",
+            "name": "thread",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "архив ZIP с письмами беседы (.eml)"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Выгрузка беседы: письма `.eml` в архиве ZIP, в порядке привязки, включая удалённые в корзину и скрытые «очисткой корзины»; окончательно стёртых писем объекта нет. Обращение — в журнал аудита, запись не сохранена — архив не отдаётся. Содержимое — только администраторам (отказ — в аудит).",
+        "tags": [
+          "threads"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/accounts/{account}/threads/{thread}/hold": {
+      "delete": {
+        "operationId": "unhold_thread",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Учётная запись (UUID)",
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Беседа (UUID)",
+            "in": "path",
+            "name": "thread",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Снимает удержание: письма беседы снова удаляются окончательно по сроку корзины. Беседы нет — 404.",
+        "tags": [
+          "threads"
+        ]
+      },
+      "put": {
+        "operationId": "hold_thread",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Учётная запись (UUID)",
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Беседа (UUID)",
+            "in": "path",
+            "name": "thread",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadHoldBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadHoldView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Удерживает беседу (решение 125 е): все письма, включая будущие, не удаляются окончательно ([`ThreadHoldHook`]); повторное удержание заменяет основание. Беседы нет — 404.",
+        "tags": [
+          "threads"
+        ]
+      }
+    },
+    "/api/v1/orgs/{org}/holds": {
+      "get": {
+        "operationId": "list_thread_holds",
+        "parameters": [
+          {
+            "description": "Организация (UUID)",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadHoldsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Удержанные беседы организации: кто, когда и основание, в порядке удержания. Удержания меняет только Admin API — список строится по журналу аудита операций удержания и сверяется с хранилищем бесед.",
+        "tags": [
+          "threads"
         ]
       }
     }

@@ -37,6 +37,9 @@ use tp_admin::resources::{NewResource, ResourceInfo, ResourcePatch, ResourceType
 use tp_admin::retention::{PageQuery, RestoredMessage, TrashPage};
 use tp_admin::server::WhoAmI;
 use tp_admin::sieve::{Script, ScriptBody, ScriptText, VacationBody};
+use tp_admin::threads::{
+    ThreadFindParams, ThreadHoldBody, ThreadHoldView, ThreadHoldsView, ThreadView,
+};
 use tp_admin::transport::{
     DomainBody, DomainList, DomainWritten, RouteBody, RouteList, SourceBody, SourceList,
     VersionQuery, Written,
@@ -223,6 +226,12 @@ pub enum ApiAction {
         /// Действие.
         #[command(subcommand)]
         action: Box<JournalAction>,
+    },
+    /// Беседы учётных записей: беседа письма, удержание (включая будущие письма) и выгрузка.
+    Thread {
+        /// Действие.
+        #[command(subcommand)]
+        action: Box<ThreadAction>,
     },
     /// Транспорт: принятые домены, доверенные источники, политики доменов назначения.
     Transport {
@@ -765,6 +774,48 @@ impl From<DirectionArg> for tp_contracts::journal::JournalDirection {
             DirectionArg::Both => Self::Both,
         }
     }
+}
+
+/// Действия с беседами (ADM-50): удержание целиком, включая будущие письма (как Google Vault), и выгрузка.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ThreadAction {
+    /// Беседа письма: удержание и письма в порядке привязки.
+    Find {
+        /// Учётная запись: имя входа или UUID.
+        account: String,
+        /// Письмо учётной записи (UUID, из `trash list`, `moderation` или `thread find`).
+        #[arg(long, value_name = "UUID")]
+        message_id: String,
+    },
+    /// Удерживает беседу: письма, включая будущие, не удаляются окончательно.
+    Hold {
+        /// Учётная запись: имя входа или UUID.
+        account: String,
+        /// Беседа (UUID, из `thread find`).
+        thread: String,
+        /// Основание (дело, требование, регламент).
+        #[arg(long)]
+        reason: String,
+    },
+    /// Снимает удержание: письма снова удаляются окончательно по сроку корзины.
+    Unhold {
+        /// Учётная запись: имя входа или UUID.
+        account: String,
+        /// Беседа (UUID, из `thread find`).
+        thread: String,
+    },
+    /// Удержанные беседы организации: кто, когда и основание.
+    Holds,
+    /// Выгрузка беседы: письма .eml в архиве ZIP, включая удалённые в корзину и скрытые, — в файл или stdout.
+    Export {
+        /// Учётная запись: имя входа или UUID.
+        account: String,
+        /// Беседа (UUID, из `thread find`).
+        thread: String,
+        /// Файл для архива ZIP (по умолчанию — stdout).
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Ресурсы транспорта; каждая запись — по версии снимка последнего чтения (устарела — 409, повторите команду).
@@ -1413,6 +1464,7 @@ pub async fn execute(client: &Client, args: &ApiArgs, action: ApiAction) -> CliR
         ApiAction::Audit { action } => audit_command(client, args, *action).await,
         ApiAction::Delivery { action } => delivery_command(client, args, *action).await,
         ApiAction::Journal { action } => journal_command(client, args, *action).await,
+        ApiAction::Thread { action } => thread_command(client, args, *action).await,
         ApiAction::Transport { action } => {
             let org = client.org(args.org.clone()).await?;
             match *action {
@@ -2780,6 +2832,136 @@ fn yes_no(yes: bool) -> String {
     }
 }
 
+/// `thepost admin thread …`: беседа письма, удержание, список удержаний и выгрузка (ADM-50).
+async fn thread_command(
+    client: &Client,
+    args: &ApiArgs,
+    action: ThreadAction,
+) -> CliResult<String> {
+    let org = client.org(args.org.clone()).await?;
+    match action {
+        ThreadAction::Find {
+            account,
+            message_id,
+        } => {
+            let id = account_id(client, &org, &account).await?;
+            let params = ThreadFindParams {
+                message_id: Some(
+                    message_id
+                        .parse()
+                        .map_err(|e| format!("--message-id {message_id:?}: {e}"))?,
+                ),
+            };
+            let v: ThreadView = client
+                .call(THREAD_FIND, &[&org, &id], &query(&params)?, NO_BODY)
+                .await?;
+            let mut text = record(&[
+                ("Беседа", v.thread.clone()),
+                (
+                    "Удержание",
+                    match &v.hold {
+                        Some(h) => format!("{} ({}) — {}", h.by, json_field(h, "at"), h.reason),
+                        None => "нет".to_owned(),
+                    },
+                ),
+                ("Писем в беседе", v.messages.len().to_string()),
+            ]);
+            text.push_str("Письма (в порядке привязки):\n");
+            text.push_str(&v.messages.join("\n"));
+            text.push('\n');
+            out(args, &v, text)
+        }
+        ThreadAction::Hold {
+            account,
+            thread,
+            reason,
+        } => {
+            let id = account_id(client, &org, &account).await?;
+            let hold: ThreadHoldView = client
+                .call(
+                    THREAD_HOLD,
+                    &[&org, &id, &thread],
+                    &[],
+                    Some(&serde_json::to_value(ThreadHoldBody { reason }).expect("json")),
+                )
+                .await?;
+            let text = format!(
+                "Беседа {thread} удержана: {} ({}) — {}.\n",
+                hold.by,
+                json_field(&hold, "at"),
+                hold.reason
+            );
+            out(args, &hold, text)
+        }
+        ThreadAction::Unhold { account, thread } => {
+            let id = account_id(client, &org, &account).await?;
+            client
+                .call_empty(THREAD_UNHOLD, &[&org, &id, &thread], &[], NO_BODY)
+                .await?;
+            let text = format!("Удержание беседы {thread} снято.\n");
+            out(
+                args,
+                &serde_json::json!({"thread": thread, "hold": null}),
+                text,
+            )
+        }
+        ThreadAction::Holds => {
+            let page: ThreadHoldsView = client.call(THREAD_HOLDS, &[&org], &[], NO_BODY).await?;
+            let rows: Vec<Vec<String>> = page
+                .holds
+                .iter()
+                .map(|h| {
+                    vec![
+                        h.account.clone(),
+                        h.thread.clone(),
+                        h.hold.by.clone(),
+                        json_field(&h.hold, "at"),
+                        h.hold.reason.clone(),
+                    ]
+                })
+                .collect();
+            let text = if rows.is_empty() {
+                style::more(args.theme(), "Удержанных бесед нет.")
+            } else {
+                style::table(
+                    args.theme(),
+                    &["УЧЁТНАЯ ЗАПИСЬ", "БЕСЕДА", "КТО", "КОГДА", "ОСНОВАНИЕ"],
+                    &rows,
+                )
+            };
+            out(args, &page, text)
+        }
+        ThreadAction::Export {
+            account,
+            thread,
+            output,
+        } => {
+            let id = account_id(client, &org, &account).await?;
+            let zip = client.bytes(THREAD_EXPORT, &[&org, &id, &thread]).await?;
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, &zip).map_err(|e| format!("{}: {e}", path.display()))?;
+                    let text = format!(
+                        "Беседа {thread} выгружена в {} ({} байт).\n",
+                        path.display(),
+                        zip.len()
+                    );
+                    out(
+                        args,
+                        &serde_json::json!({"written": path.display().to_string(), "bytes": zip.len()}),
+                        text,
+                    )
+                }
+                // Архив — двоичный: в stdout байты как есть, без оформления.
+                None => std::io::stdout()
+                    .write_all(&zip)
+                    .map_err(|e| e.to_string())
+                    .map(|()| String::new()),
+            }
+        }
+    }
+}
+
 /// Запись журнала — строки «подпись: значение».
 fn journal_entry_record(e: &tp_admin::journal::JournalEntryView) -> String {
     let r = &e.record;
@@ -3629,6 +3811,31 @@ mod tests {
             &[
                 "thepost",
                 "admin",
+                "thread",
+                "find",
+                "a@b.test",
+                "--message-id",
+                "m1",
+            ],
+            &[
+                "thepost",
+                "admin",
+                "thread",
+                "hold",
+                "a@b.test",
+                "t1",
+                "--reason",
+                "дело №1",
+            ],
+            &["thepost", "admin", "thread", "unhold", "a@b.test", "t1"],
+            &["thepost", "admin", "thread", "holds"],
+            &[
+                "thepost", "admin", "thread", "export", "a@b.test", "t1", "-o", "t.zip",
+            ],
+            &["thepost", "admin", "thread", "export", "a@b.test", "t1"],
+            &[
+                "thepost",
+                "admin",
                 "audit",
                 "search",
                 "--since",
@@ -3893,8 +4100,15 @@ mod tests {
 
     /// Admin API tp-admin на хранилищах testkit на loopback: локальный вход подключён, `oidc` — токен OIDC
     /// администратора инсталляции, `ja` — аудитор журнала; страница списков — 2 записи (переход по `Link`
-    /// в каждом списке длиннее). Третий результат — журнал переписки для записи тестовых писем.
-    async fn admin_api() -> (Arc<tp_admin::Admin>, Url, MemJournal) {
+    /// в каждом списке длиннее). Третий результат — журнал переписки для записи тестовых писем, четвёртый —
+    /// почтовое хранилище (доставка писем бесед, ADM-50).
+    async fn admin_api() -> (
+        Arc<tp_admin::Admin>,
+        Url,
+        MemJournal,
+        tp_mailstore::Store,
+        MemMetadata,
+    ) {
         admin_api_with(tp_auth::AbuseConfig::default()).await
     }
 
@@ -3902,22 +4116,30 @@ mod tests {
     /// пароль — `PasswordAuthenticator` с паролями приложений, Bearer — `oidc`; адрес клиента — из соединения.
     async fn admin_api_with(
         abuse: tp_auth::AbuseConfig,
-    ) -> (Arc<tp_admin::Admin>, Url, MemJournal) {
+    ) -> (
+        Arc<tp_admin::Admin>,
+        Url,
+        MemJournal,
+        tp_mailstore::Store,
+        MemMetadata,
+    ) {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let index = MemBlobIndex::new(clock.clone());
         let meta = MemMetadata::new(clock.clone()).with_blob_index(index.clone());
         let quota = MemQuota::new(&meta);
         let policies = MemPolicies::new(&meta);
         let trash = MemTrash::new(&meta).with_policies(policies.clone());
+        let threads = MemThreads::new();
+        let blobs = MemBlobStore::new(clock);
         let store = tp_mailstore::Store::new(tp_mailstore::Deps {
-            blobs: Arc::new(MemBlobStore::new(clock)),
+            blobs: Arc::new(blobs.clone()),
             index: Arc::new(index),
             messages: Arc::new(meta.clone()),
             changes: Arc::new(meta.clone()),
             trash: Arc::new(trash.clone()),
             quota: Arc::new(quota.clone()),
             bus: Arc::new(MemEventBus::default()),
-            threads: Some(Arc::new(MemThreads::new())),
+            threads: Some(Arc::new(threads.clone())),
             hooks: DecisionHooks::default(),
         });
         let app_passwords = tp_auth::AppPasswords::new(
@@ -3983,7 +4205,7 @@ mod tests {
             policies: Arc::new(policies.clone()),
             resolver: Arc::new(policies),
             trash: Arc::new(trash),
-            store: Arc::new(store),
+            store: Arc::new(store.clone()),
             app_passwords,
             contacts: Arc::new(MemAddressBook::new()),
             org: Arc::new(MemAddressBook::new()),
@@ -4025,6 +4247,10 @@ mod tests {
                 ))
                 .with_journal(Arc::new(journal.clone()))
                 .with_journal_rules(Arc::new(journal.clone()))
+                // Беседы и объекты писем — те же, что у приёма писем (MS-21): выгрузка беседы читает
+                // скрытые письма по объектам (ADM-50).
+                .with_threads(Arc::new(threads.clone()))
+                .with_held_blobs(Arc::new(blobs.clone()))
                 .with_sieve(Arc::new(MemSieve::new()), check_script)
                 .with_org_script_check(check_org_script)
                 .with_local_tokens(Arc::new(MemLocalAdminTokens::new()))
@@ -4050,14 +4276,14 @@ mod tests {
             .into_make_service_with_connect_info::<std::net::SocketAddr>();
         tokio::spawn(async move { axum::serve(listener, router).await });
         let url = Url::parse(&format!("http://{addr}")).expect("url");
-        (admin, url, journal)
+        (admin, url, journal, store, meta)
     }
 
     /// Приёмка ADM-41: перебор пароля с одного адреса — блокировка `AbuseGuard` по адресу клиента, после неё и
     /// верный пароль не принимается (401).
     #[tokio::test]
     async fn password_login_bruteforce_is_blocked() {
-        let (admin, url, _) = admin_api_with(tp_auth::AbuseConfig {
+        let (admin, url, _, _, _) = admin_api_with(tp_auth::AbuseConfig {
             ip_failures: 3,
             ..tp_auth::AbuseConfig::default()
         })
@@ -4208,7 +4434,7 @@ mod tests {
         use tp_contracts::journal::JournalStore as _;
         use tp_contracts::journal::{JournalDirection, JournalRule, JournalScope};
 
-        let (_admin, url, journal) = admin_api().await;
+        let (_admin, url, journal, _, _) = admin_api().await;
         let ja = client(&url, "ja");
         let root = client(&url, "oidc");
         let json = |out: CliResult<String>| -> Value {
@@ -4404,6 +4630,218 @@ mod tests {
         );
     }
 
+    /// Приёмка ADM-50: беседы в CLI — беседа письма, удержание и снятие (кто и основание), список удержаний,
+    /// выгрузка беседы ZIP (письмо корзины включено); аудитору журнала выгрузка — 403.
+    #[tokio::test]
+    async fn thread_commands_against_admin_api() {
+        use tp_contracts::mailstore::{Delivery, IngestRequest, MailStore};
+        use tp_contracts::meta::{AccountScope, Flags, SpecialUse};
+
+        /// Письмо во «Входящие» с заголовками беседы (привязка приёма, CTR-94).
+        async fn deliver(
+            store: &tp_mailstore::Store,
+            meta: &MemMetadata,
+            scope: AccountScope,
+            message_id: &str,
+            in_reply_to: Option<&str>,
+            subject: &str,
+        ) -> tp_contracts::MessageId {
+            let inbox = meta
+                .mailbox_by_role(scope, SpecialUse::Inbox)
+                .expect("inbox");
+            let reply = in_reply_to
+                .map(|p| format!("In-Reply-To: <{p}>\r\nReferences: <{p}>\r\n"))
+                .unwrap_or_default();
+            let raw = format!(
+                "From: a@example.com\r\nTo: a@threads.test\r\nMessage-ID: <{message_id}>\r\n{reply}Subject: {subject}\r\n\r\nbody\r\n"
+            );
+            let chunks: Vec<tp_contracts::Result<bytes::Bytes>> = vec![Ok(bytes::Bytes::from(raw))];
+            let got = store
+                .ingest(IngestRequest {
+                    tenant: scope.tenant,
+                    mail_from: "a@example.com".into(),
+                    raw: Box::pin(futures::stream::iter(chunks)),
+                    deliveries: vec![Delivery {
+                        account: scope.account,
+                        mailbox: inbox,
+                        extra_headers: vec![],
+                        flags: Flags::default(),
+                    }],
+                    received_at: time::OffsetDateTime::now_utc(),
+                })
+                .await
+                .expect("ingest");
+            got.delivered[0].message
+        }
+
+        let (_admin, url, _journal, store, meta) = admin_api().await;
+        let c = client(&url, "oidc");
+        let ja = client(&url, "ja");
+        let login = || "a@threads.test".to_owned();
+
+        // Учётная запись: домен и `account create`.
+        exec(
+            &c,
+            false,
+            ApiAction::Transport {
+                action: Box::new(TransportAction::Domain {
+                    action: DomainAction::Create {
+                        name: "threads.test".into(),
+                        relay: None,
+                    },
+                }),
+            },
+        )
+        .await
+        .expect("domain");
+        let created = exec(
+            &c,
+            true,
+            account_action(AccountAction::Create {
+                login: login(),
+                name: None,
+            }),
+        )
+        .await
+        .expect("account create");
+        let v: Value = serde_json::from_str(&created).expect("json");
+        let account: tp_contracts::AccountId = v["id"].as_str().expect("id").parse().expect("uuid");
+        let scope = AccountScope {
+            tenant: TenantId::DEFAULT,
+            account,
+        };
+        let thread = |action: ThreadAction| ApiAction::Thread {
+            action: Box::new(action),
+        };
+        let find = |message: tp_contracts::MessageId| {
+            thread(ThreadAction::Find {
+                account: login(),
+                message_id: message.to_string(),
+            })
+        };
+
+        // Два письма одной беседы: ответ присоединяется (In-Reply-To).
+        let first = deliver(&store, &meta, scope, "one@external.test", None, "первое").await;
+        let reply = deliver(
+            &store,
+            &meta,
+            scope,
+            "two@external.test",
+            Some("one@external.test"),
+            "ответ",
+        )
+        .await;
+
+        // Беседа письма: удержания нет, оба письма в порядке привязки.
+        let out = exec(&c, true, find(first)).await.expect("find");
+        let v: Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(v["hold"], Value::Null, "{v}");
+        assert_eq!(
+            v["messages"],
+            json!([first.to_string(), reply.to_string()]),
+            "{v}"
+        );
+        let id = v["thread"].as_str().expect("thread").to_owned();
+        let text = exec(&c, false, find(first)).await.expect("find text");
+        assert!(text.contains("Удержание") && text.contains("нет"), "{text}");
+
+        // Удержание: основание и кто; список удержаний организации; повторный find это видит.
+        exec(
+            &c,
+            false,
+            thread(ThreadAction::Hold {
+                account: login(),
+                thread: id.clone(),
+                reason: "дело №9".into(),
+            }),
+        )
+        .await
+        .expect("hold");
+        let out = exec(&c, true, find(first)).await.expect("find");
+        let v: Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(v["hold"]["reason"], "дело №9", "{v}");
+        assert_eq!(v["hold"]["by"], "root@example.test", "{v}");
+        let out = exec(&c, true, thread(ThreadAction::Holds))
+            .await
+            .expect("holds");
+        let v: Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(v["holds"].as_array().expect("holds").len(), 1, "{v}");
+        assert_eq!(v["holds"][0]["thread"], id, "{v}");
+        let text = exec(&c, false, thread(ThreadAction::Holds))
+            .await
+            .expect("holds text");
+        assert!(text.contains("дело №9"), "{text}");
+
+        // Выгрузка: письмо, удалённое в корзину, — в архиве; аудитору журнала — 403.
+        store.delete_to_trash(scope, &[first]).await.expect("trash");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("thread.zip");
+        exec(
+            &c,
+            false,
+            thread(ThreadAction::Export {
+                account: login(),
+                thread: id.clone(),
+                output: Some(file.clone()),
+            }),
+        )
+        .await
+        .expect("export");
+        let bytes = std::fs::read(&file).expect("zip");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("архив");
+        assert_eq!(zip.len(), 2, "оба письма беседы, включая корзину");
+        let mut names: Vec<String> = (0..zip.len())
+            .map(|i| {
+                zip.by_index(i)
+                    .expect("запись")
+                    .name()
+                    .expect("имя")
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![format!("1-{first}.eml"), format!("2-{reply}.eml")],
+            "{names:?}"
+        );
+        let mut entry = zip.by_name(&names[0]).expect("запись");
+        let mut eml = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut eml).expect("чтение");
+        assert!(eml.contains("Subject: первое"), "{eml}");
+        let err = exec(
+            &ja,
+            false,
+            thread(ThreadAction::Export {
+                account: login(),
+                thread: id.clone(),
+                output: None,
+            }),
+        )
+        .await
+        .expect_err("аудитору журнала нельзя");
+        assert!(err.contains("403"), "{err}");
+
+        // Снятие: список удержаний пуст, удержания нет.
+        exec(
+            &c,
+            false,
+            thread(ThreadAction::Unhold {
+                account: login(),
+                thread: id,
+            }),
+        )
+        .await
+        .expect("unhold");
+        let text = exec(&c, false, thread(ThreadAction::Holds))
+            .await
+            .expect("holds");
+        assert!(text.contains("Удержанных бесед нет"), "{text}");
+        let out = exec(&c, true, find(first)).await.expect("find");
+        let v: Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(v["hold"], Value::Null, "{v}");
+    }
+
     /// Приёмка ADM-53: `thepost admin journal rule list/set/delete` — администратор организации ведёт
     /// правила (цель, направление, включение), изменение конвейер читает без перезапуска; несуществующая
     /// область — отказ с подсказкой; аудитор журнала правил не видит (403).
@@ -4411,7 +4849,7 @@ mod tests {
     async fn journal_rule_commands_against_admin_api() {
         use tp_contracts::journal::JournalRuleStore as _;
 
-        let (_admin, url, journal) = admin_api().await;
+        let (_admin, url, journal, _, _) = admin_api().await;
         let org_admin = client(&url, "org");
         let ja = client(&url, "ja");
         let json = |out: CliResult<String>| -> Value {
@@ -4559,7 +4997,7 @@ mod tests {
     /// вход по токену OIDC.
     #[tokio::test]
     async fn pilot_flow_against_admin_api() {
-        let (admin, url, _) = admin_api().await;
+        let (admin, url, _, _, _) = admin_api().await;
         let granted = admin
             .init(&InitRequest {
                 email: "admin@example.test".into(),
@@ -4815,7 +5253,7 @@ mod tests {
     /// неверный текст — отказ с позицией ошибки, в хранилище не попадает.
     #[tokio::test]
     async fn sieve_commands_against_admin_api() {
-        let (_admin, url, _) = admin_api().await;
+        let (_admin, url, _, _, _) = admin_api().await;
         let c = client(&url, "oidc");
         let sieve = |action| ApiAction::Sieve { action };
         let account = || "a@rules.test".to_owned();
@@ -5128,7 +5566,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_block_against_admin_api() {
-        let (_admin, url, _) = admin_api().await;
+        let (_admin, url, _, _, _) = admin_api().await;
         let c = client(&url, "oidc");
         let login = || "a@block.test".to_owned();
         let account = account_action;
@@ -5179,7 +5617,7 @@ mod tests {
     /// без ключей — ошибка без запроса.
     #[tokio::test]
     async fn account_set_against_admin_api() {
-        let (_admin, url, _) = admin_api().await;
+        let (_admin, url, _, _, _) = admin_api().await;
         let c = client(&url, "oidc");
         let login = || "a@alias.test".to_owned();
         let account = account_action;
@@ -5259,7 +5697,7 @@ mod tests {
     /// повторов; подсказка сохраняет `--prefix`.
     #[tokio::test]
     async fn account_list_after_pages() {
-        let (_admin, url, _) = admin_api().await;
+        let (_admin, url, _, _, _) = admin_api().await;
         let c = client(&url, "oidc");
         let domain = DomainAction::Create {
             name: "page.test".into(),
@@ -5423,7 +5861,7 @@ mod tests {
     /// каждая команда против роутера tp-admin.
     #[tokio::test]
     async fn resource_commands_against_admin_api() {
-        let (_admin, url, _) = admin_api().await;
+        let (_admin, url, _, _, _) = admin_api().await;
         let c = client(&url, "oidc");
         let a = || "a@res.test".to_owned();
         let b = || "b@res.test".to_owned();
@@ -5792,7 +6230,7 @@ mod tests {
     /// колонка «Тип» в `resources list`, смена типа по адресу, неизвестный адрес — ошибка.
     #[tokio::test]
     async fn booking_resources_against_admin_api() {
-        let (_admin, url, _) = admin_api().await;
+        let (_admin, url, _, _, _) = admin_api().await;
         let c = client(&url, "oidc");
         exec(
             &c,
@@ -5901,7 +6339,7 @@ mod tests {
     /// контраст ниже порога — 422 с пояснением; открытый маршрут — без входа.
     #[tokio::test]
     async fn branding_commands_against_admin_api() {
-        let (_admin, url, _) = admin_api().await;
+        let (_admin, url, _, _, _) = admin_api().await;
         let c = client(&url, "oidc");
         let branding = |action: BrandingAction| ApiAction::Branding {
             action: Box::new(action),
@@ -6047,7 +6485,7 @@ mod tests {
     /// клетки выше потолка — 422 с подсказкой; изменения — в журнале аудита.
     #[tokio::test]
     async fn trust_commands_against_admin_api() {
-        let (_admin, url, _) = admin_api().await;
+        let (_admin, url, _, _, _) = admin_api().await;
         let c = client(&url, "oidc");
         let trust = |action: TrustAction| ApiAction::Trust {
             action: Box::new(action),

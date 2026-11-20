@@ -48,6 +48,7 @@ use tp_contracts::meta::{AccountStore, PolicyResolver, PolicyStore};
 use tp_contracts::queue::QueueStore;
 use tp_contracts::retention::{Quota, TrashStore};
 use tp_contracts::senders::SenderLists;
+use tp_contracts::thread::ThreadStore;
 use tp_contracts::transport::TransportStore;
 use tp_contracts::trust::TrustStore;
 use tp_contracts::{Error, Result, TenantId};
@@ -435,6 +436,9 @@ pub struct Admin {
     pub(crate) journal_rules: Option<Arc<dyn tp_contracts::journal::JournalRuleStore>>,
     /// Политика доверия ([`crate::trust`]); `None` — не подключено (маршруты — 503).
     pub(crate) trust: Option<Arc<dyn TrustStore>>,
+    /// Беседы учётных записей ([`crate::threads`]; CTR-94): беседа письма, удержание, выгрузка; `None` — не
+    /// подключено (маршруты — 503) — привязку писем ведёт приём (MS-21), сюда — то же хранилище.
+    pub(crate) threads: Option<Arc<dyn ThreadStore>>,
     /// Организации инсталляции: без модуля «Мультитенантность» — только организация по умолчанию (решение 10).
     /// Маршрут `/api/v1/orgs/{org}/...` другой организации — 404 ([`guard`]).
     pub(crate) organizations: BTreeSet<TenantId>,
@@ -455,6 +459,7 @@ impl fmt::Debug for Admin {
             .field("journal", &self.journal.is_some())
             .field("journal_rules", &self.journal_rules.is_some())
             .field("trust", &self.trust.is_some())
+            .field("threads", &self.threads.is_some())
             .field("organizations", &self.organizations)
             .finish()
     }
@@ -497,6 +502,7 @@ impl Admin {
             journal: None,
             journal_rules: None,
             trust: None,
+            threads: None,
             organizations: BTreeSet::from([TenantId::DEFAULT]),
         })
     }
@@ -541,6 +547,13 @@ impl Admin {
         self
     }
 
+    /// Подключает беседы учётных записей ([`crate::threads`]): беседа письма, удержание и выгрузка (ADM-50) —
+    /// то же хранилище, которым пользуется приём писем (MS-21).
+    pub fn with_threads(mut self, threads: Arc<dyn ThreadStore>) -> Self {
+        self.threads = Some(threads);
+        self
+    }
+
     /// Подключает чтение объектов писем очереди модерации (`HeldMessage::blob`) — для темы письма в списке очереди
     /// (`include=subject`, [`crate::groups`]). Хранилище должно отдавать письмо как принято (RFC 5322): если узел
     /// сжимает объекты, сюда передаётся читатель с распаковкой. Без него тема — `null`.
@@ -568,6 +581,7 @@ impl Admin {
         api = crate::branding::routes(api);
         api = crate::journal::routes(api);
         api = crate::trust::routes(api);
+        api = crate::threads::routes(api);
         for m in &self.d.modules {
             let prefix = m.prefix().to_owned();
             let handler = {
@@ -935,6 +949,7 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     api.merge(crate::branding::Doc::openapi());
     api.merge(crate::journal::Doc::openapi());
     api.merge(crate::trust::Doc::openapi());
+    api.merge(crate::threads::Doc::openapi());
     CommonErrors.modify(&mut api);
     api
 }

@@ -134,6 +134,13 @@ export const covered: Record<string, string> = {
   "GET /api/v1/orgs/{org}/journal/{id}": "pages/journal.tsx",
   "GET /api/v1/orgs/{org}/journal/{id}/export": "pages/journal.tsx",
   "GET /api/v1/orgs/{org}/journal/verify": "pages/journal.tsx",
+  // Беседы (ADM-50): удержание, выгрузка и список удержанных — за карточкой учётной записи и экраном
+  // организации, пока у бесед нет своего раздела консоли.
+  "GET /api/v1/orgs/{org}/accounts/{account}/threads": "pages/accounts.tsx",
+  "PUT /api/v1/orgs/{org}/accounts/{account}/threads/{thread}/hold": "pages/accounts.tsx",
+  "DELETE /api/v1/orgs/{org}/accounts/{account}/threads/{thread}/hold": "pages/accounts.tsx",
+  "GET /api/v1/orgs/{org}/accounts/{account}/threads/{thread}/export": "pages/accounts.tsx",
+  "GET /api/v1/orgs/{org}/holds": "pages/organization.tsx",
   // Правила журналирования (ADM-53): раздел «Правила журналирования» администратора организации (UI-26, console-17).
   "GET /api/v1/orgs/{org}/journal/rules": "pages/journal.tsx",
   "PUT /api/v1/orgs/{org}/journal/rules/{id}": "pages/journal.tsx",

@@ -247,6 +247,31 @@ pub const JOURNAL_VERIFY: Op = Op {
     method: "GET",
     path: "/api/v1/orgs/{org}/journal/verify",
 };
+/// Беседа письма учётной записи.
+pub const THREAD_FIND: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/accounts/{account}/threads",
+};
+/// Удержание беседы.
+pub const THREAD_HOLD: Op = Op {
+    method: "PUT",
+    path: "/api/v1/orgs/{org}/accounts/{account}/threads/{thread}/hold",
+};
+/// Снятие удержания беседы.
+pub const THREAD_UNHOLD: Op = Op {
+    method: "DELETE",
+    path: "/api/v1/orgs/{org}/accounts/{account}/threads/{thread}/hold",
+};
+/// Выгрузка беседы: письма .eml в архиве ZIP.
+pub const THREAD_EXPORT: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/accounts/{account}/threads/{thread}/export",
+};
+/// Удержанные беседы организации.
+pub const THREAD_HOLDS: Op = Op {
+    method: "GET",
+    path: "/api/v1/orgs/{org}/holds",
+};
 /// Правила журналирования организации (в порядке наследования ящик > группа > организация; ADM-53).
 pub const JOURNAL_RULES_LIST: Op = Op {
     method: "GET",
@@ -452,6 +477,11 @@ pub const OPERATIONS: &[Op] = &[
     JOURNAL_GET,
     JOURNAL_EXPORT,
     JOURNAL_VERIFY,
+    THREAD_FIND,
+    THREAD_HOLD,
+    THREAD_UNHOLD,
+    THREAD_EXPORT,
+    THREAD_HOLDS,
     JOURNAL_RULES_LIST,
     JOURNAL_RULE_PUT,
     JOURNAL_RULE_DELETE,

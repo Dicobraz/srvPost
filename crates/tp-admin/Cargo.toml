@@ -42,6 +42,8 @@ reqwest.workspace = true
 # Знак брендинга — полный разбор PNG с Limits (ADM-48); та же версия и фичи, что у tp-tui (DEPS-17), в Cargo.lock
 # новых крейтов нет.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# Выгрузка беседы: письма `.eml` в архиве ZIP (ADM-50); та же версия и фичи, что у tp-search и thepost.
+zip.workspace = true
 
 [dev-dependencies]
 tp-testkit.workspace = true

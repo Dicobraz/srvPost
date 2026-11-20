@@ -1548,6 +1548,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{org}/accounts/{account}/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Беседа письма: удержание и письма в порядке привязки; письма у учётной записи нет — 404. */
+        get: operations["find_thread"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/accounts/{account}/threads/{thread}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Выгрузка беседы: письма `.eml` в архиве ZIP, в порядке привязки, включая удалённые в корзину и скрытые «очисткой корзины»; окончательно стёртых писем объекта нет. Обращение — в журнал аудита, запись не сохранена — архив не отдаётся. Содержимое — только администраторам (отказ — в аудит). */
+        get: operations["export_thread"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/accounts/{account}/threads/{thread}/hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Удерживает беседу (решение 125 е): все письма, включая будущие, не удаляются окончательно ([`ThreadHoldHook`]); повторное удержание заменяет основание. Беседы нет — 404. */
+        put: operations["hold_thread"];
+        post?: never;
+        /** Снимает удержание: письма беседы снова удаляются окончательно по сроку корзины. Беседы нет — 404. */
+        delete: operations["unhold_thread"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Удержанные беседы организации: кто, когда и основание, в порядке удержания. Удержания меняет только Admin API — список строится по журналу аудита операций удержания и сверяется с хранилищем бесед. */
+        get: operations["list_thread_holds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3380,6 +3449,45 @@ export interface components {
         } | {
             /** @description Ящик (учётная запись, UUID). */
             mailbox: string;
+        };
+        /** @description Тело удержания беседы: основание. */
+        ThreadHoldBody: {
+            /** @description Основание (дело, требование, регламент): 1–1000 символов без управляющих ([`ThreadHold::validate`]). */
+            reason: string;
+        };
+        /** @description Удержанная беседа организации. */
+        ThreadHoldEntryView: {
+            /** @description Учётная запись (UUID). */
+            account: string;
+            /** @description Беседа (UUID). */
+            thread: string;
+            /** @description Удержание. */
+            hold: components["schemas"]["ThreadHoldView"];
+        };
+        /** @description Удержание беседы в ответе API ([`ThreadHold`] контракта CTR-94; обе стороны serde). */
+        ThreadHoldView: {
+            /** @description Кто удержал (имя входа администратора). */
+            by: string;
+            /**
+             * Format: date-time
+             * @description Когда установлено (UTC).
+             */
+            at: string;
+            /** @description Основание (дело, требование, регламент). */
+            reason: string;
+        };
+        /** @description Удержанные беседы организации. */
+        ThreadHoldsView: {
+            /** @description Удержанные беседы в порядке удержания (`at`). */
+            holds: components["schemas"]["ThreadHoldEntryView"][];
+        };
+        /** @description Беседа письма: удержание и письма в порядке привязки. */
+        ThreadView: {
+            /** @description Беседа (UUID); `threadId` письма неизменяем (RFC 8621 §3). */
+            thread: string;
+            hold?: components["schemas"]["ThreadHoldView"] | null;
+            /** @description Письма беседы в порядке привязки (до `admin.max_page_size`). */
+            messages: string[];
         };
     };
     responses: never;
@@ -9961,6 +10069,296 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JournalRuleView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    find_thread: {
+        parameters: {
+            query?: {
+                /** @description Письмо учётной записи (UUID, из списков корзины и очереди модерации), чья беседа; без параметра — 400. */
+                message_id?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Учётная запись (UUID) */
+                account: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    export_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Учётная запись (UUID) */
+                account: string;
+                /** @description Беседа (UUID) */
+                thread: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description архив ZIP с письмами беседы (.eml) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    hold_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Учётная запись (UUID) */
+                account: string;
+                /** @description Беседа (UUID) */
+                thread: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThreadHoldBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadHoldView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unhold_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Учётная запись (UUID) */
+                account: string;
+                /** @description Беседа (UUID) */
+                thread: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_thread_holds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadHoldsView"];
                 };
             };
             400: {
