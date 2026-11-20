@@ -2667,9 +2667,11 @@ async fn thread_command(
         } => {
             let id = account_id(client, &org, &account).await?;
             let params = ThreadFindParams {
-                message_id: message_id
-                    .parse()
-                    .map_err(|e| format!("--message-id {message_id:?}: {e}"))?,
+                message_id: Some(
+                    message_id
+                        .parse()
+                        .map_err(|e| format!("--message-id {message_id:?}: {e}"))?,
+                ),
             };
             let v: ThreadView = client
                 .call(THREAD_FIND, &[&org, &id], &query(&params)?, NO_BODY)
@@ -4567,7 +4569,13 @@ mod tests {
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("архив");
         assert_eq!(zip.len(), 2, "оба письма беседы, включая корзину");
         let mut names: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).expect("запись").name().to_owned())
+            .map(|i| {
+                zip.by_index(i)
+                    .expect("запись")
+                    .name()
+                    .expect("имя")
+                    .to_owned()
+            })
             .collect();
         names.sort();
         assert_eq!(

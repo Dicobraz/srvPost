@@ -779,9 +779,16 @@ mod tests {
 
     /// Имена записей архива в порядке добавления.
     fn entries(zip: &[u8]) -> Vec<String> {
-        let archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).expect("архив");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).expect("архив");
         (0..archive.len())
-            .map(|i| archive.by_index(i).expect("запись").name().to_owned())
+            .map(|i| {
+                archive
+                    .by_index(i)
+                    .expect("запись")
+                    .name()
+                    .expect("имя")
+                    .to_owned()
+            })
             .collect()
     }
 
