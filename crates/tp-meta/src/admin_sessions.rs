@@ -9,8 +9,8 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use sqlx::types::Json;
 use sqlx::FromRow;
+use sqlx::types::Json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -18,8 +18,8 @@ use tp_contracts::admin_session::{AdminSession, AdminSessions};
 use tp_contracts::auth::Principal;
 use tp_contracts::{AccountId, Result, TenantId};
 
-use crate::schema::{begin, begin_system, db_err};
 use crate::PgMeta;
+use crate::schema::{begin, begin_system, db_err};
 
 /// Размер порции очистки (`purge_expired`): короткие транзакции, долгих блокировок нет.
 const PURGE_PORTION: i64 = 10_000;
@@ -57,7 +57,7 @@ impl PgMeta {
     /// Удаляет сессии с `expires_at <= now` — очистка порциями ([`PURGE_PORTION`]) по индексу
     /// `admin_sessions_expires`; каждая порция — отдельная системная транзакция. Возвращает число
     /// удалённых.
-    async fn purge_portions(&self, now: OffsetDateTime) -> Result<u64> {
+    async fn purge_expired_portions(&self, now: OffsetDateTime) -> Result<u64> {
         let mut total: u64 = 0;
         loop {
             let deleted = sqlx::query(
@@ -143,6 +143,6 @@ impl AdminSessions for PgMeta {
 
     async fn purge_expired(&self, now: OffsetDateTime) -> Result<u64> {
         // Число удалённых при повторе — только оставшиеся (META-40), как `purge_events`.
-        self.rewrite(|| self.purge_portions(now)).await
+        self.rewrite(|| self.purge_expired_portions(now)).await
     }
 }

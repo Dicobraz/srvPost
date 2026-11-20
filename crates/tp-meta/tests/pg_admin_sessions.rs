@@ -16,7 +16,11 @@ use tp_testkit::suite;
 fn session(tenant: TenantId, login: &str, expires_at: OffsetDateTime) -> AdminSession {
     let (a, b) = (AccountId::new(), AccountId::new());
     AdminSession {
-        hash: format!("{:032x}{:032x}", a.as_uuid().as_u128(), b.as_uuid().as_u128()),
+        hash: format!(
+            "{:032x}{:032x}",
+            a.as_uuid().as_u128(),
+            b.as_uuid().as_u128()
+        ),
         principal: tp_contracts::auth::Principal {
             tenant,
             account: a,
@@ -109,7 +113,8 @@ async fn sessions_are_tenant_isolated() {
     let b = common::tenant(&pool).await;
     let now = OffsetDateTime::now_utc();
     let hash = format!("{:064x}", a.as_uuid().as_u128());
-    let insert = "INSERT INTO admin_sessions (hash, tenant_id, account_id, login, groups, roles, expires_at)
+    let insert =
+        "INSERT INTO admin_sessions (hash, tenant_id, account_id, login, groups, roles, expires_at)
                   VALUES ($1, $2, $3, 'admin@example.org', '[]', '[]', $4)";
     let mut tx = schema::begin(&pool, a).await.expect("begin");
     sqlx::query(insert)
