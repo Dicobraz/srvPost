@@ -106,7 +106,7 @@ impl AvailabilitySource for MemAvailabilitySource {
         addresses: &[Address],
         span: Span,
     ) -> Vec<(Address, AvailabilityResult)> {
-        let st = lock(&self.state);
+        let mut st = lock(&self.state);
         st.calls.push((addresses.to_vec(), span));
         let mut seen = HashSet::new();
         let mut out = Vec::new();
@@ -226,7 +226,6 @@ impl CalendarPublications for MemCalendarPublications {
             calendar,
             detail,
             expires,
-            revoked_at: None,
             token: None,
         };
         st.links.push(link.clone());
