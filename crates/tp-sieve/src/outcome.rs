@@ -10,6 +10,7 @@
 
 use tp_contracts::MailboxId;
 use tp_contracts::meta::{Flag, Flags, Mailbox, SpecialUse};
+use tp_contracts::risk::SignalId;
 use tp_contracts::sieve::{KeepTo, MailboxRef, ProcessCalendar, RulesOutcome};
 
 use crate::run::{Action, Outcome, VacationAction};
@@ -34,6 +35,8 @@ pub(crate) struct Merge<'a> {
     vacation: Option<VacationAction>,
     /// `processcalendar` — первый из выполненных скриптов (скрипт организации раньше пользователя).
     calendar: Option<ProcessCalendar>,
+    /// Признаки команды `signal` (SIEVE-15) — только скрипт организации; без повторов.
+    signals: Vec<(SignalId, Option<u16>)>,
 }
 
 impl<'a> Merge<'a> {
@@ -49,6 +52,7 @@ impl<'a> Merge<'a> {
             errors: Vec::new(),
             vacation: None,
             calendar: None,
+            signals: Vec::new(),
         }
     }
 
@@ -114,6 +118,13 @@ impl<'a> Merge<'a> {
         }
         self.implicit &= outcome.implicit_keep;
         self.flags = outcome.flags;
+        // Признаки `signal` (SIEVE-15): повтор признака — один признак (повтор с другим весом не проходит
+        // проверку скрипта).
+        for (id, weight) in outcome.signals {
+            if !self.signals.iter().any(|(i, _)| *i == id) {
+                self.signals.push((id, weight));
+            }
+        }
     }
 
     /// Есть перенаправления.
@@ -146,9 +157,9 @@ impl<'a> Merge<'a> {
                 discard,
                 vacation: None,
                 calendar: self.calendar,
-                // Признаки команды `signal` расширения `vnd.thepost.risk` (CTR-95) — скрипт
-                // администратора этапа before; движок добавит их в SIEVE-15, пока пусто.
-                signals: Vec::new(),
+                // Признаки команды `signal` расширения `vnd.thepost.risk` (CTR-95, SIEVE-15) — скрипт
+                // организации этапа before; вызывающий прибавляет их к вердикту справочника.
+                signals: self.signals,
                 errors: self.errors,
             },
             self.vacation,
