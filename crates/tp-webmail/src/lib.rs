@@ -155,19 +155,19 @@ impl Config {
                     oidc.client_id
                 )));
             }
-            if let Some(scope) = &oidc.scope {
-                if !scope.split(' ').all(scope_token) {
-                    return Err(Error::invalid(format!(
-                        "modules.webmail: oidc.scope {scope:?} — маркеры области через пробел (RFC 6749)"
-                    )));
-                }
+            if let Some(scope) = &oidc.scope
+                && !scope.split(' ').all(scope_token)
+            {
+                return Err(Error::invalid(format!(
+                    "modules.webmail: oidc.scope {scope:?} — маркеры области через пробел (RFC 6749)"
+                )));
             }
-            if let Some(end) = &oidc.end_session {
-                if https_host(end).is_none() || end.contains('#') {
-                    return Err(Error::invalid(format!(
-                        "modules.webmail: oidc.end_session {end:?} — ожидается https://адрес[?запрос]"
-                    )));
-                }
+            if let Some(end) = &oidc.end_session
+                && (https_host(end).is_none() || end.contains('#'))
+            {
+                return Err(Error::invalid(format!(
+                    "modules.webmail: oidc.end_session {end:?} — ожидается https://адрес[?запрос]"
+                )));
             }
         }
         Ok(())

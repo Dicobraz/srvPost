@@ -131,10 +131,8 @@ blob:
     /// поставщика OIDC и флаг входа по паролю приложения — сборки клиента не требует; секретов нет.
     #[tokio::test]
     async fn config_json_served() {
-        let cfg = cfg(
-            "modules:\n  webmail:\n    enabled: true\n    connect_src: [\"https://idp.example.org\"]\n    basic_login: true\n    oidc:\n      issuer: https://idp.example.org/realms/post\n      client_id: thepost-webmail\n      scope: openid profile\n",
-        );
-        let (s, h, b) = get(&cfg, "/mail/config.json").await;
+        let yaml_oidc = "modules:\n  webmail:\n    enabled: true\n    connect_src: [\"https://idp.example.org\"]\n    basic_login: true\n    oidc:\n      issuer: https://idp.example.org/realms/post\n      client_id: thepost-webmail\n      scope: openid profile\n";
+        let (s, h, b) = get(&cfg(yaml_oidc), "/mail/config.json").await;
         assert_eq!(s, axum::http::StatusCode::OK);
         assert_eq!(h["content-type"], "application/json");
         assert_eq!(h["cache-control"], "no-cache");
@@ -151,8 +149,11 @@ blob:
         assert!(!text.contains("secret"), "{text}");
 
         // Без oidc секция входа сообщает только Basic — SPA показывает форму пароля приложения.
-        let cfg = cfg("modules:\n  webmail: { enabled: true }\n");
-        let (s, _, b) = get(&cfg, "/mail/config.json").await;
+        let (s, _, b) = get(
+            &cfg("modules:\n  webmail: { enabled: true }\n"),
+            "/mail/config.json",
+        )
+        .await;
         assert_eq!(s, axum::http::StatusCode::OK);
         let json: serde_json::Value = serde_json::from_slice(&b).expect("json");
         assert_eq!(json["oidc"], serde_json::Value::Null);
