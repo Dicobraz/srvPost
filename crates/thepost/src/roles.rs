@@ -1481,7 +1481,7 @@ mod tests {
         // APP-50: сессии Admin API — истёкшая и действующая (в хранилище — хэш значения, hex SHA-256).
         use tp_contracts::admin_session::AdminSession;
         let session = |hash: char, expires_at| AdminSession {
-            hash: std::iter::repeat(hash).take(64).collect(),
+            hash: std::iter::repeat_n(hash, 64).collect(),
             principal: tp_contracts::auth::Principal {
                 tenant,
                 account: account.id,
