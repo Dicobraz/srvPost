@@ -57,6 +57,9 @@ pub(crate) struct Sieved {
     /// после Sieve и итоговому контролю действий ([`crate::deliver::pipeline`]); копии и адресаты доставки
     /// добавляет вызывающий.
     pub actions: Vec<(String, Vec<String>)>,
+    /// Признаки команды `signal "<id>" [:weight N]` расширения `vnd.thepost.risk` (CTR-95, SIEVE-15):
+    /// скрипт организации прибавляет балл письму — без повторов, применяет каталог (SMTP-52).
+    pub signals: Vec<(tp_contracts::risk::SignalId, Option<u16>)>,
 }
 
 /// Перенаправление правилами одного ящика: письмо с его меткой в цепочке и адреса назначения.

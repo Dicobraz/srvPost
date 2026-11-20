@@ -26,6 +26,7 @@
 //! - [`queue`] — очередь исходящей почты и роль smtp-out (отправка на MX через `mail-send`);
 //! - [`srs`] — адреса SRS (Sender Rewriting Scheme) пересылки и их обратное преобразование;
 //! - [`reply`] — метка ответа в Message-ID исходящих, BATV (`prvs=…`) и признак «ответ на наше письмо»;
+//! - [`risk`] — справочник аномалий на smtp-in (SMTP-52): детекторы каталога признаков, балл и действия;
 //! - [`tracking`] — журнал доставки (message tracking);
 //! - [`config`] — секция `smtp` config.yaml.
 
@@ -47,6 +48,7 @@ pub mod milter;
 pub mod policy;
 pub mod queue;
 pub mod reply;
+pub mod risk;
 pub mod routes;
 pub mod screen;
 pub mod server;
@@ -63,5 +65,6 @@ pub use limits::SendLimits;
 pub use metrics::SmtpMetrics;
 pub use milter::Milters;
 pub use queue::{Queue, QueueWorker, SmtpOutService};
+pub use risk::Risk;
 pub use server::{Envelope, Handler, Mode, Reply, ServerDeps, Session, SessionCtx, SmtpService};
 pub use tracking::Tracking;
