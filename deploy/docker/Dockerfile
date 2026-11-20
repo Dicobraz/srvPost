@@ -1,11 +1,15 @@
 # syntax=docker/dockerfile:1.7
 # OCI-образ The Post: один бинарный файл, профиль — по config.yaml (SRS 1.2).
 # Сборка из корня репозитория: docker build -f deploy/docker/Dockerfile -t thepost .
-# Веб-консоль (SRS 5.2) вшита по умолчанию; без консоли и без Node — `--build-arg CONSOLE=0`.
+# Веб-консоль (SRS 5.2) вшита по умолчанию; без неё — `--build-arg CONSOLE=0` (Node всё равно нужен:
+# web/dist веб-клиента собирается всегда).
+# Веб-клиент /mail/ (SRS 1.3) — тоже stage с Node, всегда: бинарь выпуска собран с фичей `webmail`
+# (release-build собирает web/dist до cross build), образ соответствует бинарю. Сам модуль opt-in:
+# маршруты /mail/* включаются секцией modules.webmail узла (по умолчанию выключен — SRS 1.3).
 # Вход по Kerberos (фича `gssapi`, решение 107, CI-12) — всегда, как в выпуске: узлу нужна libgssapi_krb5 (DEP-39).
 
 ARG RUST_VERSION=1.98
-# Node — как в CI (.github/actions/console, node-version).
+# Node — как в CI (.github/actions/console и .github/actions/webmail, node-version).
 ARG NODE_VERSION=26
 ARG CONSOLE=1
 
@@ -24,6 +28,16 @@ RUN mkdir /dist
 
 FROM console-${CONSOLE} AS console
 
+# Сборка web/dist (WEB-11, DEPS-07) — как console-1; токены фирменного стиля (решение 119) веб-клиент
+# читает из ../design при сборке. Стадия без условия: web/dist — в каждом образе, как в бинаре выпуска.
+FROM node:${NODE_VERSION}-bookworm-slim AS webmail
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-fund --no-audit
+COPY design/ /design/
+COPY web/ ./
+RUN npm run build && test -f dist/index.html && mv dist /webdist
+
 FROM rust:${RUST_VERSION}-bookworm AS build
 ARG CONSOLE
 ENV CARGO_TERM_COLOR=never
@@ -40,6 +54,7 @@ RUN apt-get update -qq \
 WORKDIR /src
 COPY . .
 COPY --from=console /dist console/dist
+COPY --from=webmail /webdist web/dist
 # Тулчейн образа вместо channel из rust-toolchain.toml: сборка воспроизводима и без загрузки rustup.
 # Имя — полное, из `rustup default` (1.97.1-x86_64-…): короткое `1.97` rustup не сопоставляет с установленным
 # 1.97.1 и идёт качать канал.
@@ -47,7 +62,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/target \
     RUSTUP_TOOLCHAIN="$(rustup default | cut -d' ' -f1)" cargo build --release --locked -p thepost \
-      --features gssapi $([ "$CONSOLE" = 1 ] && echo --features console) \
+      --features gssapi,webmail $([ "$CONSOLE" = 1 ] && echo --features console) \
  && install -D -m 0755 target/release/thepost /out/bin/thepost \
  && install -d -m 0750 /out/state /out/etc \
  && install -d -m 0700 /out/state/blob
