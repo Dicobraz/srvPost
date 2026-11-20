@@ -35,6 +35,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "gal book version (META-90)",
         include_str!("../migrations/0004_gal_version.sql"),
     ),
+    (
+        5,
+        "calendar publications and partner availability (META-34)",
+        include_str!("../migrations/0005_calendar_publications.sql"),
+    ),
 ];
 
 /// Мигратор схемы ядра.

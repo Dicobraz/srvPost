@@ -16,6 +16,7 @@ pub mod audit_log;
 pub mod blob_index;
 mod branding;
 mod busy;
+pub mod calendar;
 mod card_search;
 pub mod changelog;
 pub mod commits;
