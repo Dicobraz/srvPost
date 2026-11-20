@@ -352,8 +352,10 @@ async fn partner_availability_templates() {
         .await
         .expect_err("домен не партнёр");
     assert!(matches!(err, Error::Invalid(_)));
-    let mut policy = TrustPolicy::default();
-    policy.partners = vec![domain.into()];
+    let policy = TrustPolicy {
+        partners: vec![domain.into()],
+        ..TrustPolicy::default()
+    };
     meta.set_policy(TrustLevel::Org(owner.tenant), &policy)
         .await
         .expect("партнёры");
