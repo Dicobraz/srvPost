@@ -154,7 +154,8 @@ pub struct MemCalendarPublications {
 
 impl fmt::Debug for MemCalendarPublications {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MemCalendarPublications").finish_non_exhaustive()
+        f.debug_struct("MemCalendarPublications")
+            .finish_non_exhaustive()
     }
 }
 
@@ -190,7 +191,10 @@ impl MemCalendarPublications {
 #[async_trait]
 impl CalendarPublications for MemCalendarPublications {
     async fn ceiling(&self, scope: AccountScope) -> Result<Detail> {
-        let effective = self.trust.effective_for(scope.tenant, scope.account).await?;
+        let effective = self
+            .trust
+            .effective_for(scope.tenant, scope.account)
+            .await?;
         Ok(publication_ceiling(&effective))
     }
 
@@ -381,7 +385,10 @@ mod tests {
         let cal = CollectionId::new();
 
         // Без политики выпуск запрещён; сбой хранилища воспроизводится один раз.
-        assert_eq!(publ.create(scope, cal, Detail::FreeBusy, None).await, Err(Error::Forbidden));
+        assert_eq!(
+            publ.create(scope, cal, Detail::FreeBusy, None).await,
+            Err(Error::Forbidden)
+        );
         publ.fail_next(Error::UNAVAILABLE);
         assert!(publ.list(scope).await.is_err());
         assert!(publ.links().is_empty());

@@ -20,7 +20,7 @@ use crate::dav::{CollectionId, Span};
 use crate::error::Result;
 use crate::ids::PublicationId;
 use crate::meta::{AccountScope, Address};
-use crate::schedule::{BusyPeriod, merge_busy};
+use crate::schedule::BusyPeriod;
 use crate::trust::{Detail, Effective, HARD_CEILING};
 
 /// Итог запроса занятости одного адреса к источнику ([`AvailabilitySource::lookup`]).
@@ -28,8 +28,8 @@ use crate::trust::{Detail, Effective, HARD_CEILING};
 #[serde(rename_all = "snake_case")]
 pub enum AvailabilityResult {
     /// Занятость: периоды (`[start, end)`, UTC) — пересекающиеся с интервалом запроса, обрезанные по нему
-    /// и нормализованные ([`merge_busy`]), и уровень детализации, с которым они отдаются (не выше политики
-    /// организации адреса; содержание выше уровня срезает отдающий).
+    /// и нормализованные ([`crate::schedule::merge_busy`]), и уровень детализации, с которым они отдаются
+    /// (не выше политики организации адреса; содержание выше уровня срезает отдающий).
     Busy(Vec<BusyPeriod>, Detail),
     /// Нет данных: адрес вне источника, внешний сервер недоступен. Не «свободен»: клиент показывает
     /// «нет данных» (SRS 4.4).
@@ -49,11 +49,12 @@ pub trait AvailabilitySource: Send + Sync + 'static {
 
     /// Занятость адресов в интервале `span`: по записи на каждый адрес в порядке `addresses`, повторы — один
     /// раз, адрес в ответе как в запросе. Периоды — пересекающиеся с интервалом, обрезанные по нему и
-    /// нормализованные ([`merge_busy`]); `span.end = None` — без верхней границы, `end ≤ start` — пустой
-    /// интервал. Ошибок нет: адрес без доступной занятости (вне источника, внешний сервер недоступен) —
+    /// нормализованные ([`crate::schedule::merge_busy`]); `span.end = None` — без верхней границы, `end ≤ start`
+    /// — пустой интервал. Ошибок нет: адрес без доступной занятости (вне источника, внешний сервер недоступен) —
     /// [`AvailabilityResult::NoData`], не «свободен»; причины — в журнале источника. Детализация — не выше
     /// политики организации адреса.
-    async fn lookup(&self, addresses: &[Address], span: Span) -> Vec<(Address, AvailabilityResult)>;
+    async fn lookup(&self, addresses: &[Address], span: Span)
+    -> Vec<(Address, AvailabilityResult)>;
 }
 
 /// Действующий потолок уровня детализации публикаций учётной записи: клетка `sharing` для интернета в
@@ -61,7 +62,11 @@ pub trait AvailabilitySource: Send + Sync + 'static {
 /// не выше закреплённого потолка контракта ([`HARD_CEILING`]). Реализации
 /// [`CalendarPublications::ceiling`] вычисляют им по своему [`crate::trust::TrustStore`].
 pub fn publication_ceiling(effective: &Effective) -> Detail {
-    effective.matrix.sharing.external.min(HARD_CEILING.sharing.external)
+    effective
+        .matrix
+        .sharing
+        .external
+        .min(HARD_CEILING.sharing.external)
 }
 
 /// Ссылка публикации календаря (SRS 4.4): только чтение, токен в адресе, уровень детализации не выше политики.
@@ -139,7 +144,10 @@ mod tests {
             Detail::FreeBusy,
         );
         let s = serde_json::to_string(&r).expect("serialize");
-        assert_eq!(serde_json::from_str::<AvailabilityResult>(&s).expect("parse"), r);
+        assert_eq!(
+            serde_json::from_str::<AvailabilityResult>(&s).expect("parse"),
+            r
+        );
         let s = serde_json::to_string(&AvailabilityResult::NoData).expect("serialize");
         assert_eq!(s, "\"no_data\"");
         assert_eq!(
@@ -158,13 +166,25 @@ mod tests {
         wide.sharing.external = Some(Detail::All);
 
         // Умолчание: интернета — ничего.
-        assert_eq!(publication_ceiling(&effective(None, None, &[])), Detail::None);
+        assert_eq!(
+            publication_ceiling(&effective(None, None, &[])),
+            Detail::None
+        );
         // Организация поднимает до «занят/свободен».
-        assert_eq!(publication_ceiling(&effective(Some(&org), None, &[])), Detail::FreeBusy);
+        assert_eq!(
+            publication_ceiling(&effective(Some(&org), None, &[])),
+            Detail::FreeBusy
+        );
         // Группа учётной записи сужает до ничего.
         let groups = [(TrustLevel::Group(TenantId::new(), GroupId::new()), &group)];
-        assert_eq!(publication_ceiling(&effective(Some(&org), None, &groups)), Detail::None);
+        assert_eq!(
+            publication_ceiling(&effective(Some(&org), None, &groups)),
+            Detail::None
+        );
         // Выше закреплённого потолка интернета (`details`) организация не поднимет.
-        assert_eq!(publication_ceiling(&effective(Some(&wide), None, &[])), Detail::Details);
+        assert_eq!(
+            publication_ceiling(&effective(Some(&wide), None, &[])),
+            Detail::Details
+        );
     }
 }

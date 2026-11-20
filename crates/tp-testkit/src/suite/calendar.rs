@@ -58,7 +58,10 @@ pub async fn calendar_publications(
 
     // Политики публикации нет: клетка `sharing` интернету — none, выпуск запрещён.
     assert_eq!(publ.ceiling(owner).await.expect("ceiling"), Detail::None);
-    assert_eq!(publ.create(owner, calendar, Detail::FreeBusy, None).await, Err(Error::Forbidden));
+    assert_eq!(
+        publ.create(owner, calendar, Detail::FreeBusy, None).await,
+        Err(Error::Forbidden)
+    );
 
     // Организация разрешает «занят/свободен»: выпуск и список; токен — только в результате create.
     let mut policy = TrustPolicy::default();
@@ -67,7 +70,10 @@ pub async fn calendar_publications(
         .set_policy(TrustLevel::Org(owner.tenant), &policy)
         .await
         .expect("set policy");
-    assert_eq!(publ.ceiling(owner).await.expect("ceiling"), Detail::FreeBusy);
+    assert_eq!(
+        publ.ceiling(owner).await.expect("ceiling"),
+        Detail::FreeBusy
+    );
     assert_eq!(
         publ.ceiling(peer).await.expect("ceiling peer"),
         Detail::FreeBusy,
@@ -83,7 +89,10 @@ pub async fn calendar_publications(
         (owner, calendar, Detail::FreeBusy, None)
     );
     let token = a.token.as_deref().expect("токен выдаётся один раз");
-    assert!(!token.is_empty() && !token.chars().any(char::is_control), "{token}");
+    assert!(
+        !token.is_empty() && !token.chars().any(char::is_control),
+        "{token}"
+    );
     let listed = publ.list(owner).await.expect("list");
     assert_eq!(
         listed,
@@ -95,7 +104,10 @@ pub async fn calendar_publications(
     );
 
     // Уровень выше потолка — Forbidden; «нет уровня» и срок в прошлом — Invalid.
-    assert_eq!(publ.create(owner, calendar, Detail::Limited, None).await, Err(Error::Forbidden));
+    assert_eq!(
+        publ.create(owner, calendar, Detail::Limited, None).await,
+        Err(Error::Forbidden)
+    );
     assert!(matches!(
         publ.create(owner, calendar, Detail::None, None).await,
         Err(Error::Invalid(_))
@@ -106,10 +118,19 @@ pub async fn calendar_publications(
 
     // Срок в будущем сохраняется; токены ссылок не повторяются.
     let b = publ
-        .create(owner, calendar, Detail::FreeBusy, Some(now + Duration::hours(1)))
+        .create(
+            owner,
+            calendar,
+            Detail::FreeBusy,
+            Some(now + Duration::hours(1)),
+        )
         .await
         .expect("create b");
-    assert_ne!(a.token.as_deref(), b.token.as_deref(), "токены не повторяются");
+    assert_ne!(
+        a.token.as_deref(),
+        b.token.as_deref(),
+        "токены не повторяются"
+    );
     assert_ne!(a.id, b.id, "идентификаторы не повторяются");
     assert_eq!(b.expires, Some(now + Duration::hours(1)));
 
@@ -119,13 +140,19 @@ pub async fn calendar_publications(
         .set_policy(TrustLevel::Org(owner.tenant), &policy)
         .await
         .expect("raise policy");
-    assert_eq!(publ.ceiling(owner).await.expect("ceiling details"), Detail::Details);
+    assert_eq!(
+        publ.ceiling(owner).await.expect("ceiling details"),
+        Detail::Details
+    );
     let c = publ
         .create(owner, calendar, Detail::Limited, None)
         .await
         .expect("create limited");
     assert_eq!(c.detail, Detail::Limited);
-    assert_eq!(publ.create(owner, calendar, Detail::All, None).await, Err(Error::Forbidden));
+    assert_eq!(
+        publ.create(owner, calendar, Detail::All, None).await,
+        Err(Error::Forbidden)
+    );
 
     // Изоляция: чужая учётная запись не видит ссылок и не отзывает; чужая организация — без политики.
     assert!(publ.list(peer).await.expect("peer list").is_empty());
@@ -135,7 +162,10 @@ pub async fn calendar_publications(
         Detail::None,
         "политики организации foreign нет"
     );
-    assert_eq!(publ.create(foreign, calendar, Detail::FreeBusy, None).await, Err(Error::Forbidden));
+    assert_eq!(
+        publ.create(foreign, calendar, Detail::FreeBusy, None).await,
+        Err(Error::Forbidden)
+    );
     assert!(publ.list(foreign).await.expect("foreign list").is_empty());
     assert_eq!(publ.revoke(foreign, a.id).await, Err(Error::NotFound));
 
@@ -145,6 +175,9 @@ pub async fn calendar_publications(
     let left = publ.list(owner).await.expect("list after revoke");
     let ids: Vec<PublicationId> = left.iter().map(|l| l.id).collect();
     assert_eq!(ids.len(), 2, "остались a и c: {ids:?}");
-    assert!(ids.windows(2).all(|w| w[0] < w[1]), "по возрастанию id: {ids:?}");
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "по возрастанию id: {ids:?}"
+    );
     assert_eq!(left, vec![a, c], "отозванной нет");
 }
