@@ -20,6 +20,7 @@ import {
   TeamOutlined,
   UserDeleteOutlined,
   UserOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import { ErrorComponent, ThemedLayout, ThemedTitle, useNotificationProvider } from "@refinedev/antd";
 import { Authenticated, CanAccess, Refine, usePermissions } from "@refinedev/core";
@@ -46,6 +47,7 @@ import { MailboxAuditPage } from "./pages/mailbox-audit";
 import { ModerationPage } from "./pages/moderation";
 import { OrganizationPage } from "./pages/organization";
 import { QueuePage } from "./pages/queue";
+import { RiskPage } from "./pages/risk";
 import { ResourceCreate, ResourceList, ResourceShow } from "./pages/resources";
 import { AccountSieve, OrgSieve } from "./pages/sieve";
 import { AccountTrash } from "./pages/trash";
@@ -135,6 +137,9 @@ export function App() {
               { name: "sieve", list: "/sieve", meta: { label: "Правила организации", icon: <FilterOutlined /> } },
               { name: "trust", list: "/trust", meta: { label: "Доверие", icon: <SafetyCertificateOutlined /> } },
               { name: "transport", list: "/transport", meta: { label: "Транспорт", icon: <NodeIndexOutlined /> } },
+              // Признаки риска (UI-24): каталог, пороги, пакеты, источники TI — настройка поставщика
+              // анти-спама; срабатывания — журнал организации.
+              { name: "risk", list: "/risk", meta: { label: "Признаки риска", icon: <WarningOutlined /> } },
               // Правила журналирования (UI-26, решение #171): ведёт администратор организации —
               // аудитор журнала правил не видит (узел отвечает 403, раздел — другая роль).
               { name: "journal-rules", list: "/journal-rules", meta: { label: "Правила журналирования", icon: <FileDoneOutlined /> } },
@@ -191,6 +196,7 @@ export function App() {
                 <Route path="/sieve" element={<OrgSieve />} />
                 <Route path="/trust" element={<TrustPage />} />
                 <Route path="/transport" element={<TransportPage />} />
+                <Route path="/risk" element={<RiskPage />} />
                 <Route path="/delivery" element={<DeliveryPage />} />
                 <Route path="/audit" element={<AuditPage />} />
                 <Route path="/journal" element={<JournalPage />} />

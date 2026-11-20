@@ -11,11 +11,22 @@ export function stubApi(routes: Record<string, Reply | ((c: Call) => Reply)>) {
     "fetch",
     vi.fn(async (input: string, init: RequestInit = {}) => {
       const headers = new Headers(init.headers);
+      // Тело — JSON; файл (загрузка пакета или списка TI) — как есть.
+      let body: unknown;
+      if (typeof init.body === "string") {
+        try {
+          body = JSON.parse(init.body);
+        } catch {
+          body = init.body;
+        }
+      } else if (init.body != null) {
+        body = init.body;
+      }
       const call: Call = {
         method: init.method ?? "GET",
         path: input,
         auth: headers.get("Authorization"),
-        body: init.body ? JSON.parse(String(init.body)) : undefined,
+        body,
       };
       calls.push(call);
       const route = routes[`${call.method} ${input.split("?")[0]}`];
