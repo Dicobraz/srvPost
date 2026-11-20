@@ -1269,3 +1269,592 @@ body {
   color: var(--m-i-amber);
 }
 
+
+/*
+  Композер (WEB-04) — вкладка /compose по макету docs/design/webmail/02: командная строка
+  (Отправить — акцент, Сохранить черновик — подложка, Вложить/Удалить — тихие), карточка
+  с полями (метки — акцент, чипы получателей, автодополнение, таблица, чипы вложений),
+  TipTap-редактор, предупреждения — inline-полоса (не модалки).
+*/
+.compose {
+  --m-screen: var(--c-screen, #e9eef3);
+  --m-panel: var(--c-panel, #ffffff);
+  --m-text: var(--c-text, #161616);
+  --m-muted: var(--c-muted, #5f6b78);
+  --m-frame: var(--c-frame, #bac1c6);
+  --m-err: var(--c-err, #c62828);
+  --m-hover: #edf2f6;
+  --m-fill: #e4eaf0;
+  --m-div: #dce3e8;
+  --m-acc: #0067c0;
+  --m-accbtn: #0067c0;
+  --m-tint: #dff0ff;
+  --m-tinttext: #234e82;
+  --m-duebg: #f8dea8;
+  --m-duetx: #664700;
+  --m-i-blue: #2f6db5;
+}
+
+[data-theme="dark"] .compose {
+  --m-hover: #1b2229;
+  --m-fill: #232b33;
+  --m-div: #262f38;
+  --m-acc: #7cc4f0;
+  --m-accbtn: #2b6ca8;
+  --m-tint: #23364f;
+  --m-tinttext: #bfddff;
+  --m-duebg: #6c5005;
+  --m-duetx: #f7e2b8;
+  --m-i-blue: #74a6e0;
+}
+
+.compose {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  color: var(--m-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.compose .cmd .sp {
+  flex: 1;
+}
+
+.compose .btn-t {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 4px;
+  background: var(--m-tint);
+  color: var(--m-tinttext);
+  font: inherit;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.compose .btn-q:disabled,
+.compose .btn-t:disabled,
+.compose .btn-acc:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.compose .main {
+  flex: 1;
+  padding: 2px 8px 6px;
+  min-height: 0;
+  display: flex;
+}
+
+/* Карточка письма (макет: белая карточка с полями). */
+.compose .card {
+  flex: 1;
+  background: var(--m-panel);
+  border-radius: 8px;
+  padding: 14px 22px 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.compose .card.drop {
+  outline: 2px dashed var(--m-acc);
+  outline-offset: -4px;
+}
+
+/* Поля: метка справа, чипы и ввод. */
+.compose .frow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  position: relative;
+  flex-wrap: wrap;
+}
+
+.compose .frow .lbl {
+  width: 88px;
+  text-align: right;
+  color: var(--m-acc);
+  flex: none;
+  cursor: default;
+}
+
+.compose .finput {
+  flex: 1;
+  color: var(--m-text);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.compose .finput.subject {
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--m-text);
+  padding: 4px 0;
+  min-width: 0;
+}
+
+.compose .finput.subject:focus {
+  outline: none;
+}
+
+.compose .fromsel {
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  font: inherit;
+  padding: 3px 6px;
+  max-width: 100%;
+}
+
+.compose .fentry {
+  flex: 1;
+  min-width: 120px;
+  border: none;
+  background: none;
+  color: var(--m-text);
+  font: inherit;
+  padding: 3px 0;
+}
+
+.compose .fentry:focus {
+  outline: none;
+}
+
+.compose .fentry::placeholder {
+  color: var(--m-muted);
+}
+
+.compose .ferr {
+  flex-basis: 100%;
+  color: var(--m-err);
+  font-size: 12px;
+  padding-left: 98px;
+}
+
+/* Чип получателя (макет: 24px, скруглённый, ×). */
+.compose .chip {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--m-fill);
+  border-radius: 12px;
+  padding: 0 6px 0 11px;
+  font-size: 12.5px;
+  max-width: 260px;
+}
+
+.compose .chip .chip-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.compose .chip .x {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--m-muted);
+  border: none;
+  background: none;
+  cursor: pointer;
+  flex: none;
+}
+
+.compose .chip .x:hover {
+  background: var(--m-hover);
+}
+
+.compose .picker {
+  border: none;
+  background: none;
+  color: var(--m-acc);
+  font: inherit;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: 4px;
+  flex: none;
+}
+
+.compose .picker:hover {
+  background: var(--m-tint);
+}
+
+/* Автодополнение (макет: панель под строкой, группы, аватар, источник). */
+.compose .ac {
+  position: absolute;
+  top: 36px;
+  left: 98px;
+  width: 430px;
+  max-width: calc(100% - 98px);
+  background: var(--m-panel);
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(22, 22, 22, 0.16);
+  padding: 4px;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+}
+
+.compose .ac .grp {
+  font-size: 11px;
+  color: var(--m-muted);
+  padding: 5px 10px 3px;
+  font-weight: 600;
+}
+
+.compose .ac .mi {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  border-radius: 5px;
+  padding: 0 8px;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--m-text);
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+
+.compose .ac .mi .ava {
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--m-fill);
+  color: var(--m-muted);
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.compose .ac .mi .nm {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+  max-width: 170px;
+}
+
+.compose .ac .mi .adr {
+  color: var(--m-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.compose .ac .mi.on {
+  background: var(--m-tint);
+}
+
+.compose .ac .src {
+  margin-left: auto;
+  color: var(--m-muted);
+  font-size: 11px;
+  flex: none;
+}
+
+/* Панель форматирования (макет: подписи и значки — цвет акцента). */
+.compose .fmt {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--m-div);
+  flex: none;
+}
+
+.compose .fmt .fb {
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--m-acc);
+  font-size: 13px;
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.compose .fmt .fb:hover {
+  background: var(--m-hover);
+}
+
+.compose .fmt .fs {
+  width: 1px;
+  height: 18px;
+  background: var(--m-div);
+  margin: 0 4px;
+}
+
+.compose .fbwrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.compose .linkpop {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--m-panel);
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  padding: 6px 8px;
+  box-shadow: 0 6px 18px rgba(22, 22, 22, 0.16);
+}
+
+.compose .linkinput {
+  width: 220px;
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  font: inherit;
+  padding: 3px 6px;
+}
+
+.compose .linkpop .lk {
+  border: none;
+  background: none;
+  color: var(--m-acc);
+  font-weight: 600;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+/* Тело письма: редактор TipTap. */
+.compose .bodyc {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 2px 6px;
+  line-height: 20px;
+  min-height: 160px;
+}
+
+.compose-body {
+  outline: none;
+  min-height: 100%;
+}
+
+.compose-body p {
+  margin: 0 0 8px;
+}
+
+/* Таблица в письме — как в макете 02 и как её увидит получатель. */
+.compose-body table {
+  border-collapse: collapse;
+  max-width: 100%;
+  margin: 2px 0 10px;
+  font-size: 12.5px;
+}
+
+.compose-body th {
+  background: var(--m-hover);
+  text-align: left;
+  font-weight: 600;
+  padding: 5px 10px;
+  border: 1px solid var(--m-div);
+}
+
+.compose-body td {
+  padding: 4px 10px;
+  border: 1px solid var(--m-div);
+}
+/* Ячейка правки таблицы (ProseMirror) и цитата/подпись. */
+.compose-body td.selectedCell,
+.compose-body th.selectedCell {
+  outline: 2px solid var(--m-acc);
+  outline-offset: -2px;
+}
+
+.compose-body .tp-quote blockquote {
+  border-left: 3px solid var(--m-div);
+  margin: 4px 0 8px;
+  padding: 2px 12px;
+  color: var(--m-muted);
+}
+
+.compose-body .tp-sig {
+  color: var(--m-muted);
+  margin-top: 12px;
+}
+
+/* Чипы вложений (макет: чип с именем, размером и ×) + пикер. */
+.compose .atts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: none;
+}
+
+.compose .att {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--m-frame);
+  border-radius: 16px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  max-width: 340px;
+}
+
+.compose .att .sz {
+  color: var(--m-muted);
+  flex: none;
+}
+
+.compose .att .x {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--m-muted);
+  border: none;
+  background: none;
+  cursor: pointer;
+  flex: none;
+}
+
+.compose .att .x:hover {
+  background: var(--m-hover);
+}
+
+.compose .att[data-status="error"] {
+  border-color: var(--m-err);
+  color: var(--m-err);
+}
+
+.compose .attbar {
+  width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--m-fill);
+  overflow: hidden;
+  flex: none;
+}
+
+.compose .attbar > span {
+  display: block;
+  height: 100%;
+  background: var(--m-accbtn);
+}
+
+.compose .addf {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--m-acc);
+  font-weight: 600;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: none;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.compose .addf:hover {
+  background: var(--m-tint);
+}
+
+/* Подвал карточки: черновик сохраняется автоматически · сохранён HH:MM. */
+.compose .flexspace {
+  flex: 1;
+  min-height: 8px;
+}
+
+.compose .cardfoot {
+  display: flex;
+  align-items: center;
+  padding: 8px 2px 2px;
+  color: var(--m-muted);
+  font-size: 12px;
+  flex: none;
+}
+
+.compose .cardfoot .sp {
+  flex: 1;
+}
+
+.compose .draft-err {
+  color: var(--m-err);
+  font-weight: 600;
+}
+
+/* Предупреждения перед отправкой — inline-полоса (янтарный — только внимание, знаки ▲). */
+.compose .strip.warn {
+  background: var(--m-duebg);
+  color: var(--m-duetx);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px;
+  margin: 4px 0 2px;
+  font-size: 12.5px;
+  flex: none;
+}
+
+.compose .warnlines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.compose .strip.warn .lk {
+  border: none;
+  background: none;
+  color: var(--m-duetx);
+  font-weight: 600;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 0 4px;
+}

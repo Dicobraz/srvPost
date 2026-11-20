@@ -1,7 +1,8 @@
 /*
-  Тосты с Undo (WEB-03, земля для волны 4): inline-карточки в стопке внизу справа (макет 02 —
-  «Отправлено · Отменить»), модальных окон нет. Undo — действие обратного патча (Email/set),
-  сроки показа: обычный тост 6 с, с Undo — 10 с (успеть подумать).
+  Тосты с Undo (WEB-03/04): inline-карточки в стопке внизу справа (макет 02 — «Отправлено ·
+  Отменить»), модальных окон нет. Undo — действие обратного патча (Email/set) или отмена
+  отложенной отправки (WEB-04: undo-send — окно ~15 с, срок передаёт композер). Сроки показа:
+  обычный тост 6 с, с Undo — 10 с (успеть подумать), undo-send — свой срок (окно сервера).
 */
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 
@@ -13,8 +14,8 @@ interface Toast {
 }
 
 interface ToastContextValue {
-  /** Показать тост; `undo` — «Отменить» (откат оптимистичной мутации). */
-  show(label: string, undo?: () => void): void;
+  /** Показать тост; `undo` — «Отменить»; `durationMs` — свой срок (окно undo-send). */
+  show(label: string, undo?: () => void, durationMs?: number): void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -38,10 +39,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const show = useCallback(
-    (label: string, undo?: () => void) => {
+    (label: string, undo?: () => void, durationMs?: number) => {
       const id = nextId.current++;
       setToasts((current) => [...current.slice(-3), { id, label, undo: undo ?? null }]);
-      window.setTimeout(() => dismiss(id), undo ? TOAST_UNDO_MS : TOAST_MS);
+      const ms = durationMs ?? (undo ? TOAST_UNDO_MS : TOAST_MS);
+      window.setTimeout(() => dismiss(id), ms);
     },
     [dismiss],
   );
