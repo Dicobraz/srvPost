@@ -1634,7 +1634,7 @@ mod tests {
         assert!(caller.is_ok());
         let expired = env.admin.session_caller(&v, exp).await.expect("session");
         assert_eq!(expired.map(|_| ()), Err(Error::Forbidden));
-        assert!(env.admin.session_caller("eyJ.x.y", now).is_none());
+        assert!(env.admin.session_caller("eyJ.x.y", now).await.is_none());
 
         let store = MemorySessions::new(3);
         for i in 0..4 {
