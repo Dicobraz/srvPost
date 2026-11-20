@@ -11,14 +11,15 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::task::JoinSet;
-use tp_contracts::events::{EventLog, EventSink, partition_of};
+use tp_contracts::events::{EventLog, EventSink, ShardPartition, partition_of};
 use tp_contracts::meta::AccountScope;
-use tp_contracts::role::{Role, RoleCtx, RoleService};
+use tp_contracts::role::{CancellationToken, Role, RoleCtx, RoleService};
 use tp_contracts::search::IndexManifestStore as _;
 use tp_contracts::tls::Profile;
-use tp_contracts::{Error, Result};
+use tp_contracts::{Error, Result, ShardId};
 use tp_meta::PgMeta;
 use tp_meta::events::EventConsumer;
+use tp_meta::shards::ShardResolver as _;
 use tp_platform::listen::EndpointConfig;
 use tp_platform::{Config, InheritedSockets, Listener, TlsCerts, service_http};
 use tp_search::{Indexer, IndexerConfig, Rebuilder, SCHEMA_VERSION, SUBSCRIBER};
@@ -580,10 +581,11 @@ fn log_step(log: &mut RepeatLog, result: Result<()>, what: &str) {
     }
 }
 
-/// Роль indexer: подписчик `indexer` журнала событий с лизами разделов `events/indexer/{p}` (обработчик
-/// `tp-meta`), перестройка индексов по `pending_rebuilds` для ящиков своих разделов.
+/// Роль indexer: подписчик `indexer` журналов событий шардов справочника с лизами разделов
+/// `events/indexer/{p}` (по потребителю на шард, APP-47), перестройка индексов по `pending_rebuilds`
+/// для ящиков своих разделов.
 pub struct IndexerRole {
-    events: EventConsumer,
+    events: Vec<EventConsumer>,
     indexer: Arc<Indexer>,
     rebuilder: Arc<Rebuilder>,
     meta: PgMeta,
@@ -601,11 +603,12 @@ impl std::fmt::Debug for IndexerRole {
 }
 
 impl IndexerRole {
-    /// Роль: журнал `events`, индексатор и перестройка; журнал дочитывается по сигналам `signals` (раздел с
-    /// ошибкой — к сроку повтора), запросы перестройки — после каждого чтения; повторяющиеся ошибки — в журнал
-    /// не чаще раза за паузу `log_pause`, перестройка с ошибкой повторяется через `log_pause.initial`.
+    /// Роль: журналы шардов `events` (по потребителю на шард), индексатор и перестройка; журнал дочитывается
+    /// по сигналам `signals` (раздел с ошибкой — к сроку повтора), запросы перестройки — после каждого чтения;
+    /// повторяющиеся ошибки — в журнал не чаще раза за паузу `log_pause`, перестройка с ошибкой повторяется
+    /// через `log_pause.initial`.
     pub fn new(
-        events: EventConsumer,
+        events: Vec<EventConsumer>,
         indexer: Arc<Indexer>,
         rebuilder: Rebuilder,
         meta: PgMeta,
@@ -623,41 +626,99 @@ impl IndexerRole {
             log_pause,
         }
     }
+}
 
-    /// Перестройка запрошенных индексов ящиков, чьи разделы журнала держит узел; `failed` — ошибки перестройки
-    /// по ящикам (остаются только ящики из текущего списка запросов).
-    async fn rebuild_pending(&self, failed: &mut HashMap<AccountScope, RepeatLog>) -> Result<()> {
-        let pending = self
-            .meta
-            .pending_rebuilds(SCHEMA_VERSION, self.rebuild_batch.max(1))
-            .await?;
-        failed.retain(|scope, _| pending.contains(scope));
-        if pending.is_empty() {
-            return Ok(());
+/// Чтение журнала потребителя `events` шарда и перестройка запрошенных индексов ящиков, чьи разделы этого
+/// журнала держит узел; `failed` — ошибки перестройки по ящикам (остаются только ящики из текущего списка
+/// запросов). До остановки `shutdown`.
+async fn read_journal(
+    events: EventConsumer,
+    indexer: Arc<Indexer>,
+    rebuilder: Arc<Rebuilder>,
+    meta: PgMeta,
+    signals: LogSignals,
+    rebuild_batch: usize,
+    log_pause: LogPause,
+    shutdown: CancellationToken,
+) {
+    let mut poll_log = RepeatLog::new(log_pause);
+    let mut pending_log = RepeatLog::new(log_pause);
+    let mut rebuild_failed = HashMap::new();
+    let mut reader = LogReader::new(events.clone(), signals);
+    let sink = indexer.as_ref() as &dyn EventSink;
+    while let Some(work) = reader.wait(&shutdown).await {
+        let read = reader.read(sink, &work).await;
+        log_step(&mut poll_log, read, "чтение журнала событий");
+        let pending = rebuild_pending(
+            &meta,
+            &events,
+            &rebuilder,
+            rebuild_batch,
+            log_pause,
+            &mut rebuild_failed,
+        )
+        .await;
+        if pending.is_err() || !rebuild_failed.is_empty() {
+            // Повтор при временной ошибке — один таймер (SRS 2.8, закрытый список, п. 2).
+            reader.wake_in(log_pause.initial);
         }
-        let held = self.events.held(SUBSCRIBER);
-        let partitions = EventLog::partitions(&self.meta);
-        for scope in pending {
-            if !held.contains(&partition_of(scope.account, partitions)) {
-                continue;
-            }
-            match self.rebuilder.rebuild(scope).await {
-                Ok(n) => {
-                    failed.remove(&scope);
-                    tracing::info!(account = %scope.account, messages = n, "search: индекс перестроен")
-                }
-                Err(e) => {
-                    let log = failed
-                        .entry(scope)
-                        .or_insert_with(|| RepeatLog::new(self.log_pause));
-                    if let Some(skipped) = log.fail(e.to_string(), Instant::now()) {
-                        tracing::warn!(account = %scope.account, error = %e, skipped, "search: индекс не перестроен")
-                    }
-                }
-            }
-        }
-        Ok(())
+        log_step(&mut pending_log, pending, "чтение запросов перестройки");
     }
+    if let Err(e) = reader.release_all(SUBSCRIBER).await {
+        tracing::warn!(error = %e, "indexer: лизы разделов не отданы");
+    }
+}
+
+/// Перестройка запрошенных индексов ящиков, чьи разделы журнала потребителя `events` держит узел.
+async fn rebuild_pending(
+    meta: &PgMeta,
+    events: &EventConsumer,
+    rebuilder: &Arc<Rebuilder>,
+    rebuild_batch: usize,
+    log_pause: LogPause,
+    failed: &mut HashMap<AccountScope, RepeatLog>,
+) -> Result<()> {
+    let pending = meta
+        .pending_rebuilds(SCHEMA_VERSION, rebuild_batch.max(1))
+        .await?;
+    failed.retain(|scope, _| pending.contains(scope));
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let partitions = EventLog::partitions(meta);
+    for scope in pending {
+        // Раздел ящика — в журнале шарда учётной записи (CTR-34): перестройку ведёт узел, держащий его раздел.
+        let shard = match meta.shard_resolver() {
+            Some(resolver) => match resolver.shard_of(scope).await {
+                Ok(shard) => shard,
+                // Учётной записи нет (удалена после запроса перестройки) — перестраивать нечего.
+                Err(_) => continue,
+            },
+            None => ShardId::MAIN,
+        };
+        if events.shard() != shard
+            || !events
+                .held(SUBSCRIBER)
+                .contains(&partition_of(scope.account, partitions))
+        {
+            continue;
+        }
+        match rebuilder.rebuild(scope).await {
+            Ok(n) => {
+                failed.remove(&scope);
+                tracing::info!(account = %scope.account, messages = n, "search: индекс перестроен")
+            }
+            Err(e) => {
+                let log = failed
+                    .entry(scope)
+                    .or_insert_with(|| RepeatLog::new(log_pause));
+                if let Some(skipped) = log.fail(e.to_string(), Instant::now()) {
+                    tracing::warn!(account = %scope.account, error = %e, skipped, "search: индекс не перестроен")
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -668,23 +729,28 @@ impl RoleService for IndexerRole {
 
     async fn run(&self, ctx: RoleCtx) -> Result<()> {
         ctx.ready.set(true);
-        let mut poll_log = RepeatLog::new(self.log_pause);
-        let mut pending_log = RepeatLog::new(self.log_pause);
-        let mut rebuild_failed = HashMap::new();
-        let mut reader = LogReader::new(self.events.clone(), self.signals.clone());
-        let sink = self.indexer.as_ref() as &dyn EventSink;
-        while let Some(work) = reader.wait(&ctx.shutdown).await {
-            let read = reader.read(sink, &work).await;
-            log_step(&mut poll_log, read, "чтение журнала событий");
-            let pending = self.rebuild_pending(&mut rebuild_failed).await;
-            if pending.is_err() || !rebuild_failed.is_empty() {
-                // Повтор при временной ошибке — один таймер (SRS 2.8, закрытый список, п. 2).
-                reader.wake_in(self.log_pause.initial);
+        // Чтение журналов шардов — по потребителю каждого шарда (APP-47); каждый потребитель перестраивает
+        // индексы ящиков своих разделов.
+        let readers: Vec<_> = self
+            .events
+            .iter()
+            .map(|events| {
+                tokio::spawn(read_journal(
+                    events.clone(),
+                    self.indexer.clone(),
+                    self.rebuilder.clone(),
+                    self.meta.clone(),
+                    self.signals.clone(),
+                    self.rebuild_batch,
+                    self.log_pause,
+                    ctx.shutdown.clone(),
+                ))
+            })
+            .collect();
+        for reader in readers {
+            if let Err(e) = reader.await {
+                return Err(Error::Internal(format!("indexer: {e}")));
             }
-            log_step(&mut pending_log, pending, "чтение запросов перестройки");
-        }
-        if let Err(e) = self.events.release_all(SUBSCRIBER).await {
-            tracing::warn!(error = %e, "indexer: лизы разделов не отданы");
         }
         ctx.ready.set(false);
         Ok(())

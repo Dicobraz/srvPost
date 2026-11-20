@@ -14,7 +14,7 @@ use tp_meta::MetaConfig;
 use tp_meta::failover::{self, Failover};
 use tp_meta::pool::{self, AcquireObserver, DbPool, NoAcquireObserver, PoolConfig};
 use tp_meta::shards::ShardDirectory;
-use tp_meta::signals::{PgSignalBus, SignalMetrics};
+use tp_meta::signals::{PgSignalBus, ShardedSignalBus, SignalMetrics};
 use tp_platform::{BusSample, Config, DbMetrics};
 
 use crate::sections::{
@@ -169,7 +169,7 @@ pub struct Bus {
     pub sample: BusSampler,
     /// Шина LISTEN/NOTIFY (`bus.kind: postgres`) — источник метрик слушателя и фиксаций с NOTIFY
     /// (`crate::metrics::register_db`, APP-34); у шины в процессе — `None`.
-    pub signals: Option<PgSignalBus>,
+    pub signals: Option<SignalBus>,
 }
 
 impl std::fmt::Debug for Bus {
@@ -180,15 +180,59 @@ impl std::fmt::Debug for Bus {
     }
 }
 
+/// Шина LISTEN/NOTIFY для метрик СУБД: основной БД или по шардам справочника (APP-47).
+#[derive(Clone)]
+pub enum SignalBus {
+    /// Основная БД.
+    Main(PgSignalBus),
+    /// Шарды справочника: основная БД и `ShardedSignalBus` (сумма метрик шин шардов).
+    Sharded(PgSignalBus, Arc<ShardedSignalBus>),
+}
+
+impl SignalBus {
+    /// Есть связь со слушателем основной БД; у шин шардов — есть хотя бы один слушатель.
+    pub fn connected(&self) -> bool {
+        match self {
+            SignalBus::Main(bus) => bus.connected(),
+            SignalBus::Sharded(_, bus) => bus.metrics().listeners > 0,
+        }
+    }
+
+    /// Число подписок узла (у шин шардов — подписки основной БД; системные подписки одинаковы на всех шинах).
+    pub fn subscribers(&self) -> usize {
+        match self {
+            SignalBus::Main(bus) | SignalBus::Sharded(bus, _) => bus.subscribers(),
+        }
+    }
+
+    /// Снимок метрик; у шин шардов — сумма по шинам всех шардов.
+    pub fn metrics(&self) -> SignalMetrics {
+        match self {
+            SignalBus::Main(bus) => bus.metrics(),
+            SignalBus::Sharded(_, bus) => bus.metrics(),
+        }
+    }
+
+    /// Шина шардов; у шины основной БД — `None`.
+    pub fn sharded(&self) -> Option<Arc<ShardedSignalBus>> {
+        match self {
+            SignalBus::Main(_) => None,
+            SignalBus::Sharded(_, bus) => Some(bus.clone()),
+        }
+    }
+}
+
 /// Шина по секции `bus`: `local` — в процессе; `postgres` — LISTEN/NOTIFY: публикатор на пуле узла `db`
 /// (обязателен), слушатель — прямое соединение с primary (`tp_meta::signals::connect_listener`), параметры —
 /// `meta.signals`; занятость и ожидание соединения пула слушателя — `tp_db_pool_*{pool="listener"}` набора
-/// `metrics`. Вызывать внутри runtime tokio.
+/// `metrics`. Со справочником шардов `shards` — `ShardedSignalBus`: сигналы ящиков — на primary их шарда
+/// (APP-47), шары новых шардов подключает [`ShardedSignalBus::refresh`]. Вызывать внутри runtime tokio.
 pub async fn open_bus(
     cfg: &Config,
     db: Option<&Failover>,
     store: Arc<dyn SecretStore>,
     metrics: &DbMetrics,
+    shards: Option<Arc<ShardDirectory>>,
 ) -> Result<Bus> {
     let section = cfg.section::<BusSection>(BUS)?;
     match section.kind {
@@ -211,20 +255,52 @@ pub async fn open_bus(
                 .clone();
             let (observer, slot) =
                 crate::metrics::pool_observer(metrics, crate::metrics::POOL_LISTENER);
-            let listen = tp_meta::signals::connect_listener(&pool_config(cfg)?, store, observer)
-                .await
-                .map_err(|e| context("bus", e))?;
+            let listen = tp_meta::signals::connect_listener(
+                &pool_config(cfg)?,
+                store.clone(),
+                observer,
+            )
+            .await
+            .map_err(|e| context("bus", e))?;
             slot.set(listen.pool());
-            let bus = PgSignalBus::start(db.clone(), listen, signals)
+            let main = PgSignalBus::start(db.clone(), listen, signals)
                 .map_err(|e| context("meta.signals", e))?;
-            let probe = bus.clone();
-            Ok(Bus {
-                bus: Arc::new(bus.clone()),
-                sample: Arc::new(move || pg_bus_sample(probe.connected(), &probe.metrics())),
-                signals: Some(bus),
-            })
+            match shards {
+                None => {
+                    let probe = main.clone();
+                    Ok(Bus {
+                        bus: Arc::new(main.clone()),
+                        sample: Arc::new(move || pg_bus_sample(probe.connected(), &probe.metrics())),
+                        signals: Some(SignalBus::Main(main)),
+                    })
+                }
+                Some(dir) => {
+                    let bus = ShardedSignalBus::start(main.clone(), dir, store, signals_cfg(cfg)?)
+                        .map_err(|e| context("bus", e))?;
+                    let bus = Arc::new(bus);
+                    Ok(Bus {
+                        bus: bus.clone(),
+                        sample: {
+                            let bus = bus.clone();
+                            Arc::new(move || {
+                                let m = bus.metrics();
+                                pg_bus_sample(m.listeners > 0, &m)
+                            })
+                        },
+                        signals: Some(SignalBus::Sharded(main, bus)),
+                    })
+                }
+            }
         }
     }
+}
+
+/// Секция параметров сигналов `meta.signals` (у [`ShardedSignalBus::start`] она своя копия на шину).
+fn signals_cfg(cfg: &Config) -> Result<tp_meta::signals::SignalsConfig> {
+    Ok(cfg
+        .section::<MetaConfig>(MetaConfig::SECTION)?
+        .signals
+        .clone())
 }
 
 /// Снимок метрик шины LISTEN/NOTIFY: отброшенные сигналы — ошибки публикации, `Resync` из-за переполнения —
@@ -321,6 +397,7 @@ mod tests {
             None,
             Arc::new(crate::secrets::NoSecretStore),
             &db_metrics(&tp_platform::Metrics::default()),
+            None,
         )
         .await
         .expect("bus");
@@ -336,6 +413,7 @@ mod tests {
             None,
             Arc::new(crate::secrets::NoSecretStore),
             &db_metrics(&tp_platform::Metrics::default()),
+            None,
         )
         .await
         .expect_err("без пула");

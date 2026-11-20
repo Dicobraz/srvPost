@@ -3,13 +3,16 @@
 //! Порядок запуска: конфигурация (мягкий режим, неизвестные поля — предупреждение) → телеметрия → хранилище
 //! секретов (OpenBao/Vault по секции `secrets`; секреты конфигурации читаются при запуске и перечитывании) →
 //! PostgreSQL (поиск primary по `database.url` + `urls`, ротация динамических учётных данных; метрики переключения —
-//! в `/metrics`) и миграции (от `database.owner`, если задан) → модули → членство узла и распределитель разделов
-//! журнала → BLOB, шина → запросы узел → узел (`cluster.rpc`, mTLS; слушатель — на `cluster.addr`) → ACME (при
-//! `acme.enabled`: слушатель HTTP-01, первый выпуск) → сертификаты TLS (продление ACME — в фоне) → сервисы ролей
-//! (вход, хранилище писем, поиск, очередь SMTP; `services`) → монитор нагрузки узла (ресурсы cgroups, заполнение
-//! кэша индексов) → роли (`protocols`, `roles`; maintenance — и истечение срока
-//! корзины) → служебный HTTP (`/healthz/ready` — 200, когда готовы все роли узла). Остановка: роли проходят drain,
-//! узел покидает членство, служебный HTTP и фоновые задачи останавливаются последними.
+//! в `/metrics`; реплика фоновых чтений — `database.read_replica`, APP-47) и миграции (от `database.owner`, если
+//! задан; на шардах справочника — [`ShardDirectory::migrate`]) → модули → членство узла и распределитель разделов
+//! журнала → BLOB, шина сигналов (LISTEN/NOTIFY по шардам справочника — [`ShardedSignalBus`]) → запросы узел →
+//! узел (`cluster.rpc`, mTLS; слушатель — на `cluster.addr`; службы ролей — `search/query`, `admin/state`, APP-46;
+//! перечитывание сертификатов канала — по событиям, APP-45) → ACME (при `acme.enabled`: слушатель HTTP-01,
+//! первый выпуск) → сертификаты TLS (продление ACME — в фоне) → сервисы ролей (вход, хранилище писем, поиск,
+//! очередь SMTP; `services`) → монитор нагрузки узла (ресурсы cgroups, свободное место дисков кэша, APP-48) →
+//! роли (`protocols`, `roles`; maintenance — и истечение срока корзины) → служебный HTTP (`/healthz/ready` — 200,
+//! когда готовы все роли узла). Остановка: роли проходят drain, узел покидает членство, служебный HTTP и
+//! фоновые задачи останавливаются последними.
 //!
 //! Проверка учётной записи и ограничения ролей (seccomp, Landlock) — до рантайма tokio (`startup`, из `main`).
 //!
@@ -18,21 +21,26 @@
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use tokio::task::JoinHandle;
 use tp_cluster::{NodeRpc, NodeTls, PartitionAssignerConfig, RendezvousAssigner};
-use tp_contracts::events::{EventLog, PartitionAssigner};
+use tp_contracts::events::{PartitionAssigner, ShardEventLogs};
 use tp_contracts::lease::LeaseStore;
 use tp_contracts::membership::{Membership, NodeId, NodeInfo};
 use tp_contracts::role::{CancellationToken, Role, RoleService, fixed_config};
+use tp_contracts::rpc::RpcService;
 use tp_contracts::secrets::SecretStore;
 use tp_contracts::tls::InternalTls;
 use tp_contracts::{Error, Result};
 use tp_meta::events::EventConsumer;
+use tp_meta::shards::ReadIntent;
+use tp_meta::signals::ShardedSignalBus;
 use tp_meta::{MetaConfig, PgMeta};
+use tp_platform::fswatch::{self, FsEvents, FsWatch};
 use tp_platform::roles::{RssGauge, uses_data_layer};
 use tp_platform::{
     Config, DbMetrics, Health, LoadConfig, LoadInputs, Metrics, NodeLoad, PressureConfig, Reloader,
@@ -43,7 +51,7 @@ use tp_platform::{pressure, service_http};
 use tp_search::{IndexCache, SearchConfig};
 use tp_smtp::dkim_sign::DkimSign;
 use tp_smtp::{Mode, SmtpConfig, SmtpOutService};
-use tp_sys::{NodeResources, ResourceSnapshot, ResourcesConfig};
+use tp_sys::{FsUsage, NodeResources, ResourceSnapshot, ResourcesConfig};
 
 use crate::acme;
 use crate::audit_export::AuditExport;
@@ -54,6 +62,7 @@ use crate::protocols::{
     Bound, HttpRole, ImapRole, InProcessRole, IndexerRole, LogPause, SmtpRole, Sockets,
 };
 use crate::roles::{ItipPurge, Maintenance, PendingRole, Purge, ScheduledVerify, ThreadBinder};
+use crate::rpc_services;
 use crate::secrets;
 use crate::sections::{self, BLOB, BlobSection, CLUSTER, ClusterSection, HttpSection};
 use crate::services::{Base, EdgeServices, Services};
@@ -213,19 +222,51 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
     let pool = db.pool().clone();
     let meta_cfg = (*cfg.section::<MetaConfig>(MetaConfig::SECTION)?).clone();
     let migrations = infra::migration_pool(&cfg, store.as_ref(), &pool, &db_metrics).await?;
+    // Справочник шардов — до шины: сигналы LISTEN/NOTIFY идут по шардам справочника (APP-47); миграции
+    // каталога — в основной БД, схемы ящиков — [`ShardDirectory::migrate`] на каждом шарде с адресом.
+    let shards = infra::shard_directory(&cfg, pool.clone(), store.clone())?;
     if meta_cfg.migrate_on_start {
         tp_meta::schema::migrate(&migrations).await?;
+        shards.migrate().await.map_err(|e| infra::context("shards", e))?;
     }
+    // Фоновые задачи узла живут дольше ролей: служебный HTTP отвечает 503 во время drain. Ошибка запуска
+    // останавливает уже запущенные (слушатель HTTP-01, перечитывание сертификатов).
+    let aux = CancellationToken::new();
+    let aux_guard = aux.clone().drop_guard();
     let events_cfg = meta_cfg.events.clone();
     let blob_cfg = cfg.section::<BlobSection>(BLOB)?;
     // Шина сигналов — до хранилищ: после фиксации они публикуют `LogAppended` (будит читателей журнала событий),
     // `MembersChanged`, `TransportChanged` и др. (APP-08, SRS 2.8).
-    let bus = infra::open_bus(&cfg, Some(&db), store.clone(), &db_metrics).await?;
+    let bus = infra::open_bus(
+        &cfg,
+        Some(&db),
+        store.clone(),
+        &db_metrics,
+        Some(shards.clone()),
+    )
+    .await?;
     let sample = bus.sample.clone();
     metrics.register_bus(move || sample());
-    crate::metrics::register_db(&metrics, &db_metrics, bus.signals);
+    // Шины шардов, добавленных в справочник после запуска, подключает `ShardedSignalBus::refresh` по сигналам
+    // `ShardsChanged`, `ConfigReloaded` и `Resync` (APP-47); сама шина узла работает и до их подключения.
+    if let Some(sharded) = bus.signals.as_ref().and_then(infra::SignalBus::sharded) {
+        tokio::spawn(shard_buses_follow(sharded, events_cfg.retry_min, aux.clone()));
+    }
+    crate::metrics::register_db(&metrics, &db_metrics, bus.signals.clone());
     let bus = bus.bus;
-    let meta = PgMeta::new(pool, meta_cfg).with_bus(bus.clone());
+    let mut meta = PgMeta::new(pool, meta_cfg).with_bus(bus.clone());
+    // Реплика основной БД для фоновых чтений (META-32, APP-47): `database.read_replica` с порогом
+    // `database.replica_max_lag`; используют хранилища с `ReadIntent::Stale`, записи — всегда на primary.
+    let db_cfg = infra::pool_config(&cfg)?;
+    let (observer, slot) = crate::metrics::pool_observer(&db_metrics, crate::metrics::POOL_REPLICA);
+    let replica = tp_meta::pool::connect_replica(&db_cfg, store.as_ref(), observer).await?;
+    if let Some(replica) = replica {
+        slot.set(&replica);
+        meta = meta.with_replica(replica, db_cfg.replica_max_lag);
+    }
+    // Хранилища ящиков — на шарде учётной записи через справочник (META-30, APP-47); один шард — без запроса
+    // к справочнику.
+    let meta = meta.with_shards(shards.clone());
 
     let mut ext = modules::activate_of(&cfg, &migrations, modules).await?;
     // Удержание беседы целиком (APP-77, решение 125 е, CTR-94): окончательное удаление письма удержанной
@@ -236,11 +277,10 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
     )))?;
     let store = ext.secret_store().unwrap_or(store);
     // Учёт BLOB роли maintenance — по всем шардам справочника (FIX-04): GC, «сироты» и сверка не удалят объект, на
-    // который ссылается только другой шард. Кэш справочника сбрасывают `ShardsChanged`, `ConfigReloaded`, `Resync`;
-    // задача завершается с остановкой шины.
-    let shards = infra::shard_directory(&cfg, meta.pool().clone(), store.clone())?;
+    // который ссылается только другой шард; перечисление объектов — фоновое чтение с реплик шардов (META-32).
+    // Кэш справочника сбрасывают `ShardsChanged`, `ConfigReloaded`, `Resync` (задача `follow` — с шиной узла).
     shards.clone().follow(bus.clone()).await?;
-    let blob_index = meta.clone().with_shards(shards);
+    let blob_index = meta.clone().with_intent(ReadIntent::Stale);
 
     // Членство: запись узла до чтения состава, иначе узлу не достанется ни одного раздела.
     let node = infra::node_id(&cfg)?;
@@ -271,31 +311,11 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         resubscribe: events_cfg.retry_min,
     };
 
-    // Фоновые задачи узла живут дольше ролей: служебный HTTP отвечает 503 во время drain. Ошибка запуска
-    // останавливает уже запущенные (слушатель HTTP-01, перечитывание сертификатов).
-    let aux = CancellationToken::new();
-    let aux_guard = aux.clone().drop_guard();
     let service = (*cfg.section::<ServiceHttpConfig>("service_http")?).clone();
     let tls = cfg.section::<TlsConfig>("tls")?;
     let bound = Bound::default();
     // Сокеты от systemd (активация сокетов) — до открытия любых слушателей.
     let sockets = Sockets::adopt(&cfg, bound.clone())?;
-    // Запросы узел → узел (APP-18): после записи узла в членстве (маршрут и роли вызывающего — по составу).
-    let rpc = start_rpc(
-        &cluster,
-        &node,
-        Arc::new(meta.clone()),
-        store.clone(),
-        &sockets,
-        aux.clone(),
-    )
-    .await?;
-    let acme = acme::prepare(&cfg, store.clone(), &sockets, aux.clone()).await?;
-    let certs = load_certs(&service, &tls, store.clone(), aux.clone()).await?;
-    if let Some(acme) = &acme {
-        acme.spawn(certs.clone(), aux.clone());
-    }
-
     let services = Services::build(Base {
         cfg: &cfg,
         meta: meta.clone(),
@@ -307,6 +327,25 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         node: node.clone(),
     })
     .await?;
+    // Готовность узла и ролей: её же читает служба состояния узла в Rpc (APP-46).
+    let health = Health::default();
+    // Запросы узел → узел (APP-18): после записи узла в членстве (маршрут и роли вызывающего — по составу)
+    // и сборки сервисов — обработчики служб ролей регистрируются в транспорте (APP-46).
+    let rpc = start_rpc(
+        &cluster,
+        &node,
+        Arc::new(meta.clone()),
+        store.clone(),
+        reloader.subscribe(),
+        &sockets,
+        aux.clone(),
+    )
+    .await?;
+    let acme = acme::prepare(&cfg, store.clone(), &sockets, aux.clone()).await?;
+    let certs = load_certs(&service, &tls, store.clone(), aux.clone()).await?;
+    if let Some(acme) = &acme {
+        acme.spawn(certs.clone(), aux.clone());
+    }
     // Блокировки перебора других узлов — по сигналам шины (AUTH-08).
     let (abuse, abuse_bus, abuse_stop) = (services.abuse.clone(), bus.clone(), aux.clone());
     tokio::spawn(async move {
@@ -378,16 +417,36 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         &metrics,
         aux.clone(),
     );
-    // Диски кэша (APP-10): заполнение кэша индексов поиска относительно `search.cache.max_bytes`.
+    // Диски кэша (APP-48): занятое место файловой системы каталога кэша — больше из двух: она и заполнение
+    // кэша индексов поиска относительно `search.cache.max_bytes`.
+    let search_cfg = cfg.section::<SearchConfig>(sections::SEARCH)?;
     tokio::spawn(feed_cache_disk(
         load.inputs(),
         services.cache.clone(),
-        cfg.section::<SearchConfig>(sections::SEARCH)?
-            .cache
-            .max_bytes,
+        search_cfg.cache.max_bytes,
+        search_cfg.index.dir.clone(),
         resources.subscribe(),
         aux.clone(),
     ));
+
+    // Службы ролей узла в Rpc (APP-46, SRS 2.8, Ф3): запросы узел → узел обслуживают включённые роли —
+    // `search/query` (поиск по индексам ящиков на узле-владельце) у роли search, состояние узла
+    // (`admin/state`) для Admin API у роли admin; матрица разрешений «роль → службы» —
+    // `cluster.rpc.permissions` на принимающем узле. Остальные службы ролей — карточки своих полос.
+    if let Some(rpc) = &rpc {
+        if cfg.roles().contains(Role::Search) {
+            rpc.serve(
+                RpcService::new(Role::Search, rpc_services::SEARCH_QUERY)?,
+                Arc::new(rpc_services::SearchQuery::new(services.search.clone())),
+            )?;
+        }
+        if cfg.roles().contains(Role::Admin) {
+            rpc.serve(
+                RpcService::new(Role::Admin, rpc_services::NODE_STATE)?,
+                Arc::new(rpc_services::NodeState::new(node.clone(), health.clone(), load.shared())),
+            )?;
+        }
+    }
 
     let holder = format!("{node}/{}", std::process::id());
     let runtime = (*cfg.section::<RuntimeConfig>("runtime")?).clone();
@@ -399,13 +458,24 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
     .with_updates(reloader.subscribe())
     .with_load(load.shared());
     let leases: Arc<dyn LeaseStore> = Arc::new(meta.clone());
-    let events = EventConsumer::new(
-        Arc::new(meta.clone()) as Arc<dyn EventLog>,
-        leases.clone(),
-        holder.clone(),
-        events_cfg.clone(),
-    )
-    .with_assigner(assigner, node.clone());
+    // Журнал событий — по шардам справочника (CTR-34, APP-47): потребители (maintenance, indexer) читают
+    // журнал каждого шарда — по `EventConsumer` на шард (`with_shard`; ключи назначения и имён лиз — с
+    // шардом). Шарды справочника, добавленные после запуска узла, подключает его перезапуск.
+    let logs = meta.shard_logs().await.map_err(|e| infra::context("meta.events", e))?;
+    let events: Vec<EventConsumer> = logs
+        .shards()
+        .into_iter()
+        .map(|shard| {
+            EventConsumer::new(
+                logs.log(shard).expect("журнал шарда справочника"),
+                leases.clone(),
+                holder.clone(),
+                events_cfg.clone(),
+            )
+            .with_assigner(assigner.clone(), node.clone())
+            .with_shard(shard)
+        })
+        .collect();
     let maintenance_cfg = cfg.section::<sections::MaintenanceSection>(sections::MAINTENANCE)?;
     let verify_page_size = cfg
         .section::<sections::VerifySection>(sections::VERIFY)?
@@ -440,7 +510,7 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         store: blob.clone(),
         leases,
         holder,
-        events: events.clone(),
+        events,
         sinks: ext
             .event_sinks()
             .iter()
@@ -458,7 +528,8 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
             Arc::new(meta.clone()),
         )),
         purge: Some(Purge {
-            meta: meta.clone(),
+            // Чтения закрытого списка (учётные записи, ящики) — с реплики (META-32), удаления — на primary.
+            meta: meta.clone().with_intent(ReadIntent::Stale),
             interval: maintenance_cfg.purge_interval,
             admin_token_retention: maintenance_cfg.admin_token_retention,
             // Записи об отправленном старше `smtp.reply.max_age` (APP-77, SMTP-51) — признак ответа по
@@ -485,7 +556,8 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
             now: tp_blob::system_now(),
         }),
         audit_export: Some(audit_export),
-        card_reindex: Some(meta.clone()),
+        // Пересчёт поисковых строк контактов (APP-63) — фоновое чтение с реплики (META-32).
+        card_reindex: Some(meta.clone().with_intent(ReadIntent::Stale)),
         gal: Some(gal),
         // Фоновая привязка существующих писем к беседам по `thread_key` (APP-77, META-86): письма, принятые
         // до включения привязки и положенные клиентом (APPEND), — порциями, без простоя.
@@ -522,7 +594,6 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
     }
     drop(services);
 
-    let health = Health::default();
     sockets.warn_unused(&listen_addrs(&cfg));
     let listener = sockets.take_or(service.listen, || service_http::bind(&service))?;
     let service_addr = listener
@@ -769,7 +840,8 @@ struct RoleSetup<'a> {
     certs: Option<Arc<TlsCerts>>,
     sockets: Sockets,
     updates: tokio::sync::watch::Receiver<Arc<Config>>,
-    events: EventConsumer,
+    /// Потребители журнала событий — по одному на шард справочника (APP-47).
+    events: Vec<EventConsumer>,
     signals: LogSignals,
     maintenance: Option<Maintenance>,
 }
@@ -890,7 +962,8 @@ impl RoleSetup<'_> {
                     self.events.clone(),
                     indexer,
                     self.services.rebuilder(&search),
-                    self.services.meta.clone(),
+                    // Запросы перестройки — фоновое чтение с реплики (META-32, APP-47).
+                    self.services.meta.clone().with_intent(ReadIntent::Stale),
                     self.signals.clone(),
                     self.cfg.section::<ClusterSection>(CLUSTER)?.rebuild_scan,
                     LogPause::from(&search.indexer),
@@ -974,24 +1047,50 @@ async fn apply_trust(
     }
 }
 
-/// Показатель «диски кэша» монитора нагрузки: свободно — `max_bytes` минус занятое кэшем индексов поиска на узле
-/// (`IndexCache::stats`), всего — `max_bytes` (сверх него кэш вытесняет индексы). Своего таймера нет (SRS 2.8):
-/// значение обновляется с каждым снимком ресурсов узла (по PSI или с интервалом секции `resources`).
+/// Показатель «диски кэша» монитора нагрузки (APP-48): занятое место файловой системы каталога кэша
+/// (`tp_sys::fs_usage`, SYS-13; блокирующий вызов — в `spawn_blocking`) — больше из двух: она и заполнение
+/// кэша индексов относительно предела `search.cache.max_bytes` ([`cache_disk_load`]). Ошибка `fs_usage` —
+/// показатель не обновляется (действует прежнее значение). Своего таймера нет (SRS 2.8): значение обновляется
+/// с каждым снимком ресурсов узла (по PSI или с интервалом секции `resources`).
 async fn feed_cache_disk(
     inputs: LoadInputs,
     cache: Arc<IndexCache>,
     max_bytes: u64,
+    dir: PathBuf,
     mut resources: tokio::sync::watch::Receiver<ResourceSnapshot>,
     shutdown: CancellationToken,
 ) {
     loop {
-        let used = cache.stats().bytes;
-        inputs.set_cache_disk(max_bytes.saturating_sub(used), max_bytes);
+        let usage = tokio::task::spawn_blocking({
+            let dir = dir.clone();
+            move || tp_sys::fs_usage(&dir)
+        })
+        .await
+        .ok()
+        .and_then(|usage| usage.ok());
+        if let Some(usage) = usage {
+            let (free, total) = cache_disk_load(usage, cache.stats().bytes, max_bytes);
+            inputs.set_cache_disk(free, total);
+        }
         tokio::select! {
             () = shutdown.cancelled() => return,
             changed = resources.changed() => if changed.is_err() { return },
         }
     }
+}
+
+/// «Свободно и всего» показателя дисков кэша (APP-48): доля занятого места файловой системы `usage`, если
+/// она больше заполнения кэша `used` относительно предела `max_bytes`, приведённого к объёму файловой
+/// системы (заполнение кэша живёт на этом же диске). `max_bytes: 0` — только файловая система.
+fn cache_disk_load(usage: FsUsage, used: u64, max_bytes: u64) -> (u64, u64) {
+    let fs_used = usage.total.saturating_sub(usage.available);
+    let by_limit = (max_bytes > 0)
+        .then(|| {
+            (used.min(max_bytes) as f64 / max_bytes as f64 * usage.total as f64) as u64
+        })
+        .unwrap_or(0);
+    let used = fs_used.max(by_limit.min(usage.total));
+    (usage.total - used, usage.total)
 }
 
 /// Запись узла в членстве: роли ядра, внутренний адрес и площадка из секции `cluster`.
@@ -1011,12 +1110,14 @@ fn node_info(id: NodeId, roles: &BTreeSet<Role>, cluster: &ClusterSection) -> Re
 /// слушателя — до запуска ролей.
 ///
 /// Ключ сертификата узла — файл `rpc.tls.key_file` либо секрет `rpc.tls.key` из хранилища `store` (APP-36): на
-/// диск он не пишется. Сертификаты перечитываются без перезапуска ([`follow_rpc_tls`]).
+/// диск он не пишется. Сертификаты перечитываются без перезапуска по событиям ([`follow_rpc_tls`], APP-45);
+/// `updates` — перечитывание конфигурации: новая секция `cluster.rpc.tls` — новая задача перечитывания.
 async fn start_rpc(
     cluster: &ClusterSection,
     node: &NodeId,
     members: Arc<dyn Membership>,
     store: Arc<dyn SecretStore>,
+    updates: tokio::sync::watch::Receiver<Arc<Config>>,
     sockets: &Sockets,
     shutdown: CancellationToken,
 ) -> Result<Option<NodeRpc>> {
@@ -1028,15 +1129,7 @@ async fn start_rpc(
         .await
         .map_err(ctx)?;
     let rpc = NodeRpc::new(node.clone(), &cluster.rpc, tls, members).map_err(ctx)?;
-    if !cluster.rpc_tls_reload_interval.is_zero() {
-        tokio::spawn(follow_rpc_tls(
-            rpc.clone(),
-            cluster.rpc.tls.clone(),
-            store,
-            cluster.rpc_tls_reload_interval,
-            shutdown.clone(),
-        ));
-    }
+    tokio::spawn(follow_rpc_tls(rpc.clone(), store, updates, shutdown.clone()));
     let Some(listen) = cluster.listen_addr() else {
         tracing::info!("cluster.rpc: адрес узла не задан — запросы других узлов не принимаются");
         return Ok(Some(rpc));
@@ -1079,32 +1172,188 @@ async fn rpc_tls_fingerprint(tls: &InternalTls) -> u64 {
     hasher.finish()
 }
 
-/// Перечитывание сертификатов межузлового канала без перезапуска (APP-36, хвост CLU-16): раз в `period`
-/// сверяется отпечаток файлов ([`rpc_tls_fingerprint`]); при изменении — `NodeRpc::follow_tls` читает новую пару
-/// (ошибка — `warn`, действует прежняя). Смену секрета ключа `NodeRpc::follow_tls` отслеживает сам. До `shutdown`.
+/// Перечитывание сертификатов межузлового канала без перезапуска (APP-45, CLU-16): `NodeRpc::follow_tls`
+/// перечитывает пару по событиям ([`rpc_tls_events`]; смену секрета ключа отслеживает сам, CLU-17), новая
+/// секция `cluster.rpc.tls` (`updates`) — задача перезапускается с ней (ошибка пары — `warn`, действует
+/// прежняя). До `shutdown`.
 async fn follow_rpc_tls(
     rpc: NodeRpc,
-    tls: InternalTls,
     store: Arc<dyn SecretStore>,
-    period: Duration,
+    updates: tokio::sync::watch::Receiver<Arc<Config>>,
     shutdown: CancellationToken,
 ) {
-    let seen = rpc_tls_fingerprint(&tls).await;
-    let state = (seen, tls.clone(), shutdown);
-    let changes = futures::stream::unfold(state, move |(mut seen, tls, shutdown)| async move {
-        loop {
-            tokio::select! {
-                () = shutdown.cancelled() => return None,
-                () = tokio::time::sleep(period) => {}
+    let mut updates = updates;
+    loop {
+        let Ok(cluster) = updates.borrow_and_update().section::<ClusterSection>(CLUSTER) else {
+            if updates.changed().await.is_err() {
+                return;
             }
-            let now = rpc_tls_fingerprint(&tls).await;
-            if now != seen {
-                seen = now;
-                return Some(((), (seen, tls, shutdown)));
+            continue;
+        };
+        let (tls, poll) = (cluster.rpc.tls.clone(), cluster.rpc_tls_reload_interval);
+        // Первый элемент потока — перечитывание текущей секции: задача перезапущена (новая секция или
+        // SIGHUP — как у слушателей клиентов), пара читается с диска заново.
+        let events = futures::stream::once(async {}).chain(rpc_tls_events(&tls, poll));
+        tokio::pin!(events);
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            // Любое перечитывание конфигурации (SIGHUP, запрос, новая секция) — перечитывание пары:
+            // задача перезапускается, поток событий начинается со сверки ([`rpc_tls_events`]).
+            changed = updates.changed() => if changed.is_err() { return },
+            _ = rpc.follow_tls(&tls, store.clone(), events.as_mut()) => return,
+        }
+    }
+}
+
+/// Каталоги наблюдения для файлов сертификатов: каталог пути и каталог цели символической ссылки
+/// (замена ConfigMap/Secret в Kubernetes — подменой ссылки, PLT-17). Блокирующее разрешение ссылок.
+fn cert_dirs(files: &[Option<&Path>]) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut push = |dir: Option<&Path>| {
+        let Some(dir) = dir else { return };
+        let dir = if dir.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            dir.to_owned()
+        };
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+    for file in files.iter().flatten() {
+        push(file.parent());
+        if let Ok(real) = std::fs::canonicalize(file) {
+            push(real.parent());
+        }
+    }
+    dirs
+}
+
+/// Поток событий перечитывания сертификатов межузлового канала (APP-45, как у слушателей клиентов —
+/// PLT-17): событие каталога сертификатов (`fswatch::os_events`, inotify на Linux) и опрос отпечатка
+/// файлов ([`rpc_tls_fingerprint`]) — только без событий ОС, раз в `poll` (`0s` — никогда). Поток не
+/// кончается; ошибки чтения каталогов — без события (файлы прочитает следующее событие или опрос).
+fn rpc_tls_events(tls: &InternalTls, poll: Duration) -> impl futures::Stream<Item = ()> {
+    let files = [
+        tls.ca_file.as_deref(),
+        tls.cert_file.as_deref(),
+        tls.key_file.as_deref(),
+    ];
+    let dirs = cert_dirs(&files);
+    futures::stream::unfold(
+        (fswatch::os_events(), dirs, None, poll, None::<u64>),
+        |(events, dirs, mut watch, poll, mut seen)| async move {
+            loop {
+                // Наблюдение ставится заново, когда набор каталогов изменился или прежнее прекратилось
+                // (постановка наблюдения — блокирующие системные вызовы, `spawn_blocking`).
+                if watch.is_none() && !dirs.is_empty() {
+                    let put = {
+                        let events = events.clone();
+                        let dirs = dirs.clone();
+                        tokio::task::spawn_blocking(move || events.watch(&dirs))
+                            .await
+                            .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+                    };
+                    match put {
+                        Ok(rx) => {
+                            tracing::debug!(
+                                dirs = ?dirs,
+                                "cluster.rpc: события каталогов сертификатов включены"
+                            );
+                            watch = Some(rx);
+                            // Отпечаток на момент постановки наблюдения: событие каталога — только
+                            // при последующем изменении.
+                            seen = Some(rpc_tls_fingerprint(tls).await);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "cluster.rpc: события каталогов сертификатов недоступны — опрос отпечатка файлов"
+                            );
+                        }
+                    }
+                }
+                // Без событий ОС — опрос отпечатка раз в `poll`; событие — только при изменении файлов.
+                let poll_files = watch.is_none() && !poll.is_zero();
+                let changed = tokio::select! {
+                    () = async {
+                        match watch.as_mut() {
+                            Some(rx) => {
+                                let _ = rx.recv().await;
+                            }
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => true,
+                    () = async {
+                        if poll_files {
+                            tokio::time::sleep(poll).await
+                        } else {
+                            std::future::pending::<()>().await
+                        }
+                    } => false,
+                };
+                if changed {
+                    // Наблюдение прекратилось — канал закрыт: событие (сверка файлов) и новая попытка
+                    // постановки наблюдения при следующем шаге.
+                    if watch.as_ref().is_some_and(|rx| rx.is_closed()) {
+                        watch = None;
+                    }
+                    return Some(((), (events, dirs, watch, poll, seen)));
+                }
+                let now = rpc_tls_fingerprint(tls).await;
+                if seen != Some(now) {
+                    seen = Some(now);
+                    return Some(((), (events, dirs, watch, poll, seen)));
+                }
+            }
+        },
+    )
+}
+
+/// Подключение шин шардов справочника, добавленных после запуска (`ShardedSignalBus::refresh`, APP-47):
+/// по сигналам `ShardsChanged`, `ConfigReloaded` и `Resync`; переподписка после ошибки — через
+/// `resubscribe`. До `shutdown`.
+async fn shard_buses_follow(
+    bus: Arc<ShardedSignalBus>,
+    resubscribe: Duration,
+    shutdown: CancellationToken,
+) {
+    loop {
+        let stream = match bus.subscribe_system().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                tracing::warn!(error = %e, retry_in = ?resubscribe,
+                    "cluster: подписка на сигналы шины шардов не удалась");
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    () = tokio::time::sleep(resubscribe.max(Duration::from_millis(1))) => continue,
+                }
+            }
+        };
+        tokio::pin!(stream);
+        loop {
+            let event = tokio::select! {
+                () = shutdown.cancelled() => return,
+                event = stream.next() => event,
+            };
+            let Some(event) = event else { break };
+            if matches!(
+                event.kind,
+                tp_contracts::bus::EventKind::ShardsChanged
+                    | tp_contracts::bus::EventKind::ConfigReloaded
+                    | tp_contracts::bus::EventKind::Resync
+            ) {
+                if let Err(e) = bus.refresh().await {
+                    tracing::warn!(error = %e, "cluster: шины новых шардов не подключены");
+                }
             }
         }
-    });
-    rpc.follow_tls(&tls, store, changes).await;
+        // Поток подписки закончился (ошибка шины): переподписка.
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            () = tokio::time::sleep(resubscribe.max(Duration::from_millis(1))) => {}
+        }
+    }
 }
 
 /// Продление записи узла с периодом `period` до остановки.
@@ -1667,18 +1916,90 @@ mod tests {
         (port, count)
     }
 
-    struct Echo;
+    /// APP-48: показатель дисков кэша — больше из двух: занятое место файловой системы каталога кэша и
+    /// заполнение кэша относительно предела `search.cache.max_bytes`, приведённое к объёму файловой системы.
+    #[test]
+    fn cache_disk_load_takes_greater_share() {
+        let gib = 1u64 << 30;
+        // ФС почти пуста, кэш у предела (80 %): показатель — заполнение относительно предела.
+        let usage = FsUsage {
+            total: 100 * gib,
+            available: 99 * gib,
+        };
+        let (free, total) = cache_disk_load(usage, 8 * gib, 10 * gib);
+        assert_eq!(total, 100 * gib);
+        assert_eq!((total - free) * 100 / total, 80);
+        // ФС занята на 97 %, кэш у предела (10 %): показатель — файловая система.
+        let usage = FsUsage {
+            total: 100 * gib,
+            available: 3 * gib,
+        };
+        let (free, total) = cache_disk_load(usage, 10 * gib, 10 * gib);
+        assert_eq!(total, 100 * gib);
+        assert_eq!((total - free) * 100 / total, 97);
+        // `max_bytes: 0` — только файловая система.
+        let (free, total) = cache_disk_load(usage, 10 * gib, 0);
+        assert_eq!(total, 100 * gib);
+        assert_eq!(free, 3 * gib);
+        // Заполнение кэша не превышает объёма файловой системы и предела.
+        let usage = FsUsage {
+            total: gib,
+            available: gib,
+        };
+        let (free, total) = cache_disk_load(usage, 10 * gib, 8 * gib);
+        assert_eq!(total, gib);
+        assert_eq!(free, 0);
+    }
 
-    #[async_trait::async_trait]
-    impl tp_contracts::rpc::RpcHandler for Echo {
-        async fn handle(&self, r: tp_contracts::rpc::RpcRequest) -> Result<bytes::Bytes> {
-            Ok(bytes::Bytes::from(format!(
-                "{}|{}|{}",
-                r.caller,
-                r.key,
-                String::from_utf8_lossy(&r.body)
-            )))
+    /// APP-48: заполненная файловая система каталога кэша поднимает уровень нагрузки узла.
+    #[tokio::test]
+    async fn full_cache_disk_raises_node_load() {
+        use tp_contracts::load::{LoadLevel, LoadMonitor};
+
+        let total = 100u64 * (1 << 30);
+        let snapshot = ResourceSnapshot {
+            resources: NodeResources {
+                cpus: 1.0,
+                memory_total: u64::MAX,
+                memory_available: u64::MAX,
+            },
+            memory_current: None,
+            cpu_usage_usec: None,
+            cpu_used: None,
+        };
+        let (resources, _) = tokio::sync::watch::channel(snapshot);
+        let shutdown = CancellationToken::new();
+        let load = NodeLoad::start(
+            LoadConfig::default(),
+            resources,
+            None,
+            &Metrics::default(),
+            shutdown.clone(),
+        );
+        let mut level = load.subscribe();
+        let inputs = load.inputs();
+        // Диск каталога кэша занят на 99 % — выше порога «высокого» уровня (95 %).
+        let (free, total) = cache_disk_load(
+            FsUsage { total, available: total / 100 },
+            total - total / 100,
+            total,
+        );
+        inputs.set_cache_disk(free, total);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if *level.borrow_and_update() == LoadLevel::High {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "уровень нагрузки не поднят заполненным диском кэша"
+            );
+            tokio::select! {
+                changed = level.changed() => if changed.is_err() { panic!("монитор остановлен") },
+                () = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
         }
+        shutdown.cancel();
     }
 
     /// APP-36: отпечаток файлов сертификатов межузлового канала меняется при смене файла и не меняется без
@@ -1705,7 +2026,9 @@ mod tests {
     /// на принимающем узле отказывает роли без разрешения. APP-30: узел `b` слушает `cluster.listen`, а объявляет
     /// `cluster.addr` с другим портом (проброс порта) — `a` вызывает `b` по объявленному адресу через проброс;
     /// `a` без `listen` слушает свой `addr`. APP-36: ключ узла `b` — из хранилища секретов
-    /// (`cluster.rpc.tls.key`), файла ключа у него нет; ключ узла `a` — в файле.
+    /// (`cluster.rpc.tls.key`), файла ключа у него нет; ключ узла `a` — в файле. APP-46: узел с ролью search
+    /// обслуживает `search/query` (учётной записи без индекса — пустой ответ), незарегистрированная служба —
+    /// `NotFound`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn two_nodes_call_each_other_over_rpc() {
         use tp_contracts::rpc::{Rpc, RpcError, RpcService};
@@ -1797,29 +2120,46 @@ mod tests {
             assert_eq!(me.addr, format!("https://127.0.0.1:{port}"));
         }
 
-        let search = RpcService::new(Role::Search, "echo").expect("service");
-        b.serve(search.clone(), Arc::new(Echo)).expect("serve");
+        // APP-46: служба `search/query` зарегистрирована на узле с ролью search: учётной записи без индекса
+        // соответствует пустой ответ.
+        let query = RpcService::new(Role::Search, rpc_services::SEARCH_QUERY).expect("service");
+        let request = crate::rpc_services::SearchQueryRequest {
+            tenant: tp_contracts::TenantId::DEFAULT,
+            account: tp_contracts::AccountId::new(),
+            mailboxes: Vec::new(),
+            q: tp_contracts::search::TextQuery::Term {
+                field: tp_contracts::search::TextField::Subject,
+                text: "word".into(),
+            },
+            sort: tp_contracts::search::SearchSort::default(),
+            limit: 10,
+        };
         let out = a
             .call(
-                &search,
-                "k1",
-                bytes::Bytes::from_static(b"ping"),
+                &query,
+                "default/none",
+                bytes::Bytes::from(serde_json::to_vec(&request).expect("body")),
                 Duration::from_secs(10),
             )
             .await
             .expect("call a -> b");
-        assert_eq!(&out[..], b"a|k1|ping");
+        let ids: Vec<tp_contracts::MessageId> = serde_json::from_slice(&out).expect("ids");
+        assert!(ids.is_empty(), "{ids:?}");
         // Вызов дошёл по объявленному адресу `b` — через проброс на его `cluster.listen`.
         let forwards = forwards.expect("проброс");
         assert!(forwards.load(Ordering::SeqCst) > 0, "вызов мимо проброса");
 
+        // APP-46: служба роли search, которую узел не зарегистрировал, — `NotFound`.
+        let snippet = RpcService::new(Role::Search, "snippet").expect("service");
+        let refused = a.call(&snippet, "k2", bytes::Bytes::new(), Duration::from_secs(10)).await;
+        assert_eq!(refused, Err(RpcError::Failed(Error::NotFound)));
+
         // Роли search службы maintenance не разрешены: отказ на принимающем узле `a`.
-        let maintenance = RpcService::new(Role::Maintenance, "echo").expect("service");
-        a.serve(maintenance.clone(), Arc::new(Echo)).expect("serve");
+        let maintenance = RpcService::new(Role::Maintenance, "state").expect("service");
         let refused = b
             .call(
                 &maintenance,
-                "k2",
+                "k3",
                 bytes::Bytes::new(),
                 Duration::from_secs(10),
             )
@@ -1848,6 +2188,178 @@ mod tests {
             let report = running.wait().await.expect("wait");
             assert!(report.failed.is_empty(), "{report:?}");
         }
+        crate::testutil::drop_database(&url, &db_name).await;
+    }
+
+    /// APP-45: замена файлов сертификата узла (УЦ, сертификат, ключ) — новые соединения Rpc с новым
+    /// сертификатом без перезапуска: узел `c`, доверяющий только новому УЦ, до замены не соединяется с `b`
+    /// (`Unavailable`), после замены соединяется (матрица отвечает `Forbidden` — транспорт и опознание
+    /// работают). Узел `b` ключ читает из файла, `c` — из файла.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn rpc_tls_reloaded_on_file_change() {
+        use tp_contracts::rpc::{Rpc, RpcError, RpcService};
+
+        let Some(url) = tp_testkit::pg_url() else {
+            eprintln!("TEST_DATABASE_URL не задан — тест пропущен");
+            return;
+        };
+        let url = dev_url(&url);
+        let (db_name, url_db) = crate::testutil::create_database(&url).await;
+        let (db_url, password) = split_password(&url_db);
+        let secrets = Arc::new(MemSecretStore::default());
+        let db: SecretRef = "thepost/db#password".parse().expect("ref");
+        secrets.set(&db, password.unwrap_or_else(|| "unused".to_owned()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let certs = cluster_testdata();
+        // Каталог узла `b`: файлы сертификатов узла — их заменит тест.
+        let home_b = dir.path().join("b");
+        std::fs::create_dir_all(&home_b).expect("dir");
+        for file in ["ca.pem", "node-b.pem", "node-b-key.pem"] {
+            std::fs::copy(certs.join(file), home_b.join(file)).expect("copy");
+        }
+        // Новый УЦ и пара узла `b` от него — из тестовых данных `tp-cluster`.
+        let bundle = {
+            let mut out = std::fs::read(certs.join("ca.pem")).expect("ca");
+            out.extend(std::fs::read(certs.join("ca2.pem")).expect("ca2"));
+            out
+        };
+        let (b2_cert, b2_key) = (
+            std::fs::read(certs.join("node-b2.pem")).expect("node-b2"),
+            std::fs::read(certs.join("node-b2-key.pem")).expect("node-b2-key"),
+        );
+
+        let mut nodes = Vec::new();
+        // Узел `a` — maintenance (вызывает `search/query`), `b` — search, `c` — jmap (после замены).
+        for (id, role) in [("a", "maintenance"), ("b", "search")] {
+            let (home, tls) = if id == "b" {
+                let tls = format!(
+                    "      ca_file: {h}/ca.pem\n      cert_file: {h}/node-b.pem\n      \
+                     key_file: {h}/node-b-key.pem\n",
+                    h = home_b.display(),
+                );
+                (home_b.clone(), tls)
+            } else {
+                let home = dir.path().join(id);
+                std::fs::create_dir_all(&home).expect("dir");
+                let tls = format!(
+                    "      ca_file: {c}/ca.pem\n      cert_file: {c}/node-{id}.pem\n      \
+                     key_file: {c}/node-{id}-key.pem\n",
+                    c = certs.display(),
+                );
+                (home, tls)
+            };
+            let port = free_port().await;
+            let path = write_config(
+                &home,
+                &format!(
+                    "domain: example.org\nprofile: dev\nroles: [{role}]\n\
+                     service_http:\n  listen: 127.0.0.1:0\n  allow_plaintext: true\n\
+                     database:\n  url: \"{db_url}\"\n  password: {{ secret: \"{db}\" }}\n  tls: {{ allow_plaintext: true }}\n\
+                     cluster:\n  node_id: {id}\n  addr: https://127.0.0.1:{port}\n\
+                     \x20 listen: 127.0.0.1:{port}\n  rpc:\n    members_ttl: 0s\n\
+                     \x20   permissions:\n      maintenance: [search/*]\n    tls:\n{tls}\
+                     \x20 rpc_tls_reload_interval: 100ms\n\
+                     runtime:\n  drain_deadline: 5s\n\
+                     blob:\n  url: file://{}\n",
+                    home.join("blob").display(),
+                ),
+            );
+            let (o, shutdown) = opts(path, Some(secrets.clone()));
+            let running = start(o).await.expect("start");
+            assert!(running.rpc.is_some(), "{id}: транспорт не запущен");
+            nodes.push((running, shutdown));
+        }
+        let rpc = |i: usize| nodes[i].0.rpc.clone().expect("rpc");
+        let (a, b) = (rpc(0), rpc(1));
+        let query = RpcService::new(Role::Search, rpc_services::SEARCH_QUERY).expect("service");
+
+        // Вызов `a` → `b` работает: старая пара узла `b` в силе.
+        let body = serde_json::to_vec(&crate::rpc_services::SearchQueryRequest {
+            tenant: tp_contracts::TenantId::DEFAULT,
+            account: tp_contracts::AccountId::new(),
+            mailboxes: Vec::new(),
+            q: tp_contracts::search::TextQuery::Term {
+                field: tp_contracts::search::TextField::Subject,
+                text: "word".into(),
+            },
+            sort: tp_contracts::search::SearchSort::default(),
+            limit: 10,
+        })
+        .expect("body");
+        let out = a
+            .call(&query, "default/none", bytes::Bytes::from(body), Duration::from_secs(10))
+            .await
+            .expect("call a -> b");
+        let ids: Vec<tp_contracts::MessageId> = serde_json::from_slice(&out).expect("ids");
+        assert!(ids.is_empty(), "{ids:?}");
+
+        // Замена файлов сертификата узла `b`: новый УЦ, новая пара. Перезапуска нет.
+        std::fs::write(home_b.join("ca.pem"), &bundle).expect("ca");
+        std::fs::write(home_b.join("node-b.pem"), b2_cert).expect("cert");
+        std::fs::write(home_b.join("node-b-key.pem"), b2_key).expect("key");
+
+        // Узел `c` доверяет только новому УЦ (ca2): с прежней парой узла `b` соединения нет, с новой —
+        // транспорт работает и матрица отвечает отказом.
+        let home_c = dir.path().join("c");
+        std::fs::create_dir_all(&home_c).expect("dir");
+        let ca2 = home_c.join("ca2.pem");
+        std::fs::copy(certs.join("ca2.pem"), &ca2).expect("ca2");
+        let port_c = free_port().await;
+        let path_c = write_config(
+            &home_c,
+            &format!(
+                "domain: example.org\nprofile: dev\nroles: [jmap]\n\
+                 service_http:\n  listen: 127.0.0.1:0\n  allow_plaintext: true\n\
+                 database:\n  url: \"{db_url}\"\n  password: {{ secret: \"{db}\" }}\n  tls: {{ allow_plaintext: true }}\n\
+                 cluster:\n  node_id: c\n  addr: https://127.0.0.1:{port_c}\n\
+                 \x20 listen: 127.0.0.1:{port_c}\n  rpc:\n    members_ttl: 0s\n\
+                 \x20   tls:\n      ca_file: {ca2}\n      cert_file: {certs}/node-c.pem\n      \
+                 key_file: {certs}/node-c-key.pem\n\
+                 runtime:\n  drain_deadline: 5s\n\
+                 blob:\n  url: file://{}\n",
+                home_c.join("blob").display(),
+                ca2 = ca2.display(),
+                certs = certs.display(),
+            ),
+        );
+        let (o, shutdown_c) = opts(path_c, Some(secrets.clone()));
+        let running_c = start(o).await.expect("start c");
+        assert!(running_c.rpc.is_some(), "c: транспорт не запущен");
+        let c = running_c.rpc.clone().expect("rpc c");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let refused = loop {
+            let call = c
+                .call(
+                    &query,
+                    "default/none",
+                    bytes::Bytes::new(),
+                    Duration::from_secs(5),
+                )
+                .await;
+            if call == Err(RpcError::Failed(Error::Forbidden)) {
+                break call;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "новая пара узла b не подхвачена: {call:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        assert_eq!(
+            refused,
+            Err(RpcError::Failed(Error::Forbidden)),
+            "транспорт с новой парой работает, матрица отказывает роли jmap"
+        );
+
+        for (running, shutdown) in nodes {
+            shutdown.cancel();
+            let report = running.wait().await.expect("wait");
+            assert!(report.failed.is_empty(), "{report:?}");
+        }
+        shutdown_c.cancel();
+        let report = running_c.wait().await.expect("wait c");
+        assert!(report.failed.is_empty(), "{report:?}");
         crate::testutil::drop_database(&url, &db_name).await;
     }
 }
