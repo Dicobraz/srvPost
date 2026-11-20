@@ -3623,7 +3623,6 @@ impl Delivery {
     /// `delivery.redirect_hops` или исчерпан `delivery.redirect_total` (`over`) — правила ящика не применяются,
     /// письмо — в папку по умолчанию, запись в журнал доставки.
     #[allow(clippy::too_many_arguments)] // конвенция репо (как у `forward`)
-    #[allow(clippy::too_many_arguments)] // вердикт каталога признаков письма (SMTP-52); конвенция репо
     async fn apply_rules(
         &self,
         id: &str,
