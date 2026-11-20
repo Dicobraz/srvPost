@@ -285,6 +285,32 @@ async fn background_binding_by_thread_key() {
     let m6 = MessageId::new();
     assert_eq!(store.bind(scope, m6, &["chain-1"]).await, Ok(t1));
 
+    // APP-77: `thread_key` хранит значения заголовков в угловых скобках (иногда — несколько): фоновая
+    // привязка канонизирует идентификаторы и находит беседу приёма, ключи регистрируются канонической
+    // формой — ответ по любому из них попадает в ту же беседу.
+    let m7 = MessageId::new();
+    insert_message(
+        &meta,
+        scope,
+        mailbox,
+        m7,
+        "<chain-1> <EXTRA-1@Example.ORG>",
+        received,
+    )
+    .await;
+    assert_eq!(meta.bind_unthreaded_messages(scope, 100).await, Ok(1));
+    assert_eq!(
+        store.thread_of(scope, m7).await,
+        Ok(Some(t1)),
+        "каноническая форма ключей находит беседу приёма"
+    );
+    let m8 = MessageId::new();
+    assert_eq!(
+        store.bind(scope, m8, &["<EXTRA-1@Example.ORG>"]).await,
+        Ok(t1),
+        "ключи фоновой привязки — канонические, для будущих ответов"
+    );
+
     // Повторный вызов — привязывать нечего.
     assert_eq!(meta.bind_unthreaded_messages(scope, 100).await, Ok(0));
     assert!(matches!(
