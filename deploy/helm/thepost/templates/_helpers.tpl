@@ -46,7 +46,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 /etc/thepost/krb5/thepost.keytab
 {{- end -}}
 
-{{/* config.yaml: с cnpg.enabled адреса database задаёт чарт — служба primary (<кластер>-rw) или PgBouncer (Pooler). */}}
+{{/* config.yaml: с cnpg.enabled адреса database задаёт чарт — служба primary (<кластер>-rw) или PgBouncer (Pooler),
+     прямые адреса мимо PgBouncer (direct_url) и реплика фоновых чтений (<кластер>-ro, cnpg.read_replica). */}}
 {{- define "thepost.config" -}}
 {{- $cfg := deepCopy .Values.config -}}
 {{- if .Values.cnpg.enabled -}}
@@ -62,6 +63,18 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- $_ := set $db "url" $rw -}}
 {{- $_ := unset $db "pgbouncer" -}}
 {{- $_ := unset $db "direct_url" -}}
+{{- end -}}
+{{- $readReplica := true -}}
+{{- if hasKey .Values.cnpg "read_replica" -}}
+{{-   $readReplica = .Values.cnpg.read_replica -}}
+{{- end -}}
+{{- if $readReplica -}}
+{{- $ro := printf "postgres://thepost@%s-ro:5432/%s?%s" (include "thepost.dbCluster" .) .Values.cnpg.database $tls -}}
+{{- $_ := set $db "read_replica" $ro -}}
+{{- $_ := set $db "replica_max_lag" (.Values.cnpg.replica_max_lag | default "30s") -}}
+{{- else -}}
+{{- $_ := unset $db "read_replica" -}}
+{{- $_ := unset $db "replica_max_lag" -}}
 {{- end -}}
 {{- $_ := set $cfg "database" $db -}}
 {{- end -}}

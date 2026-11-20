@@ -1,8 +1,10 @@
 # Узел The Post в Kubernetes:
 #   helm install thepost deploy/helm/thepost -n thepost --create-namespace -f <свои значения>
-# До установки — OpenBao (deploy/helm/openbao, bootstrap.sh: Kubernetes auth для сервисного аккаунта thepost),
-# секрет с цепочкой TLS клиентских протоколов (values.tls.secretName: tls.crt; ca.crt — CA внутренних каналов) и ключ TLS
-# в OpenBao (секрет thepost/tls#key — bootstrap.sh с TLS_KEY; в под монтируются только tls.crt и ca.crt).
+# До установки — OpenBao (deploy/helm/openbao) и секрет с токеном администратора OpenBao (openbaoBootstrap):
+# настройку OpenBao — KV, политика, Kubernetes auth, пароли PostgreSQL, ключ TLS — делает Job Helm-хука чарта
+# (DEP-33; прежний bootstrap.sh удалён). До установки — также секрет с цепочкой TLS клиентских протоколов
+# (values.tls.secretName: tls.crt; ca.crt — CA внутренних каналов); в под монтируются только tls.crt и ca.crt,
+# ключ TLS — секрет thepost/tls#key в OpenBao (пишет хук из tlsKeySecret или сам узел — ACME).
 
 # Образ узла — ghcr.io (выпуски beta.yml, linux/amd64; теги <версия> = appVersion чарта, v<версия>-beta.N и beta),
 # подписан cosign без ключей:
@@ -25,7 +27,8 @@ imagePullSecrets: []
 
 replicaCount: 1
 
-# Сервисный аккаунт — вход в OpenBao через Kubernetes auth (роль thepost, bootstrap.sh): токен монтируется в под.
+# Сервисный аккаунт — вход в OpenBao через Kubernetes auth (роль thepost — её создаёт хук openbaoBootstrap):
+# токен монтируется в под.
 serviceAccount:
   create: true
   name: thepost
@@ -74,6 +77,32 @@ ports:
 service:
   type: LoadBalancer
   annotations: {}
+
+# Начальная настройка OpenBao — Job Helm-хука (pre-install, pre-upgrade) на образе OpenBao (DEP-33; прежний
+# сценарий bootstrap.sh удалён, CI-05 — решение 6: команды bao в манифесте, не файлом на shell). Создаёт:
+# KV v2 thepost, политику thepost (копия deploy/openbao/thepost-policy.hcl — в манифесте хука), Kubernetes auth
+# (роль thepost для сервисного аккаунта), секреты паролей PostgreSQL (thepost/db, thepost/db-owner,
+# thepost/db-readonly — случайные при первом запуске, существующие не меняются) и ключ TLS слушателей
+# thepost/tls (если задан tlsKeySecret — новая версия секрета, узел перечитывает пару сам). Ключи S3
+# (thepost/s3) хук не создаёт. Повторная установка настройки не меняет. До установки — секрет с токеном
+# администратора OpenBao (поле token) в пространстве релиза:
+#   kubectl -n thepost create secret generic openbao-bootstrap --from-file=token=<файл с токеном>
+# Настройка средствами заказчика — enabled: false.
+openbaoBootstrap:
+  enabled: true
+  # Адрес OpenBao для хука — тот же, что config.secrets.url.
+  url: https://openbao.openbao.svc:8200
+  tokenSecret: openbao-bootstrap
+  # CA внутренних каналов для проверки сертификата OpenBao (BAO_CACERT): по умолчанию ca.crt секрета
+  # tls.secretName — тот же CA, что в config.secrets.tls.ca_file.
+  caSecret: ""
+  caKey: ca.crt
+  # Секрет с ключом TLS слушателей (поле tlsKeyKey, PEM) — записывается в секрет thepost/tls.
+  tlsKeySecret: ""
+  tlsKeyKey: tls.key
+  # Образ OpenBao для хука — как у сервера (deploy/helm/openbao/values.yaml, server.image).
+  image: quay.io/openbao/openbao:2.7.2
+  resources: {}
 
 # Память — requests и limits (кэши занимают её до лимита, SRS 2.7); размеры — по рекомендациям VPA (vpa.enabled).
 # HPA по CPU считает загрузку от requests.cpu: с autoscaling.enabled он обязателен. Пример:
@@ -150,8 +179,9 @@ metrics:
 # Оператор CloudNativePG 1.26+ (synchronous.dataDurability) и его CRD — отдельно, до чарта:
 #   helm repo add cnpg https://cloudnative-pg.github.io/charts
 #   helm install cnpg cnpg/cloudnative-pg -n cnpg-system --create-namespace
-# С enabled: true адреса config.database (url, pgbouncer, direct_url) задаёт чарт: служба primary <выпуск>-db-rw
-# (единый адрес, список urls не нужен) и Pooler <выпуск>-db-pooler-rw; CA сервера — секрет <выпуск>-db-ca
+# С enabled: true адреса config.database (url, pgbouncer, direct_url, read_replica, replica_max_lag) задаёт чарт:
+# служба primary <выпуск>-db-rw (единый адрес, список urls не нужен), Pooler <выпуск>-db-pooler-rw и служба
+# реплик <выпуск>-db-ro (фоновые чтения, cnpg.read_replica); CA сервера — секрет <выпуск>-db-ca
 # (в под — только ca.crt). Секреты паролей (kubernetes.io/basic-auth: username, password) создаются до установки —
 # с теми же паролями, что в OpenBao: owner — thepost_owner (thepost/db-owner), app — thepost (thepost/db),
 # readonly — thepost_readonly (thepost/db-readonly).
@@ -190,6 +220,14 @@ cnpg:
       max_client_conn: "1000"
       default_pool_size: "20"
       max_prepared_statements: "200"
+  # Фоновые чтения (ReadIntent::Stale — экспорт, отчёты, eDiscovery, verify, первичная индексация) — на реплике:
+  # с true чарт задаёт config.database.read_replica — службу <выпуск>-db-ro (только реплики) с теми же
+  # параметрами TLS, что у url, порог отставания — replica_max_lag. Отставание больше порога, неизвестно или
+  # реплика недоступна — чтение на primary. false — секция не задаётся, фоновые чтения на primary. Свои
+  # сертификаты сервера (cnpg.certificates) — SAN должен включать имя службы -ro (проверка verify-full).
+  read_replica: true
+  # Наибольшее отставание реплики для фоновых чтений (config.database.replica_max_lag).
+  replica_max_lag: 30s
 
 # config.yaml узла (SRS 5.5; полный перечень — thepost config schema). Слушатели — на портах ports.*.container.
 # Admin API — только loopback пода (SRS 6.8; доступ — kubectl port-forward), в Service не входит.
@@ -206,11 +244,19 @@ config:
     owner:
       user: thepost_owner
       password: { secret: "thepost/db-owner#password" }
+    # Внешний PgBouncer (transaction): url — PgBouncer, pgbouncer: true; слушатель сигналов (LISTEN/NOTIFY) и
+    # миграции — прямые адреса мимо PgBouncer: один — direct_url, несколько (поиск primary) — direct_urls.
+    # Фоновые чтения (экспорт, отчёты, eDiscovery, verify, индексация) — на реплике, если отставание не больше
+    # replica_max_lag (умолчание 30s), иначе — на primary. С cnpg.enabled их задаёт чарт (cnpg.read_replica).
+    #   pgbouncer: true
+    #   direct_url: postgres://thepost@pg-primary.example.ru:5432/thepost?sslmode=verify-full&sslrootcert=/etc/thepost/tls/ca.crt
+    #   read_replica: postgres://thepost@pg-replica.example.ru:5432/thepost
+    #   replica_max_lag: 30s
   blob:
     url: s3://thepost-blob
     # Параметры S3 задайте в своих значениях: без endpoint узел обращается к AWS (region us-east-1), без credentials
     # берёт ключи из окружения. Канал — только HTTPS. Ключи — только ссылками на секрет OpenBao thepost/s3 (поля
-    # access_key_id, secret_access_key); bootstrap.sh его не создаёт — заведите сами:
+    # access_key_id, secret_access_key); хук openbaoBootstrap его не создаёт — заведите сами:
     #   bao kv put -mount=thepost s3 access_key_id=… secret_access_key=…
     # s3:
     #   endpoint: https://s3.example.ru:8333

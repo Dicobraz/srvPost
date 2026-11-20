@@ -53,6 +53,8 @@ Linux или WSL2 с Docker Engine / Docker Desktop, Compose v2. Команды 
 ## Helm
 1. `helm template openbao openbao/openbao --version 0.30.6 -n openbao -f deploy/helm/openbao/values.yaml` → StatefulSet
    на 3 реплики, `BAO_CACERT`, тома `openbao-tls`, `openbao-unseal`, ClusterRoleBinding `system:auth-delegator`.
-2. В кластере: установка, `bao operator init`, `bootstrap.sh` → под с сервисным аккаунтом `thepost` в пространстве
-   `thepost` входит `bao write auth/kubernetes/login role=thepost jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token`
-   и читает `thepost/db`.
+2. В кластере: установка OpenBao, `bao operator init`, секрет `openbao-bootstrap` (токен администратора, поле
+   `token`), `helm install thepost …` → Job Helm-хука `openbao-bootstrap` — успешно; под с сервисным аккаунтом
+   `thepost` в пространстве `thepost` входит
+   `bao write auth/kubernetes/login role=thepost jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token`
+   и читает `thepost/db`. Повторный `helm upgrade` → хук настройку не меняет (секреты не перезаписаны, DEP-33).

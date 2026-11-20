@@ -7,8 +7,8 @@ domain: example.ru
 # первый доступный для записи из url и urls (target_session_attrs=read-write), при переключении сбрасывает пул и
 # повторяет идемпотентные операции (database.failover), дольше retry_for — временный отказ (SMTP 4xx).
 # Учётные данные и параметры TLS — из url, из адресов urls — только хост, порт и БД.
-# Узел — роль thepost (thepost_app); миграции — владелец схемы thepost_owner (DEP-08). Миграции подключаются только к
-# url, без поиска primary: после переключения — meta.migrate_on_start: false или url — текущий primary.
+# Узел — роль thepost (thepost_app); миграции — владелец схемы thepost_owner (DEP-08): прямые адреса ищут primary
+# в direct_url и direct_urls, пусто — миграции от роли url.
 database:
   url: postgres://thepost@pg1.example.ru:5432/thepost?sslmode=verify-full
   urls:
@@ -19,11 +19,22 @@ database:
   owner:
     user: thepost_owner
     password: { secret: "thepost/db-owner#password" }
-  # Через PgBouncer (transaction): url — PgBouncer, pgbouncer: true; слушатель сигналов и миграции — direct_url мимо
-  # PgBouncer, один адрес (список urls к нему не применяется) — VIP или DNS, следующий за primary.
+  # Через PgBouncer (transaction): url — PgBouncer, pgbouncer: true; слушатель сигналов (LISTEN/NOTIFY) и миграции —
+  # прямые адреса мимо PgBouncer (prepared statements и LISTEN в режиме transaction не работают): узел данных или
+  # VIP/DNS, следующий за primary. Один адрес — direct_url, несколько (поиск primary, как url и urls) — direct_urls.
   #   url: postgres://thepost@pgbouncer.example.ru:6432/thepost?sslmode=verify-full
   #   pgbouncer: true
   #   direct_url: postgres://thepost@pg-primary.example.ru:5432/thepost?sslmode=verify-full
+  #   direct_urls:
+  #     - postgres://thepost@pg2.example.ru:5432/thepost
+  #     - postgres://thepost@pg3.example.ru:5432/thepost
+  # Фоновые чтения (ReadIntent::Stale: экспорт, отчёты, eDiscovery, verify, первичная индексация) — на реплике, если
+  # её отставание не больше replica_max_lag (умолчание 30s); отставание больше, неизвестно или реплика недоступна —
+  # на primary. Без реплики секция не задаётся — фоновые чтения на primary. Пароль — тот же (database.password),
+  # роль и БД — из адреса; TLS — в самом адресе: sslmode и sslrootcert из url к read_replica не переносятся
+  # (если CA задан в database.tls, достаточно sslmode=verify-full).
+  #   read_replica: postgres://thepost@pg2.example.ru:5432/thepost?sslmode=verify-full
+  #   replica_max_lag: 30s
 
 # S3 (эталон — SeaweedFS); ключи доступа — ссылки на секрет thepost/s3 в секции BLOB-хранилища.
 blob:

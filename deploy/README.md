@@ -7,9 +7,9 @@
 | `compose/tls/` | Генерация самоподписанного CA (`gen-certs.sh`), `pg_hba.conf` (только `hostssl`) |
 | `compose/openbao/` | OpenBao в compose: конфигурация (Raft, TLS, seal `static`), запуск, начальная настройка (`init.sh`) |
 | `compose/postgres/app-role.sh` | Учётные записи PostgreSQL: владелец схемы `thepost_owner`, узел `thepost`, только чтение `thepost_readonly` |
-| `openbao/thepost-policy.hcl` | Политика узла `thepost` в OpenBao (общая для compose, Helm, Ansible) |
-| `helm/openbao/` | Значения чарта `openbao/openbao` и настройка Kubernetes auth (`bootstrap.sh`) |
-| `helm/thepost/` | Чарт узла: не root, корневая ФС только для чтения, без capabilities, seccomp `RuntimeDefault`; HPA по CPU, по соединениям — опция (`autoscaling`), PodDisruptionBudget, VPA в режиме рекомендаций, anti-affinity по узлам; PostgreSQL — CloudNativePG (`cnpg.enabled`) |
+| `openbao/thepost-policy.hcl` | Политика узла `thepost` в OpenBao (общая для compose, Ansible; в чарте `helm/thepost` — та же политика в манифесте хука `openbaoBootstrap`, DEP-33: править в обоих файлах) |
+| `helm/openbao/` | Значения чарта `openbao/openbao` (Raft, TLS, seal `static`); настройку OpenBao делает хук чарта `helm/thepost` (`openbaoBootstrap`, DEP-33) |
+| `helm/thepost/` | Чарт узла: не root, корневая ФС только для чтения, без capabilities, seccomp `RuntimeDefault`; HPA по CPU, по соединениям — опция (`autoscaling`), PodDisruptionBudget, VPA в режиме рекомендаций, anti-affinity по узлам; PostgreSQL — CloudNativePG (`cnpg.enabled`); настройка OpenBao — Job Helm-хука (`openbaoBootstrap`, DEP-33) |
 | `helm/prometheus-adapter/` | Значения чарта prometheus-adapter: метрика `tp_load_connections` для HPA по соединениям |
 | `ansible/` | Эталон SMB одной командой (`smb.yml`: роли `chrony`, `thepost_pki`, `openbao`, `postgresql`, `rspamd`, `clamav_milter`, `thepost`, `pgbackrest`); восстановление из копий (`restore.yml`); OpenBao отдельно (`openbao.yml`); СУБД Enterprise-ВМ — pg_auto_failover (`pg-ha.yml`); «Малый Enterprise» — 2 узла mailbox и 3 ВМ данных: pg_auto_failover, OpenBao (Raft), SeaweedFS с метаданными filer в PostgreSQL (`small-enterprise.yml`, роль `seaweedfs`) |
 | `stand/` | Стенд SMB и базовая нагрузка (APP-D): ВМ SMB + генератор, imaptest, smtp-source, k6, отчёт; автообновление из релизов (`stand-update.sh`, DEP-59) |
@@ -205,7 +205,7 @@ thepost admin policy get                            # заданное и дей
 | Малый Enterprise (З.2) | S3: SeaweedFS на трёх ВМ данных, шлюз S3 на каждом узле (`https://localhost:8333`) | `ansible/small-enterprise.yml`, бакет — `small_bucket` |
 | Enterprise-ВМ (З.3) | S3, `s3://thepost-blob` | пресет `config/mailbox.yaml` + секция `blob.s3` |
 | Enterprise-K8s (З.4) | S3, `s3://thepost-blob` | `config.blob` в `helm/thepost/values.yaml` + `config.blob.s3` |
-| edge (DMZ) | писем ящиков нет; локальная очередь `file:///var/lib/thepost/edge` | пресет `config/edge.yaml` |
+| edge (DMZ) | писем ящиков нет; без очереди и состояния — письмо передаётся в той же сессии на transport (SRS 2.6) | пресет `config/edge.yaml` |
 
 Для S3 нужна секция `blob.s3`. В пресете `mailbox` её нет, в значениях чарта (`config.blob`) она — закомментированный
 пример: задаёт администратор, иначе узел обратится к AWS с ключами из окружения.
@@ -224,8 +224,8 @@ blob:
   `tls.allow_plaintext`). Клиентский сертификат (mTLS) клиент S3 не поддерживает.
 - Ключи — только ссылки на секрет OpenBao `thepost/s3` (поля `access_key_id`, `secret_access_key`); ключ открытым
   текстом — ошибка разбора. Завести: `bao kv put -mount=thepost s3 access_key_id=… secret_access_key=…`.
-  `small-enterprise.yml` создаёт секрет сам, compose — ключи стенда; роль `openbao` и `helm/openbao/bootstrap.sh`
-  его не создают. Без `credentials` ключи берутся из окружения (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`).
+  `small-enterprise.yml` создаёт секрет сам, compose — ключи стенда; роль `openbao` и хук `openbaoBootstrap`
+  чарта его не создают. Без `credentials` ключи берутся из окружения (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`).
 - Бакет заводит администратор хранилища; `small-enterprise.yml` создаёт его сам.
 - Переключить: Ansible — `thepost_config_extra: { blob: { url: …, s3: { … } } }`, Helm — `config.blob`, вручную —
   секция `blob` в `config.yaml`. Записанные объекты узел сам не переносит: переход с диска на S3 — плановое окно или
@@ -434,7 +434,8 @@ ansible-playbook -i inventory-small.yml deploy/ansible/small-enterprise.yml
 Паролей и ключей в инвентаре нет — их создаёт и хранит OpenBao: KV `thepost` — узлам (`db`, `db-owner`,
 `db-readonly`, `s3`, `tls`), KV `infra` — службам (`pgaf`, `seaweedfs`; политике `thepost` недоступен). Внутренние
 каналы — только TLS, gRPC SeaweedFS — взаимный. `config.yaml` узлов — пресет `all.yaml` с `roles: [mailbox]`,
-`blob` (S3 через шлюз `https://localhost:8333`) и адресами двух узлов PostgreSQL (`database.url` + `urls`). СУБД —
+`blob` (S3 через шлюз `https://localhost:8333`), адресами двух узлов PostgreSQL (`database.url` + `urls`) и
+репликой фоновых чтений (`database.read_replica` — второй узел данных, при установке standby). СУБД —
 `db_durability: preferred`: синхронная реплика одна, при её отказе запись продолжается без неё. Шину сигналов
 плейбук не задаёт (умолчание `bus.kind: local` — в процессе одного узла); для нескольких узлов —
 `bus: { kind: postgres }` в `small_thepost_config_extra`. Резервное копирование плейбук не ставит. Проверка отказа
@@ -555,6 +556,14 @@ Service Kubernetes; при переключении сбрасывает пул 
 | Enterprise-ВМ | pg_auto_failover: монитор + 3 узла данных (`ansible/pg-ha.yml`) | `url` + `urls` — узлы данных (`config/mailbox.yaml`) |
 | Enterprise-K8s | CloudNativePG: Cluster (3 экземпляра) + Pooler (`helm/thepost`, `cnpg.enabled`) | служба `<выпуск>-db-rw`, PgBouncer — `<выпуск>-db-pooler-rw` |
 
+Какие адреса задавать (полный перечень — `thepost config schema`):
+
+| Параметр | Когда задавать |
+|---|---|
+| `url` (+ `urls`) | пул узла всегда: единый адрес (VIP, DNS, Service) — или адреса всех узлов данных, поиск primary |
+| `pgbouncer: true`, `direct_url` / `direct_urls` | пул — через PgBouncer в режиме transaction: слушатель сигналов (LISTEN/NOTIFY) и миграции через него не работают, идут на прямые адреса мимо PgBouncer — узел данных или VIP/DNS за primary (один адрес — `direct_url`, поиск primary — список `direct_urls`); учётные данные и TLS — из `url`. Без PgBouncer прямые адреса не задают: поиск primary уже идёт по `url` + `urls` |
+| `read_replica` (+ `replica_max_lag`) | фоновые чтения ([`ReadIntent::Stale`]: экспорт, отчёты Admin API, eDiscovery, verify, «сироты» BLOB, первичная индексация) — на реплике: адрес узла данных, обычно реплики; отставание реплики больше `replica_max_lag` (умолчание 30 с), неизвестно или реплика недоступна — чтение на primary. После переключения роли узлов меняются: адрес на primary — отставание ноль. Без реплики не задают — фоновые чтения на primary. Пароль — общий (`database.password`); TLS — в самом адресе реплики (sslmode и sslrootcert из `url` к `direct_url`/`direct_urls`/`read_replica` не переносятся) |
+
 ### Enterprise-ВМ (Ansible, pg_auto_failover)
 ```bash
 ansible-galaxy collection install -r deploy/ansible/requirements.yml
@@ -570,8 +579,11 @@ pg_auto_failover по умолчанию дают ≈ 50 с). Только TLS (
 отклоняется), служебные пароли — `~postgres/.pgpass`. Учётные записи и БД The Post — на primary, как в эталоне SMB.
 Узел `thepost` (роль `thepost`): `thepost_db_url` — первый узел, `thepost_db_urls` — остальные,
 `thepost_db_failover` — `database.failover`. Шард 2 — узел своей формации (`pgaf_formation`).
-Без PgBouncer: с `pgbouncer: true` слушатель сигналов и миграции идут на `direct_url` — один адрес, `urls` к нему не
-применяется. Миграции (`database.owner`) подключаются только к `url`.
+PgBouncer перед кластером нет: прямые адреса (`direct_url`/`direct_urls`) не задаются — поиск primary идёт по
+`url` + `urls`; с PgBouncer в режиме transaction задайте прямые адреса тех же узлов — `thepost_db_direct_url`
+или `thepost_db_direct_urls` (слушатель сигналов и миграции идут мимо PgBouncer). Фоновые чтения —
+`thepost_db_read_replica`: адрес узла данных, обычно реплики (порог отставания — `thepost_db_replica_max_lag`,
+пусто — умолчание узла 30 с); «Малый Enterprise» задаёт её сам (`small-enterprise.yml`).
 
 ### Enterprise-K8s (Helm, CloudNativePG)
 ```bash
@@ -586,7 +598,9 @@ Cluster: 3 экземпляра на разных узлах Kubernetes, син�
 `cnpg.db_durability` (по умолчанию `required`, см. «Режим сохранности»),
 без суперпользователя, `pg_hba` — только `hostssl`; образ `minimal` (без barman-cloud на Python). Pooler —
 PgBouncer в режиме transaction; чарт сам задаёт `database.url` (Pooler), `pgbouncer: true` и `direct_url` (служба
-primary) и монтирует CA сервера (`<выпуск>-db-ca`, только `ca.crt`).
+primary) и монтирует CA сервера (`<выпуск>-db-ca`, только `ca.crt`). Фоновые чтения — служба реплик
+`<выпуск>-db-ro` (`database.read_replica`, порог — `cnpg.replica_max_lag`; выключить — `cnpg.read_replica: false`;
+свои сертификаты `cnpg.certificates` — SAN должен включать службу `-ro`).
 
 ### Режим сохранности: `db_durability` (решение владельца #272)
 Что делать, если primary остался без синхронной реплики (обе реплики отказали или отрезаны): ждать реплику или писать
@@ -642,10 +656,22 @@ ansible-playbook -i <инвентарь> deploy/ansible/openbao.yml \
 helm repo add openbao https://openbao.github.io/openbao-helm
 helm install openbao openbao/openbao --version 0.30.6 -n openbao --create-namespace -f deploy/helm/openbao/values.yaml
 kubectl -n openbao exec -it openbao-0 -- bao operator init   # ключи восстановления и root-токен — администратору
-BAO_TOKEN=<root-токен> TLS_KEY=tls.key sh deploy/helm/openbao/bootstrap.sh openbao thepost   # ключ — thepost/tls#key
+kubectl -n thepost create secret generic openbao-bootstrap --from-file=token=<файл с токеном администратора>
 ```
 До установки — секреты `openbao-tls` (сертификат, ключ, CA) и, без KMS/HSM, `openbao-unseal` (`helm/openbao/values.yaml`).
-Узел `thepost` входит через Kubernetes auth: сервисный аккаунт `thepost` в пространстве `thepost`, роль `thepost`.
+Настройку OpenBao делает Job Helm-хука чарта `thepost` (`openbaoBootstrap`, DEP-33; прежний сценарий
+`bootstrap.sh` удалён — CI-05, решение 6): при `helm install`/`helm upgrade` до подов узла хук на образе OpenBao
+включает KV v2 `thepost`, пишет политику `thepost` (копия `openbao/thepost-policy.hcl` в манифесте хука),
+настраивает Kubernetes auth (роль `thepost` для сервисного аккаунта `thepost` пространства релиза, токен на час с
+продлением до суток), создаёт пароли учётных записей PostgreSQL (`thepost/db`, `thepost/db-owner`,
+`thepost/db-readonly` — случайные при первом запуске; существующие секреты не меняются) и ключ TLS слушателей
+`thepost/tls` (`openbaoBootstrap.tlsKeySecret` — новая версия секрета, узел перечитывает пару сам; без него ключ
+не меняется). Существующие секреты (заведённые администратором — в том числе с паролями, совпадающими с
+секретами CloudNativePG) хук не перезаписывает; повторная установка настройки не меняет. Хук — на образе
+OpenBao (`openbaoBootstrap.image`), команды `bao` — в манифесте хука (`templates/openbao-bootstrap-job.yaml`),
+без сценариев на shell (SRS 7.1, CI-05). Отключить — `openbaoBootstrap.enabled: false` (настройка средствами
+заказчика). Узел `thepost` входит через Kubernetes auth: сервисный аккаунт `thepost` в пространстве `thepost`,
+роль `thepost`.
 
 ### Узел thepost (Helm)
 ```bash
@@ -658,8 +684,8 @@ helm install thepost deploy/helm/thepost -n thepost --set 'imagePullSecrets[0].n
 
 В своих значениях обязательно: `config.domain`, `config.smtp.hostname`, `config.database.url` (или `cnpg.enabled`),
 `config.secrets.url` и хранилище писем `config.blob.s3` — `endpoint` и `credentials` (пример — в `values.yaml`,
-раздел «Хранилище писем (BLOB)»). Секрет `thepost/s3` заведите в OpenBao сами, `bootstrap.sh` его не создаёт: в поде
-OpenBao (`kubectl -n openbao exec -it openbao-0 -- sh`, `BAO_TOKEN` администратора) —
+раздел «Хранилище писем (BLOB)»). Секрет `thepost/s3` заведите в OpenBao сами, хук `openbaoBootstrap` его не
+создаёт: в поде OpenBao (`kubectl -n openbao exec -it openbao-0 -- sh`, `BAO_TOKEN` администратора) —
 `bao kv put -mount=thepost s3 access_key_id=… secret_access_key=…`. Чарт шину сигналов не задаёт (умолчание `bus.kind: local` — в процессе одного пода); для
 нескольких подов — `config.bus.kind: postgres`.
 
@@ -678,15 +704,18 @@ OpenBao (`kubectl -n openbao exec -it openbao-0 -- sh`, `BAO_TOKEN` админи
 | `pdb.enabled`, `pdb.maxUnavailable` | `true`, `1` | PodDisruptionBudget; создаётся при двух и более подах |
 | `vpa.enabled` | `false` | VPA, только рекомендации (`updateMode: Off`) |
 | `metrics.podMonitor.enabled` | `false` | PodMonitor Prometheus Operator: `/metrics` по HTTPS |
-| `cnpg.enabled` | `false` | PostgreSQL CloudNativePG: `instances` 3, `storage.size` 500Gi, `db_durability`, `pooler.enabled` |
+| `openbaoBootstrap` | `enabled: true` | настройка OpenBao — Job Helm-хука (KV, политика, Kubernetes auth, пароли PostgreSQL, ключ TLS); нужны секреты `openbaoBootstrap.tokenSecret` (поле `token`) и `tls.secretName` (`ca.crt`); `tlsKeySecret` — ключ TLS в `thepost/tls`; отключение — `enabled: false` |
+| `cnpg.enabled` | `false` | PostgreSQL CloudNativePG: `instances` 3, `storage.size` 500Gi, `db_durability`, `pooler.enabled`, `read_replica` (фоновые чтения — служба `-ro`, порог `replica_max_lag`) |
 | `config` | значения узла `mailbox` | `config.yaml` целиком; полный перечень — `thepost config schema` |
 Под — `runAsNonRoot` (65532), `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
 seccomp `RuntimeDefault` (свой профиль узла — `containerSecurityContext.seccompProfile` типа `Localhost`) и профили ролей
 процесса (секция `confine`). Слушатели — на портах выше 1024, стандартные порты (25, 465, 587, 143, 993, 443) — у Service;
 ManageSieve — 4190 и в поде, и у Service.
 Admin API — `127.0.0.1:8443` в поде (`kubectl port-forward`), служебный HTTP — адрес пода для проб kubelet.
-До установки — секрет `thepost-tls` (`tls.crt`, `ca.crt`; в под монтируются только они) и OpenBao (`bootstrap.sh` выше,
-ключ TLS — `TLS_KEY`: секрет `thepost/tls#key`, в values — `config.tls.key`; смена ключа — повторный `bootstrap.sh`).
+До установки — секрет `thepost-tls` (`tls.crt`, `ca.crt`; в под монтируются только они), OpenBao и секрет с токеном
+администратора (`openbaoBootstrap` выше): KV, политика, Kubernetes auth, пароли PostgreSQL и ключ TLS (`thepost/tls`)
+— Job Helm-хука чарта (`openbaoBootstrap.tlsKeySecret`: секрет `thepost/tls#key`, в values — `config.tls.key`;
+смена ключа — новый `helm upgrade` с тем же секретом).
 Вход по Kerberos: `kubectl -n thepost create secret generic thepost-keytab --from-file=keytab=thepost.keytab` и
 `--set gssapi.keytabSecret=thepost-keytab` — чарт монтирует keytab в `/etc/thepost/krb5/thepost.keytab`, задаёт
 `KRB5_KTNAME`, `KRB5RCACHEDIR` и `config.auth.gssapi.keytab`; `hostname` и `realms` — в `config.auth.gssapi`.

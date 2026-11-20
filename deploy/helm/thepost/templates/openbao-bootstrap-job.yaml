@@ -1,0 +1,172 @@
+{{- if .Values.openbaoBootstrap.enabled }}
+{{- $ob := .Values.openbaoBootstrap -}}
+{{- $caSecret := $ob.caSecret | default .Values.tls.secretName -}}
+{{- $caKey := $ob.caKey | default "ca.crt" -}}
+{{/* Начальная настройка OpenBao (DEP-33): хуки Helm (pre-install, pre-upgrade) вместо прежнего сценария
+     bootstrap.sh (CI-05, решение 6 — без своего сценария на shell, команды bao в манифесте). Хуки создаются
+     до ресурсов выпуска (вес -10/-5) и удаляются после успеха; повторная установка настройки не меняет:
+     существующие секреты не перезаписываются, политика и роль пишутся теми же значениями. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "thepost.fullname" . }}-openbao-policy
+  labels:
+    {{- include "thepost.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  # Политика узла thepost — копия deploy/openbao/thepost-policy.hcl (общая для compose, Ansible и чарта):
+  # править в обоих файлах; в под хука попадает томом projected (только чтение).
+  thepost-policy.hcl: |
+    # Политика узла thepost — общая для compose, Helm и Ansible:
+    # чтение секретов KV v2 `thepost`, запись — только ключа TLS слушателей; продление своего токена и аренд.
+    path "thepost/data/*" {
+      capabilities = ["read"]
+    }
+
+    # Ключ TLS слушателей (`tls.key`, решение 100): встроенный ACME записывает выпущенный ключ новой версией (PLT-29).
+    path "thepost/data/tls" {
+      capabilities = ["read", "create", "update"]
+    }
+
+    # Пароль учётной записи PostgreSQL «только чтение» (thepost_readonly) — администратору и отчётам, не узлу (DEP-08).
+    path "thepost/data/db-readonly" {
+      capabilities = ["deny"]
+    }
+
+    path "thepost/metadata/*" {
+      capabilities = ["read", "list"]
+    }
+
+    path "auth/token/lookup-self" {
+      capabilities = ["read"]
+    }
+
+    path "auth/token/renew-self" {
+      capabilities = ["update"]
+    }
+
+    path "sys/leases/renew" {
+      capabilities = ["update"]
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "thepost.fullname" . }}-openbao-bootstrap
+  labels:
+    {{- include "thepost.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  # Токен администратора неверен или OpenBao недоступен — падение сразу, установка останавливается.
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "thepost.selectorLabels" . | nindent 10 }}
+    spec:
+      restartPolicy: Never
+      # Хук говорит только с API OpenBao по HTTPS; TokenReview для Kubernetes auth делает сам OpenBao
+      # (authDelegator) — токен сервисного аккаунта хуку не нужен.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bao
+          # Образ OpenBao — как у сервера (deploy/helm/openbao/values.yaml, server.image).
+          image: {{ $ob.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: BAO_ADDR
+              value: {{ $ob.url | quote }}
+            # CA внутренних каналов — тот же, что у config.secrets.tls.ca_file узла.
+            - name: BAO_CACERT
+              value: /bootstrap/ca.crt
+            - name: BAO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ob.tokenSecret }}
+                  key: token
+            # Токен-хелпер CLI пишет файл в домашний каталог — он в tmpfs, корневая ФС только для чтения.
+            - name: HOME
+              value: /tmp
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              bao secrets list | grep -q '^thepost/' || bao secrets enable -path=thepost -version=2 kv
+              # Политика — конфигурация установки (как у Ansible-эталона): пишется каждым прогоном.
+              bao policy write thepost /bootstrap/thepost-policy.hcl >/dev/null
+              bao auth list | grep -q '^kubernetes/' || bao auth enable kubernetes
+              # Внутри кластера: адрес API Kubernetes; CA и токен для TokenReview — сервисного аккаунта OpenBao.
+              bao write auth/kubernetes/config \
+                kubernetes_host="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT" >/dev/null
+              # Токен узла живёт час и продлевается до суток, затем — новый вход.
+              bao write auth/kubernetes/role/thepost bound_service_account_names=thepost \
+                bound_service_account_namespaces="{{ .Release.Namespace }}" \
+                token_policies=thepost token_ttl=1h token_max_ttl=24h >/dev/null
+              # Пароли учётных записей PostgreSQL (DEP-08) — случайные при первом запуске; существующие не
+              # меняются (совпадают с секретами CloudNativePG: thepost-db, thepost-db-owner, thepost-db-readonly).
+              for s in db:thepost db-owner:thepost_owner db-readonly:thepost_readonly; do
+                if bao kv get -mount=thepost "${s%%:*}" >/dev/null 2>&1; then
+                  echo "hook: секрет thepost/${s%%:*} уже задан — не меняю"
+                else
+                  head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' \
+                    | bao kv put -mount=thepost "${s%%:*}" username="${s#*:}" password=- >/dev/null
+                  echo "hook: записан секрет thepost/${s%%:*}"
+                fi
+              done
+              # Ключ TLS слушателей (решение 100): смонтирован tlsKeySecret — другой ключ новая версия секрета,
+              # узел перечитывает пару без перезапуска; не смонтирован — ключ не меняется.
+              if [ -f /bootstrap/tls.key ]; then
+                if [ "$(bao kv get -mount=thepost -field=key tls 2>/dev/null || true)" != "$(cat /bootstrap/tls.key)" ]; then
+                  bao kv put -mount=thepost tls key=- < /bootstrap/tls.key >/dev/null
+                  echo "hook: записан ключ TLS thepost/tls"
+                else
+                  echo "hook: ключ TLS thepost/tls не изменился — не меняю"
+                fi
+              fi
+              echo "hook: OpenBao готов — KV thepost, политика thepost, Kubernetes auth (роль thepost, пространство {{ .Release.Namespace }})"
+          volumeMounts:
+            - { name: bootstrap, mountPath: /bootstrap, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          {{- with $ob.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: bootstrap
+          projected:
+            sources:
+              # Политика узла (копия deploy/openbao/thepost-policy.hcl — см. ConfigMap выше).
+              - configMap:
+                  name: {{ include "thepost.fullname" . }}-openbao-policy
+                  items:
+                    - { key: thepost-policy.hcl, path: thepost-policy.hcl }
+              - secret:
+                  name: {{ $caSecret }}
+                  items:
+                    - { key: {{ $caKey }}, path: ca.crt }
+              {{- if $ob.tlsKeySecret }}
+              - secret:
+                  name: {{ $ob.tlsKeySecret }}
+                  items:
+                    - { key: {{ $ob.tlsKeyKey | default "tls.key" }}, path: tls.key }
+              {{- end }}
+        - name: tmp
+          emptyDir: { medium: Memory }
+{{- end }}
