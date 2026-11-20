@@ -11,10 +11,14 @@
       # никто до конца срока, ошибка в сроке не освобождает бакет); бакет отдельен от BLOB — в thepost config check.
       - thepost_journal.s3 is not defined or thepost_journal.s3.lock_mode | default('governance') != 'compliance'
         or thepost_journal.s3.retention is defined
+      # Ключи метки ответа (SMTP-51): id — 1–16 байт [a-z0-9.-] (CTR-94 ReplyKey); режим BATV — log или enforce.
+      - thepost_reply_keys | reject('match', '^[a-z0-9.-]{1,16}$') | list | length == 0
+      - thepost_batv_mode in ['log', 'enforce']
     fail_msg: >-
       thepost_tls_mode — acme, internal или files; для acme нужен thepost_acme_email,
       для files — thepost_tls_cert_src и thepost_tls_key_src; thepost_binary_url — с thepost_binary_checksum;
-      journal: режим compliance — только с явным retention (риск 21)
+      journal: режим compliance — только с явным retention (риск 21);
+      reply: id ключей thepost_reply_keys — 1–16 байт [a-z0-9.-], thepost_batv_mode — log или enforce
 
 # До бинарного файла: проверка config.yaml (validate) уже запускает thepost.
 - name: Install system libraries
@@ -214,6 +218,35 @@
     group: thepost
     mode: "0750"
   when: thepost_journal_enabled | bool and thepost_journal.s3 is not defined
+
+# Ключи метки ответа (SMTP-51, DEP-56) — создание в OpenBao при установке: на id thepost_reply_keys — случайные
+# 32 байта (секрет thepost/reply, поле — id), существующие поля не меняются (повторный прогон ничего не меняет).
+# Ротация — задачей роли: новый id в начале thepost_reply_keys прогон создаёт (patch — прежние поля пути
+# сохраняются) и делает активным в config.yaml. Выполняет узел OpenBao с токеном администратора
+# (thepost_openbao_from), как запись ключа TLS в tls-files.yml.
+- name: Create reply label keys in OpenBao
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      changed=no
+      for k in {{ thepost_reply_keys | map('quote') | join(' ') }}; do
+        bao kv get -mount=thepost -field="$k" {{ thepost_reply_secret | quote }} >/dev/null 2>&1 && continue
+        if bao kv get -mount=thepost {{ thepost_reply_secret | quote }} >/dev/null 2>&1; then
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' \
+            | bao kv patch -mount=thepost {{ thepost_reply_secret | quote }} "$k=-" >/dev/null
+        else
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' \
+            | bao kv put -mount=thepost {{ thepost_reply_secret | quote }} "$k=-" >/dev/null
+        fi
+        changed=yes
+      done
+      echo "changed=$changed"
+    executable: /bin/bash
+  environment: "{{ hostvars[thepost_openbao_from].openbao_cli_env }}"
+  delegate_to: "{{ thepost_openbao_from }}"
+  register: thepost_reply_keys_result
+  changed_when: "'changed=yes' in thepost_reply_keys_result.stdout"
+  no_log: true
 
 # Проверка auth.gssapi.keytab сверяет KRB5_KTNAME — та же переменная, что в drop-in gssapi.conf.
 - name: Write config.yaml

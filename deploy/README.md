@@ -163,6 +163,7 @@ Compose и Ansible его не копируют, а подставляют зн�
 | `database.owner.user` | `thepost_owner` | — | `thepost_db_owner_role` |
 | `smtp.hostname` | `mail.example.ru` | `mail.example.test` | `thepost_hostname` |
 | `smtp.milter` | — | — | `thepost_rspamd_milter_address`, `thepost_clamav`, `thepost_milter_submission` (адреса фильтров; профиль письма — политика) |
+| `smtp.reply`, `smtp.batv` | ключи метки — секрет `thepost/reply` (случайные при установке, ротация — `thepost_reply_keys`), BATV `log` 7d | — | `thepost_reply_keys`, `thepost_reply_max_age`, `thepost_batv_mode`, `thepost_batv_valid_for`, `thepost_batv_exempt` |
 | `http.admin.listen` | `127.0.0.1:8443` | — | `thepost_admin_listen` |
 | `secrets.url`, `secrets.tls.ca_file` | `localhost:8200`, `/etc/thepost/pki` | `openbao-tls:8200`, том `tls` | `thepost_secrets_url`, `thepost_internal_ca_file` |
 | `secrets.auth.approle` | `role_id` — `/etc/thepost/openbao`, `secret_id` — учётные данные systemd | `secret_id` — том `openbao-approle` | `thepost_secrets_role_id_file` |
@@ -317,6 +318,9 @@ Admin API — `thepost_admin_listen` (`127.0.0.1:8443`).
 | `thepost_sockets` | `smtp`, `submissions`, `submission`, `imap`, `imaps`, `https`, `managesieve` | включаемые юниты `thepost-*.socket` |
 | `thepost_firewall_ports` | `25, 465, 587, 143, 993, 443, 4190` | порты в firewalld, если он включён |
 | `thepost_backup` | `true` | резервное копирование (роль `pgbackrest`) |
+| `thepost_reply_keys` | `[k1]` | ключи метки ответа (SMTP-51; `smtp.reply`, BATV — те же): секрет `thepost/reply`, поле — id (1–16 байт `[a-z0-9.-]`), значение — случайные 32 байта при создании. Ротация: новый id в начале списка — прогон создаст его (активный — первый), прежний оставить для проверки старых меток, после `thepost_reply_max_age` — убрать |
+| `thepost_reply_max_age`, `thepost_batv_mode`, `thepost_batv_valid_for`, `thepost_batv_exempt` | `30d`, `log`, `7d`, `[]` | признак ответа и BATV: срок признака (`smtp.reply.max_age`); режим BATV `log` — только журнал (переход), затем `enforce` — отказ `550 5.7.1` bounce без валидной метки; адреса и домены без метки (`smtp.batv.exempt` — рассылки, ezmlm) |
+| `rspamd_reply_enabled`, `rspamd_reply_symbol`, `rspamd_reply_score` | `true`, `THEPOST_REPLY`, `-4` | правило multimap роли rspamd по заголовку узла `X-ThePost-Reply` (ставит узел, SMTP-51); балл — как REPLY модуля replies, модуль не включаем: признак ставит узел, второй таблицы Message-ID в Redis нет |
 | `thepost_wait_ready` | `true` | ждать `/healthz/ready` (`thepost_ready_retries` × `thepost_ready_delay` — 30 × 2 с) |
 | `postgresql_settings` | `{}` | параметры `postgresql.conf` (`shared_buffers` и т. п.) |
 | `openbao_seal`, `openbao_seal_options` | `static`, `{}` | распечатывание OpenBao (раздел «OpenBao») |
@@ -369,7 +373,9 @@ Admin API — `thepost_admin_listen` (`127.0.0.1:8443`).
 путям, на перенесённом каталоге копий — `chown -R postgres:postgres /var/lib/pgbackrest` (uid `postgres` на новой ВМ
 может быть другим); в новом OpenBao — только `thepost-backup/restic#password` (и `s3`). Ключ TLS `thepost/tls` в
 снимке — прежний: после `restore.yml` — повторный `smb.yml` (`internal` перевыпускает сертификат к ключу из снимка,
-`files` записывает свой ключ новой версией, `acme` — выпускает новый сам).
+`files` записывает свой ключ новой версией, `acme` — выпускает новый сам). Ключи метки ответа (`thepost/reply`)
+тоже возвращаются из снимка: если после ротации в снимке id, которых нет в `thepost_reply_keys`, — задайте их
+(порядок — активный первым); недостающие id прогон создаст новыми случайными, поля снимка patch сохраняет.
 
 Восстановление — `deploy/ansible/restore.yml` (`roles/pgbackrest/tasks/restore.yml`): роль `openbao` (токен
 администратора, пароли СУБД) → остановка таймеров и `thepost` → `pgbackrest restore --delta --type=time

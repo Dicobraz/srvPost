@@ -13,8 +13,8 @@
 |---|---|---|---|---|---|
 | Ф0. Основа | Платформа, хранилище метаданных и BLOB, CI, стенд SMB | 38/38 | 87/87 | ✅ готово | Узел SMB запускается из одного бинарного файла; метаданные и BLOB с тестами; CI ≤ 7 мин; стенд SMB поднимается |
 | Ф1. MVP SMB | SMTP с очередью и Milter, IMAP, JMAP Mail, поиск, LDAP, Kerberos, OAUTHBEARER, корзина, Admin API, CLI | 330/350 | 446/472 | в работе, 94 % карточек | Почта SMB целиком на стенде: приём и отправка, IMAP и JMAP, поиск, вход; проверка клиентами Thunderbird и Postman; нагрузка Д.6 для SMB |
-| Ф2. Совместная работа | CalDAV, CardDAV, JMAP Calendars и Contacts, scheduling, free/busy, Sieve, веб-консоль администратора | 146/166 | 216/238 | в работе, 91 % карточек | Календари, контакты, правила и автоответы проверены клиентами; консоль администратора покрывает Admin API |
-| Ф3. Enterprise | S3, кластерные роли, межузловое взаимодействие, edge, шарды, Legal Hold, экспорт и импорт | 8/11 | 10/14 | в работе, 71 % карточек | Схемы Enterprise-ВМ и Enterprise-K8s (приложение З) на стенде; переключение СУБД ≤ 30 с; нагрузка Д.6 для Enterprise |
+| Ф2. Совместная работа | CalDAV, CardDAV, JMAP Calendars и Contacts, scheduling, free/busy, Sieve, веб-консоль администратора | 150/166 | 220/238 | в работе, 92 % карточек | Календари, контакты, правила и автоответы проверены клиентами; консоль администратора покрывает Admin API |
+| Ф3. Enterprise | S3, кластерные роли, межузловое взаимодействие, edge, шарды, Legal Hold, экспорт и импорт | 9/11 | 11/14 | в работе, 79 % карточек | Схемы Enterprise-ВМ и Enterprise-K8s (приложение З) на стенде; переключение СУБД ≤ 30 с; нагрузка Д.6 для Enterprise |
 | Ф4. Выпуск | Стабилизация, аудит безопасности, фаззинг парсеров, документация администратора | 1/2 | 1/2 | в работе, 50 % карточек | Аудит безопасности без открытых критичных находок; фаззинг парсеров; документация; выпуск 1.0 |
 
 Открытые вопросы владельцу — issue с меткой «решение»; дополнительные модули — раздел в конце.
@@ -909,18 +909,18 @@ Perf-пакет сработал (SELECT 944→108 мс, JMAP 311→447 мс п�
 | ✅ contracts-65 (ветка `x/contracts-65`) | CTR-94 | B | contracts-64 | 1 |
 | meta-59 | META-86 | A | contracts-65 | 3 |
 | ✅ mailstore-15 (ветка `x/mailstore-15`) | MS-21 | A | contracts-65 | 1 |
-| smtp-31 | SMTP-51 | A | contracts-65, deps-18, smtp-30 | 4 |
+| ✅ smtp-31 (#176) | SMTP-51 | A | contracts-65, deps-18, smtp-30 | 4 |
 | ✅ jmap-31 | JMAP-48 | A | contracts-65, mailstore-15 | 3 |
 | ✅ jmap-33 | JMAP-49 | A | contracts-35, jmap-19 (после волны закрыть issue #46) | 3 |
 | admin-36 (ветка `x/admin-36`) | ADM-50 | B | contracts-65, admin-30 | 3 |
 | app-74 | APP-77 | A | meta-59, mailstore-15, smtp-31, jmap-31, admin-36 | 2 |
-| deploy-43 | DEP-56 | A | smtp-31 | 1 |
+| ✅ deploy-43 (#190) | DEP-56 | A | smtp-31 | 1 |
 | docs-13 | DOC-13 | A | app-74, deploy-43 | 1 |
 | ✅ deps-19 (ветка `x/deps-19`) | DEPS-19 | B | — | 1 |
 | ✅ deps-20 (ветка `x/deps-20-ofl-font`) | DEPS-20 | B | — | 1 |
 | ✅ contracts-66 (ветка `x/contracts-66`) | CTR-95 | B | contracts-65 | 1 |
-| meta-60 | META-87 | A | contracts-66 | 3 |
-| sieve-08 | SIEVE-15 | A | contracts-66, deps-19, sieve-07 | 2 |
+| ✅ meta-60 (#184) | META-87 | A | contracts-66 | 3 |
+| ✅ sieve-08 (#187) | SIEVE-15 | A | contracts-66, deps-19, sieve-07 | 2 |
 | smtp-32 | SMTP-52 | A | contracts-66, deps-19, smtp-31 | 4 |
 | admin-37 (ветка `x/admin-37`) | ADM-51 | B | contracts-66, admin-36 | 3 |
 | console-15 | UI-24 | A | console-14, admin-37 | 1 |
@@ -958,7 +958,7 @@ PR 10–12.11 (#293, #443, #449). Строки от `contracts-41` до `smtp-16
 | ✅ admin-38 | ADM-52 | A | contracts-67, meta-61 | 4 |
 | ✅ app-79 (#145) | APP-82, APP-83 | A | contracts-67, meta-61, blob-11 | 4 |
 | ✅ console-16 | UI-25 | A | admin-38 | 4 |
-| admin-39 (ветка `x/admin-39`) | ADM-53 | B | admin-38 (решение #171: CRUD правил журналирования) | 4 |
+| ✅ admin-39 (#185) | ADM-53 | B | admin-38 (решение #171: CRUD правил журналирования) | 4 |
 | console-17 | UI-26 | A | admin-39 (решение #171: вкладка правил) | 4 |
 | ✅ deploy-51 | DEP-58 | A | app-79, blob-11 | 4 |
 | ✅ app-81 (ветка `x/app-81-journal-wiring`) | APP-84 | A | smtp-33, app-79 (wiring JournalStore/JournalRules журнала в узле) | 4 |

@@ -21,3 +21,13 @@ rspamd_service: rspamd
 rspamd_milter_address: "127.0.0.1:11332"
 rspamd_normal_address: "127.0.0.1:11333"
 rspamd_controller_address: "127.0.0.1:11334"
+
+# Признак ответа узла The Post (SMTP-51, DEP-56): узел ставит заголовок rspamd_reply_header до Milter и удаляет
+# такой же заголовок, пришедший извне. Правило multimap снижает балл, как REPLY модуля replies; сам модуль replies
+# не включаем: признак ставит узел, второй таблицы Message-ID в Redis нет.
+rspamd_reply_enabled: true
+rspamd_reply_header: X-ThePost-Reply
+rspamd_reply_symbol: THEPOST_REPLY
+rspamd_reply_score: -4
+# Карта значения заголовка (yes — ставит узел, crates/tp-smtp/src/reply.rs) — файл рядом с правилом.
+rspamd_reply_map_file: /etc/rspamd/maps.d/thepost-reply.map

@@ -27,8 +27,8 @@ use tp_contracts::Bytes;
 use tp_contracts::ids::{BlobHash, JournalId, TenantId};
 use tp_contracts::journal::{
     ChainReport, GENESIS_HASH, JournalAudit, JournalCursor, JournalDirection, JournalEntry,
-    JournalPage, JournalQuery, JournalRecord, JournalRecords, JournalRule, JournalScope,
-    JournalStore, journal_eml,
+    JournalPage, JournalQuery, JournalRecord, JournalRecords, JournalRule, JournalRuleStore,
+    JournalScope, JournalStore, journal_eml,
 };
 use tp_contracts::{Error, Result};
 use uuid::Uuid;
@@ -427,6 +427,23 @@ async fn rebuild_entries(
         prev = hash;
     }
     Ok(())
+}
+
+/// Правила журналирования — порт [`JournalRuleStore`] (ADM-53) поверх тех же строк `journal.rules`;
+/// делегирует собственным методам [`PgJournal::rules`]/[`PgJournal::set_rule`]/[`PgJournal::delete_rule`].
+#[async_trait]
+impl JournalRuleStore for PgJournal {
+    async fn rules(&self, tenant: TenantId) -> Result<Vec<JournalRule>> {
+        PgJournal::rules(self, tenant).await
+    }
+
+    async fn set_rule(&self, rule: &JournalRule) -> Result<()> {
+        PgJournal::set_rule(self, rule).await
+    }
+
+    async fn delete_rule(&self, tenant: TenantId, id: &str) -> Result<()> {
+        PgJournal::delete_rule(self, tenant, id).await
+    }
 }
 
 #[async_trait]

@@ -19,6 +19,20 @@
 //! Журнал не подключён ([`Admin::with_journal`]) — 503 (записи пишет этап ядра конвейера, волна узла;
 //! ADM-52 читает готовое хранилище — BLOB-18 и META-88).
 //!
+//! Правила журналирования (ADM-53, решение #171) — не содержимое журнала: ими управляет только
+//! администратор организации ([`AdminRole::permits`]: маршруты `/journal/rules` исключены из области
+//! «аудитора журнала», который читает записи, но правил не видит — 403):
+//! - `GET /api/v1/orgs/{org}/journal/rules` — список в порядке наследования ящик > группа >
+//!   организация ([`JournalScope::priority`]);
+//! - `PUT /api/v1/orgs/{org}/journal/rules/{id}` — создать или заменить правило (область, направление,
+//!   включено); область проверена (группа и ящик существуют), повторная цель с тем же направлением —
+//!   409 с подсказкой;
+//! - `DELETE /api/v1/orgs/{org}/journal/rules/{id}` — удалить.
+//!
+//! Изменения подхватывает конвейер без перезапуска: порт [`JournalRuleStore`] читает правила на каждом
+//! письме (SMTP-53). Каждое изменение — запись журнала аудита с деталями «было → стало»
+//! ([`AuditDetails::JournalRule`]).
+//!
 //! Выгрузка во внешний архив заказчика (SRS 4.9): по секции `admin.journal_archive` — каталог или
 //! HTTPS-эндпоинт; каждая не выгруженная ещё запись ([`archive_pass`]) выгружается `.eml` с конвертом,
 //! сбой выгрузки не влияет на доставку почты (проход ведёт роль maintenance узла, как SIEM —
@@ -31,25 +45,27 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::{MatchedPath, State};
-use axum::http::{HeaderMap, HeaderValue, Method, Uri, header};
-use axum::routing::get;
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
+use axum::response::{IntoResponse as _, Response};
+use axum::routing::{get, put};
 use axum::{Extension, Router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use tp_contracts::admin_audit::AdminAuditRecord;
+use tp_contracts::admin_audit::{AdminAuditRecord, AuditDetails};
 use tp_contracts::config::duration;
 use tp_contracts::ids::{JournalId, TenantId};
 use tp_contracts::journal::{
-    ChainReport, JournalAudit, JournalCursor, JournalEntry, JournalQuery, JournalRecord,
-    JournalStore,
+    ChainReport, JournalAudit, JournalCursor, JournalDirection, JournalEntry, JournalQuery,
+    JournalRecord, JournalRule, JournalRuleStore, JournalScope, JournalStore, MAX_RULE_ID_LEN,
+    valid_rule_id,
 };
 use tp_contracts::tls::Profile;
 use tp_contracts::{Error, Result};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 
 use crate::extract::{Json, Path, Query};
-use crate::server::{Admin, ApiResult, Caller, Problem};
+use crate::server::{Admin, ApiResult, Caller, Problem, Refused};
 
 /// Шаблон маршрута поиска журнала.
 pub const JOURNAL_ROUTE: &str = "/api/v1/orgs/{org}/journal";
@@ -66,6 +82,17 @@ pub const JOURNAL_VERIFY_ROUTE: &str = "/api/v1/orgs/{org}/journal/verify";
 /// Начало шаблонов маршрутов журнала: им ограничена роль «аудитор журнала»
 /// ([`AdminRole::permits`](crate::server::AdminRole::permits)).
 pub const JOURNAL_PREFIX: &str = "/api/v1/orgs/{org}/journal";
+
+/// Шаблон маршрута списка правил журналирования (ADM-53).
+pub const JOURNAL_RULES_ROUTE: &str = "/api/v1/orgs/{org}/journal/rules";
+
+/// Шаблон маршрута правила журналирования: создание/замена и удаление (ADM-53).
+pub const JOURNAL_RULES_ITEM_ROUTE: &str = "/api/v1/orgs/{org}/journal/rules/{id}";
+
+/// Начало шаблонов маршрутов правил журналирования: правила — не содержимое журнала (ADM-53), ими
+/// управляет администратор организации; [`AdminRole::permits`] исключает их из области «аудитора
+/// журнала» (содержимое — [`JOURNAL_PREFIX`]).
+pub const JOURNAL_RULES_PREFIX: &str = "/api/v1/orgs/{org}/journal/rules";
 
 /// Тип содержимого выгрузки и записи архива: `.eml` с конвертом.
 const EML_TYPE: &str = "message/rfc822";
@@ -203,19 +230,46 @@ fn store(a: &Admin) -> ApiResult<&dyn JournalStore> {
     Ok(a.journal.as_deref().ok_or(Error::UNAVAILABLE)?)
 }
 
+/// Правила журналирования; не подключены — 503 (как хранилище записей — [`store`], но ошибка —
+/// `Error`, годится и обработчикам с [`Refused`]).
+fn rule_store(a: &Admin) -> std::result::Result<&dyn JournalRuleStore, Error> {
+    a.journal_rules.as_deref().ok_or(Error::UNAVAILABLE)
+}
+
 /// Маршруты журнала.
 pub(crate) fn routes(r: Router<Arc<Admin>>) -> Router<Arc<Admin>> {
     r.route(JOURNAL_ROUTE, get(search_journal))
         .route(JOURNAL_VERIFY_ROUTE, get(verify_journal))
         .route(JOURNAL_ENTRY_ROUTE, get(get_journal))
         .route(JOURNAL_EXPORT_ROUTE, get(export_journal))
+        .route(JOURNAL_RULES_ROUTE, get(list_rules))
+        .route(JOURNAL_RULES_ITEM_ROUTE, put(put_rule).delete(delete_rule))
 }
 
 /// Спецификация OpenAPI маршрутов модуля.
 #[derive(Debug, OpenApi)]
 #[openapi(
-    paths(search_journal, verify_journal, get_journal, export_journal),
-    components(schemas(JournalRecordView, JournalEntryView, JournalPageView, ChainReportView))
+    paths(
+        search_journal,
+        verify_journal,
+        get_journal,
+        export_journal,
+        list_rules,
+        put_rule,
+        delete_rule
+    ),
+    components(schemas(
+        JournalRecordView,
+        JournalEntryView,
+        JournalPageView,
+        ChainReportView,
+        JournalRulesView,
+        JournalRuleView,
+        JournalRuleBody,
+        JournalScopeSchema,
+        JournalDirectionSchema,
+        JournalRuleSchema
+    ))
 )]
 pub(crate) struct Doc;
 
@@ -362,6 +416,275 @@ async fn access(
         details: None,
     };
     crate::audit::record(&a.d, &record).await
+}
+
+// ---------- Правила журналирования (ADM-53, решение #171) ----------
+
+// Схемы OpenAPI контрактов `tp_contracts::journal` (в `serde` — тот же вид); значений этих типов нет.
+
+/// Область правила журналирования: `"org"` — организация, `{"group": "<uuid>"}` — группа рассылки,
+/// `{"mailbox": "<uuid>"}` — ящик.
+#[allow(dead_code)]
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = JournalScope)]
+pub enum JournalScopeSchema {
+    /// Организация целиком.
+    Org,
+    /// Группа рассылки (UUID): отправитель или получатель — член группы.
+    Group(String),
+    /// Ящик (учётная запись, UUID).
+    Mailbox(String),
+}
+
+/// Направление правила: `"in"` — доставляемое, `"out"` — отправляемое, `"both"` — оба.
+#[allow(dead_code)]
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+#[schema(as = JournalDirection)]
+pub enum JournalDirectionSchema {
+    /// Доставляемое в ящики организации (включая внутреннюю почту).
+    In,
+    /// Отправляемое клиентом.
+    Out,
+    /// Оба направления.
+    Both,
+}
+
+/// Правило журналирования контракта ([`tp_contracts::journal::JournalRule`]) — для деталей записи
+/// аудита ([`crate::audit::AuditDetailsSchema`]).
+#[allow(dead_code)]
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = JournalRule)]
+pub struct JournalRuleSchema {
+    /// Идентификатор.
+    pub id: String,
+    /// Организация (UUID).
+    pub tenant: String,
+    /// Область.
+    pub scope: JournalScopeSchema,
+    /// Направление.
+    pub direction: JournalDirectionSchema,
+    /// Включено.
+    pub enabled: bool,
+}
+
+/// Правило журналирования в ответе API ([`tp_contracts::journal::JournalRule`]; обе стороны serde — ADM-13).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct JournalRuleView {
+    /// Идентификатор (1–64 байта без пробелов и управляющих).
+    pub id: String,
+    /// Организация (UUID).
+    pub tenant: String,
+    /// Область: организация, группа или ящик.
+    #[schema(value_type = JournalScopeSchema)]
+    pub scope: JournalScope,
+    /// Направление: `in`, `out`, `both`.
+    #[schema(value_type = JournalDirectionSchema)]
+    pub direction: JournalDirection,
+    /// Включено (выключенное правило писем не касается).
+    pub enabled: bool,
+}
+
+impl From<JournalRule> for JournalRuleView {
+    fn from(r: JournalRule) -> Self {
+        Self {
+            id: r.id,
+            tenant: r.tenant.to_string(),
+            scope: r.scope,
+            direction: r.direction,
+            enabled: r.enabled,
+        }
+    }
+}
+
+/// Правила журналирования организации в порядке наследования: ящик > группа > организация
+/// ([`JournalScope::priority`]), внутри области — по идентификаторам.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct JournalRulesView {
+    /// Правила; пусто — журналирование выключено.
+    pub rules: Vec<JournalRuleView>,
+}
+
+/// Правило журналирования: создание или замена целиком (идентификатор — в пути).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JournalRuleBody {
+    /// Область: `"org"`, `{"group": "<uuid>"}` или `{"mailbox": "<uuid>"}`.
+    #[schema(value_type = JournalScopeSchema)]
+    pub scope: JournalScope,
+    /// Направление: `in`, `out`, `both`.
+    #[schema(value_type = JournalDirectionSchema)]
+    pub direction: JournalDirection,
+    /// Включено (по умолчанию — включено).
+    #[serde(default = "rule_enabled_by_default")]
+    pub enabled: bool,
+}
+
+/// Правило создаётся включённым, пока не сказано иное ([`JournalRuleBody::enabled`]).
+fn rule_enabled_by_default() -> bool {
+    true
+}
+
+/// Правила журналирования организации (ADM-53): порядок наследования ящик > группа > организация,
+/// внутри области — по идентификаторам. Право — администратор организации; аудитор журнала содержимое
+/// читает, правила не видит (403). Хранилище правил не подключено — 503.
+#[utoipa::path(get, path = "/api/v1/orgs/{org}/journal/rules", tag = "journal",
+    params(("org" = String, Path, description = "Организация (UUID)")),
+    responses((status = 200, body = JournalRulesView), (status = 403, body = Problem),
+        (status = 503, body = Problem)))]
+async fn list_rules(
+    State(a): State<Arc<Admin>>,
+    Path(org): Path<TenantId>,
+) -> ApiResult<Json<JournalRulesView>> {
+    let mut rules = rule_store(&a)?.rules(org).await?;
+    rules.sort_by_key(|r| (r.scope.priority(), r.id.clone()));
+    Ok(Json(JournalRulesView {
+        rules: rules.into_iter().map(Into::into).collect(),
+    }))
+}
+
+/// Создаёт или заменяет правило журналирования (замена целиком по идентификатору). Группа и ящик
+/// области должны существовать (422), та же цель с тем же направлением у другого правила — 409 с
+/// подсказкой; конвейер подхватывает изменение без перезапуска (SMTP-53). Изменение — в журнал аудита
+/// с парой «было → стало».
+#[utoipa::path(put, path = "/api/v1/orgs/{org}/journal/rules/{id}", tag = "journal",
+    params(("org" = String, Path, description = "Организация (UUID)"),
+        ("id" = String, Path, description = "Идентификатор правила (1–64 байта без пробелов)")),
+    request_body = JournalRuleBody,
+    responses((status = 200, body = JournalRuleView), (status = 400, body = Problem),
+        (status = 403, body = Problem),
+        (status = 409, description = "та же цель с тем же направлением уже журналируется", body = Problem),
+        (status = 422, description = "группа или ящик области не существуют", body = Problem),
+        (status = 503, body = Problem)))]
+async fn put_rule(
+    State(a): State<Arc<Admin>>,
+    Path((org, id)): Path<(TenantId, String)>,
+    Json(body): Json<JournalRuleBody>,
+) -> std::result::Result<Response, Refused> {
+    let rule = JournalRule {
+        id,
+        tenant: org,
+        scope: body.scope,
+        direction: body.direction,
+        enabled: body.enabled,
+    };
+    if !valid_rule_id(&rule.id) {
+        return Err(Refused::Problem(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "идентификатор правила {:?}: 1–{MAX_RULE_ID_LEN} байт без пробелов и управляющих",
+                rule.id
+            ),
+        ));
+    }
+    check_scope(&a, org, rule.scope).await?;
+    let store = rule_store(&a)?;
+    let existing = store.rules(org).await?;
+    if let Some(dup) = existing
+        .iter()
+        .find(|r| r.id != rule.id && r.scope == rule.scope && r.direction == rule.direction)
+    {
+        return Err(Refused::Problem(
+            StatusCode::CONFLICT,
+            format!(
+                "{} уже журналируется правилом {} ({}) — измените или удалите его",
+                scope_ru(rule.scope),
+                dup.id,
+                direction_ru(rule.direction)
+            ),
+        ));
+    }
+    let old = existing.iter().find(|r| r.id == rule.id).cloned();
+    store.set_rule(&rule).await?;
+    Ok(rule_response(
+        JournalRuleView::from(rule.clone()),
+        AuditDetails::JournalRule {
+            from: old,
+            to: Some(rule),
+        },
+    ))
+}
+
+/// Удаляет правило журналирования; нет правила — 404. Записи журнала правило не трогает: изменение
+/// действует на будущие письма, конвейер подхватывает его без перезапуска (SMTP-53). Удаление — в
+/// журнал аудита с парой «было → стало».
+#[utoipa::path(delete, path = "/api/v1/orgs/{org}/journal/rules/{id}", tag = "journal",
+    params(("org" = String, Path, description = "Организация (UUID)"),
+        ("id" = String, Path, description = "Идентификатор правила")),
+    responses((status = 200, body = JournalRuleView), (status = 403, body = Problem), (status = 404, body = Problem),
+        (status = 503, body = Problem)))]
+async fn delete_rule(
+    State(a): State<Arc<Admin>>,
+    Path((org, id)): Path<(TenantId, String)>,
+) -> std::result::Result<Response, Refused> {
+    let store = rule_store(&a)?;
+    let old = store
+        .rules(org)
+        .await?
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or(Error::NotFound)?;
+    store.delete_rule(org, &id).await?;
+    Ok(rule_response(
+        JournalRuleView::from(old.clone()),
+        AuditDetails::JournalRule {
+            from: Some(old),
+            to: None,
+        },
+    ))
+}
+
+/// Ответ с деталями изменения в расширениях: слой доступа ([`crate::server`]) переносит их в запись
+/// журнала аудита (кто/что/было-стало).
+fn rule_response(v: JournalRuleView, details: AuditDetails) -> Response {
+    let mut resp = Json(v).into_response();
+    resp.extensions_mut().insert(details);
+    resp
+}
+
+/// Область правила существует: группа и ящик — в этой организации; нет — 422 с подсказкой
+/// (организация — вся организация пути).
+async fn check_scope(
+    a: &Admin,
+    org: TenantId,
+    scope: JournalScope,
+) -> std::result::Result<(), Refused> {
+    let gone = |what: &str, id: String| {
+        Refused::Problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{what} {id} не найдена — правило можно задать только на существующую"),
+        )
+    };
+    match scope {
+        JournalScope::Org => Ok(()),
+        JournalScope::Group(g) => match a.d.groups.get(org, g).await? {
+            Some(_) => Ok(()),
+            None => Err(gone("группа", g.to_string())),
+        },
+        JournalScope::Mailbox(acc) => match a.d.accounts.get(org, acc).await? {
+            Some(_) => Ok(()),
+            None => Err(gone("учётная запись (ящик)", acc.to_string())),
+        },
+    }
+}
+
+/// Область правила по-русски (подсказка повторной цели).
+fn scope_ru(scope: JournalScope) -> String {
+    match scope {
+        JournalScope::Org => "организация".to_owned(),
+        JournalScope::Group(g) => format!("группа {g}"),
+        JournalScope::Mailbox(a) => format!("ящик {a}"),
+    }
+}
+
+/// Направление правила — имя из API (подсказка повторной цели).
+fn direction_ru(direction: JournalDirection) -> &'static str {
+    match direction {
+        JournalDirection::In => "in",
+        JournalDirection::Out => "out",
+        JournalDirection::Both => "both",
+    }
 }
 
 // ---------- Внешний архив (SRS 4.9) ----------
@@ -734,7 +1057,7 @@ mod tests {
     use time::format_description::well_known::Rfc3339;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tp_contracts::TenantId;
-    use tp_contracts::journal::{JournalDirection, JournalRule, JournalScope};
+    use tp_contracts::journal::{JournalDirection, JournalRule, JournalRuleStore, JournalScope};
 
     use crate::testenv::Env;
 
@@ -1351,5 +1674,319 @@ mod tests {
             self.0.lock().expect("lock").push(id);
             Ok(())
         }
+    }
+
+    /// Правила журналирования организации по умолчанию (идентификаторы по порядку списка).
+    async fn rule_ids(env: &Env) -> Vec<String> {
+        let (s, _, b) = env
+            .call(
+                "GET",
+                &format!("/api/v1/orgs/{}/journal/rules", TenantId::DEFAULT),
+                Some("org"),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        b["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .map(|r| r["id"].as_str().expect("id").to_owned())
+            .collect()
+    }
+
+    /// Приёмка ADM-53: администратор организации ведёт правила журналирования — список в порядке
+    /// наследования ящик > группа > организация, создание/замена/удаление; область проверена (группа и
+    /// ящик существуют), дубликат цели — 409 с подсказкой; изменение видно конвейеру без перезапуска
+    /// (порт читает на каждом письме, SMTP-53); аудитор журнала правил не видит (403), оператор —
+    /// только чтение, администратор инсталляции — все организации, чужой организации — 403.
+    #[tokio::test]
+    async fn journal_rules_crud_and_roles() {
+        let env = Env::new();
+        let d = TenantId::DEFAULT;
+        let base = format!("/api/v1/orgs/{d}/journal/rules");
+        let acc = env.account("director@example.org").await;
+        let group = tp_contracts::GroupId::new();
+        env.group(d, "board", group, acc.account).await;
+
+        // Создание: включено по умолчанию, ответ — правило.
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                &format!("{base}/all-mail"),
+                Some("org"),
+                Some(json!({"scope": "org", "direction": "both"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(
+            b,
+            json!({
+                "id": "all-mail", "tenant": d.to_string(), "scope": "org",
+                "direction": "both", "enabled": true,
+            })
+        );
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                &format!("{base}/team-in"),
+                Some("org"),
+                Some(json!({"scope": {"group": group.to_string()}, "direction": "in"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                &format!("{base}/director"),
+                Some("org"),
+                Some(json!({
+                    "scope": {"mailbox": acc.account.to_string()},
+                    "direction": "out", "enabled": false
+                })),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+
+        // Список — порядок наследования: ящик > группа > организация.
+        assert_eq!(
+            rule_ids(&env).await,
+            vec!["director", "team-in", "all-mail"]
+        );
+
+        // Замена целиком: выключенное правило организации с другим направлением.
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                &format!("{base}/all-mail"),
+                Some("org"),
+                Some(json!({"scope": "org", "direction": "in", "enabled": false})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["enabled"], false);
+        assert_eq!(b["direction"], "in");
+        assert_eq!(rule_ids(&env).await.len(), 3, "замена, не добавление");
+
+        // Дубликат цели: та же группа с тем же направлением у другого правила — 409 с подсказкой.
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                &format!("{base}/team-copy"),
+                Some("org"),
+                Some(json!({"scope": {"group": group.to_string()}, "direction": "in"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::CONFLICT, "{b}");
+        assert!(
+            b["detail"].as_str().expect("detail").contains("team-in"),
+            "подсказка: {b}"
+        );
+        // Та же цель другим направлением — не дубликат.
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                &format!("{base}/team-out"),
+                Some("org"),
+                Some(json!({"scope": {"group": group.to_string()}, "direction": "out"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+
+        // Область существует: чужая группа и ящик — 422 с подсказкой; направление — enum, идентификатор
+        // и тело — 400.
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                &format!("{base}/ghost-group"),
+                Some("org"),
+                Some(
+                    json!({"scope": {"group": tp_contracts::GroupId::new().to_string()},
+                            "direction": "both"}),
+                ),
+            )
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert!(b["detail"].as_str().expect("detail").contains("группа"));
+        let (s, _, b) = env
+            .call(
+                "PUT",
+                &format!("{base}/ghost-box"),
+                Some("org"),
+                Some(
+                    json!({"scope": {"mailbox": tp_contracts::AccountId::new().to_string()},
+                            "direction": "both"}),
+                ),
+            )
+            .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+        assert!(
+            b["detail"]
+                .as_str()
+                .expect("detail")
+                .contains("учётная запись"),
+            "{b}"
+        );
+        for (id, body) in [
+            ("sideways", json!({"scope": "org", "direction": "sideways"})),
+            ("has%20space", json!({"scope": "org", "direction": "both"})),
+        ] {
+            let (s, _, b) = env
+                .call("PUT", &format!("{base}/{id}"), Some("org"), Some(body))
+                .await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{id}: {b}");
+        }
+
+        // Удаление: ответ — удалённое правило; повтор — 404.
+        let (s, _, b) = env
+            .call("DELETE", &format!("{base}/team-in"), Some("org"), None)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        assert_eq!(b["id"], "team-in");
+        assert_eq!(b["scope"], json!({"group": group.to_string()}));
+        let (s, _, _) = env
+            .call("DELETE", &format!("{base}/team-in"), Some("org"), None)
+            .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert_eq!(
+            rule_ids(&env).await,
+            vec!["director", "team-out", "all-mail"],
+            "ящик > группа > организация"
+        );
+
+        // Изменение видно конвейеру без перезапуска: порт читает правила на каждом письме (SMTP-53) —
+        // то же хранилище, что подключено к Admin API.
+        let pipeline = env.journal.rules(d).await.expect("правила");
+        assert_eq!(
+            pipeline.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["all-mail", "director", "team-out"],
+            "конвейер прочитает новые правила"
+        );
+        assert!(
+            !pipeline
+                .iter()
+                .find(|r| r.id == "all-mail")
+                .expect("есть")
+                .enabled,
+            "выключенное правило писем не касается"
+        );
+
+        // Право — только администратор организации (и инсталляции): аудитор журнала правил не видит —
+        // 403 на чтение и запись, оператор — только чтение, пользователь — 403, чужая организация — 403.
+        for method in ["GET", "PUT", "DELETE"] {
+            let (s, _, _) = env.call(method, &base, Some("journal"), None).await;
+            assert_eq!(s, StatusCode::FORBIDDEN, "аудитор журнала {method}");
+        }
+        let (s, _, _) = env.call("GET", &base, Some("operator"), None).await;
+        assert_eq!(s, StatusCode::OK, "оператор читает");
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                &format!("{base}/ops"),
+                Some("operator"),
+                Some(json!({"scope": "org", "direction": "both"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "оператор не пишет");
+        let (s, _, _) = env.call("GET", &base, Some("user"), None).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = env.call("GET", &base, Some("root"), None).await;
+        assert_eq!(
+            s,
+            StatusCode::OK,
+            "администратор инсталляции — все организации"
+        );
+        let other = format!("/api/v1/orgs/{}/journal/rules", env.other_tenant);
+        let (s, _, _) = env.call("GET", &other, Some("org"), None).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "чужая организация");
+        let (s, _, _) = env
+            .call(
+                "PUT",
+                &format!("{other}/mine"),
+                Some("other"),
+                Some(json!({"scope": "org", "direction": "both"})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "своя организация — администратор другой");
+
+        // Хранилище правил не подключено — 503 (записи журнала при этом не нужны правилам).
+        let env = Env::without_journal();
+        let (s, _, b) = env
+            .call(
+                "GET",
+                &format!("/api/v1/orgs/{d}/journal/rules"),
+                Some("org"),
+                None,
+            )
+            .await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{b}");
+    }
+
+    /// Приёмка ADM-53: каждое изменение правил — запись журнала аудита с деталями «было → стало»
+    /// (кто/что менял), отказ аудитору журнала — 403 слоя доступа (тоже с записью).
+    #[tokio::test]
+    async fn journal_rules_changes_are_audited() {
+        let env = Env::new();
+        let d = TenantId::DEFAULT;
+        let base = format!("/api/v1/orgs/{d}/journal/rules");
+        let put = |id: &str, direction: &str, enabled: bool| {
+            (
+                format!("{base}/{id}"),
+                json!({"scope": "org", "direction": direction, "enabled": enabled}),
+            )
+        };
+
+        // Создание: from — null, to — новое правило.
+        let (path, body) = put("all-mail", "both", true);
+        let (s, _, _) = env.call("PUT", &path, Some("org"), Some(body)).await;
+        assert_eq!(s, StatusCode::OK);
+        // Замена: from — прежнее, to — новое.
+        let (path, body) = put("all-mail", "in", false);
+        let (s, _, _) = env.call("PUT", &path, Some("org"), Some(body)).await;
+        assert_eq!(s, StatusCode::OK);
+        // Отказ аудитору журнала — тоже запись (слой доступа).
+        let (s, _, _) = env.call("DELETE", &path, Some("journal"), None).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        // Удаление: from — прежнее, to — null.
+        let (s, _, _) = env.call("DELETE", &path, Some("org"), None).await;
+        assert_eq!(s, StatusCode::OK);
+
+        let log = env.audit.records();
+        assert_eq!(log.len(), 4, "GET списка в аудит не пишется: {log:?}");
+        let statuses: Vec<u16> = log.iter().map(|r| r.status).collect();
+        let details: Vec<Option<AuditDetails>> = log.iter().map(|r| r.details.clone()).collect();
+        assert_eq!(statuses, vec![200, 200, 403, 200]);
+        for record in &log {
+            assert_eq!(record.route, JOURNAL_RULES_ITEM_ROUTE, "{record:?}");
+            assert_eq!(record.tenant, Some(d));
+        }
+        assert_eq!(log[0].method, "PUT");
+        assert_eq!(log[1].method, "PUT");
+        assert_eq!(log[2].method, "DELETE");
+        assert_eq!(log[3].method, "DELETE");
+        assert_eq!(log[0].actor_login, "admin@example.org");
+        assert_eq!(log[0].roles, vec!["organization_admin"]);
+        assert_eq!(log[2].roles, vec!["journal_auditor"]);
+        let what = |d: &Option<AuditDetails>| -> String {
+            serde_json::to_value(d).expect("json")["what"]
+                .as_str()
+                .expect("what")
+                .to_owned()
+        };
+        assert_eq!(what(&details[0]), "journal_rule");
+        assert_eq!(what(&details[1]), "journal_rule");
+        assert_eq!(details[2], None, "отказ — без деталей");
+        assert_eq!(what(&details[3]), "journal_rule");
+        let field = |i: usize, name: &str| -> serde_json::Value {
+            serde_json::to_value(&details[i]).expect("json")[name].clone()
+        };
+        // Создание: не было → новое; замена: прежнее → новое; удаление: прежнее → нет.
+        assert!(field(0, "from").is_null());
+        assert_eq!(field(0, "to")["direction"], "both");
+        assert_eq!(field(1, "from")["direction"], "both");
+        assert_eq!(field(1, "to")["direction"], "in");
+        assert_eq!(field(1, "to")["enabled"], false);
+        assert_eq!(field(3, "from")["direction"], "in");
+        assert!(field(3, "to").is_null());
     }
 }

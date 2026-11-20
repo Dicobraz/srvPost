@@ -46,6 +46,14 @@ pub enum AuditDetailsSchema {
         /// Новая политика уровня; `null` — сброс к умолчаниям уровня выше.
         to: Option<TrustPolicySchema>,
     },
+    /// Правило журналирования (ADM-53): прежнее и новое правило целиком — кто какое правило записал и
+    /// что в нём было и стало.
+    JournalRule {
+        /// Прежнее правило; `null` — не было (создание).
+        from: Option<crate::journal::JournalRuleSchema>,
+        /// Новое правило; `null` — удаление.
+        to: Option<crate::journal::JournalRuleSchema>,
+    },
 }
 
 /// Запись журнала аудита в ответе API и в экспорте в SIEM ([`AdminAuditRecord`] контракта).

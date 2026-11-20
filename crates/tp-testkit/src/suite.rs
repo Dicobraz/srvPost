@@ -316,7 +316,7 @@ pub use dav::dav;
 pub use freebusy::freebusy;
 pub use freebusy::recurring as freebusy_recurring;
 pub use itip::itip;
-pub use journal::journal;
+pub use journal::{journal, journal_rules};
 pub use pipeline::pipeline;
 pub use reply::reply;
 pub use risk::risk;

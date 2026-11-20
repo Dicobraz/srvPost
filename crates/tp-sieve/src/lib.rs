@@ -9,7 +9,11 @@
 //! матрицы (SIEVE-14, решение 124): `processcalendar` (RFC 9671) и `vnd.thepost.peer` — тип абонента из контекста
 //! ядра; сбой скрипта организации — итог «отказ» ([`Decision::Failed`]); автоответ чужим — только внешним текстом
 //! настройки; профиль «админский» ([`AdminProfile`], [`compile_admin`]) проверяет скрипт организации при
-//! сохранении (ADM-49). [`managesieve`] — сервер
+//! сохранении (ADM-49). Расширения админского профиля справочника аномалий (SIEVE-15, решение 126 д):
+//! `vnd.thepost.risk` — команда `signal` (только повысить риск, предел веса [`Limits::max_signal_weight`]),
+//! `environment` (RFC 5183) с пунктами `vnd.thepost.*`, `extlists` (RFC 6134, [`ExternalLists`]) и `:regex`
+//! (draft-ietf-sieve-regex, лимиты [`Limits::regex_size_limit`]) — объявлены только скрипту организации
+//! ([`ADMIN_EXTENSIONS`]). [`managesieve`] — сервер
 //! ManageSieve (RFC 5804; SIEVE-08, SIEVE-09): вход SASL и команды скриптов поверх `SieveStore`. [`fuzz`] — проверки для целей
 //! cargo-fuzz `crates/tp-sieve/fuzz` (не API).
 //!
@@ -31,11 +35,18 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub use ast::{Arg, Command, Script, Test, parse};
-pub use compile::{AdminProfile, EXTENSIONS, Program, check, compile, compile_admin};
-pub use config::{CacheConfig, ManageSieveConfig, SieveConfig, VacationConfig};
+pub use compile::{
+    ADMIN_EXTENSIONS, AdminProfile, EXTENSIONS, Program, check, compile, compile_admin,
+    compile_trusted,
+};
+pub use config::{
+    CacheConfig, ManageSieveConfig, RegexConfig, RiskConfig, SieveConfig, VacationConfig,
+};
 pub use managesieve::ManageSieve;
 pub use rules::{Decision, Rules};
-pub use run::{Action, Context, Outcome, VacationAction, run};
+pub use run::{
+    Action, Context, Environment, ExternalLists, Outcome, Phase, ThreadTrust, VacationAction, run,
+};
 
 /// Лимиты разбора и выполнения; в приложении — из секции `sieve` ([`SieveConfig::limits`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +67,28 @@ pub struct Limits {
     pub max_redirects: usize,
     /// Объём текста письма, который читает тест `body`, байт (остальное не проверяется).
     pub max_body_scan: usize,
+    /// Предел веса команды `signal` расширения `vnd.thepost.risk` (SIEVE-15, решение 126 д):
+    /// `0 ≤ :weight N ≤ предел`; по умолчанию 10 (конфигурация `sieve.risk.max_weight`).
+    #[serde(default = "default_signal_weight")]
+    pub max_signal_weight: u16,
+    /// `regex::RegexBuilder::size_limit` шаблонов `:regex` (draft-ietf-sieve-regex, SIEVE-15), байт;
+    /// превышение — ошибка проверки скрипта (конфигурация `sieve.regex.size_limit`).
+    #[serde(default = "default_regex_size")]
+    pub regex_size_limit: usize,
+    /// `regex::RegexBuilder::dfa_size_limit` шаблонов `:regex`, байт (конфигурация
+    /// `sieve.regex.dfa_size_limit`).
+    #[serde(default = "default_regex_size")]
+    pub regex_dfa_size_limit: usize,
+}
+
+/// Предел веса `signal` по умолчанию.
+fn default_signal_weight() -> u16 {
+    10
+}
+
+/// Лимиты `:regex` по умолчанию — умолчания крейта `regex` (10 МиБ).
+fn default_regex_size() -> usize {
+    10 * (1 << 20)
 }
 
 impl Default for Limits {
@@ -69,6 +102,9 @@ impl Default for Limits {
             max_steps: 10_000_000,
             max_redirects: 4,
             max_body_scan: 1024 * 1024,
+            max_signal_weight: default_signal_weight(),
+            regex_size_limit: default_regex_size(),
+            regex_dfa_size_limit: default_regex_size(),
         }
     }
 }

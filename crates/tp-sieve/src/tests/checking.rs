@@ -323,7 +323,7 @@ fn errors_with_position() {
             "require \"comparator-i;ascii-numeric\";\nif header :contains :comparator \"i;ascii-numeric\" \"a\" \"1\" {}",
             2,
             21,
-            "не поддерживает :contains и :matches",
+            "не поддерживает :contains, :matches и :regex",
         ),
         (
             "if address :all :domain \"to\" \"a\" {}",
@@ -409,7 +409,13 @@ if allof (header :count "ge" :comparator "i;ascii-numeric" ["To", "Cc"] "3",
     let Test::AllOf(tests) = &branches[0].0 else {
         panic!("{branches:?}");
     };
-    let Test::Header { m, names, keys } = &tests[0] else {
+    let Test::Header {
+        m,
+        names,
+        keys,
+        list: false,
+    } = &tests[0]
+    else {
         panic!("{tests:?}");
     };
     assert_eq!(m.kind, MatchKind::Count(Rel::Ge));
@@ -516,7 +522,7 @@ fn processcalendar() {
         "require \"processcalendar\"; processcalendar :organizers \"partners\";",
         1,
         44,
-        ":organizers требует расширение extlists",
+        "\"extlists\" не объявлено в require",
     );
     assert_error(
         "require \"processcalendar\"; processcalendar :allowpublic :allowpublic;",

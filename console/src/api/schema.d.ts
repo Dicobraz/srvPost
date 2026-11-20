@@ -1500,6 +1500,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{org}/journal/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Правила журналирования организации (ADM-53): порядок наследования ящик > группа > организация,
+         *     внутри области — по идентификаторам. Право — администратор организации; аудитор журнала содержимое
+         *     читает, правила не видит (403). Хранилище правил не подключено — 503.
+         */
+        get: operations["list_rules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{org}/journal/rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Создаёт или заменяет правило журналирования (замена целиком по идентификатору). Группа и ящик
+         *     области должны существовать (422), та же цель с тем же направлением у другого правила — 409 с
+         *     подсказкой; конвейер подхватывает изменение без перезапуска (SMTP-53). Изменение — в журнал аудита
+         *     с парой «было → стало».
+         */
+        put: operations["put_rule"];
+        post?: never;
+        /**
+         * Удаляет правило журналирования; нет правила — 404. Записи журнала правило не трогает: изменение
+         *     действует на будущие письма, конвейер подхватывает его без перезапуска (SMTP-53). Удаление — в
+         *     журнал аудита с парой «было → стало».
+         */
+        delete: operations["delete_rule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1616,6 +1664,11 @@ export interface components {
             to?: components["schemas"]["TrustPolicy"] | null;
             /** @enum {string} */
             what: "trust";
+        } | {
+            from?: components["schemas"]["JournalRule"] | null;
+            to?: components["schemas"]["JournalRule"] | null;
+            /** @enum {string} */
+            what: "journal_rule";
         };
         /** @description Запись журнала с номером в ответе API. */
         AuditEntry: components["schemas"]["AuditRecord"] & {
@@ -3265,6 +3318,68 @@ export interface components {
             at: string;
             /** @description Правило журналирования. */
             rule: string;
+        };
+        /**
+         * @description Направление правила: `"in"` — доставляемое, `"out"` — отправляемое, `"both"` — оба.
+         * @enum {string}
+         */
+        JournalDirection: "in" | "out" | "both";
+        /**
+         * @description Правило журналирования контракта ([`tp_contracts::journal::JournalRule`]) — для деталей записи
+         *     аудита ([`crate::audit::AuditDetailsSchema`]).
+         */
+        JournalRule: {
+            /** @description Идентификатор. */
+            id: string;
+            /** @description Организация (UUID). */
+            tenant: string;
+            /** @description Область. */
+            scope: components["schemas"]["JournalScope"];
+            /** @description Направление. */
+            direction: components["schemas"]["JournalDirection"];
+            /** @description Включено. */
+            enabled: boolean;
+        };
+        /** @description Правило журналирования: создание или замена целиком (идентификатор — в пути). */
+        JournalRuleBody: {
+            /** @description Область: `"org"`, `{"group": "<uuid>"}` или `{"mailbox": "<uuid>"}`. */
+            scope: components["schemas"]["JournalScope"];
+            /** @description Направление: `in`, `out`, `both`. */
+            direction: components["schemas"]["JournalDirection"];
+            /** @description Включено (по умолчанию — включено). */
+            enabled?: boolean;
+        };
+        /** @description Правило журналирования в ответе API ([`tp_contracts::journal::JournalRule`]; обе стороны serde — ADM-13). */
+        JournalRuleView: {
+            /** @description Идентификатор (1–64 байта без пробелов и управляющих). */
+            id: string;
+            /** @description Организация (UUID). */
+            tenant: string;
+            /** @description Область: организация, группа или ящик. */
+            scope: components["schemas"]["JournalScope"];
+            /** @description Направление: `in`, `out`, `both`. */
+            direction: components["schemas"]["JournalDirection"];
+            /** @description Включено (выключенное правило писем не касается). */
+            enabled: boolean;
+        };
+        /**
+         * @description Правила журналирования организации в порядке наследования: ящик > группа > организация
+         *     ([`JournalScope::priority`]), внутри области — по идентификаторам.
+         */
+        JournalRulesView: {
+            /** @description Правила; пусто — журналирование выключено. */
+            rules: components["schemas"]["JournalRuleView"][];
+        };
+        /**
+         * @description Область правила журналирования: `"org"` — организация, `{"group": "<uuid>"}` — группа рассылки,
+         *     `{"mailbox": "<uuid>"}` — ящик.
+         */
+        JournalScope: "org" | {
+            /** @description Группа рассылки (UUID): отправитель или получатель — член группы. */
+            group: string;
+        } | {
+            /** @description Ящик (учётная запись, UUID). */
+            mailbox: string;
         };
     };
     responses: never;
@@ -9658,6 +9773,194 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChainReportView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_rules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalRulesView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    put_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Идентификатор правила (1–64 байта без пробелов) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JournalRuleBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalRuleView"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description та же цель с тем же направлением уже журналируется */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description группа или ящик области не существуют */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Организация (UUID) */
+                org: string;
+                /** @description Идентификатор правила */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalRuleView"];
                 };
             };
             400: {
