@@ -301,6 +301,7 @@ pub struct Signal {
     /// Происхождение: согласовано с префиксом идентификатора.
     pub origin: Origin,
     /// Дата появления признака (для срока «только отчёт» — `risk.report_only_days`, APP-78).
+    #[serde(with = "time::serde::rfc3339")]
     pub since: OffsetDateTime,
 }
 
@@ -917,6 +918,7 @@ pub struct PackageManifest {
     /// Номер версии: только растёт; пакет со старым или тем же номером не ставится.
     pub version: u64,
     /// Момент сборки (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub created: OffsetDateTime,
     /// Минимальная версия узла.
     pub min_node: Semver,
