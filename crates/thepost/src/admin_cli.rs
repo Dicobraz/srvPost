@@ -5386,7 +5386,7 @@ mod tests {
             false,
             ApiAction::Risk {
                 action: Box::new(RiskAction::Source {
-                    action: Box::new(SourceAction::Add { file: source }),
+                    action: Box::new(RiskSourceAction::Add { file: source }),
                 }),
             },
         )
@@ -5398,7 +5398,7 @@ mod tests {
             false,
             ApiAction::Risk {
                 action: Box::new(RiskAction::Source {
-                    action: Box::new(SourceAction::List),
+                    action: Box::new(RiskSourceAction::List),
                 }),
             },
         )
@@ -5412,7 +5412,7 @@ mod tests {
             false,
             ApiAction::Risk {
                 action: Box::new(RiskAction::Source {
-                    action: Box::new(SourceAction::Import {
+                    action: Box::new(RiskSourceAction::Import {
                         id: "feodo".to_owned(),
                         file: list,
                     }),
@@ -5427,7 +5427,7 @@ mod tests {
             false,
             ApiAction::Risk {
                 action: Box::new(RiskAction::Source {
-                    action: Box::new(SourceAction::Refresh {
+                    action: Box::new(RiskSourceAction::Refresh {
                         id: "feodo".to_owned(),
                     }),
                 }),
@@ -5441,7 +5441,7 @@ mod tests {
             false,
             ApiAction::Risk {
                 action: Box::new(RiskAction::Source {
-                    action: Box::new(SourceAction::Usage {
+                    action: Box::new(RiskSourceAction::Usage {
                         id: "feodo".to_owned(),
                         since: None,
                     }),
@@ -5456,7 +5456,7 @@ mod tests {
             false,
             ApiAction::Risk {
                 action: Box::new(RiskAction::Source {
-                    action: Box::new(SourceAction::Rm {
+                    action: Box::new(RiskSourceAction::Rm {
                         id: "feodo".to_owned(),
                     }),
                 }),
@@ -7185,7 +7185,7 @@ mod tests {
         // Доверенные источники: шлюз по сети, приложение по сертификату; удаление; неверная сеть — отказ.
         let source = |action| transport(TransportAction::Source { action });
         let set = |name: &str, networks: Vec<&str>, cert: Option<&str>, senders: Vec<&str>| {
-            source(SourceAction::Set {
+            source(RiskSourceAction::Set {
                 name: name.into(),
                 networks: networks.into_iter().map(str::to_owned).collect(),
                 client_cert: cert.map(str::to_owned),
@@ -7225,7 +7225,7 @@ mod tests {
         )
         .await
         .expect("source mfu");
-        let listed = exec(&c, false, source(SourceAction::List))
+        let listed = exec(&c, false, source(RiskSourceAction::List))
             .await
             .expect("source list");
         for part in [
@@ -7237,11 +7237,11 @@ mod tests {
         ] {
             assert!(listed.contains(part), "{part}: {listed}");
         }
-        let delete = SourceAction::Delete { name: "gw".into() };
+        let delete = RiskSourceAction::Delete { name: "gw".into() };
         exec(&c, false, source(delete))
             .await
             .expect("source delete");
-        let listed = json(exec(&c, true, source(SourceAction::List)).await);
+        let listed = json(exec(&c, true, source(RiskSourceAction::List)).await);
         assert_eq!(
             listed["sources"].as_array().map(Vec::len),
             Some(1),
