@@ -5,14 +5,26 @@ import { useState } from "react";
 
 type Cursor = string | number | undefined;
 
-/** Страница по условиям `query`; смена условий возвращает к первой странице. */
-export function useCursorPages<T extends { next?: string | number | null }>(url: string, query: Record<string, unknown>) {
+/**
+ * Страница по условиям `query`; смена условий возвращает к первой странице. `cursor` — имя параметра
+ * продолжения: `after` (журналы) или `until` (срабатывания признаков, где он же — конец интервала).
+ */
+export function useCursorPages<T extends { next?: string | number | null }>(
+  url: string,
+  query: Record<string, unknown>,
+  cursor: "after" | "until" = "after",
+) {
   const key = JSON.stringify(query);
   // Курсоры пройденных страниц: последний — текущая.
   const [state, setState] = useState<{ key: string; cursors: Cursor[] }>({ key, cursors: [undefined] });
   const cursors = state.key === key ? state.cursors : [undefined];
   const after = cursors[cursors.length - 1];
-  const { result, query: q } = useCustom<T>({ url, method: "get", config: { query: { ...query, after } } });
+  const { result, query: q } = useCustom<T>({
+    url,
+    method: "get",
+    // Незаданный курсор условие не подменяет (`until` интервала без продолжения остаётся).
+    config: { query: after === undefined ? query : { ...query, [cursor]: after } },
+  });
   const next = result.data?.next;
   const pager = (
     <Space style={{ marginTop: 16 }}>
