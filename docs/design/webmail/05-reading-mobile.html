@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>WEB-05 · Чтение письма — мобильный</title>
+<style>
+/* Макет mod-webmail, мобильное чтение (WEB-08): письмо «страницей» с возвратом,
+   нижняя панель действий. Правила DESIGN.md: внешние картинки скрыты, подменённая
+   ссылка — красная полоса (красный только безопасность), карточка приглашения с ответом.
+   Цвета — токены srvPost design/tokens.toml (перенос вручную) + таблица DESIGN.md. Акцент — синий #0067C0 (решение владельца 20.11). */
+:root{
+  --screen:#E9EEF3; --panel:#FFFFFF; --hover:#EDF2F6; --fill:#E4EAF0; --quiet:#F6F6F6;
+  --div:#DCE3E8; --stroke:#BAC1C6;
+  --t1:#161616; --t2:#5F6B78;
+  --acc:#0067C0; --accbtn:#0067C0; --tint:#DFF0FF; --tinttext:#234E82;
+  --selrow:#D1E4F4;
+  --ok:#0E8483; --warn:#9A6F00; --err:#C62828;
+  --threatbg:#FFE6E3; --threattx:#7A3430;
+  --duebg:#F8DEA8; --duetx:#664700;
+  --own:#D7E2EA;
+  --catblue-bg:#DFF0FF; --catblue-tx:#234E82;
+  --iblue:#2F6DB5; --ipink:#C2477F; --igreen:#3D8556; --iamber:#A0761A;
+}
+*{box-sizing:border-box;margin:0}
+html,body{width:390px;height:844px;overflow:hidden}
+body{
+  font:14px/1.4 "Segoe UI Variable Text","Segoe UI",-apple-system,"SF Pro Text",Roboto,"Helvetica Neue",Arial,sans-serif;
+  color:var(--t1);background:var(--screen);display:flex;flex-direction:column;
+}
+.i{width:22px;height:22px;flex:none;display:inline-block;vertical-align:middle}
+.i.s{width:18px;height:18px}
+.i.xs{width:15px;height:15px}
+
+/* верхняя строка: назад, тема, ещё */
+.top{height:56px;display:flex;align-items:center;gap:4px;padding:0 6px;flex:none}
+.top .tb{width:40px;height:40px;border-radius:20px;display:flex;align-items:center;justify-content:center;color:var(--t1);flex:none}
+.top .subj{flex:1;min-width:0;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top .tb .i{color:var(--iamber)}
+
+.read{flex:1;background:var(--panel);border-radius:12px 12px 0 0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+
+/* полосы безопасности */
+.strip{min-height:30px;border-radius:6px;display:flex;align-items:center;gap:8px;padding:5px 10px;margin:6px 12px 0;font-size:12.5px;flex:none}
+.strip b{font-weight:600}
+.strip .sp{flex:1}
+.strip .lk{color:var(--acc);font-weight:600;white-space:nowrap}
+.strip.img{background:var(--fill);color:var(--t1);white-space:nowrap}
+.strip.img .i{color:var(--t2)}
+.strip.threat{background:var(--threatbg);color:var(--threattx);white-space:nowrap}
+.strip.threat .i{color:var(--threattx)}
+
+/* шапка письма */
+.mhead{display:flex;align-items:flex-start;gap:10px;padding:10px 16px 6px;flex:none}
+.ava{width:36px;height:36px;border-radius:18px;background:var(--fill);color:var(--t2);font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none}
+.mhead .who{flex:1;min-width:0;line-height:18px}
+.mhead .who b{font-weight:600}
+.mhead .meta{color:var(--t2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mhead .time{color:var(--t2);font-size:12px;white-space:nowrap}
+.tags{display:flex;align-items:center;gap:6px;padding:0 16px 6px;flex:none}
+.chip{font-size:11px;padding:1px 6px;border-radius:3px;background:var(--cchip-bg);color:var(--cchip-tx);white-space:nowrap;flex:none}
+.chip.n{background:var(--fill);color:var(--t2)}
+
+/* вложения */
+.atts{display:flex;flex-wrap:wrap;gap:6px;padding:2px 16px 6px;flex:none}
+.att{height:30px;display:flex;align-items:center;gap:6px;border:1px solid var(--stroke);border-radius:15px;padding:0 10px;font-size:12px;background:var(--panel)}
+.att .sz{color:var(--t2)}
+.att .i{width:14px;height:14px;color:var(--iblue)}
+
+/* карточка приглашения */
+.inv{border:1px solid var(--stroke);border-radius:10px;padding:8px 12px;margin:2px 12px 6px;background:var(--panel);flex:none}
+.inv .ih{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.inv .ih .ttl{font-weight:600;font-size:13px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inv .ih .i{width:16px;height:16px;color:var(--ipink)}
+.inv .det{color:var(--t2);font-size:12px;line-height:17px}
+.inv .det b{color:var(--t1);font-weight:600}
+.day{display:flex;gap:8px;margin:6px 0 7px;align-items:stretch}
+.day .lbl{width:74px;color:var(--t2);font-size:11.5px;padding-top:2px}
+.day .lbl b{color:var(--t1);font-weight:600;font-size:12px}
+.hours{display:flex;flex-direction:column;flex:1;border-left:1px solid var(--div);position:relative}
+.hrow{height:18px;border-top:1px solid var(--div);position:relative}
+.hrow:first-child{border-top:none}
+.hrow .hl{position:absolute;left:0;top:1px;font-size:9.5px;color:var(--t2);background:var(--panel);padding-right:3px;line-height:1}
+.nowline{position:absolute;left:0;right:0;height:0;border-top:1.5px solid var(--accbtn);z-index:2}
+.nowline::after{content:"13:20";position:absolute;left:30px;top:-7px;font-size:9px;color:var(--accbtn);background:var(--panel);padding-right:2px;line-height:1}
+.ev{position:absolute;left:40px;right:6px;border-radius:3px;font-size:10px;line-height:1.3;padding:0 5px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ev.own{background:var(--own);color:var(--t1)}
+.ev.invite{background:rgba(0,103,192,.15);border:1px dashed var(--accbtn);color:var(--acc);font-weight:600}
+.invacts{display:flex;align-items:center;gap:6px}
+.ibtn{height:30px;flex:1;border-radius:5px;display:flex;align-items:center;justify-content:center;gap:5px;font-weight:600;font-size:12px}
+.ibtn.acc{background:var(--accbtn);color:#fff}
+.ibtn.tint{background:var(--tint);color:var(--tinttext)}
+.ibtn .st-ic{width:15px;height:15px;border-radius:50%;border:1.3px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:10px;line-height:1}
+
+/* тело письма */
+.bodym{flex:1;overflow:hidden;padding:2px 16px 6px;line-height:18px}
+.bodym p{margin:0 0 6px;font-size:13.5px}
+.bodym .sig{color:var(--t2);font-size:12.5px}
+table.spec{border-collapse:collapse;width:100%;margin:2px 0 8px;font-size:11.5px}
+table.spec th{background:var(--quiet);text-align:left;font-weight:600;padding:4px 7px;border:1px solid var(--div)}
+table.spec td{padding:3px 7px;border:1px solid var(--div)}
+table.spec .r{text-align:right}
+table.spec tr.total td{font-weight:600;background:var(--quiet)}
+
+/* нижняя панель действий */
+.actions{height:62px;background:var(--panel);border-top:1px solid var(--div);display:flex;flex:none;padding-bottom:6px}
+.actions .ab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;color:var(--t1)}
+.actions .ab .i{width:21px;height:21px}
+.actions .ab .i.blue{color:var(--iblue)}
+.actions .ab .i.green{color:var(--igreen)}
+.actions .ab .i.amber{color:var(--iamber)}
+</style>
+</head>
+<body>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 6.5L5 12l5.5 5.5"/><path d="M5 12h14"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5v17"/><path d="M6 4.5c4-2 8 2 12 0v8c-4 2-8-2-12 0"/></symbol>
+  <symbol id="i-imgoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5.5" width="16" height="13" rx="2"/><path d="M4.5 15.5l4-3.5 4 3.5 3-2.5 4 3"/><circle cx="9.3" cy="9.5" r="1.3"/><path d="M4.5 4.5l15 15"/></symbol>
+  <symbol id="i-shielda" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l7 2.5v5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5V6l7-2.5z"/><path d="M12 8v4"/><circle cx="12" cy="15.3" r=".4" fill="currentColor"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5h7L18 8v12.5H6.5z"/><path d="M13.5 3.5V8H18"/><path d="M9 12h6M9 15h6"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M4 10h16M10.5 10v9"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M9.5 7V5h5v2M7 7l1 13h8l1-13"/><path d="M10.5 10.5v6M13.5 10.5v6"/></symbol>
+  <symbol id="i-arch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="5" rx="1"/><path d="M5.5 9.5V19a1 1 0 001 1h11a1 1 0 001-1V9.5M9.5 13h5"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-4.5 4.5L9 16"/><path d="M4.5 11.5H14a5.5 5.5 0 015.5 5.5v1"/></symbol>
+ </defs>
+</svg>
+
+<!-- верхняя строка чтения: назад, тема, флаг, ещё -->
+<div class="top">
+  <span class="tb"><svg class="i"><use href="#i-back"/></svg></span>
+  <span class="subj">Договор поставки</span>
+  <span class="tb"><svg class="i"><use href="#i-flag"/></svg></span>
+  <span class="tb"><svg class="i"><use href="#i-more"/></svg></span>
+</div>
+
+<div class="read">
+  <div class="strip img">
+    <svg class="i xs"><use href="#i-imgoff"/></svg>
+    <span><b>Внешние картинки скрыты</b></span>
+    <span class="sp"></span><span class="lk">Загрузить</span><span class="lk">Всегда</span>
+  </div>
+  <div class="strip threat">
+    <svg class="i xs"><use href="#i-shielda"/></svg>
+    <span><b>Ссылка ведёт на vektor-pay.example</b></span>
+    <span class="sp"></span><span class="lk">Показать</span>
+  </div>
+
+  <div class="mhead">
+    <span class="ava">ОС</span>
+    <span class="who">
+      <b>Ольга Смирнова</b>
+      <div class="meta">Кому: Анна Антропова · вт 18.11.2026 10:15</div>
+    </span>
+    <span class="time">Беседа · 3</span>
+  </div>
+  <div class="tags">
+    <span class="chip" style="--cchip-bg:var(--catblue-bg);--cchip-tx:var(--catblue-tx)">Клиенты</span>
+    <span class="chip n">Ждёт ответа</span>
+  </div>
+
+  <div class="atts">
+    <span class="att"><svg class="i"><use href="#i-doc"/></svg>Договор_поставки_ред3.docx<span class="sz">84 КБ</span></span>
+    <span class="att"><svg class="i"><use href="#i-table"/></svg>Смета_2026.xlsx<span class="sz">22 КБ</span></span>
+  </div>
+
+  <div class="inv">
+    <div class="ih">
+      <svg class="i"><use href="#i-cal"/></svg>
+      <span class="ttl">Приглашение: Согласование договора</span>
+    </div>
+    <div class="det"><b>вт 24.11.2026 14:00–15:00</b> · Переговорная 4 · организатор: Ольга Смирнова · 2 из 5 приняли</div>
+    <div class="day">
+      <div class="lbl"><b>Ваш день</b><br>12:00–16:00</div>
+      <div class="hours">
+        <div class="hrow"><span class="hl">12:00</span></div>
+        <div class="hrow"><span class="hl">13:00</span></div>
+        <div class="hrow"><span class="hl">14:00</span></div>
+        <div class="hrow"><span class="hl">15:00</span></div>
+        <div class="hrow"><span class="hl">16:00</span></div>
+        <div class="ev invite" style="top:36px;height:18px">Согласование договора · 14:00–15:00</div>
+        <div class="ev own" style="top:54px;height:18px">Ревью релиза · 15:00–16:00</div>
+        <div class="nowline" style="top:24px"></div>
+      </div>
+    </div>
+    <div class="invacts">
+      <span class="ibtn acc"><span class="st-ic">✓</span>Принять</span>
+      <span class="ibtn tint"><span class="st-ic">?</span>Под вопросом</span>
+      <span class="ibtn tint"><span class="st-ic">✕</span>Отклонить</span>
+    </div>
+  </div>
+
+  <div class="bodym">
+    <p>Добрый день, Анна!</p>
+    <p>Направляю третью редакцию договора. Правка одна: кабель — 1 200 м вместо 1 050. Спецификация:</p>
+    <table class="spec">
+      <tr><th>Позиция</th><th>Ед.</th><th class="r">Кол-во</th><th class="r">Сумма, ₽</th></tr>
+      <tr><td>Кабель ВВГнг 3×2,5</td><td>м</td><td class="r">1 200</td><td class="r">115 680,00</td></tr>
+      <tr><td>Автомат С16</td><td>шт</td><td class="r">48</td><td class="r">19 680,00</td></tr>
+      <tr><td>Щит ЩРН-24</td><td>шт</td><td class="r">6</td><td class="r">18 900,00</td></tr>
+      <tr><td>Монтаж, этап 1</td><td>усл</td><td class="r">1</td><td class="r">300 000,00</td></tr>
+      <tr class="total"><td>Итого</td><td></td><td class="r"></td><td class="r">454 260,00</td></tr>
+    </table>
+    <p>Жду замечания до среды.<br><span class="sig">Ольга Смирнова · ООО «Вектор»</span></p>
+  </div>
+</div>
+
+<!-- нижняя панель действий: удалить / в архив / флаг / ответить -->
+<div class="actions">
+  <span class="ab"><svg class="i"><use href="#i-trash"/></svg>Удалить</span>
+  <span class="ab"><svg class="i green"><use href="#i-arch"/></svg>В архив</span>
+  <span class="ab"><svg class="i amber"><use href="#i-flag"/></svg>Флаг</span>
+  <span class="ab"><svg class="i blue"><use href="#i-reply"/></svg>Ответить</span>
+</div>
+</body>
+</html>

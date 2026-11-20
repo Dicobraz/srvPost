@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>WEB-06 · Мобильный список, тёмная тема: обычная и компактная плотность</title>
+<style>
+/* Макет mod-webmail: мобильный список в тёмной теме, два экрана на одном холсте —
+   плотность «Обычная» (аватар и превью) и «Компактная» (без аватара и превью, как в DESIGN.md).
+   Цвета — тёмные режимы токенов srvPost design/tokens.toml (перенос вручную) + таблица DESIGN.md. Акцент — #2B6CA8/#7CC4F0 (решение 20.11);
+   плотность по умолчанию — обычная с превью. */
+:root{
+  --screen:#0F1317; --panel:#141A20; --hover:#1B2229; --fill:#232B33;
+  --div:#262F38; --stroke:#3A4652;
+  --t1:#D8E7F4; --t2:#7E8A96;
+  --acc:#7CC4F0; --accbtn:#2B6CA8; --tint:#23364F; --tinttext:#BFDDFF;
+  --selrow:#2B3E50; --selbar:#7CC4F0;
+  --ok:#2EBCBA; --warn:#E7B512; --err:#FF5C5C;
+  --duebg:#6C5005; --duetx:#F7E2B8;
+  --catblue-bg:#23364F; --catblue-tx:#BFDDFF;
+  --catgreen-bg:#2A3B20; --catgreen-tx:#BAD9AB;
+  --catblue:#689BDB; --catpink:#D2569A; --catpink-bg:#3A1A2A; --catpink-tx:#F0A8CA;
+  --iblue:#74A6E0; --ipink:#E68AB5; --igreen:#7DC08F; --iamber:#D9AE55;
+}
+*{box-sizing:border-box;margin:0}
+html,body{width:850px;height:912px;overflow:hidden}
+body{background:#DDE4EA;font:13px/1.4 "Segoe UI Variable Text","Segoe UI",-apple-system,"SF Pro Text",Roboto,"Helvetica Neue",Arial,sans-serif;position:relative}
+.cap{position:absolute;top:14px;font-size:13px;font-weight:600;color:#161616}
+.phone{position:absolute;top:40px;width:390px;height:844px;overflow:hidden;background:var(--screen);color:var(--t1);display:flex;flex-direction:column;box-shadow:0 6px 22px rgba(15,19,23,.35);border-radius:14px}
+.p1{left:20px}.p2{left:440px}
+.cap1{left:20px}.cap2{left:440px}
+.hint{position:absolute;bottom:8px;left:20px;right:20px;font-size:11.5px;color:#5F6B78;text-align:center}
+
+.i{width:22px;height:22px;flex:none;display:inline-block;vertical-align:middle}
+.i.s{width:18px;height:18px}
+.i.xs{width:15px;height:15px}
+
+.top{height:56px;display:flex;align-items:center;gap:6px;padding:0 6px;flex:none}
+.top .tb{width:40px;height:40px;border-radius:20px;display:flex;align-items:center;justify-content:center;color:var(--t1)}
+.top .ttl{font-size:17px;font-weight:600;display:flex;align-items:center;gap:4px;flex:1}
+.top .ttl .i{color:var(--t2);width:16px;height:16px}
+.top .ava{width:30px;height:30px;border-radius:15px;background:var(--fill);color:var(--t2);font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-right:8px}
+
+.qf{display:flex;gap:6px;padding:0 12px 8px;overflow:hidden;flex:none}
+.qf .f{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:14px;background:var(--panel);font-size:12.5px;white-space:nowrap;color:var(--t1)}
+.qf .f .i{width:14px;height:14px}
+.qf .f .cnt{color:var(--t2);font-size:11.5px}
+.qf .f.thr .i{color:var(--err)}
+.qf .f.duef .i{color:var(--iamber)}
+
+.list{flex:1;background:var(--panel);border-radius:12px 12px 0 0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.lhead{height:42px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--div);font-weight:600;font-size:14px;flex:none;white-space:nowrap}
+.lhead .sec{color:var(--t2);font-weight:400;font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.rows{flex:1;overflow:hidden}
+.msg{border-bottom:1px solid var(--div);display:flex;gap:11px;align-items:flex-start;padding:9px 16px 9px 12px;height:76px}
+.msg .ava{width:40px;height:40px;border-radius:20px;background:var(--fill);color:var(--t2);font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+.msg .mid{flex:1;min-width:0}
+.msg .l1{display:flex;align-items:center;gap:6px;height:20px}
+.msg .l1 .from{font-weight:400;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
+.msg.unread .l1 .from{font-weight:700}
+.msg .l1 .time{color:var(--t2);font-size:12px;flex:none}
+.msg .l2{display:flex;align-items:center;gap:6px;margin-top:2px}
+.msg .l3{display:block;color:var(--t2);font-size:11.5px;line-height:15px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg .thm{color:var(--t1);font-size:12.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg.unread .thm{font-weight:600}
+.msg .subj{color:var(--t2);font-size:12.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg .ends{display:flex;align-items:center;gap:5px;flex:none}
+.msg .st{color:var(--t2);font-size:11.5px}
+.catdot{width:8px;height:8px;border-radius:4px;flex:none}
+.chip{font-size:11px;padding:1px 6px;border-radius:3px;background:var(--cchip-bg);color:var(--cchip-tx);white-space:nowrap;flex:none}
+.chip.due{background:var(--duebg);color:var(--duetx);font-weight:600}
+.duelbl{color:var(--warn);font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:3px;flex:none}
+.unread-badge{min-width:17px;height:17px;border-radius:9px;background:var(--accbtn);color:#fff;font-size:10.5px;font-weight:600;display:flex;align-items:center;justify-content:center;padding:0 5px;flex:none}
+.iclam{color:var(--iamber)}
+
+/* компактная плотность: без аватара и превью — строки 44 px */
+.compact .msg{height:44px;padding:6px 16px 6px 16px;align-items:center}
+.compact .msg .l2 .subj{font-size:12.5px}
+.compact .msg.unread .subj{color:var(--t1)}
+.compact .msg.unread .subj{font-weight:600}
+.compact .subj{flex:1}
+
+.nav{height:64px;background:var(--panel);border-top:1px solid var(--div);display:flex;flex:none;padding-bottom:6px}
+.nav .ni{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;color:var(--t2)}
+.nav .ni.on{color:var(--acc);font-weight:600}
+.fab{position:absolute;right:16px;bottom:82px;height:48px;padding:0 18px;border-radius:24px;background:var(--accbtn);color:#fff;display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;box-shadow:0 4px 14px rgba(0,0,0,.5);z-index:5}
+</style>
+</head>
+<body>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-chevd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5 5 5-5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20"/></symbol>
+  <symbol id="i-shielda" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l7 2.5v5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5V6l7-2.5z"/><path d="M12 8v4"/><circle cx="12" cy="15.3" r=".4" fill="currentColor"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.4"/><path d="M5.5 19.5c.7-3.5 3.3-5.4 6.5-5.4s5.8 1.9 6.5 5.4"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5v17"/><path d="M6 4.5c4-2 8 2 12 0v8c-4 2-8-2-12 0"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 11.5l-6 6a4 4 0 01-5.7-5.7l7.3-7.3a2.7 2.7 0 013.8 3.8l-7.3 7.3a1.4 1.4 0 01-2-2l6.4-6.4"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 7.5l8.5 6 8.5-6"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-people" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3.2 2.9-5 5.5-5s4.9 1.8 5.5 5"/><path d="M15.5 5.8a3.2 3.2 0 010 5.4M17.5 14.2c1.9.7 3 2.4 3.4 4.8"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5l4 4"/><path d="M4 20l1-4L16.5 4.5a2.05 2.05 0 013 3L8 19l-4 1z"/></symbol>
+ </defs>
+</svg>
+
+<div class="cap cap1">Обычная плотность — по умолчанию</div>
+<div class="cap cap2">Компактная — переключается в настройках</div>
+
+<!-- Телефон 1: обычная плотность -->
+<div class="phone p1">
+  <div class="top">
+    <span class="tb"><svg class="i"><use href="#i-menu"/></svg></span>
+    <span class="ttl">Входящие<svg class="i"><use href="#i-chevd"/></svg></span>
+    <span class="tb"><svg class="i"><use href="#i-search"/></svg></span>
+    <span class="ava">АА</span>
+  </div>
+  <div class="qf">
+    <span class="f thr"><svg class="i"><use href="#i-shielda"/></svg>Угрозы<span class="cnt">1</span></span>
+    <span class="f duef"><svg class="i"><use href="#i-clock"/></svg>Срок<span class="cnt">2</span></span>
+    <span class="f"><svg class="i"><use href="#i-clock"/></svg>Ждём<span class="cnt">3</span></span>
+    <span class="f"><svg class="i"><use href="#i-person"/></svg>Мне<span class="cnt">8</span></span>
+  </div>
+  <div class="list">
+    <div class="lhead">Входящие<span class="sec">12 писем · 4 непрочитанных</span></div>
+    <div class="rows">
+      <div class="msg unread">
+        <span class="ava">ИП</span>
+        <span class="mid">
+          <span class="l1"><span class="from">Иван Петров</span><span class="time">10:42</span></span>
+          <span class="l2"><span class="thm">Отчёт за октябрь</span><span class="ends"><svg class="i xs" style="color:var(--t2)"><use href="#i-clip"/></svg></span></span>
+          <span class="l3">Направляю с подписью, главные цифры на листе 3</span>
+        </span>
+      </div>
+      <div class="msg unread">
+        <span class="ava">ОС</span>
+        <span class="mid">
+          <span class="l1"><span class="from">Ольга Смирнова</span><span class="time">вт 10:15</span></span>
+          <span class="l2"><span class="thm">Договор поставки</span><span class="ends"><span class="chip" style="--cchip-bg:var(--catblue-bg);--cchip-tx:var(--catblue-tx)">Клиенты</span><span class="st">3 письма</span></span></span>
+          <span class="l3">Третья редакция, правки по срокам поставки</span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="ava">СК</span>
+        <span class="mid">
+          <span class="l1"><span class="from">Сергей Ким</span><span class="time">09:30</span></span>
+          <span class="l2"><span class="thm">Re: план на неделю</span><span class="ends"><span class="st">Ждём ответа</span></span></span>
+          <span class="l3">Учёл замечания, жду подтверждения по датам</span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="ava">АЛ</span>
+        <span class="mid">
+          <span class="l1"><span class="from">Анна Лебедева</span><span class="duelbl"><svg class="i xs"><use href="#i-clock"/></svg>До ср</span><span class="time">Вчера</span></span>
+          <span class="l2"><span class="thm">Тендер: вопросы по заявке</span><span class="ends"><span class="chip" style="--cchip-bg:var(--catpink-bg);--cchip-tx:var(--catpink-tx)">Тендеры</span></span></span>
+          <span class="l3">Ответы по двум позициям нужны до среды</span>
+        </span>
+      </div>
+      <div class="msg unread">
+        <span class="ava">МВ</span>
+        <span class="mid">
+          <span class="l1"><span class="from">Мария Волкова</span><span class="unread-badge">2</span><span class="time">Вчера</span></span>
+          <span class="l2"><span class="thm">Проект «Гамма»: правки в смете</span><span class="ends"><span class="catdot" style="background:var(--igreen)"></span><span class="st">5 писем</span></span></span>
+          <span class="l3">Согласуйте правки по кабелю и щиту</span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="ava">ДО</span>
+        <span class="mid">
+          <span class="l1"><span class="from">Дмитрий Орлов</span><span class="time">пн 11:20</span></span>
+          <span class="l2"><span class="thm">Ревью релиза: перенос на 16:00</span><span class="ends"><span class="chip due">Просрочено 1 д</span></span></span>
+          <span class="l3">Переносим из-за сборки, календарь обновлён</span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="ava">СД</span>
+        <span class="mid">
+          <span class="l1"><span class="from">Сервис-деск</span><span class="time">пн 09:12</span></span>
+          <span class="l2"><span class="thm">Заявка № 1207 закрыта</span><span class="ends"><span class="st">Сервисы</span></span></span>
+          <span class="l3">Решение: заменён блок питания</span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="ava">ПО</span>
+        <span class="mid">
+          <span class="l1"><span class="from">noreply@thepost.example</span><span class="time">пн 08:40</span></span>
+          <span class="l2"><span class="thm">Ваш отчёт о фишинге отправлен</span></span>
+          <span class="l3">Команда безопасности проверит ссылку</span>
+        </span>
+      </div>
+    </div>
+  </div>
+  <span class="fab"><svg class="i s"><use href="#i-pen"/></svg>Новое</span>
+  <div class="nav">
+    <span class="ni on"><svg class="i"><use href="#i-mail"/></svg>Почта</span>
+    <span class="ni"><svg class="i"><use href="#i-cal"/></svg>Календарь</span>
+    <span class="ni"><svg class="i"><use href="#i-people"/></svg>Контакты</span>
+  </div>
+</div>
+
+<!-- Телефон 2: компактная плотность -->
+<div class="phone p2 compact">
+  <div class="top">
+    <span class="tb"><svg class="i"><use href="#i-menu"/></svg></span>
+    <span class="ttl">Входящие<svg class="i"><use href="#i-chevd"/></svg></span>
+    <span class="tb"><svg class="i"><use href="#i-search"/></svg></span>
+    <span class="ava">АА</span>
+  </div>
+  <div class="qf">
+    <span class="f thr"><svg class="i"><use href="#i-shielda"/></svg>Угрозы<span class="cnt">1</span></span>
+    <span class="f duef"><svg class="i"><use href="#i-clock"/></svg>Срок<span class="cnt">2</span></span>
+    <span class="f"><svg class="i"><use href="#i-clock"/></svg>Ждём<span class="cnt">3</span></span>
+    <span class="f"><svg class="i"><use href="#i-person"/></svg>Мне<span class="cnt">8</span></span>
+  </div>
+  <div class="list">
+    <div class="lhead">Входящие<span class="sec">12 писем · 4 непрочитанных</span></div>
+    <div class="rows">
+      <div class="msg unread">
+        <span class="mid">
+          <span class="l1"><span class="from">Иван Петров</span><svg class="i xs" style="color:var(--t2)"><use href="#i-clip"/></svg><span class="time">10:42</span></span>
+          <span class="l2"><span class="subj">Отчёт за октябрь</span></span>
+        </span>
+      </div>
+      <div class="msg unread">
+        <span class="mid">
+          <span class="l1"><span class="from">Ольга Смирнова</span><span class="st">3 письма</span><span class="time">вт 10:15</span></span>
+          <span class="l2"><span class="subj">Договор поставки</span><span class="catdot" style="background:var(--catblue)"></span></span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="mid">
+          <span class="l1"><span class="from">Сергей Ким</span><span class="time">09:30</span></span>
+          <span class="l2"><span class="subj">Re: план на неделю — ждём ответа</span></span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="mid">
+          <span class="l1"><span class="from">Анна Лебедева</span><span class="duelbl"><svg class="i xs"><use href="#i-clock"/></svg>До ср</span><span class="time">Вчера</span></span>
+          <span class="l2"><span class="subj">Тендер: вопросы по заявке</span><span class="catdot" style="background:var(--catpink)"></span></span>
+        </span>
+      </div>
+      <div class="msg unread">
+        <span class="mid">
+          <span class="l1"><span class="from">Мария Волкова</span><span class="unread-badge">2</span><span class="time">Вчера</span></span>
+          <span class="l2"><span class="subj">Проект «Гамма»: правки в смете</span><span class="catdot" style="background:var(--igreen)"></span></span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="mid">
+          <span class="l1"><span class="from">Дмитрий Орлов</span><span class="chip due">Просрочено 1 д</span><span class="time">пн 11:20</span></span>
+          <span class="l2"><span class="subj">Ревью релиза: перенос на 16:00</span></span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="mid">
+          <span class="l1"><span class="from">Сервис-деск</span><span class="time">пн 09:12</span></span>
+          <span class="l2"><span class="subj">Заявка № 1207 закрыта</span></span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="mid">
+          <span class="l1"><span class="from">noreply@thepost.example</span><span class="time">пн 08:40</span></span>
+          <span class="l2"><span class="subj">Ваш отчёт о фишинге отправлен</span></span>
+        </span>
+      </div>
+      <div class="msg">
+        <span class="mid">
+          <span class="l1"><span class="from">ООО «Вектор»</span><span class="chip due">Просрочено 1 д</span><span class="time">пн 14:05</span></span>
+          <span class="l2"><span class="subj">Счёт № 402: напоминание</span><span class="catdot" style="background:var(--catblue)"></span></span>
+        </span>
+      </div>
+    </div>
+  </div>
+  <span class="fab"><svg class="i s"><use href="#i-pen"/></svg>Новое</span>
+  <div class="nav">
+    <span class="ni on"><svg class="i"><use href="#i-mail"/></svg>Почта</span>
+    <span class="ni"><svg class="i"><use href="#i-cal"/></svg>Календарь</span>
+    <span class="ni"><svg class="i"><use href="#i-people"/></svg>Контакты</span>
+  </div>
+</div>
+
+<div class="hint">Тёмная тема: окно (#0F1317) темнее карточек (#141A20) — T1-D, вариант D1. Плотность по умолчанию — обычная с превью (решение 20.11).</div>
+</body>
+</html>
