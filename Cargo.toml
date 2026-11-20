@@ -43,7 +43,9 @@ tp-tui = { path = "crates/tp-tui" }
 anyhow = "1.0.104"
 argon2 = "0.6.0"
 async-trait = "0.1.92"
-axum = { version = "0.8.9", features = ["ws"] }
+# HTTP/2 для межузловых вызовов (решение 31, DEPS-06): фича http2 включает hyper/http2 (h2 уже в дереве);
+# согласование протокола по ALPN (h2) — CLU-15.
+axum = { version = "0.8.9", features = ["http2", "ws"] }
 base64 = "0.23.1"
 bytes = "1.12.1"
 calamine = "0.38.0"
@@ -115,7 +117,8 @@ ratatui-image = { version = "11.1.0", default-features = false, features = ["cro
 # Шаблоны признаков каталога аномалий и списков TI (решение 126, tp-sieve/tp-smtp): линейное время на
 # недоверенном вводе; та же версия, что уже в дереве через tantivy.
 regex = "1.13.1"
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+# HTTP/2 для межузловых вызовов (решение 31, DEPS-06): без default-features фича http2 выключена — включаем явно.
+reqwest = { version = "0.13.5", default-features = false, features = ["http2", "rustls"] }
 # Подпись Ed25519 пакета признаков поставщика (решение 126, как карты Rspamd; thepost); без второй
 # криптобиблиотеки — та же версия, что уже в дереве через rustls.
 ring = "0.17.14"
