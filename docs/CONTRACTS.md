@@ -883,6 +883,39 @@ iMIP (RFC 6047), занятость. iCalendar контракты не разб�
 - Наборы: `suite::itip` (входящие, `Schedule-Tag`, занятость в индексе, `transparent`; лимиты `suite::dav::LIMITS`, `DavFixture`),
   `suite::itip::signals`, `suite::freebusy(dav, fb, fixture)`.
 
+## Calendar
+SRS 4.4, 1.3; CTR-36, решение 2026-11-04-calendar-external-api. Код — `calendar.rs`. Внешний доступ к календарям:
+источники занятости для `Availability/get` (`urn:thepost:availability`, JMAP-19) и публикации календарей по ссылке
+(JMAP `urn:thepost:calendarpublish`, JMAP-20; CalDAV-публикация ICS — DAV-20). Внешние ссылки сервер запрашивает
+только по HTTPS, с таймаутом и кэшем; внутренние и частные адреса запрещены (SSRF) — правило отдающего, не контракта.
+- `AvailabilitySource { name(), lookup(&[Address], Span) -> Vec<(Address, AvailabilityResult)> }` — точка расширения
+  (SRS 1.3, 2.5): модуль «Федерация календарей» регистрирует источники при запуске
+  (`Registry::add_availability_source`; имя уникально, повтор — `Conflict`; `Registry::availability_sources()` —
+  в порядке регистрации). Встроенные источники узла — `organization` (пользователи организации, `FreeBusy`), `link`
+  (ссылки занятости FBURL из GAL и контактов), `partner` (шаблон домена-партнёра из политики) — не через точку;
+  источник модуля в ответе `Availability/get` помечается `source: federation`. `lookup` — по записи на каждый адрес
+  в порядке запроса (повторы — один раз, адрес как в запросе); периоды — пересекающиеся с интервалом, обрезаны по
+  нему и нормализованы (`merge_busy`), `span.end = None` — без верхней границы, `end ≤ start` — пустой интервал.
+  Ошибок нет: `AvailabilityResult::{Busy(Vec<BusyPeriod>, Detail), NoData}` — `Busy` — периоды и уровень
+  детализации (не выше политики организации адреса), `NoData` — «нет данных» (адрес вне источника, внешний сервер
+  недоступен), не «свободен» (SRS 4.4).
+- `CalendarPublication { id: PublicationId, scope, calendar, detail: Detail, expires, token: Option<String> }` —
+  ссылка публикации только для чтения. `detail` — `free_busy` (занят/свободен), `limited` (тема и время), `details`
+  (полностью), не `none`. `token` — только в результате `create`; адрес ссылки собирает вызывающий по схеме
+  развёртывания, в хранилище — только хэш токена (META-34). Отзыв удаляет запись (отозванных в `list` нет);
+  истёкшие удаляет обслуживание, отдачу по ним прекращает вызывающий.
+- `CalendarPublications`: `ceiling(scope) -> Detail` — действующий потолок детализации учётной записи
+  (`publication_ceiling(&Effective)`: клетка `sharing` интернета действующей матрицы доверия
+  (`TrustStore::effective_for`), не выше `HARD_CEILING`); `create(scope, calendar, detail, expires)` — выпуск
+  (новый `id` и токен; уровень выше потолка — `Forbidden`; `detail = none` или срок не позже текущего момента —
+  `Invalid`); `list(scope)` — по возрастанию `id`, без токена; `revoke(scope, id)` — отзыв (нет — `NotFound`).
+  Ужесточение политики существующие ссылки не отзывает — отдачу по ссылке ограничивает сервер. Выдачу и отзыв
+  ссылки в журнал аудита записывает вызывающий (SRS 4.4).
+- In-memory — `MemCalendarPublications` (`new(trust)`, `with_clock`, `links`, `fail_next`), источник-заглушка —
+  `MemAvailabilitySource` (`set_busy`, `remove`, `set_unavailable`, `calls`); набор —
+  `suite::calendar::calendar_publications`. PostgreSQL — META-34 (RLS, шаблоны ссылок занятости доменов-партнёров —
+  в политике организации); источники модуля «Федерация календарей» — mod-federation (#187).
+
 ## Sharing
 SRS 4.4, 4.5; APP-I «Политики общего доступа к календарям»; CTR-48. Код — `sharing.rs`. Права проверяет единый слой авторизации
 (`tp-auth`), хранилища только хранят записи; владелец имеет все права на свои коллекции без записей.
@@ -1192,7 +1225,8 @@ register(&mut Registry, &ModuleCtx) -> Result<()> }`; имя — `validate_modul
 типизированно — `ModuleCtx::config::<T: DeserializeOwned>() -> Result<T>` (ошибка полей — `Invalid`).
 `Registry`: `add_role(RoleService)`, `add_jmap_capability(JmapCapability { uri, session_object, methods, call })`,
 `add_admin_routes(AdminRoutes { prefix, handle(AdminRequest) -> AdminResponse })`, `add_event_sink`, `add_decision_hook`,
-`add_stage(point, Stage)` — этап конвейера обработки (раздел Pipeline, SRS 2.5);
+`add_stage(point, Stage)` — этап конвейера обработки (раздел Pipeline, SRS 2.5), `add_availability_source(AvailabilitySource)`
+— источники занятости модуля «Федерация календарей» (раздел Calendar);
 `set_blob_store` / `set_directory` / `set_search_index` / `set_secret_store` — замена встроенной реализации; `set_mail_flow` — правила потока
 почты (`transport::MailFlow`, раздел Transport). Повтор имени, URI, префикса, реализации — `Conflict`.
 JSON в JMAP (`session_object`, аргументы и результат `call`) и тела Admin API модулей — `serde_json::Value`
@@ -1641,3 +1675,12 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   с `events/{subscriber}/{index}` на `events/{subscriber}@0/{index}`; прежние лизы не переносятся — разделы
   берутся под новыми именами (совместимость не нужна, решение 93). Комментарии `tp-meta` — в META при следующей
   правке.
+- 2026-11-20 — CTR-36 (волна contracts-24, решение 2026-11-04-calendar-external-api): `calendar::{AvailabilitySource,
+  AvailabilityResult}` — точка расширения источников занятости модуля «Федерация календарей»
+  (`Registry::add_availability_source`/`availability_sources`; в `Availability/get` — `source: federation`),
+  `calendar::{CalendarPublications, CalendarPublication}` и `PublicationId` — выпуск (`create`), список (`list`) и
+  отзыв (`revoke`) ссылок публикации календаря; уровень детализации — не выше политики (`ceiling` — клетка `sharing`
+  интернета действующей матрицы доверия, `publication_ceiling`), токен — только в результате `create` (в хранилище —
+  только хэш, META-34). In-memory — `MemAvailabilitySource`, `MemCalendarPublications`; набор
+  `suite::calendar::calendar_publications`. PostgreSQL — META-34; источники — JMAP-19 (`urn:thepost:availability`),
+  публикация — JMAP-20 (`urn:thepost:calendarpublish`) и DAV-20.

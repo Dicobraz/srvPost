@@ -95,6 +95,10 @@ uuid_id!(
     DavObjectId
 );
 uuid_id!(
+    /// Ссылка публикации календаря (`calendar::CalendarPublications`, CTR-36); JMAP id `CalendarPublication`.
+    PublicationId
+);
+uuid_id!(
     /// Группа рассылки (`groups::GroupStore`).
     GroupId
 );

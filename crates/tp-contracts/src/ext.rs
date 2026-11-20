@@ -4,7 +4,8 @@
 //! Ядро не меняется: модуль при запуске регистрирует в [`Registry`] свои роли, capability JMAP,
 //! маршруты Admin API, подписчиков журнала событий ([`EventSink`]), точки принятия решений
 //! ([`DecisionHook`]), этапы конвейера обработки ([`Stage`]), правила потока почты ([`MailFlow`]) и
-//! реализации интерфейсов ядра ([`BlobStore`], [`Directory`], [`SearchIndex`], [`SecretStore`]).
+//! реализации интерфейсов ядра ([`BlobStore`], [`Directory`], [`SearchIndex`], [`SecretStore`]),
+//! источники занятости ([`AvailabilitySource`]).
 //! Данные модуля — только в схеме PostgreSQL `mod_<имя>` с собственной последовательностью миграций.
 //!
 //! # Точки принятия решений
@@ -43,6 +44,7 @@ use time::OffsetDateTime;
 
 use crate::auth::{Directory, Principal};
 use crate::blob::BlobStore;
+use crate::calendar::AvailabilitySource;
 use crate::error::{Error, Result};
 use crate::events::EventSink;
 use crate::ids::{MailboxId, MessageId, TenantId};
@@ -368,6 +370,7 @@ pub struct Registry {
     search_index: Option<Arc<dyn SearchIndex>>,
     secret_store: Option<Arc<dyn SecretStore>>,
     mail_flow: Option<Arc<dyn MailFlow>>,
+    availability_sources: Vec<Arc<dyn AvailabilitySource>>,
 }
 
 fn unique<T: ?Sized>(items: &[Arc<T>], key: impl Fn(&T) -> &str, new: &T) -> Result<()> {
@@ -429,6 +432,13 @@ impl Registry {
             return Err(Error::Conflict);
         }
         self.stages.push((point, stage));
+        Ok(())
+    }
+
+    /// Источник занятости внешних адресов (модуль «Федерация календарей», раздел Calendar).
+    pub fn add_availability_source(&mut self, source: Arc<dyn AvailabilitySource>) -> Result<()> {
+        unique(&self.availability_sources, |s| s.name(), source.as_ref())?;
+        self.availability_sources.push(source);
         Ok(())
     }
 
@@ -511,6 +521,11 @@ impl Registry {
     pub fn mail_flow(&self) -> Option<Arc<dyn MailFlow>> {
         self.mail_flow.clone()
     }
+
+    /// Источники занятости в порядке регистрации.
+    pub fn availability_sources(&self) -> &[Arc<dyn AvailabilitySource>] {
+        &self.availability_sources
+    }
 }
 
 impl fmt::Debug for Registry {
@@ -546,6 +561,14 @@ impl fmt::Debug for Registry {
             .field("search_index", &self.search_index.is_some())
             .field("secret_store", &self.secret_store.is_some())
             .field("mail_flow", &self.mail_flow.is_some())
+            .field(
+                "availability",
+                &self
+                    .availability_sources
+                    .iter()
+                    .map(|s| s.name())
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -553,7 +576,10 @@ impl fmt::Debug for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calendar::AvailabilityResult;
+    use crate::dav::Span;
     use crate::ids::AccountId;
+    use crate::meta::Address;
     use futures::executor::block_on;
 
     #[test]
@@ -562,6 +588,7 @@ mod tests {
         fn _hook(_: Arc<dyn DecisionHook>) {}
         fn _jmap(_: Arc<dyn JmapCapability>) {}
         fn _admin(_: Arc<dyn AdminRoutes>) {}
+        fn _source(_: Arc<dyn AvailabilitySource>) {}
     }
 
     struct Hook(&'static str, Decision);
@@ -715,6 +742,46 @@ mod tests {
         assert_eq!(reg.set_mail_flow(Arc::new(NoRules)), Err(Error::Conflict));
         assert!(reg.mail_flow().is_some());
         assert!(format!("{reg:?}").contains("mail_flow: true"));
+    }
+
+    struct NoBusy(&'static str);
+
+    #[async_trait]
+    impl AvailabilitySource for NoBusy {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        async fn lookup(
+            &self,
+            addresses: &[Address],
+            _: Span,
+        ) -> Vec<(Address, AvailabilityResult)> {
+            addresses
+                .iter()
+                .cloned()
+                .map(|a| (a, AvailabilityResult::NoData))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn registry_availability_sources() {
+        let mut reg = Registry::default();
+        assert!(reg.availability_sources().is_empty());
+        let src = Arc::new(NoBusy("federation"));
+        reg.add_availability_source(src.clone()).expect("first");
+        assert_eq!(
+            reg.add_availability_source(src),
+            Err(Error::Conflict),
+            "повтор имени"
+        );
+        let other = Arc::new(NoBusy("other"));
+        reg.add_availability_source(other).expect("second");
+        let sources = reg.availability_sources();
+        let names: Vec<&str> = sources.iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["federation", "other"], "порядок регистрации");
+        assert!(format!("{reg:?}").contains("federation"));
     }
 
     #[test]

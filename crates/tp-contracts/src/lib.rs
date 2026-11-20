@@ -1,4 +1,4 @@
-//! Межкрейтовые контракты: идентификаторы, ошибки, трейты хранилищ, сигналов, запросов узел → узел, поиска, аутентификации, журнала доставки, конвейера обработки и журналирования, записи об отправленном, бесед, нагрузки, групп рассылки, настроек транспорта и правил потока почты, календарей и контактов, планирования встреч и занятости, правил Sieve, общего доступа к календарям и контактам, брендинга заказчика, политики доверия, справочника аномалий и threat intelligence (SRS 2.1, 3, 4.1, 4.3, 4.4, 4.5, 4.9). Изменение — только PR класса B.
+//! Межкрейтовые контракты: идентификаторы, ошибки, трейты хранилищ, сигналов, запросов узел → узел, поиска, аутентификации, журнала доставки, конвейера обработки и журналирования, записи об отправленном, бесед, нагрузки, групп рассылки, настроек транспорта и правил потока почты, календарей и контактов, планирования встреч и занятости, внешнего доступа к календарям, правил Sieve, общего доступа к календарям и контактам, брендинга заказчика, политики доверия, справочника аномалий и threat intelligence (SRS 2.1, 3, 4.1, 4.3, 4.4, 4.5, 4.9). Изменение — только PR класса B.
 //!
 //! Спецификация — `docs/CONTRACTS.md`. Асинхронные трейты для `dyn` — через `async-trait`; все трейты `Send + Sync + 'static`.
 
@@ -15,6 +15,7 @@ pub mod auth;
 pub mod blob;
 pub mod branding;
 pub mod bus;
+pub mod calendar;
 pub mod config;
 pub mod dav;
 pub mod delivery;
@@ -54,6 +55,6 @@ pub use bytes::Bytes;
 pub use error::{Error, Result};
 pub use ids::{
     AccountId, BlobHash, BlobKey, ContactId, DomainId, Gen, GroupId, HeldId, JournalId, MailboxId,
-    MessageId, ModSeq, OrgUnitId, QueueId, ShardId, ShareNotificationId, TenantId, ThreadId, Uid,
-    UidValidity,
+    MessageId, ModSeq, OrgUnitId, PublicationId, QueueId, ShardId, ShareNotificationId, TenantId,
+    ThreadId, Uid, UidValidity,
 };
