@@ -674,7 +674,7 @@ async fn mail_srv(
             listeners: smtp.submission.clone(),
         },
         MailService {
-            enabled: pop3.is_some_and(|p| p.enabled) && roles.contains(Role::Imap),
+            enabled: pop3.as_ref().is_some_and(|p| p.enabled) && roles.contains(Role::Imap),
             what: "сервер POP3",
             implicit: "pop3s",
             starttls: "pop3",
