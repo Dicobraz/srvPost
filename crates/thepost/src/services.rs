@@ -575,6 +575,11 @@ impl Services {
     /// Журналирование переписки (`Delivery::with_journal`, SMTP-53, APP-84): копия письма и полный конверт —
     /// в отдельный бакет журнала по правилам организации, до Sieve ящика и независимо от него; секция `journal`
     /// (APP-83) выключена — этапа нет.
+    ///
+    /// Соответствие Exchange (APP-12): динамические группы и почтовые контакты в раскрытии групп
+    /// (`Groups::with_address_book`, SMTP-26) и личные списки отправителей ящика при каждой доставке
+    /// (`Delivery::with_sender_lists`, SMTP-25) — письмо заблокированного отправителя в «Спам», надёжного —
+    /// во «Входящие», поверх вердикта фильтров.
     fn base_delivery(&self, smtp: &SmtpConfig) -> Result<Delivery> {
         let resolver = system_resolver()?;
         let milter = (!smtp.milter.filters.is_empty())
@@ -591,14 +596,20 @@ impl Services {
             authcheck: Some(Arc::new(AuthCheck::new(resolver, smtp))),
             milter,
         };
+        // Адресная книга (SMTP-26, APP-12): динамические группы раскрываются по фильтру на момент доставки,
+        // контакты в составе групп получают письмо по внешнему адресу; хранилища — `PgMeta`.
         let groups = Groups::new(
             Arc::new(self.meta.clone()),
             self.blob.clone(),
             Arc::new(self.meta.clone()),
-        );
+        )
+        .with_address_book(Arc::new(self.meta.clone()), Arc::new(self.meta.clone()));
         let forwarding = Forwarding::new(self.secrets.clone(), smtp.forward.clone());
         let delivery = Delivery::new(deps, smtp)
             .with_groups(groups)
+            // Личные списки отправителей (SMTP-25, APP-12): то же хранилище `PgMeta`, что у JMAP
+            // (`SenderList/set`), — вердикты совпадают в SMTP и JMAP.
+            .with_sender_lists(Arc::new(self.meta.clone()))
             .with_tracking(self.tracking.clone())
             .with_transport(self.routes.clone())
             .with_forwarding(Arc::new(forwarding))
@@ -662,6 +673,10 @@ impl Services {
     /// Обработчик очереди роли smtp-out: доставка на MX с MTA-STS и DANE, уведомления — в ту же очередь; политики
     /// доменов назначения организаций (SMTP-15) и внутренняя ретрансляция — из снимков узла [`Services::routes`]
     /// (перечитывает их `Routes::watch` узла); шина узла — для сигналов очереди `QueueReady` (APP-66, SMTP-42).
+    /// Отложенная отправка (SMTP-24, APP-12): локальные получатели выпущенной записи доставляются в ящики
+    /// доставкой узла (`QueueWorker::with_local`, [`Self::base_delivery`]) — группы раскрываются на момент
+    /// выпуска, применяются правила Sieve и списки отправителей получателя; правила потока почты повторно не
+    /// применяются — они уже прошли при приёме письма.
     pub fn queue_worker(&self, smtp: &SmtpConfig) -> Result<QueueWorker> {
         let transport = tp_smtp::queue::send::MxTransport::new(
             system_resolver()?,
@@ -676,6 +691,7 @@ impl Services {
             Arc::new(transport),
             smtp.hostname.clone(),
         )
+        .with_local(Arc::new(self.base_delivery(smtp)?))
         .with_dsn(self.queue.clone())
         .with_metrics(self.smtp_metrics.clone())
         .with_tracking(self.tracking.clone())

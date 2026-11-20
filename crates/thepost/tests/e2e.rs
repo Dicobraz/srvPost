@@ -564,6 +564,8 @@ impl Jmap {
                 "urn:ietf:params:jmap:mail",
                 "urn:ietf:params:jmap:submission",
                 "urn:ietf:params:jmap:calendars",
+                // Личные списки отправителей (`SenderList/get|set`, JMAP-17).
+                "urn:thepost:senderlists",
             ],
             "methodCalls": [[method, args, "c0"]],
         });
@@ -1115,6 +1117,363 @@ async fn mvp_mail_flow() {
         }
         retry(until, "истечение срока корзины (maintenance)").await;
     }
+
+    shutdown.cancel();
+    let report = running.wait().await.expect("wait");
+    assert!(report.failed.is_empty(), "{report:?}");
+    pool.close().await;
+    drop_database(&url, &db_name).await;
+}
+
+// ---------- соответствие Exchange: сборка (APP-12) ----------
+
+/// Соответствие Exchange (APP-12, решение 2026-11-04-exchange-parity): отложенная отправка с отменой и
+/// с выпуском — выпущенная запись доставляет локального получателя доставкой узла
+/// (`QueueWorker::with_local`, SMTP-24), отправка становится `final` со статусом доставки; письмо
+/// заблокированного отправителя — сразу в «Спам» получателя (`Delivery::with_sender_lists`,
+/// `SenderList/set`, SMTP-25); вход представителя по ACL папки — запись в журнале аудита ящика
+/// (`MailboxAudit`, IMAP-15).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exchange_parity_wave() {
+    let Some(url) = tp_testkit::pg_url() else {
+        eprintln!("TEST_DATABASE_URL не задан — тест пропущен");
+        return;
+    };
+    let url = dev_url(&url);
+    let (db_name, url_db) = create_database(&url).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (db_url, password) = split_password(&url_db);
+    let secrets = node_secrets(password);
+
+    let domain = "example.ru".to_owned();
+    let path = dir.path().join("config.yaml");
+    std::fs::write(&path, config(dir.path(), &db_url, &domain)).expect("config");
+    let shutdown = CancellationToken::new();
+    let bound = ADMIN_SOCKET.lock().await;
+    let running = start(ServeOptions {
+        config: path,
+        secrets: Some(secrets.clone() as Arc<dyn SecretStore>),
+        telemetry: false,
+        shutdown: shutdown.clone(),
+        modules: thepost::modules::BUILTIN,
+    })
+    .await
+    .expect("start");
+    drop(bound);
+    let until = deadline();
+    while !running.health.is_ready() {
+        retry(until, "узел готов").await;
+    }
+
+    // Учётные записи alice и bob с паролями приложений — в той же БД (миграции выполнил узел).
+    let pool = db_pool(&url_db).await;
+    let meta = PgMeta::new(pool.clone(), MetaConfig::default());
+    let tenant = TenantId::DEFAULT;
+    let domain_id = accept_domain(&meta, tenant, &domain).await;
+    let login = format!("alice@{domain}");
+    let account = meta
+        .upsert(
+            tenant,
+            AccountUpsert {
+                domain: domain_id,
+                login: login.clone(),
+                display_name: "Alice".into(),
+                external_id: None,
+                enabled: true,
+                aliases: Vec::new(),
+                kind: AccountKind::User,
+                hidden_from_gal: false,
+                resource_type: None,
+            },
+        )
+        .await
+        .expect("account");
+    let scope = AccountScope {
+        tenant,
+        account: account.id,
+    };
+    let bob_login = format!("bob@{domain}");
+    let bob = meta
+        .upsert(
+            tenant,
+            AccountUpsert {
+                domain: domain_id,
+                login: bob_login.clone(),
+                display_name: "Bob".into(),
+                external_id: None,
+                enabled: true,
+                aliases: Vec::new(),
+                kind: AccountKind::User,
+                hidden_from_gal: false,
+                resource_type: None,
+            },
+        )
+        .await
+        .expect("bob");
+    let bob_scope = AccountScope {
+        tenant,
+        account: bob.id,
+    };
+    let apps =
+        tp_auth::AppPasswords::new(Arc::new(meta.clone()), tp_auth::PasswordConfig::default())
+            .expect("app passwords");
+    let (_, secret) = apps.issue(scope, "e2e").await.expect("issue");
+    let app_password = secret.expose().to_owned();
+    let (_, bob_secret) = apps.issue(bob_scope, "e2e").await.expect("issue bob");
+    let basic = |password: &str| {
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("{login}:{password}"))
+        )
+    };
+    let jmap = Jmap {
+        addr: addr(&running, "jmap"),
+        auth: basic(&app_password),
+        account: account.id.to_string(),
+    };
+    let bob_jmap = Jmap {
+        addr: jmap.addr,
+        auth: basic(bob_secret.expose()),
+        account: bob.id.to_string(),
+    };
+    let identity = jmap
+        .call("Identity/get", json!({ "accountId": jmap.account }))
+        .await;
+    let identity = identity["list"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("нет идентичности: {identity}"))
+        .to_owned();
+    let drafts = jmap.mailbox("drafts").await;
+    let inbox = bob_jmap.mailbox("inbox").await;
+    let draft = |jmap: &Jmap, drafts: &str, subject: String| {
+        let account = jmap.account.clone();
+        let drafts = drafts.to_owned();
+        let login = login.clone();
+        let bob_login = bob_login.clone();
+        async move {
+            let created = jmap
+                .call(
+                    "Email/set",
+                    json!({
+                        "accountId": account,
+                        "create": { "m": {
+                            "mailboxIds": { drafts: true },
+                            "from": [{ "name": "Alice", "email": login }],
+                            "to": [{ "name": "Bob", "email": bob_login }],
+                            "subject": subject,
+                            "textBody": [{ "partId": "t", "type": "text/plain" }],
+                            "bodyValues": { "t": { "value": "Deferred send check.\n" } },
+                        } },
+                    }),
+                )
+                .await;
+            created["created"]["m"]["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("черновик не создан: {created}"))
+                .to_owned()
+        }
+    };
+    // `sendAt` — RFC 3339 вперёд на несколько секунд: очередь хранит срок выпуска.
+    let send_at = |secs: i64| {
+        (time::OffsetDateTime::now_utc() + time::Duration::seconds(secs))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("sendAt")
+    };
+
+    // 1. Отложенная отправка с отменой (SMTP-24): письмо ставится в очередь со сроком выпуска (`pending`),
+    //    отмена до срока снимает его с очереди — письмо не доставляется.
+    let email1 = draft(&jmap, &drafts, "Canceled deferred send".into()).await;
+    let created = jmap
+        .call(
+            "EmailSubmission/set",
+            json!({
+                "accountId": jmap.account,
+                "create": { "s": { "identityId": identity, "emailId": email1, "sendAt": send_at(5) } },
+            }),
+        )
+        .await;
+    assert_eq!(
+        created["created"]["s"]["undoStatus"], "pending",
+        "{created}"
+    );
+    let sub1 = created["created"]["s"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("нет записи отправки: {created}"))
+        .to_owned();
+    let canceled = jmap
+        .call(
+            "EmailSubmission/set",
+            json!({ "accountId": jmap.account, "update": { sub1: { "undoStatus": "canceled" } } }),
+        )
+        .await;
+    assert!(
+        canceled["updated"]
+            .as_object()
+            .is_some_and(|m| m.contains_key(sub1.as_str())),
+        "отменённая отправка не обновлена: {canceled}"
+    );
+    let got = jmap
+        .call(
+            "EmailSubmission/get",
+            json!({ "accountId": jmap.account, "ids": [sub1] }),
+        )
+        .await;
+    assert_eq!(got["list"][0]["undoStatus"], "canceled", "{got}");
+    assert_eq!(
+        queued(&pool, &bob_login).await,
+        0,
+        "отменённое письмо осталось в очереди"
+    );
+    assert!(
+        bob_jmap.query(json!({ "inMailbox": inbox })).await.is_empty(),
+        "отменённое письмо доставлено"
+    );
+
+    // 2. Доставка от заблокированного отправителя в «Спам» (SMTP-25): bob блокирует alice в личном списке
+    //    (`SenderList/set`), письмо по SMTP от alice — сразу в «Спам», не во «Входящие».
+    let junk = bob_jmap.mailbox("junk").await;
+    let set = bob_jmap
+        .call(
+            "SenderList/set",
+            json!({
+                "accountId": bob_jmap.account,
+                "update": { "singleton": { "blocked": [login] } },
+            }),
+        )
+        .await;
+    assert!(
+        set["updated"]
+            .as_object()
+            .is_some_and(|m| m.contains_key("singleton")),
+        "список отправителей не обновлён: {set}"
+    );
+    let subject = "Blocked sender goes to spam";
+    let message = format!(
+        "From: Alice <{login}>\nTo: Bob <{bob_login}>\nSubject: {subject}\n\
+         Message-ID: <blocked-{}@{domain}>\nMIME-Version: 1.0\n\
+         Content-Type: text/plain; charset=us-ascii\n\n\
+         The sender is on the recipient block list.\n",
+        std::process::id()
+    );
+    smtp_send(addr(&running, "smtp-in"), &login, &bob_login, &message).await;
+    let until = deadline();
+    let junk_ids = loop {
+        let ids = bob_jmap.query(json!({ "inMailbox": junk })).await;
+        if !ids.is_empty() {
+            break ids;
+        }
+        retry(until, "письмо заблокированного отправителя в «Спаме»").await;
+    };
+    let got = bob_jmap
+        .call(
+            "Email/get",
+            json!({ "accountId": bob_jmap.account, "ids": junk_ids, "properties": ["subject"] }),
+        )
+        .await;
+    assert_eq!(got["list"][0]["subject"], subject, "{got}");
+    assert!(
+        bob_jmap.query(json!({ "inMailbox": inbox })).await.is_empty(),
+        "письмо заблокированного отправителя во «Входящих»"
+    );
+
+    // 3. Выпуск отложенной отправки (SMTP-24): срок наступил — запись берёт smtp-out, локальный получатель
+    //    доставляется доставкой узла (`QueueWorker::with_local`) с правилами Sieve и списком отправителей
+    //    получателя, отправка становится `final` со статусом доставки. Список отправителей получателя
+    //    очищается: письмо от alice выпускается во «Входящие» (проверка «Спама» — в п. 2).
+    let cleared = bob_jmap
+        .call(
+            "SenderList/set",
+            json!({
+                "accountId": bob_jmap.account,
+                "update": { "singleton": { "blocked": [] } },
+            }),
+        )
+        .await;
+    assert!(
+        cleared["updated"]
+            .as_object()
+            .is_some_and(|m| m.contains_key("singleton")),
+        "список отправителей не очищен: {cleared}"
+    );
+    let email2 = draft(&jmap, &drafts, "Released deferred send".into()).await;
+    let created = jmap
+        .call(
+            "EmailSubmission/set",
+            json!({
+                "accountId": jmap.account,
+                "create": { "s": { "identityId": identity, "emailId": email2, "sendAt": send_at(5) } },
+            }),
+        )
+        .await;
+    let sub2 = created["created"]["s"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("нет записи отправки: {created}"))
+        .to_owned();
+    let until = deadline();
+    loop {
+        let got = jmap
+            .call(
+                "EmailSubmission/get",
+                json!({ "accountId": jmap.account, "ids": [sub2] }),
+            )
+            .await;
+        let s = &got["list"][0];
+        let status = &s["deliveryStatus"][&bob_login];
+        if s["undoStatus"] == "final" && status["delivered"] == "yes" {
+            break;
+        }
+        retry(until, "выпуск отложенной отправки").await;
+    }
+    let until = deadline();
+    let inbox_ids = loop {
+        let ids = bob_jmap.query(json!({ "inMailbox": inbox })).await;
+        if !ids.is_empty() {
+            break ids;
+        }
+        retry(until, "выпущенное письмо во «Входящих»").await;
+    };
+    let got = bob_jmap
+        .call(
+            "Email/get",
+            json!({ "accountId": bob_jmap.account, "ids": inbox_ids, "properties": ["subject"] }),
+        )
+        .await;
+    assert_eq!(got["list"][0]["subject"], "Released deferred send", "{got}");
+    while queued(&pool, &bob_login).await != 0 {
+        retry(until, "запись очереди выпущена и завершена").await;
+    }
+
+    // 4. Аудит доступа представителя (IMAP-15): alice даёт bob права на папку, bob открывает её —
+    //    вход представителя записан в журнал аудита ящика alice.
+    let mut alice_imap = imap_login(addr(&running, "imap"), &login, &app_password).await;
+    alice_imap.cmd("CREATE Shared").await;
+    alice_imap
+        .cmd(&format!("SETACL Shared {bob_login} lr"))
+        .await;
+    let mut bob_imap = imap_login(addr(&running, "imap"), &bob_login, bob_secret.expose()).await;
+    let shared = format!("\"Other Users/{login}/Shared\"");
+    bob_imap.cmd(&format!("SELECT {shared}")).await;
+    use tp_contracts::audit::{AuditAction, AuditActorKind, AuditQuery, MailboxAudit};
+    let query = AuditQuery {
+        account: Some(account.id),
+        actor: Some(bob_login.clone()),
+        action: Some(AuditAction::Login),
+        ..AuditQuery::all(10)
+    };
+    let until = deadline();
+    loop {
+        let page = MailboxAudit::search_audit(&meta, tenant, &query)
+            .await
+            .expect("audit");
+        if page.entries.iter().any(|e| {
+            e.actor_kind == AuditActorKind::Delegate && e.actor.eq_ignore_ascii_case(&bob_login)
+        }) {
+            break;
+        }
+        retry(until, "запись аудита о входе представителя").await;
+    }
+    bob_imap.cmd("LOGOUT").await;
+    alice_imap.cmd("LOGOUT").await;
 
     shutdown.cancel();
     let report = running.wait().await.expect("wait");

@@ -6,6 +6,9 @@
 //! подходит к цепочке), слушатели с PROXY protocol v2 за балансировщиком.
 //! Имена зон RFC 6761 (`.test`, `.example`, `.invalid`, `.localhost`) — проверки DNS пропускаются (SKIP, CMP-09).
 //! При роли dav — SRV `_caldavs._tcp` и `_carddavs._tcp` с TXT `path=` (RFC 6764) основного домена и доменов DKIM.
+//! Соответствие Exchange (APP-12): при роли imap — SRV `_imaps._tcp`/`_imap._tcp` и `_pop3s._tcp`/`_pop3._tcp`
+//! (RFC 6186, RFC 8314), при роли submission — SRV `_submissions._tcp`/`_submission._tcp`; при роли jmap — имя
+//! `autoconfig.<домен>` (автонастройка Thunderbird, SRS 4.2) указывает на узел автонастройки.
 //! DNS — через [`Dns`]: в работе — системный резолвер (`mail-auth`), в тестах — подстановка.
 
 use std::net::IpAddr;
@@ -234,6 +237,8 @@ pub async fn check(
     mta_sts(&domain, dns, t, report).await;
     ptr(&smtp, dns, t, report).await;
     dav_srv(cfg, &domain, &smtp, dns, t, report).await;
+    mail_srv(cfg, &domain, &smtp, dns, t, report).await;
+    autoconfig_dns(cfg, &domain, &smtp, dns, t, report).await;
     certificate(cfg, &smtp, store, doctor, cause, SystemTime::now(), report).await;
     proxy(cfg, &smtp, report);
 }
@@ -497,6 +502,16 @@ fn txt_path(records: &[String]) -> Option<&str> {
     })
 }
 
+/// Публичное имя узла автонастройки клиентов: `jmap.autoconfig.host`, иначе `smtp.hostname`.
+fn autoconfig_host(cfg: &Config, smtp: &SmtpConfig) -> String {
+    cfg.section::<tp_jmap::JmapConfig>(sections::JMAP)
+        .ok()
+        .and_then(|j| j.autoconfig.host.clone())
+        .unwrap_or_else(|| smtp.hostname.clone())
+        .trim_end_matches('.')
+        .to_owned()
+}
+
 /// SRV `_caldavs._tcp` / `_carddavs._tcp` и TXT `path=` каждого домена при роли dav. Записи нет — `WARN` с готовыми
 /// строками зоны: узел — `jmap.autoconfig.host` или `smtp.hostname`, порт — слушателя DAV (`http.dav`, иначе
 /// `http.jmap`; не задан — 443), путь — `/dav/`.
@@ -517,14 +532,7 @@ async fn dav_srv(
         .map(|h| (*h).clone())
         .unwrap_or_default();
     let port = http.dav_listener(roles).0.map_or(443, |l| l.listen.port());
-    let auto_host = cfg
-        .section::<tp_jmap::JmapConfig>(sections::JMAP)
-        .ok()
-        .and_then(|j| j.autoconfig.host.clone());
-    let host = auto_host
-        .unwrap_or_else(|| smtp.hostname.clone())
-        .trim_end_matches('.')
-        .to_owned();
+    let host = autoconfig_host(cfg, smtp);
     let path = tp_dav::PREFIX;
     for d in dav_domains(domain, smtp) {
         for (service, what) in DAV_SERVICES {
@@ -597,6 +605,218 @@ async fn dav_srv(
                     ),
                 },
             }
+        }
+    }
+}
+
+/// Служба приёма или отправки почты клиентами для SRV (RFC 6186, RFC 8314): включена ролью и настройкой,
+/// имена SRV неявного TLS и STARTTLS, слушатели с портами.
+struct MailService {
+    /// Проверять службу (роль и настройка).
+    enabled: bool,
+    /// Пояснение в отчёте («сервер входящей почты (IMAP)»).
+    what: &'static str,
+    /// SRV-имя неявного TLS (`imaps`, порт слушателя с `implicit_tls`).
+    implicit: &'static str,
+    /// SRV-имя для STARTTLS (`imap`, порт слушателя без `implicit_tls`).
+    starttls: &'static str,
+    /// Слушатели службы.
+    listeners: Vec<EndpointConfig>,
+}
+
+impl MailService {
+    /// Варианты проверки: (SRV-имя, порт слушателя). Слушателей нет — служба узлом не принимается,
+    /// объявлять её в DNS не нужно, проверки нет.
+    fn variants(&self) -> Vec<(&'static str, u16)> {
+        let mut out = Vec::new();
+        if let Some(l) = self.listeners.iter().find(|l| l.implicit_tls) {
+            out.push((self.implicit, l.listen.port()));
+        }
+        if let Some(l) = self.listeners.iter().find(|l| !l.implicit_tls) {
+            out.push((self.starttls, l.listen.port()));
+        }
+        out
+    }
+}
+
+/// SRV почтовых служб (RFC 6186, RFC 8314; APP-12) каждого домена: при роли imap — `_imaps`/`_imap` и,
+/// если POP3 включён, `_pop3s`/`_pop3`; при роли submission — `_submissions`/`_submission`. Записи нет —
+/// `WARN` с готовой строкой зоны: узел — `jmap.autoconfig.host` или `smtp.hostname`, порт — слушателя службы.
+/// Порт записи не равен порту слушателя — `WARN`.
+async fn mail_srv(
+    cfg: &Config,
+    domain: &str,
+    smtp: &SmtpConfig,
+    dns: &dyn Dns,
+    t: Duration,
+    report: &mut Report,
+) {
+    use tp_contracts::role::Role;
+    let roles = cfg.roles();
+    let imap = cfg
+        .section::<tp_imap::ImapConfig>(IMAP)
+        .map(|i| (*i).clone())
+        .ok();
+    let pop3 = imap.as_ref().map(|i| i.pop3.clone());
+    let services = [
+        MailService {
+            enabled: roles.contains(Role::Imap),
+            what: "сервер входящей почты (IMAP)",
+            implicit: "imaps",
+            starttls: "imap",
+            listeners: imap.map(|i| i.listeners).unwrap_or_default(),
+        },
+        MailService {
+            enabled: roles.contains(Role::Submission),
+            what: "сервер отправки (submission)",
+            implicit: "submissions",
+            starttls: "submission",
+            listeners: smtp.submission.clone(),
+        },
+        MailService {
+            enabled: pop3.is_some_and(|p| p.enabled) && roles.contains(Role::Imap),
+            what: "сервер POP3",
+            implicit: "pop3s",
+            starttls: "pop3",
+            listeners: pop3.map(|p| p.listeners).unwrap_or_default(),
+        },
+    ];
+    let host = autoconfig_host(cfg, smtp);
+    for d in dav_domains(domain, smtp) {
+        for s in &services {
+            if !s.enabled {
+                continue;
+            }
+            for (name, port) in s.variants() {
+                let id = format!("dns.{name}.{d}");
+                let fq = format!("_{name}._tcp.{d}");
+                if skip_reserved(&id, &fq, report) {
+                    continue;
+                }
+                let line = format!("{fq}. SRV 0 1 {port} {host}.");
+                let records = match query(t, dns.srv(&fq)).await {
+                    Ok(records) => records,
+                    Err(e) => {
+                        report.push(&id, Status::Fail, fq.clone(), format!("SRV не получены: {e}"));
+                        continue;
+                    }
+                };
+                if records.is_empty() {
+                    report.push(
+                        &id,
+                        Status::Warn,
+                        fq.clone(),
+                        format!(
+                            "нет записи SRV: клиенты не найдут {} по адресу почты (RFC 6186); добавьте в DNS: {line}",
+                            s.what
+                        ),
+                    );
+                    continue;
+                }
+                if records.iter().all(|r| r.target.is_empty()) {
+                    report.push(
+                        &id,
+                        Status::Warn,
+                        fq.clone(),
+                        format!("SRV с узлом «.»: служба {} объявлена недоступной (RFC 2782); замените на: {line}", s.what),
+                    );
+                    continue;
+                }
+                let value = records
+                    .iter()
+                    .map(|r| format!("{} {} {} {}", r.priority, r.weight, r.port, r.target))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if records.iter().all(|r| r.port == port) {
+                    report.push(
+                        &id,
+                        Status::Ok,
+                        value,
+                        format!("SRV опубликован, порт совпадает со слушателем ({port})"),
+                    );
+                } else {
+                    report.push(
+                        &id,
+                        Status::Warn,
+                        value,
+                        format!("порт записи SRV — не порт слушателя {name} ({port}): исправьте на {line}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Имя `autoconfig.<домен>` (автонастройка Thunderbird, SRS 4.2; APP-12) при роли jmap: имени нет — `WARN` с
+/// готовой строкой зоны (`CNAME` на `jmap.autoconfig.host` или `smtp.hostname`); имя указывает на другой узел —
+/// `WARN`, клиент получит чужой ответ автонастройки.
+async fn autoconfig_dns(
+    cfg: &Config,
+    domain: &str,
+    smtp: &SmtpConfig,
+    dns: &dyn Dns,
+    t: Duration,
+    report: &mut Report,
+) {
+    if !cfg.roles().contains(tp_contracts::role::Role::Jmap) {
+        return;
+    }
+    let host = autoconfig_host(cfg, smtp);
+    for d in dav_domains(domain, smtp) {
+        let id = format!("dns.autoconfig.{d}");
+        let name = format!("autoconfig.{d}");
+        if skip_reserved(&id, &name, report) {
+            continue;
+        }
+        let ips = match query(t, dns.ip(&name)).await {
+            Err(e) => {
+                report.push(&id, Status::Fail, name.clone(), format!("адреса не получены: {e}"));
+                continue;
+            }
+            Ok(ips) => ips,
+        };
+        if ips.is_empty() {
+            report.push(
+                &id,
+                Status::Warn,
+                name.clone(),
+                format!(
+                    "имя не разрешается: Thunderbird не найдёт автонастройку ({name}/mail/config-v1.1.xml); \
+                     добавьте в DNS: {name}. CNAME {host}."
+                ),
+            );
+            continue;
+        }
+        let target = match query(t, dns.ip(&host)).await {
+            Err(e) => {
+                report.push(
+                    &id,
+                    Status::Warn,
+                    name.clone(),
+                    format!("адреса {host} не получены: {e}"),
+                );
+                continue;
+            }
+            Ok(target) => target,
+        };
+        if target.iter().any(|ip| ips.contains(ip)) {
+            report.push(
+                &id,
+                Status::Ok,
+                name,
+                format!("имя указывает на узел автонастройки ({host})"),
+            );
+        } else {
+            report.push(
+                &id,
+                Status::Warn,
+                name,
+                format!(
+                    "имя указывает не на {} ({}): клиент получит чужой ответ автонастройки",
+                    host,
+                    ips.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(", ")
+                ),
+            );
         }
     }
 }
@@ -1117,6 +1337,121 @@ mod tests {
         // Роль dav выключена — проверок нет.
         let r = run(&config(&format!("{SMTP}roles: [jmap]\n")), &healthy()).await;
         assert!(r.get("dns.caldavs.example.org").is_none(), "{r:?}");
+    }
+
+    /// APP-12: роли imap и submission — SRV `_imaps`/`_imap`, `_submissions`/`_submission` (RFC 6186, RFC 8314)
+    /// по портам слушателей, включённый POP3 — `_pop3s`; записи нет — `WARN` с готовой строкой зоны, порт чужой —
+    /// `WARN`, записи верные — `OK`. Роль jmap — имя `autoconfig.<домен>` указывает на узел автонастройки.
+    #[tokio::test]
+    async fn mail_srv_hints() {
+        let cfg = config(&format!(
+            "{SMTP}  submission:\n    - {{ listen: \"0.0.0.0:465\", implicit_tls: true }}\n\
+             imap:\n  listeners:\n    - {{ listen: \"0.0.0.0:993\", implicit_tls: true }}\n    - {{ listen: \"0.0.0.0:143\" }}\n  \
+             pop3: {{ enabled: true, listeners: [{{ listen: \"0.0.0.0:995\", implicit_tls: true }}] }}\n\
+             http:\n  jmap: {{ listen: 127.0.0.1:443 }}\n"
+        ));
+        // Записей нет — предупреждения с готовыми строками зоны по портам слушателей; POP3 выключен — нет.
+        let r = run(&cfg, &healthy()).await;
+        for (id, name, port) in [
+            ("dns.imaps.example.org", "_imaps._tcp.example.org.", 993),
+            ("dns.imap.example.org", "_imap._tcp.example.org.", 143),
+            (
+                "dns.submissions.example.org",
+                "_submissions._tcp.example.org.",
+                465,
+            ),
+            ("dns.pop3s.example.org", "_pop3s._tcp.example.org.", 995),
+        ] {
+            let c = r.get(id).unwrap_or_else(|| panic!("нет {id}: {r:?}"));
+            assert_eq!(c.status, Status::Warn, "{c:?}");
+            assert!(
+                c.message
+                    .contains(&format!("{name} SRV 0 1 {port} mx.example.org.")),
+                "{c:?}"
+            );
+        }
+        let auto = r.get("dns.autoconfig.example.org").expect("autoconfig");
+        assert_eq!(auto.status, Status::Warn, "{auto:?}");
+        assert!(
+            auto.message
+                .contains("autoconfig.example.org. CNAME mx.example.org."),
+            "{auto:?}"
+        );
+
+        // Все записи опубликованы верно — OK.
+        let ip: IpAddr = "192.0.2.10".parse().expect("ip");
+        let mut dns = healthy();
+        for (name, port) in [
+            ("imaps", 993u16),
+            ("imap", 143u16),
+            ("submissions", 465u16),
+            ("pop3s", 995u16),
+        ] {
+            dns.srv.insert(
+                format!("_{name}._tcp.example.org"),
+                vec![SrvRecord {
+                    priority: 0,
+                    weight: 1,
+                    port,
+                    target: "mx.example.org".into(),
+                }],
+            );
+        }
+        dns.ip
+            .insert("autoconfig.example.org".into(), vec![ip]);
+        let r = run(&cfg, &dns).await;
+        for id in [
+            "dns.imaps.example.org",
+            "dns.imap.example.org",
+            "dns.submissions.example.org",
+            "dns.pop3s.example.org",
+            "dns.autoconfig.example.org",
+        ] {
+            assert_eq!(status(&r, id), Some(Status::Ok), "{id}: {r:?}");
+        }
+
+        // Порт записи не порт слушателя — предупреждение со строкой зоны.
+        dns.srv.insert(
+            "_imaps._tcp.example.org".into(),
+            vec![SrvRecord {
+                priority: 0,
+                weight: 1,
+                port: 9993,
+                target: "mx.example.org".into(),
+            }],
+        );
+        let r = run(&cfg, &dns).await;
+        let c = r.get("dns.imaps.example.org").expect("imaps");
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+        assert!(
+            c.message
+                .contains("не порт слушателя imaps (993): исправьте на _imaps._tcp.example.org. SRV 0 1 993"),
+            "{c:?}"
+        );
+
+        // autoconfig указывает на другой узел — предупреждение.
+        let other: IpAddr = "203.0.113.5".parse().expect("ip");
+        dns.ip
+            .insert("autoconfig.example.org".into(), vec![other]);
+        let r = run(&cfg, &dns).await;
+        let c = r.get("dns.autoconfig.example.org").expect("autoconfig");
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+        assert!(c.message.contains("указывает не на mx.example.org"), "{c:?}");
+
+        // Роли imap, submission и jmap выключены — проверок нет.
+        let r = run(
+            &config(&format!("{SMTP}roles: [smtp-in, smtp-out]\n")),
+            &healthy(),
+        )
+        .await;
+        for id in [
+            "dns.imaps.example.org",
+            "dns.submissions.example.org",
+            "dns.pop3s.example.org",
+            "dns.autoconfig.example.org",
+        ] {
+            assert!(r.get(id).is_none(), "{id}: {r:?}");
+        }
     }
 
     #[tokio::test]
