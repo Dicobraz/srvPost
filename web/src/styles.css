@@ -184,3 +184,1088 @@ body {
     justify-content: space-around;
   }
 }
+
+/*
+  Почта — три-панель по макетам docs/design/webmail/01 (светлая) и 03 (тёмная). Палитра —
+  перенос вручную: mode.* из design/tokens.toml (--c-*) + утверждённая таблица DESIGN.md
+  (акцент #0067C0 — решение владельца 20.11; розовый — палитра категорий/календарных глифов,
+  красный — только безопасность, янтарный — только сроки).
+*/
+.mail {
+  /* Поверхности и текст — токены темы; остальное — таблица макета. */
+  --m-screen: var(--c-screen, #e9eef3);
+  --m-panel: var(--c-panel, #ffffff);
+  --m-text: var(--c-text, #161616);
+  --m-muted: var(--c-muted, #5f6b78);
+  --m-frame: var(--c-frame, #bac1c6);
+  --m-err: var(--c-err, #c62828);
+  --m-warn: var(--c-warn, #9a6f00);
+  --m-hover: #edf2f6;
+  --m-fill: #e4eaf0;
+  --m-div: #dce3e8;
+  --m-acc: #0067c0;
+  --m-accbtn: #0067c0;
+  --m-tint: #dff0ff;
+  --m-tinttext: #234e82;
+  --m-selrow: #d1e4f4;
+  --m-selrow2: #575757;
+  --m-selbar: #0067c0;
+  --m-threatbg: #ffe6e3;
+  --m-threattx: #7a3430;
+  --m-duebg: #f8dea8;
+  --m-duetx: #664700;
+  --m-own: #d7e2ea;
+  --m-cat-blue: #4687d8;
+  --m-cat-blue-bg: #dff0ff;
+  --m-cat-blue-tx: #234e82;
+  --m-cat-green: #5f983a;
+  --m-cat-green-bg: #e5f4dd;
+  --m-cat-green-tx: #34591b;
+  --m-cat-pink: #e4107f;
+  --m-cat-pink-bg: #fce4ef;
+  --m-cat-pink-tx: #8c0b4e;
+  --m-cat-gray: #b7b7b7;
+  --m-cat-gray-bg: #f5f5f5;
+  --m-cat-gray-tx: #616161;
+  --m-i-blue: #2f6db5;
+  --m-i-pink: #c2477f;
+  --m-i-amber: #a0761a;
+  --m-i-red: #b5403b;
+}
+
+[data-theme="dark"] .mail {
+  --m-hover: #1b2229;
+  --m-fill: #232b33;
+  --m-div: #262f38;
+  --m-acc: #7cc4f0;
+  --m-accbtn: #2b6ca8;
+  --m-tint: #23364f;
+  --m-tinttext: #bfddff;
+  --m-selrow: #2b3e50;
+  --m-selrow2: #bfddff;
+  --m-selbar: #7cc4f0;
+  --m-threatbg: #4c2b28;
+  --m-threattx: #f9bdb7;
+  --m-duebg: #6c5005;
+  --m-duetx: #f7e2b8;
+  --m-own: #26313b;
+  --m-cat-blue: #689bdb;
+  --m-cat-blue-bg: #23364f;
+  --m-cat-blue-tx: #bfddff;
+  --m-cat-green: #709349;
+  --m-cat-green-bg: #2a3b20;
+  --m-cat-green-tx: #bad9ab;
+  --m-cat-pink: #d2569a;
+  --m-cat-pink-bg: #3a1a2a;
+  --m-cat-pink-tx: #f0a8ca;
+  --m-cat-gray: #5c5c5c;
+  --m-cat-gray-bg: #323232;
+  --m-cat-gray-tx: #a6a6a6;
+  --m-i-blue: #74a6e0;
+  --m-i-pink: #e68ab5;
+  --m-i-amber: #d9ae55;
+  --m-i-red: #e58580;
+}
+
+.mail {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  color: var(--m-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Командная строка: одна акцентная кнопка + тихие команды + поиск (макет 01). */
+.cmd {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  flex: none;
+}
+
+.cmd .btn-acc {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 4px;
+  background: var(--m-accbtn);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cmd .btn-q {
+  height: 28px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--m-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cmd .btn-q:hover,
+.cmd .btn-acc:hover {
+  filter: brightness(1.05);
+}
+
+.cmd .search {
+  margin-left: auto;
+  width: 270px;
+  height: 28px;
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  padding: 0 9px;
+  font: inherit;
+}
+
+.cmd .search:focus {
+  outline: 1px solid var(--m-acc);
+}
+
+/* Настройки чтения: inline-панель у шестерёнки, не модалка. */
+.cmd .settings {
+  position: relative;
+}
+
+.cmd .gear {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--m-muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.cmd .gear:hover {
+  background: var(--m-hover);
+}
+
+.settings-pop {
+  position: absolute;
+  right: 0;
+  top: 32px;
+  z-index: 8;
+  width: 260px;
+  padding: 10px 12px;
+  background: var(--m-panel);
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(22, 22, 22, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-pop label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--m-text);
+}
+
+.settings-pop select {
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  padding: 2px 4px;
+}
+
+.settings-pop .cap {
+  color: var(--m-muted);
+  font-size: 12px;
+}
+
+/* Тело: три панели. */
+.mail .main {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  padding: 2px 8px 6px;
+  min-height: 0;
+}
+
+/* Дерево папок — на фоне окна (не карточка), как в макете S8-D. */
+.tree {
+  width: 236px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 2px 4px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tree .fold {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--m-text);
+  cursor: pointer;
+  position: relative;
+  border: 1px dashed transparent;
+  background: none;
+  text-align: left;
+  font: inherit;
+  width: 100%;
+}
+
+.tree .fold:hover {
+  background: var(--m-hover);
+}
+
+.tree .fold.on {
+  background: var(--m-selrow);
+}
+
+.tree .fold.on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--m-selbar);
+}
+
+.tree .fold .name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree .fold .n {
+  color: var(--m-acc);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.tree .fold.on .n {
+  color: var(--m-tinttext);
+}
+
+.tree .fold.drop {
+  border-color: var(--m-acc);
+  background: var(--m-tint);
+}
+
+.tree .newfolder {
+  height: 28px;
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  padding: 0 8px;
+  font: inherit;
+}
+
+.tree .child {
+  padding-left: 22px;
+}
+
+/* Список — карточка; быстрый фильтр — закладками поверх нижнего края. */
+.list {
+  width: 430px;
+  background: var(--m-panel);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  flex: none;
+}
+
+.lhead {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--m-div);
+  font-weight: 600;
+  flex: none;
+  white-space: nowrap;
+}
+
+.lhead .sec {
+  color: var(--m-muted);
+  font-weight: 400;
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lhead .sort {
+  border: none;
+  background: none;
+  color: var(--m-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rows {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
+
+.msg {
+  height: 52px;
+  padding: 7px 14px 7px 16px;
+  border-bottom: 1px solid var(--m-div);
+  position: relative;
+  cursor: pointer;
+  background: var(--m-panel);
+}
+
+.msg .l1,
+.msg .l2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 19px;
+}
+
+.msg .from {
+  font-weight: 400;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.msg.unread .from {
+  font-weight: 600;
+}
+
+.msg .time {
+  color: var(--m-muted);
+  font-size: 12px;
+  flex: none;
+}
+
+.msg .subj {
+  color: var(--m-muted);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.msg .st {
+  color: var(--m-muted);
+  font-size: 12px;
+  flex: none;
+}
+
+.msg.sel {
+  background: var(--m-selrow);
+}
+
+.msg.sel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--m-selbar);
+}
+
+.msg.sel .subj,
+.msg.sel .time,
+.msg.sel .st {
+  color: var(--m-selrow2);
+}
+
+.msg .catbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--catcol, var(--m-cat-blue));
+}
+
+.chip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--cchip-bg, var(--m-fill));
+  color: var(--cchip-tx, var(--m-muted));
+  white-space: nowrap;
+  flex: none;
+}
+
+.chip.due {
+  background: var(--m-duebg);
+  color: var(--m-duetx);
+  font-weight: 600;
+}
+
+.duelbl {
+  color: var(--m-warn);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.duelbl.over {
+  color: var(--m-text);
+  background: var(--m-duebg);
+  border-radius: 3px;
+  padding: 0 6px;
+}
+
+.thr {
+  color: var(--m-muted);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+}
+
+.unread-badge {
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--m-accbtn);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  flex: none;
+}
+
+/* Компактная плотность: без аватара и превью — только отправитель и тема (макет 06). */
+.mail[data-density="compact"] .msg {
+  height: 36px;
+  padding: 3px 14px 3px 16px;
+}
+
+.mail[data-density="compact"] .msg .l2 {
+  display: none;
+}
+
+/* Быстрые фильтры: порядок по срочности, равная ширина. */
+.qf {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 34px;
+  background: var(--m-panel);
+  border-top: 1px solid var(--m-div);
+  display: flex;
+  gap: 4px;
+  padding: 5px 8px;
+  box-shadow: 0 -4px 8px rgba(22, 22, 22, 0.05);
+  z-index: 2;
+}
+
+.qf .f {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--m-text);
+  background: var(--m-hover);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.qf .f.on {
+  background: var(--m-panel);
+  outline: 1px solid var(--m-frame);
+  box-shadow: inset 0 -2px 0 var(--m-acc);
+}
+
+.qf .f .cnt {
+  font-size: 11px;
+  color: var(--m-muted);
+}
+
+.qf .f[data-icon="red"] {
+  color: var(--m-i-red);
+}
+
+.qf .f[data-icon="amber"] {
+  color: var(--m-i-amber);
+}
+
+/* Панель простых фильтров: строка над списком (прочитанность, вложения). */
+.filters {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--m-div);
+  flex-wrap: wrap;
+}
+
+.filters .f {
+  border: 1px solid var(--m-frame);
+  background: var(--m-panel);
+  color: var(--m-text);
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.filters .f.on {
+  background: var(--m-tint);
+  color: var(--m-tinttext);
+  border-color: var(--m-tinttext);
+}
+
+/* Чтение. */
+.read {
+  flex: 1;
+  background: var(--m-panel);
+  border-radius: 8px;
+  padding: 14px 20px 10px;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.read h3 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.read .empty {
+  color: var(--m-muted);
+  margin: auto;
+}
+
+.tbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--m-muted);
+  font-size: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--m-div);
+}
+
+.tbar .lk {
+  border: none;
+  background: none;
+  color: var(--m-acc);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.mhead {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 0 6px;
+}
+
+.ava {
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  background: var(--m-fill);
+  color: var(--m-muted);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.mhead .who {
+  line-height: 17px;
+  min-width: 0;
+}
+
+.mhead .who b {
+  font-weight: 600;
+}
+
+.mhead .who .adr {
+  color: var(--m-muted);
+}
+
+.mhead .meta {
+  color: var(--m-muted);
+  font-size: 12px;
+}
+
+.mhead .right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+/* Полосы: картинки и подмена ссылки (красный — только безопасность). */
+.strip {
+  min-height: 30px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 12px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+}
+
+.strip b {
+  font-weight: 600;
+}
+
+.strip .sp {
+  flex: 1;
+}
+
+.strip .lk {
+  border: none;
+  background: none;
+  color: var(--m-acc);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.strip.img {
+  background: var(--m-fill);
+  color: var(--m-text);
+  white-space: nowrap;
+  flex-wrap: wrap;
+}
+
+.strip.threat {
+  background: var(--m-threatbg);
+  color: var(--m-threattx);
+}
+
+.strip .dom {
+  color: var(--m-muted);
+}
+
+.strip.threat .dom {
+  color: var(--m-threattx);
+  opacity: 0.85;
+}
+
+.strip .addr {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+/* Вложения. */
+.atts {
+  display: flex;
+  gap: 8px;
+  margin: 2px 0 8px;
+  flex-wrap: wrap;
+}
+
+.att {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--m-frame);
+  border-radius: 5px;
+  padding: 0 11px;
+  font-size: 12.5px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  text-decoration: none;
+}
+
+.att .sz {
+  color: var(--m-muted);
+}
+
+.att:hover {
+  background: var(--m-hover);
+}
+
+/* Карточка приглашения (макет 01): календарный глиф — розовый icon.pink по DESIGN.md. */
+.inv {
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  padding: 8px 14px;
+  margin-bottom: 8px;
+  background: var(--m-panel);
+}
+
+.inv .ih {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.inv .ih .ttl {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.inv .cal-glyph {
+  color: var(--m-i-pink);
+  flex: none;
+}
+
+.inv .det {
+  color: var(--m-muted);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.inv .det b {
+  color: var(--m-text);
+  font-weight: 600;
+}
+
+.day {
+  display: flex;
+  gap: 10px;
+  margin: 6px 0 7px;
+  align-items: stretch;
+}
+
+.day .lbl {
+  width: 110px;
+  color: var(--m-muted);
+  font-size: 12px;
+  padding-top: 2px;
+}
+
+.day .lbl b {
+  color: var(--m-text);
+  font-weight: 600;
+}
+
+.hours {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  border-left: 1px solid var(--m-div);
+  position: relative;
+}
+
+.hrow {
+  height: 24px;
+  border-top: 1px solid var(--m-div);
+  position: relative;
+}
+
+.hrow:first-child {
+  border-top: none;
+}
+
+.hrow .hl {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  font-size: 10.5px;
+  color: var(--m-muted);
+  background: var(--m-panel);
+  padding-right: 4px;
+  line-height: 1;
+}
+
+.ev {
+  position: absolute;
+  left: 52px;
+  right: 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.3;
+  padding: 1px 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ev.invite {
+  background: rgba(0, 103, 192, 0.15);
+  border: 1px dashed var(--m-accbtn);
+  color: var(--m-acc);
+  font-weight: 600;
+}
+
+[data-theme="dark"] .ev.invite {
+  background: rgba(124, 196, 240, 0.12);
+  color: var(--m-acc);
+}
+
+.nowline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1.5px solid var(--m-selbar);
+  z-index: 2;
+}
+
+.nowline::after {
+  content: attr(data-now);
+  position: absolute;
+  left: 54px;
+  top: -7px;
+  font-size: 10px;
+  color: var(--m-selbar);
+  background: var(--m-panel);
+  padding-right: 3px;
+  line-height: 1;
+}
+
+.invacts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ibtn {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ibtn.acc {
+  background: var(--m-accbtn);
+  color: #fff;
+}
+
+.ibtn.tint {
+  background: var(--m-tint);
+  color: var(--m-tinttext);
+}
+
+.ibtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.invnote {
+  margin-left: auto;
+  color: var(--m-muted);
+  font-size: 12px;
+}
+
+/* Тело письма — sandboxed iframe (CSS письма изолирован). */
+.bodym {
+  flex: 1;
+  overflow: auto;
+  line-height: 18px;
+  min-height: 0;
+}
+
+.bodym iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--m-panel);
+}
+
+.bodym .plain {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Контекстное меню (без модалок) и тосты. */
+.menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 220px;
+  padding: 4px;
+  background: var(--m-panel);
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(22, 22, 22, 0.18);
+  display: flex;
+  flex-direction: column;
+}
+
+.menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--m-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.menu button:hover {
+  background: var(--m-hover);
+}
+
+.menu button:disabled {
+  color: var(--m-muted);
+  cursor: default;
+}
+
+.menu button:disabled:hover {
+  background: none;
+}
+
+.menu .danger {
+  color: var(--m-err);
+}
+
+.menu .confirm {
+  background: var(--m-threatbg);
+  color: var(--m-threattx);
+}
+
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 40px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--m-panel);
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(22, 22, 22, 0.18);
+  font-size: 13px;
+}
+
+.toast-undo {
+  border: none;
+  background: var(--m-tint);
+  color: var(--m-tinttext);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Строка состояния. */
+.status {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  color: var(--m-muted);
+  font-size: 12px;
+  flex: none;
+}
+
+.status .sp {
+  flex: 1;
+}
+
+/* Узкий экран: список и чтение стеком (полный паттерн — WEB-08), дерево — скрыто. */
+@media (max-width: 900px) {
+  .mail .main {
+    padding: 2px 4px 4px;
+  }
+
+  .tree {
+    display: none;
+  }
+
+  .list {
+    width: auto;
+    flex: 1;
+  }
+
+  .mail.reading .list {
+    display: none;
+  }
+
+  .mail:not(.reading) .read {
+    display: none;
+  }
+}
+
+/* Резерв маршрута «Каналы» (шов скрыт до запуска чата — решение 20.11). */
+.hidden-route {
+  display: none;
+}
+
+/* Пустые состояния и служебные значки списка. */
+.empty-list {
+  padding: 12px 14px;
+  color: var(--m-muted);
+}
+
+.read .empty,
+.bodym .empty {
+  color: var(--m-muted);
+}
+
+.bodym .empty {
+  margin: auto;
+}
+
+.msg .l1 svg {
+  color: var(--m-muted);
+  flex: none;
+}
+
+.msg .l1 svg.flag-ic,
+.msg .l1 .duelbl svg {
+  color: var(--m-i-amber);
+}
+

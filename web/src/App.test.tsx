@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { App } from "./App";
 import { storageKey } from "./auth/store";
+import { queryClient } from "./mail/client";
 
 // Вход (WEB-02) мокается на границе: конфигурация — fetch (/mail/config.json), oidc-client-ts —
 // модуль (сеть не нужна). Запросы — по контейнеру своего рендера: автоочистки RTL без globals
@@ -56,13 +57,14 @@ function stubFetch(config: unknown, jmapStatus = 200, configStatus = 200) {
 beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
+  queryClient.clear(); // кэш почты между тестами не перетекает
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
-test("оболочка — только в состоянии входа: сессия восстановлена, навигация и заглушки на месте", async () => {
+test("оболочка — только в состоянии входа: сессия восстановлена, навигация и раздел почты на месте", async () => {
   sessionStorage.setItem(
     storageKey(),
     JSON.stringify({
@@ -80,11 +82,9 @@ test("оболочка — только в состоянии входа: сес
   const nav = await page.findByRole("navigation", { name: "Разделы" });
   expect(within(nav).getByRole("link", { name: "Почта" }).getAttribute("href")).toBe("/");
   expect(within(nav).getByRole("link", { name: "Календарь" }).getAttribute("href")).toBe("/calendar");
-  // Шов «Каналы» (решение 2026-11-17): место под будущий веб-чат, пункт отключён.
-  const seam = within(nav).getByText("Каналы");
-  expect(seam.getAttribute("aria-disabled")).toBe("true");
+  // Шов «Каналы» скрыт до запуска чата (решение 20.11): в навигации пункта нет.
+  expect(nav.textContent).not.toContain("Каналы");
   expect(page.getByRole("heading", { name: "Почта" })).toBeTruthy();
-  expect(page.getByText("Раздел в разработке.")).toBeTruthy();
   expect(page.getByText("user@example.org")).toBeTruthy(); // имя из id_token — не показываем мусор
   expect(page.getByRole("button", { name: "Выйти" })).toBeTruthy();
   expect(document.documentElement.dataset.theme).toBe("light");

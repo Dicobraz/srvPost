@@ -121,8 +121,8 @@ test("clear: память и sessionStorage; broadcast — соседям тож
 });
 
 test("вторая вкладка подхватывает сессию и узнаёт о выходе; пароль приложения не передаётся", () => {
-  const first = new AuthStore(new FakeChannel());
-  const second = new AuthStore(new FakeChannel());
+  const first = new AuthStore(new FakeChannel(), "tab-1-first");
+  const second = new AuthStore(new FakeChannel(), "tab-2-second");
 
   first.loginOidc(TOKENS);
   expect(second.get()).toEqual({ kind: "oidc", ...TOKENS });
@@ -150,8 +150,8 @@ test("новая вкладка получает сессию по запрос�
 });
 
 test("tick выбирает обновляющего — ровно одна вкладка с OIDC сессией", () => {
-  const a = new AuthStore(new FakeChannel());
-  const b = new AuthStore(new FakeChannel());
+  const a = new AuthStore(new FakeChannel(), "tab-1-a");
+  const b = new AuthStore(new FakeChannel(), "tab-2-b");
   a.loginOidc(TOKENS); // b подхватил по каналу
 
   const now = 1_000_000;
@@ -169,8 +169,8 @@ test("tick выбирает обновляющего — ровно одна в�
 
 test("закрывшаяся вкладка выпадает из соседей — обновление переезжает", () => {
   // Сосед должен существовать к моменту входа: иначе подхвата сессии не будет.
-  const b = new AuthStore(new FakeChannel());
-  const a = new AuthStore(new FakeChannel());
+  const b = new AuthStore(new FakeChannel(), "tab-2-b");
+  const a = new AuthStore(new FakeChannel(), "tab-1-a");
   a.loginOidc(TOKENS); // b подхватил по каналу
   const now = 500_000;
   a.tick(now);
