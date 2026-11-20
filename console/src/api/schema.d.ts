@@ -4289,7 +4289,10 @@ export interface components {
             /** @description Краткое описание кода. */
             title: string;
         };
-        /** @description Доставка и параметры источника TI (зеркало `tp_contracts::risk::SourceKind`; имя `TiSourceKind` — не пересекается с видом доверенного источника транспорта). */
+        /**
+         * @description Доставка и параметры источника TI (зеркало `tp_contracts::risk::SourceKind`; имя `TiSourceKind` —
+         *     не пересекается с видом доверенного источника транспорта).
+         */
         TiSourceKind: {
             /** @description Фид по HTTP(S). */
             http: {

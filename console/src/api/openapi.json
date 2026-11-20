@@ -6160,7 +6160,7 @@
         "type": "object"
       },
       "TiSourceKind": {
-        "description": "Доставка и параметры источника TI (зеркало `tp_contracts::risk::SourceKind`; имя `TiSourceKind` — не пересекается с видом доверенного источника транспорта).",
+        "description": "Доставка и параметры источника TI (зеркало `tp_contracts::risk::SourceKind`; имя `TiSourceKind` —\nне пересекается с видом доверенного источника транспорта).",
         "oneOf": [
           {
             "description": "Фид по HTTP(S).",
