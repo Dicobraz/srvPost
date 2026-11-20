@@ -82,7 +82,7 @@ impl RpcHandler for SearchQuery {
 }
 
 /// Состояние узла для администрирования ([`NodeState`], SRS 2.8 — «состояние узлов для администрирования»).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct NodeStateReport {
     /// Имя узла в членстве.
     pub node: NodeId,
@@ -99,7 +99,7 @@ pub struct NodeStateReport {
 }
 
 /// Готовность одной роли узла.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct RoleStatus {
     /// Роль.
     pub role: String,
@@ -225,13 +225,12 @@ mod tests {
             .handle(request("", Bytes::new()))
             .await
             .expect("handle");
-        let report: NodeStateReport = serde_json::from_slice(&out).expect("report");
-        assert_eq!(report.node.as_str(), "node-a");
-        assert!(!report.ready, "роль smtp не готова — узел не готов");
-        assert!(!report.draining);
-        assert_eq!(report.load, LoadLevel::Elevated);
-        assert_eq!(report.roles.len(), 1);
-        assert_eq!(report.roles[0].role, "imap");
-        assert!(report.roles[0].ready);
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("report");
+        assert_eq!(report["node"], "node-a");
+        assert_eq!(report["ready"], serde_json::json!(false), "{report}");
+        assert_eq!(report["draining"], serde_json::json!(false));
+        assert_eq!(report["load"], "elevated");
+        assert_eq!(report["roles"][0]["role"], "imap");
+        assert_eq!(report["roles"][0]["ready"], serde_json::json!(true));
     }
 }

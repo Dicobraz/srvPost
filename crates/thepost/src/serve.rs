@@ -525,7 +525,7 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         store: blob.clone(),
         leases,
         holder,
-        events,
+        events: events.clone(),
         sinks: ext
             .event_sinks()
             .iter()
