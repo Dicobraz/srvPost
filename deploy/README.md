@@ -385,6 +385,30 @@ Admin API — `thepost_admin_listen` (`127.0.0.1:8443`).
 `thepost verify --fix` при «сиротах» → таймеры и новая полная копия. Подтверждение — `-e thepost_restore_confirm=true`.
 Порядок для администратора и для новой ВМ — [docs/INSTALL.md](../docs/INSTALL.md#резервное-копирование-и-восстановление).
 
+### Обновление (решение владельца 20.11, DEP-60)
+Обновление — тот же деплой второй раз, отдельного апдейтера у узла нет: новый бинарник в
+`thepost_binary_url` + `thepost_binary_checksum` (или `thepost_binary_src`) — и плейбук. Роль идемпотентна:
+при смене бинарника — замена, рестарт и ожидание `/healthz/ready`, иначе прогон ничего не меняет. Схема СУБД
+доводится узлом при старте (`tp_migrations`: транзакция и advisory lock на схему — сорвавшаяся миграция базу
+не меняет, узел не стартует). Расписание обновлений — дело эксплуатанта (хоть его cron на плейбук).
+Беты (pre-release) — для стендов (`stand-update.sh`, DEP-59); боевая машина ставит стабильные `vX.Y.Z`.
+
+Рецепт релиза:
+```bash
+curl -fLO https://github.com/Dicobraz/srvPost/releases/download/vX.Y.Z/thepost-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz{,.sha256}
+sha256sum -c thepost-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256 && tar xzf thepost-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+```
+Распакованный `thepost` — в `thepost_binary_url` (`https://…`)+`thepost_binary_checksum` (`sha256:` хэша
+бинаря, не тарболла) или, с управляющей машины, в `thepost_binary_src`.
+
+Матрица (конвенции смены схемы — META-92):
+- патч/минор без смены схемы — свободно, в обе стороны; откат — тот же плейбук с предыдущим тегом;
+- версия со сменой схемы (см. заметки выпуска) — окно обслуживания; сначала репетиция: копия боевой базы
+  (pgBackRest) на пустую ВМ, `restore.yml`, прогон миграции — время и место в заметки выпуска; откат на
+  предыдущий релиз работает, пока идёт окно совместимости (правило расширение/сжатие: старый формат удаляется
+  не в том же релизе, где добавлен новый, а в следующем);
+- даунгрейд после сжатия схемы — только восстановление из копии (PITR pgBackRest, `restore.yml` — выше).
+
 ## Малый Enterprise (Ansible)
 Два узла `thepost` (`roles: [mailbox]`; Rspamd и шлюз S3 SeaweedFS на каждом) и три ВМ данных: на двух — PostgreSQL
 primary и standby, на третьей — монитор pg_auto_failover; на всех трёх — OpenBao (Raft, кворум 2 из 3) и SeaweedFS
