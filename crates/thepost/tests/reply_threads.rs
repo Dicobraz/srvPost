@@ -5,8 +5,8 @@
 //! Наше письмо наружу через submission получает метку Message-ID (`tp1.<id>.…`, XChaCha20-Poly1305) и
 //! BATV-подпись `MAIL FROM` (`prvs=…`), письмо пишется в запись об отправленном. Bounce на адрес без метки —
 //! `550 5.7.1` (`smtp.batv.mode: enforce`). Ответ адресата через доверенный шлюз (`Authentication-Results` с
-//! `dmarc=pass`) получает `X-ThePost-Reply`, попадает в беседу исходного письма (копия в «Отправленных»,
-//! привязанная фоном по `thread_key`, META-86); удержание беседы через Admin API переживает перезапуск узла.
+//! `dmarc=pass`) получает `X-ThePost-Reply` и попадает в беседу исходного письма (привязка приёмом, MS-21;
+//! JMAP `threadId` обеих писем — одна беседа); удержание беседы через Admin API переживает перезапуск узла.
 //! Ротация ключа метки без перезапуска (перечитанная секция `smtp.reply.keys`): ответ на письмо со старым
 //! ключом ещё признаётся, новое письмо метится новым.
 //!
@@ -160,7 +160,7 @@ search:
   indexer:
     commit_interval: 100ms
 maintenance:
-  purge_interval: 200ms
+  purge_interval: 1h
 reload:
   poll_interval: 100ms
 ",
@@ -324,6 +324,30 @@ async fn smtp_send(addr: std::net::SocketAddr, from: &str, to: &str, message: &s
         .expect("data");
     assert_eq!(smtp_cmd(&mut s, "\r\n.").await, 250, "письмо не принято");
     assert_eq!(smtp_cmd(&mut s, "QUIT").await, 221);
+}
+
+/// Ответ `EHLO` целиком (строки расширений).
+async fn smtp_ehlo(addr: std::net::SocketAddr) -> String {
+    let mut s = TcpStream::connect(addr).await.expect("smtp connect");
+    assert_eq!(smtp_reply(&mut s).await, 220);
+    s.write_all(b"EHLO client.test\r\n")
+        .await
+        .expect("smtp write");
+    let mut text = String::new();
+    let mut buf = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        s.read_exact(&mut byte).await.expect("smtp read");
+        buf.push(byte[0]);
+        if buf.ends_with(b"\r\n") {
+            let line = String::from_utf8_lossy(&buf).into_owned();
+            buf.clear();
+            text.push_str(&line);
+            if line.len() >= 4 && line.as_bytes()[3] == b' ' {
+                return text;
+            }
+        }
+    }
 }
 
 // ---------- IMAP ----------
@@ -681,12 +705,37 @@ async fn reply_marks_threads_and_hold() {
     .await
     .expect("источник");
 
-    // 1. Наше письмо наружу (submission, без Message-ID): метка в Message-ID, BATV в `MAIL FROM` очереди,
-    //    запись об отправленном.
+    // Снимок транспорта без перезапуска (сигнал `TransportChanged`): шлюзу `EHLO` объявляет `XCLIENT` —
+    // результаты его проверок действуют на новые сессии приёма.
+    let until = deadline();
+    while !smtp_ehlo(smtp).await.contains("XCLIENT") {
+        retry(until, "доверенный шлюз действует на новую сессию").await;
+    }
+
+    // Исходное письмо беседы: bob пишет alice (приём SMTP через доверенный шлюз, DMARC pass) — во
+    // «Входящих» alice, привязка к беседе приёмом (MS-21).
     let peer = "bob@ext.test";
-    let letter = "From: Alice <alice@example.ru>\nTo: Bob <bob@ext.test>\nSubject: Pricing\n\n\
-                  Please send the pricing.\n";
-    submit_letter(submission, &login, &app_password, peer, letter).await;
+    let orig_id = format!("orig-{}@ext.test", std::process::id());
+    let first = format!(
+        "Authentication-Results: {AUTHSERV}; spf=pass smtp.mailfrom=ext.test;\n \
+         dkim=pass header.d=ext.test; dmarc=pass header.from=ext.test\n\
+         From: Bob <{peer}>\nTo: Alice <{login}>\nSubject: Pricing\n\
+         Message-ID: <{orig_id}>\n\nCould you send the pricing?\n"
+    );
+    let mut imap = imap_login(addr(&running, "imap"), &login, &app_password).await;
+    smtp_send(smtp, peer, &login, &first).await;
+    let until = deadline();
+    while exists(&imap.cmd("SELECT INBOX").await) != 1 {
+        retry(until, "исходное письмо во «Входящих»").await;
+    }
+
+    // 1. Наше письмо наружу (submission, ответ alice, без Message-ID): метка в Message-ID, BATV в
+    //    `MAIL FROM` очереди, запись об отправленном.
+    let letter = format!(
+        "From: Alice <alice@example.ru>\nTo: Bob <bob@ext.test>\nSubject: Re: Pricing\n\
+         In-Reply-To: <{orig_id}>\nReferences: <{orig_id}>\n\nHere is the pricing.\n"
+    );
+    submit_letter(submission, &login, &app_password, peer, &letter).await;
 
     // Очередь: конверт с BATV-меткой (`prvs=0…` — ключ k1, номер 0), письмо с меткой Message-ID (`tp1.k1.…`),
     // запись об отправленном с адресатом.
@@ -765,11 +814,6 @@ async fn reply_marks_threads_and_hold() {
     assert!(mark.starts_with("tp1.k1."), "метка узла: {mark}");
     assert!(mark.ends_with(&format!("@{domain}")), "{mark}");
 
-    // Копия отправленного — в «Отправленных» alice (кладёт клиент, IMAP APPEND): фон maintenance привяжет
-    // её к беседе по `thread_key` (META-86), ответ адресата присоединится к той же беседе.
-    let mut imap = imap_login(addr(&running, "imap"), &login, &app_password).await;
-    imap.append("Sent", &raw).await;
-
     // 2. Bounce на адрес без метки — `550 5.7.1` (`smtp.batv.mode: enforce`).
     let mut s = TcpStream::connect(smtp).await.expect("smtp connect");
     assert_eq!(smtp_reply(&mut s).await, 220);
@@ -782,32 +826,52 @@ async fn reply_marks_threads_and_hold() {
     );
     assert_eq!(smtp_cmd(&mut s, "QUIT").await, 221);
 
-    // 3. Ответ адресата (DMARC pass по результатам шлюза) — признак `X-ThePost-Reply`, в беседу исходного.
+    // 3. Ответ адресата (DMARC pass по результатам шлюза) на наше письмо — признак `X-ThePost-Reply`
+    //    и в беседу исходного письма.
     let reply = format!(
         "Authentication-Results: {AUTHSERV}; spf=pass smtp.mailfrom=ext.test;\n \
          dkim=pass header.d=ext.test; dmarc=pass header.from=ext.test\n\
          From: Bob <{peer}>\nTo: Alice <{login}>\nSubject: Re: Pricing\n\
-         In-Reply-To: <{mark}>\nReferences: <{mark}>\n\nHere it is.\n"
+         In-Reply-To: <{mark}>\nReferences: <{orig_id}> <{mark}>\n\nThanks, received.\n"
     );
     smtp_send(smtp, peer, &login, &reply).await;
     let until = deadline();
     let fetch = loop {
-        while exists(&imap.cmd("SELECT INBOX").await) != 1 {
+        while exists(&imap.cmd("SELECT INBOX").await) != 2 {
             retry(until, "ответ во «Входящих»").await;
         }
-        let fetch = imap.cmd("FETCH 1 (BODY.PEEK[])").await;
-        if fetch.contains("Here it is") {
+        let fetch = imap.cmd("FETCH 1:2 (BODY.PEEK[])").await;
+        if fetch.contains("Thanks, received") {
             break fetch;
         }
         retry(until, "тело ответа").await;
     };
+    let bodies: Vec<String> = fetch
+        .split("BODY[] {")
+        .skip(1)
+        .map(|p| p[p.find("\r\n").map(|i| i + 2).unwrap_or(0)..].to_owned())
+        .collect();
+    assert_eq!(bodies.len(), 2, "{fetch}");
+    let answer_body = bodies
+        .iter()
+        .find(|b| b.contains("Thanks, received"))
+        .expect("тело ответа");
     assert!(
-        fetch.to_ascii_uppercase().contains("X-THEPOST-REPLY: YES"),
+        answer_body
+            .to_ascii_uppercase()
+            .contains("X-THEPOST-REPLY: YES"),
         "признака ответа нет: {fetch}"
     );
+    let first_body = bodies
+        .iter()
+        .find(|b| b.contains("Could you send the pricing"))
+        .expect("тело исходного письма");
+    assert!(
+        !first_body.contains("X-ThePost-Reply"),
+        "у исходного письма признака быть не должно: {fetch}"
+    );
 
-    // Ответ — в беседе исходного письма: беседа копии в «Отправленных» (фоновая привязка по `thread_key`)
-    // и беседа ответа — одна; письма беседы — оба.
+    // Ответ — в беседе исходного письма (привязка приёмом, MS-21): оба письма — одна беседа.
     let inbox = MailboxStore::list(&meta, scope)
         .await
         .expect("mailboxes")
@@ -815,41 +879,26 @@ async fn reply_marks_threads_and_hold() {
         .find(|m| m.role == Some(SpecialUse::Inbox))
         .expect("inbox")
         .id;
-    let sent = MailboxStore::list(&meta, scope)
+    let inbox_ids = MessageStore::list(&meta, scope, inbox, MessageQuery::All, 10)
         .await
-        .expect("mailboxes")
-        .into_iter()
-        .find(|m| m.name == "Sent")
-        .expect("Sent")
-        .id;
-    let until = deadline();
-    let (reply_id, thread) = loop {
-        let reply = MessageStore::list(&meta, scope, inbox, MessageQuery::All, 10)
-            .await
-            .expect("list")
-            .pop()
-            .expect("ответ во «Входящих»");
-        let copy = MessageStore::list(&meta, scope, sent, MessageQuery::All, 10)
-            .await
-            .expect("list")
-            .pop()
-            .expect("копия в «Отправленных»");
-        let reply_thread = meta.thread_of(scope, reply.id).await.expect("thread_of");
-        let copy_thread = meta.thread_of(scope, copy.id).await.expect("thread_of");
-        match (reply_thread, copy_thread) {
-            (Some(t1), Some(t2)) if t1 == t2 => break (reply.id, t1),
-            _ => retry(until, "копия и ответ — в одной беседе (фоновая привязка)").await,
-        }
-    };
+        .expect("list");
+    assert_eq!(inbox_ids.len(), 2, "{inbox_ids:?}");
+    let (orig, answer) = (inbox_ids[0].id, inbox_ids[1].id);
+    let thread = meta
+        .thread_of(scope, orig)
+        .await
+        .expect("thread_of")
+        .expect("беседа исходного письма");
+    assert_eq!(
+        meta.thread_of(scope, answer).await,
+        Ok(Some(thread)),
+        "ответ — в беседе исходного письма"
+    );
     let thread_messages = meta.messages(scope, thread, 10).await.expect("messages");
-    assert_eq!(thread_messages.len(), 2, "{thread_messages:?}");
+    assert_eq!(thread_messages, vec![orig, answer], "{thread_messages:?}");
 
-    // JMAP (узел передаёт `ThreadStore` роли jmap, JMAP-48): `threadId` копии и ответа — одна беседа
-    // (идентификатор привязанной беседы — `T` + UUID, не запасной расчёт по ключу цепочки).
-    let other = thread_messages
-        .iter()
-        .find(|m| **m != reply_id)
-        .expect("второе письмо беседы");
+    // JMAP (узел передаёт `ThreadStore` роли jmap, JMAP-48): `threadId` исходного письма и ответа — одна
+    // беседа (идентификатор привязанной беседы — `T` + UUID, не запасной расчёт по ключу цепочки).
     let web = addr(&running, "jmap");
     let jmap_auth =
         base64::engine::general_purpose::STANDARD.encode(format!("{login}:{app_password}"));
@@ -860,7 +909,7 @@ async fn reply_marks_threads_and_hold() {
         "Email/get",
         json!({
             "accountId": account.id.to_string(),
-            "ids": [reply_id.to_string(), other.to_string()],
+            "ids": [orig.to_string(), answer.to_string()],
             "properties": ["threadId"],
         }),
     )
@@ -914,10 +963,7 @@ async fn reply_marks_threads_and_hold() {
     let (code, body) = http(
         admin,
         "GET",
-        &format!(
-            "{org}/accounts/{}/threads?message_id={reply_id}",
-            account.id
-        ),
+        &format!("{org}/accounts/{}/threads?message_id={orig}", account.id),
         &bearer,
         None,
     )
@@ -991,7 +1037,7 @@ async fn reply_marks_threads_and_hold() {
     let old_reply = format!(
         "Authentication-Results: {AUTHSERV}; dmarc=pass header.from=ext.test\n\
          From: Bob <{peer}>\nTo: Alice <{login}>\nSubject: Re: Pricing\n\
-         In-Reply-To: <{mark}>\nReferences: <{mark}>\n\nStill answering the old one.\n"
+         In-Reply-To: <{mark}>\nReferences: <{orig_id}> <{mark}>\n\nStill answering the old one.\n"
     );
     smtp_send(smtp, peer, &login, &old_reply).await;
     // Ответ на новое письмо — меткой нового ключа.
@@ -1003,10 +1049,10 @@ async fn reply_marks_threads_and_hold() {
     smtp_send(smtp, peer, &login, &new_reply).await;
     let until = deadline();
     let fetch = loop {
-        while exists(&imap.cmd("SELECT INBOX").await) != 3 {
+        while exists(&imap.cmd("SELECT INBOX").await) != 4 {
             retry(until, "ответы после ротации во «Входящих»").await;
         }
-        let fetch = imap.cmd("FETCH 1:3 (BODY.PEEK[])").await;
+        let fetch = imap.cmd("FETCH 1:4 (BODY.PEEK[])").await;
         if fetch.contains("Still answering") && fetch.contains("Answering the new one") {
             break fetch;
         }
@@ -1017,7 +1063,7 @@ async fn reply_marks_threads_and_hold() {
         .skip(1)
         .map(|part| &part[part.find("\r\n").map(|i| i + 2).unwrap_or(0)..])
         .collect();
-    assert_eq!(flagged.len(), 3, "{fetch}");
+    assert_eq!(flagged.len(), 4, "{fetch}");
     let by_body = |needle: &str| {
         flagged
             .iter()
@@ -1073,10 +1119,7 @@ async fn reply_marks_threads_and_hold() {
     let (code, body) = http(
         admin,
         "GET",
-        &format!(
-            "{org}/accounts/{}/threads?message_id={reply_id}",
-            account.id
-        ),
+        &format!("{org}/accounts/{}/threads?message_id={orig}", account.id),
         &bearer,
         None,
     )
