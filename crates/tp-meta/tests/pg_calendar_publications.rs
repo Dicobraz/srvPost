@@ -6,7 +6,6 @@ mod common;
 
 use std::time::Duration;
 
-use sqlx::AssertSqlSafe;
 use time::OffsetDateTime;
 use tp_contracts::calendar::CalendarPublications;
 use tp_contracts::dav::CollectionId;
@@ -149,14 +148,14 @@ async fn token_lookup_revocation_and_expiry() {
         .await
         .expect("создать ссылку со сроком");
     assert_eq!(b.expires, Some(expires));
-    assert_eq!(meta.list(owner).await.expect("список").len(), 2);
+    assert_eq!(CalendarPublications::list(&meta, owner).await.expect("список").len(), 2);
 
     // Обслуживание: до срока ссылки живут; после — истёкшая удалена (поиск по ней и список пусты).
     // Удаление идёт по всем организациям — число удалённых по всей установке не проверяем.
     meta.expire_publications(OffsetDateTime::now_utc())
         .await
         .expect("обслуживание");
-    assert_eq!(meta.list(owner).await.expect("список").len(), 2);
+    assert_eq!(CalendarPublications::list(&meta, owner).await.expect("список").len(), 2);
     meta.expire_publications(OffsetDateTime::now_utc() + time::Duration::hours(2))
         .await
         .expect("обслуживание");
@@ -166,7 +165,7 @@ async fn token_lookup_revocation_and_expiry() {
             .expect("поиск")
             .is_none()
     );
-    assert_eq!(meta.list(owner).await.expect("список").len(), 1);
+    assert_eq!(CalendarPublications::list(&meta, owner).await.expect("список").len(), 1);
 
     // Истёкшая, но ещё не убранная обслуживанием ссылка по токену не отдаётся — отдачу по ней
     // прекращает хранилище (DAV-20), до уборки она остаётся в списке.
@@ -186,7 +185,7 @@ async fn token_lookup_revocation_and_expiry() {
             .expect("поиск")
             .is_none()
     );
-    assert_eq!(meta.list(owner).await.expect("список").len(), 2);
+    assert_eq!(CalendarPublications::list(&meta, owner).await.expect("список").len(), 2);
 
     // Отзыв: по токену больше не отдаётся, из списка исчезла (истёкшая c — до обслуживания);
     // повтор — NotFound. Обслуживание убирает и её.
@@ -200,12 +199,12 @@ async fn token_lookup_revocation_and_expiry() {
         meta.publication_by_token(&token).await.expect("поиск"),
         None
     );
-    assert_eq!(meta.list(owner).await.expect("список").len(), 1);
+    assert_eq!(CalendarPublications::list(&meta, owner).await.expect("список").len(), 1);
     assert_eq!(meta.revoke(owner, a.id).await, Err(Error::NotFound));
     meta.expire_publications(OffsetDateTime::now_utc() + time::Duration::hours(2))
         .await
         .expect("обслуживание");
-    assert!(meta.list(owner).await.expect("список").is_empty());
+    assert!(CalendarPublications::list(&meta, owner).await.expect("список").is_empty());
 }
 
 /// Схема: недопустимый уровень, срок не позже выдачи и повтор хэша — ошибки ограничений;
@@ -260,7 +259,7 @@ async fn schema_constraints_and_rls() {
     .bind(owner.tenant.as_uuid())
     .bind(owner.account.as_uuid())
     .bind(pub_id)
-    .fetch_one(&mut common::conn(meta.pool()).await)
+    .fetch_one(&mut *common::conn(meta.pool()).await)
     .await
     .expect("хэш");
     let mut tx = schema::begin(meta.pool(), foreign.tenant)
