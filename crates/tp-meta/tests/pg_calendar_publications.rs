@@ -160,11 +160,12 @@ async fn token_lookup_revocation_and_expiry() {
     meta.expire_publications(OffsetDateTime::now_utc() + time::Duration::hours(2))
         .await
         .expect("обслуживание");
-    assert!(meta
-        .publication_by_token(b.token.as_deref().expect("токен b"))
-        .await
-        .expect("поиск")
-        .is_none());
+    assert!(
+        meta.publication_by_token(b.token.as_deref().expect("токен b"))
+            .await
+            .expect("поиск")
+            .is_none()
+    );
     assert_eq!(meta.list(owner).await.expect("список").len(), 1);
 
     // Истёкшая, но ещё не убранная обслуживанием ссылка по токену не отдаётся — отдачу по ней
@@ -179,11 +180,12 @@ async fn token_lookup_revocation_and_expiry() {
         .await
         .expect("создать ссылку со сроком");
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    assert!(meta
-        .publication_by_token(c.token.as_deref().expect("токен c"))
-        .await
-        .expect("поиск")
-        .is_none());
+    assert!(
+        meta.publication_by_token(c.token.as_deref().expect("токен c"))
+            .await
+            .expect("поиск")
+            .is_none()
+    );
     assert_eq!(meta.list(owner).await.expect("список").len(), 2);
 
     // Отзыв: по токену больше не отдаётся, из списка исчезла (истёкшая c — до обслуживания);
@@ -340,7 +342,10 @@ async fn partner_availability_templates() {
             .as_deref(),
         Some(template)
     );
-    let list = meta.partner_availability(owner.tenant).await.expect("список");
+    let list = meta
+        .partner_availability(owner.tenant)
+        .await
+        .expect("список");
     assert_eq!(
         list,
         vec![tp_meta::calendar::PartnerAvailability {
@@ -348,11 +353,12 @@ async fn partner_availability_templates() {
             template: template.into()
         }]
     );
-    assert!(meta
-        .partner_availability(foreign.tenant)
-        .await
-        .expect("чужой список")
-        .is_empty());
+    assert!(
+        meta.partner_availability(foreign.tenant)
+            .await
+            .expect("чужой список")
+            .is_empty()
+    );
     assert_eq!(
         meta.partner_availability_template(foreign.tenant, domain)
             .await
@@ -375,11 +381,12 @@ async fn partner_availability_templates() {
     meta.set_partner_availability_template(owner.tenant, domain, None)
         .await
         .expect("снять шаблон");
-    assert!(meta
-        .partner_availability(owner.tenant)
-        .await
-        .expect("список")
-        .is_empty());
+    assert!(
+        meta.partner_availability(owner.tenant)
+            .await
+            .expect("список")
+            .is_empty()
+    );
     meta.set_partner_availability_template(owner.tenant, domain, None)
         .await
         .expect("снять отсутствующий");

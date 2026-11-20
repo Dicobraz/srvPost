@@ -80,7 +80,9 @@ fn detail_of(s: &str) -> Result<Detail> {
         "limited" => Ok(Detail::Limited),
         "details" => Ok(Detail::Details),
         "all" => Ok(Detail::All),
-        other => Err(Error::internal(format!("calendar_publications.detail: {other}"))),
+        other => Err(Error::internal(format!(
+            "calendar_publications.detail: {other}"
+        ))),
     }
 }
 
@@ -423,7 +425,10 @@ mod tests {
         assert!(!token[4..].chars().any(|c| !c.is_ascii_hexdigit()));
         let hash = token_hash(&token);
         assert_eq!(hash.len(), 64);
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            hash.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
         assert_ne!(hash, token_hash(&new_token()));
         assert_eq!(token_hash("x"), token_hash("x"));
     }
