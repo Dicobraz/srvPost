@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
+import { QueryClientProvider } from "@tanstack/react-query";
 
 import { CalendarPage } from "./pages/calendar";
 import { ContactsPage } from "./pages/contacts";
@@ -7,31 +8,21 @@ import { MailPage } from "./pages/mail";
 import { LoginPage } from "./pages/login";
 import { CallbackPage } from "./pages/callback";
 import { AuthProvider, useAuth } from "./auth/session";
+import { JmapProvider } from "./mail/context";
+import { ToastProvider } from "./mail/toast";
+import { queryClient } from "./mail/client";
 import { useTheme, type ThemeChoice } from "./theme";
 
-// Оболочка веб-клиента (WEB-01/02): вход — карточка WEB-02 (OIDC PKCE из SPA или пароль приложения;
-// решение 2026-11-20 — без новой серверной точки), разделы Почта / Календарь / Контакты и шов
-// «Каналы» — место под будущий веб-чат (решение 2026-11-17). На узких экранах навигация уходит вниз
-// (паттерн mobile Outlook, ADR 2026-11-20). Данные — через JMAP того же узла (same-origin); ящики —
-// карточка WEB-03, разделы пока заглушки.
+// Оболочка веб-клиента (WEB-01/02/03): разделы Почта / Календарь / Контакты. Шов «Каналы» скрыт
+// до запуска чата (решение 20.11): видимой навигации нет — маршрут /channels зарезервирован
+// (страница-заглушка не рендерится пользователю), чтобы вписать веб-чат без переделки маршрутов.
+// Данные почты — JMAP того же узла (WEB-03): JmapProvider — сессия и push, ToastProvider — тосты
+// с Undo (каркас волны 4), QueryClientProvider — кэш TanStack Query.
 const SECTIONS = [
   { to: "/", label: "Почта", end: true },
   { to: "/calendar", label: "Календарь", end: false },
   { to: "/contacts", label: "Контакты", end: false },
 ];
-
-/** Шов «Каналы»: отключённый пункт навигации, чтобы вписать чат потом без переделки оболочки. */
-function ChannelsSeam() {
-  return (
-    <span
-      className="nav-item nav-seam"
-      aria-disabled="true"
-      title="Появится позже: веб-чат (решение 2026-11-17)"
-    >
-      Каналы
-    </span>
-  );
-}
 
 function Nav() {
   return (
@@ -41,7 +32,6 @@ function Nav() {
           {s.label}
         </NavLink>
       ))}
-      <ChannelsSeam />
     </nav>
   );
 }
@@ -99,6 +89,8 @@ function Shell() {
           <Route path="/" element={<MailPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/contacts" element={<ContactsPage />} />
+          {/* Шов «Каналы»: маршрут зарезервирован (решение 2026-11-17), в навигации скрыт. */}
+          <Route path="/channels" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
@@ -142,19 +134,26 @@ function Protected({ children }: { children: ReactNode }) {
 export function App() {
   useTheme();
   return (
-    <AuthProvider>
-      <Routes>
-        <Route path="/callback" element={<CallbackPage />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route
-          path="*"
-          element={
-            <Protected>
-              <Shell />
-            </Protected>
-          }
-        />
-      </Routes>
-    </AuthProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <Routes>
+          <Route path="/callback" element={<CallbackPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="*"
+            element={
+              <Protected>
+                {/* Почта живёт на сессии JMAP: сессия и push — JmapProvider (WEB-03). */}
+                <JmapProvider>
+                  <ToastProvider>
+                    <Shell />
+                  </ToastProvider>
+                </JmapProvider>
+              </Protected>
+            }
+          />
+        </Routes>
+      </AuthProvider>
+    </QueryClientProvider>
   );
 }
