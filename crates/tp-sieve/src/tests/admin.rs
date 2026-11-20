@@ -347,8 +347,8 @@ fn environment_facts() {
     ));
 
     // Неизвестный пункт — ошибка проверки.
-    let d = first_error("require \"environment\";\nenvironment \"vnd.thepost.other\" \"x\";");
-    assert_eq!((d.line, d.column), (2, 13), "{d}");
+    let d = first_error("require \"environment\";\nif environment \"vnd.thepost.other\" \"x\" { }");
+    assert_eq!((d.line, d.column), (2, 16), "{d}");
     assert!(d.message.contains("неизвестный пункт"), "{d}");
     let d = user_error("require \"environment\"; if environment \"host\" \"x\" { }");
     assert!(
