@@ -74,6 +74,8 @@ pub const AUTH: &str = "auth";
 pub const HTTP: &str = "http";
 /// Имя секции кэша политики доверия.
 pub const TRUST: &str = "trust";
+/// Имя секции справочника аномалий (APP-78).
+pub const RISK: &str = "risk";
 
 /// Реестр секций: платформа, `tp-meta`, приложение и встроенные модули; проверки каналов.
 pub fn registry() -> Result<SectionRegistry> {
@@ -105,6 +107,8 @@ pub fn registry_of(builtin: &[modules::Builtin]) -> Result<SectionRegistry> {
     r.add_section::<AuthSection>(AUTH)?;
     r.add_section::<HttpSection>(HTTP)?;
     r.add_section::<TrustSection>(TRUST)?;
+    r.add_section::<RiskSection>(RISK)?;
+    r.add_check::<RiskSection>(RISK, |c, profile| c.check(profile))?;
     r.add_check::<PoolConfig>(PoolConfig::SECTION, |c, profile| {
         pool_config(c, profile).check().map(drop)
     })?;
@@ -919,6 +923,136 @@ impl Default for TrustSection {
         Self {
             cache_ttl: Duration::from_secs(60),
             cache_entries: 10_000,
+        }
+    }
+}
+
+// ---------- risk ----------
+
+/// Секция `risk` (APP-78, решение 126): справочник аномалий на узле — доверенные ключи подписи пакетов
+/// поставщика, первый пакет из поставки, обновление (роль maintenance) и срок «только отчёт».
+///
+/// ```yaml
+/// risk:
+///   trusted_keys:
+///     vendor: /usr/share/thepost/risk/vendor.pub
+///   update:
+///     url: https://risk.thepost.example/packages/
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RiskSection {
+    /// Доверенные открытые ключи подписи пакетов (Ed25519): `key_id` → ключ — base64 или hex (32 байта)
+    /// либо путь к файлу с ним (пакеты ОС кладут ключи в `/usr/share/thepost/risk/`, DEP-57).
+    /// Пусто — проверенные пакеты не устанавливаются (подпись не проверить), предупреждение — `doctor`.
+    pub trusted_keys: std::collections::BTreeMap<String, String>,
+    /// Первый пакет из поставки.
+    pub package: RiskPackageSection,
+    /// Обновление пакета поставщика — роль maintenance раз в `interval`.
+    pub update: RiskUpdateSection,
+    /// Сколько суток новый признак поставщика работает «только отчёт» без решения администратора
+    /// (`14`): дольше — признак переходит в `Enforce` (журнал узла и строка в `doctor`).
+    pub report_only_days: u32,
+    /// Каталог импорта источников TI (закрытый контур: файлы кладут руками или зеркалом, APP-79).
+    pub import: RiskImportSection,
+}
+
+impl Default for RiskSection {
+    fn default() -> Self {
+        Self {
+            trusted_keys: Default::default(),
+            package: Default::default(),
+            update: Default::default(),
+            report_only_days: 14,
+            import: Default::default(),
+        }
+    }
+}
+
+impl RiskSection {
+    /// Период обновления положителен; источник — URL только по HTTPS (HTTP — профиль dev, конфиденциальные
+    /// списки TI и подписанные пакеты идут по TLS); `url` и `dir` вместе — ошибка (один источник обновления).
+    pub fn check(&self, profile: Profile) -> Result<()> {
+        if self.update.interval.is_zero() {
+            return Err(Error::invalid("risk: update.interval must be positive"));
+        }
+        if let Some(url) = &self.update.url
+            && !url.starts_with("https://")
+            && !(url.starts_with("http://") && profile == Profile::Dev)
+        {
+            return Err(Error::invalid(
+                "risk: update.url — только HTTPS (http — профиль dev)",
+            ));
+        }
+        if self.update.url.is_some() && self.update.dir.is_some() {
+            return Err(Error::invalid(
+                "risk: заданы update.url и update.dir — источник обновления один (url или каталог)",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// `risk.package`: первый пакет из поставки (DEP-57). При пустом хранилище узел ставит пакет из каталога
+/// поставки.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RiskPackageSection {
+    /// Каталог поставки с пакетом (`*-v*.zip`) и открытыми ключами (`*.pub`); пусто — первый пакет не ставится.
+    pub dir: Option<PathBuf>,
+}
+
+impl Default for RiskPackageSection {
+    fn default() -> Self {
+        Self {
+            dir: Some(PathBuf::from("/usr/share/thepost/risk")),
+        }
+    }
+}
+
+/// `risk.update`: обновление пакета поставщика в роли maintenance (решение 126 б). Источник — `url`
+/// (HTTPS, `If-None-Match`) или `dir` (закрытый контур: файл пакета кладут руками или зеркалом).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RiskUpdateSection {
+    /// Период опроса источника (`24h`). Требует перезапуска.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub interval: Duration,
+    /// Адрес обновлений (HTTPS): каталог с файлами пакетов, запрос с `If-None-Match` по последней
+    /// установленной версии.
+    pub url: Option<String>,
+    /// Каталог обновлений закрытого контура: свежий пакет в нём ставится при проходе.
+    pub dir: Option<PathBuf>,
+    /// Ставить проверенный пакет сразу (`true`): новые признаки всё равно приходят «только отчёт»
+    /// (`report_only_days`); `false` — пакет ждёт администратора (`POST …/activate`).
+    pub auto_activate: bool,
+}
+
+impl Default for RiskUpdateSection {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(24 * 3600),
+            url: None,
+            dir: None,
+            auto_activate: true,
+        }
+    }
+}
+
+/// `risk.import`: каталог импорта списков TI закрытого контура (решение 126 к; APP-79).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RiskImportSection {
+    /// Каталог: источник [`tp_contracts::risk::SourceKind::File`] читает файл `<каталог>/<id источника>`
+    /// (ГосСОПКА и ФинЦЕРТ — только импорт, всегда с организациями).
+    pub dir: PathBuf,
+}
+
+impl Default for RiskImportSection {
+    fn default() -> Self {
+        Self {
+            dir: PathBuf::from("/var/lib/thepost/risk-import"),
         }
     }
 }
