@@ -20,6 +20,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -36,6 +37,8 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use tp_contracts::addressbook::{ContactStore, DynamicGroupStore, OrgStore};
 use tp_contracts::admin_audit::{AdminAuditRecord, AuditDetails, AuditLog};
+use tp_contracts::admin_session::AdminSessions;
+use tp_contracts::admin_token::LocalAdminTokens;
 use tp_contracts::audit::MailboxAudit;
 use tp_contracts::auth::{Authenticator, Credentials, Principal, SyncGate};
 use tp_contracts::blob::BlobStore;
@@ -62,7 +65,7 @@ use crate::console::ConsoleConfig;
 use crate::export::AuditExportConfig;
 use crate::extract::Json;
 use crate::groups::Moderation;
-use crate::init::{InitConfig, Local, OidcClient};
+use crate::init::{InitConfig, OidcClient};
 
 /// Начало префикса маршрутов модуля.
 pub const MODULE_PREFIX: &str = "/api/v1/modules/";
@@ -157,6 +160,30 @@ impl AdminRole {
 
 /// Маршрут `whoami` (доступен любой роли).
 pub const WHOAMI_ROUTE: &str = "/api/v1/whoami";
+
+impl FromStr for AdminRole {
+    type Err = String;
+
+    /// Роль по имени в журнале аудита и API ([`AdminRole::as_str`], формат сессии `AdminSessions`,
+    /// CTR-61).
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        for role in [
+            AdminRole::InstallationAdmin,
+            AdminRole::OrganizationAdmin,
+            AdminRole::Operator,
+            AdminRole::Auditor,
+            AdminRole::JournalAuditor,
+        ] {
+            if role.as_str() == s {
+                return Ok(role);
+            }
+        }
+        Err(format!(
+            "роль администратора — installation_admin, organization_admin, operator, auditor или \
+             journal_auditor, а не {s:?}"
+        ))
+    }
+}
 
 /// Назначение роли: имена входа и группы каталога (`Principal::groups`), получающие роль.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -420,8 +447,11 @@ pub struct Admin {
     pub(crate) cfg: AdminConfig,
     /// Настройки транспорта; `None` — не подключено (маршруты отвечают 503).
     pub(crate) transport: Option<Arc<dyn TransportStore>>,
-    /// Локальный вход (`admin init`, сессии); `None` — не подключено (вход по паролю и обмен отвечают 503).
-    pub(crate) local: Option<Arc<Local>>,
+    /// Локальный вход (`admin init`); `None` — не подключено (вход по паролю и обмен отвечают 503).
+    pub(crate) local: Option<Arc<dyn LocalAdminTokens>>,
+    /// Сессии Admin API (CTR-61, [`crate::init`]): по умолчанию — память узла, общее хранилище
+    /// подключает [`Admin::with_sessions`].
+    pub(crate) sessions: Arc<dyn AdminSessions>,
     /// Правила Sieve и автоответ; `None` — не подключено (маршруты отвечают 503).
     pub(crate) sieve: Option<crate::sieve::Sieve>,
     /// Проверка скрипта организации профилем «админский» (SIEVE-14); подключается к [`Admin::with_sieve`].
@@ -497,7 +527,9 @@ impl Admin {
                 return Err(Error::Conflict);
             }
         }
+        let memory = crate::init::MemorySessions::new(cfg.init.max_sessions);
         Ok(Self {
+            sessions: Arc::new(memory),
             d,
             cfg,
             transport: None,
@@ -637,7 +669,7 @@ impl Admin {
     /// `peer` — адрес клиента соединения (CTR-57; `None` — запрос без соединения клиента).
     pub async fn identify(&self, headers: &HeaderMap, peer: Option<IpAddr>) -> Result<Caller> {
         let token = bearer(headers)?;
-        if let Some(c) = self.session_caller(token, OffsetDateTime::now_utc()) {
+        if let Some(c) = self.session_caller(token, OffsetDateTime::now_utc()).await {
             return c;
         }
         if tp_contracts::admin_token::is_local_admin_token(token) {
