@@ -23,7 +23,7 @@ use tp_testkit::{MemDeliveryLog, MemRisk, MemSecretStore, MemSentLog, SystemCloc
 use super::*;
 use crate::authcheck::tests as fx;
 use crate::config::{ReplyConfig, ReplyKeyConfig, RiskConfig};
-use crate::milter::proto;
+use crate::milter::proto::{self, Packet};
 use crate::milter::tests as mt;
 use crate::reply::ReplyMarks;
 use crate::risk::{ListValue, Risk, RiskEnviron};

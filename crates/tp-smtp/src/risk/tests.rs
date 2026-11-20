@@ -525,7 +525,7 @@ async fn engine_link_domain_and_drops_reply() {
     let environ = Environ::default()
         .with_facts(account, memory)
         .with_psl(psl(PSL_TEXT));
-    let (risk, _) = risk(
+    let (engine, _) = risk(
         vec![signal(
             "tp.link.new_domain",
             Detector::ThreadNewLinkDomain,
@@ -535,7 +535,7 @@ async fn engine_link_domain_and_drops_reply() {
         environ,
     )
     .await;
-    let scan = risk
+    let scan = engine
         .scan("192.0.2.1".parse().expect("ip"), &raw, &[(account, tenant)])
         .await;
     let verdict = scan.verdict_for(tenant);
@@ -656,7 +656,7 @@ async fn engine_list_match() {
             "malware-sha256",
             &hash.iter().map(|b| format!("{b:02x}")).collect::<String>(),
         );
-    let (risk, _) = risk(
+    let (engine, _) = risk(
         vec![
             signal(
                 "tp.ti.link_url",
@@ -680,7 +680,7 @@ async fn engine_list_match() {
         environ,
     )
     .await;
-    let scan = risk
+    let scan = engine
         .scan(
             "192.0.2.9".parse().expect("ip"),
             &hash_raw,
@@ -727,7 +727,7 @@ async fn engine_stale_source_reduces_weight() {
                 url: "https://feeds.example/feodo.txt".into(),
             },
             format: FeedFormat::Txt,
-            ttl: time::Duration::hours(1),
+            ttl: std::time::Duration::from_secs(3600),
             stale: StaleAction::Reduce { percent: 50 },
             license: License {
                 terms_url: "https://example/license".into(),
