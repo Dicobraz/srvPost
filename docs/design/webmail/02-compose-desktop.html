@@ -14,7 +14,7 @@
   --selrow:#D1E4F4; --selbar:#0067C0;
   --framea:#177CAA;
   --ok:#0E8483; --warn:#9A6F00; --err:#C62828;
-  --iblue:#2F6DB5; --ipink:#C2477F;
+  --iblue:#2F6DB5;
 }
 *{box-sizing:border-box;margin:0}
 html,body{width:1440px;height:900px;overflow:hidden}
@@ -32,7 +32,6 @@ body{
 .secs{display:flex;align-items:center;gap:2px}
 .sbtn{width:34px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--t2);position:relative}
 .sbtn .i{color:var(--iblue)}
-.sbtn.c-cal .i{color:var(--ipink)}
 .sbtn.off{opacity:.55}
 .sbtn.off .i{color:var(--t2)}
 .tsep{width:1px;height:20px;background:var(--stroke);margin:0 8px}
@@ -150,7 +149,7 @@ table.spec tr.total td{font-weight:600;background:var(--quiet)}
 
 <!-- Заголовок окна: вкладки — открытые объекты; композер — вкладка, не окно -->
 <div class="title">
-  <svg class="logo" viewBox="0 0 22 22"><rect x="1" y="3" width="20" height="4.2" rx="2.1" fill="#0067C0"/><rect x="1" y="9" width="20" height="4.2" rx="2.1" fill="#177CAA"/><rect x="1" y="15" width="13" height="4.2" rx="2.1" fill="#E4107F"/></svg>
+  <svg class="logo" viewBox="0 0 22 22"><rect x="1" y="3" width="20" height="4.2" rx="2.1" fill="#0067C0"/><rect x="1" y="9" width="20" height="4.2" rx="2.1" fill="#177CAA"/><rect x="1" y="15" width="13" height="4.2" rx="2.1" fill="#7CC4F0"/></svg>
   <div class="secs">
     <div class="sbtn" title="Почта (Ctrl+1)"><svg class="i"><use href="#i-mail"/></svg></div>
     <div class="sbtn c-cal" title="Календарь (Ctrl+2)"><svg class="i"><use href="#i-cal"/></svg></div>

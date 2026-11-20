@@ -26,7 +26,7 @@
   --catpur:#B681C2; --catpur-bg:#332A4A; --catpur-tx:#D7CBF5;
   --catgraph:#CDCDCD; --catgraph-bg:#3A3A3A; --catgraph-tx:#E0E0E0;
   --catgray:#5C5C5C; --catgray-bg:#323232; --catgray-tx:#A6A6A6;
-  --iblue:#74A6E0; --ipink:#E68AB5; --igreen:#7DC08F; --iamber:#D9AE55; --ired:#E58580;
+  --iblue:#74A6E0; --igreen:#7DC08F; --iamber:#D9AE55; --ired:#E58580;
 }
 *{box-sizing:border-box;margin:0}
 html,body{width:1440px;height:900px;overflow:hidden}
@@ -46,7 +46,6 @@ body{
 .sec.on{background:var(--panel);outline:1px solid var(--stroke)}
 .sec.off{color:var(--t2);opacity:.55}
 .sec .i{color:var(--iblue)}
-.sec.c-cal .i{color:var(--ipink)}
 .sec.off .i{color:var(--t2)}
 .tsep{width:1px;height:20px;background:var(--stroke);margin:0 8px}
 .tabs{display:flex;align-items:flex-end;gap:2px;height:100%;flex:1;min-width:0}
@@ -150,7 +149,7 @@ body{
 .inv{border:1px solid var(--stroke);border-radius:8px;padding:8px 14px;margin-bottom:8px;background:var(--panel)}
 .inv .ih{display:flex;align-items:center;gap:8px;margin-bottom:5px}
 .inv .ih .ttl{font-weight:600;font-size:13.5px}
-.inv .ih .i{color:var(--ipink)}
+.inv .ih .i{color:var(--iblue)}
 .inv .det{color:var(--t2);font-size:12.5px;line-height:18px}
 .inv .det b{color:var(--t1);font-weight:600}
 .day{display:flex;gap:10px;margin:6px 0 7px;align-items:stretch}
@@ -235,7 +234,7 @@ table.spec tr.total td{font-weight:600;background:var(--hover)}
 
 <!-- Заголовок окна: значок → разделы (Ctrl+1..4) → вкладки → шестерёнка → кнопки окна -->
 <div class="title">
-  <svg class="logo" viewBox="0 0 22 22"><rect x="1" y="3" width="20" height="4.2" rx="2.1" fill="#0067C0"/><rect x="1" y="9" width="20" height="4.2" rx="2.1" fill="#177CAA"/><rect x="1" y="15" width="13" height="4.2" rx="2.1" fill="#E4107F"/></svg>
+  <svg class="logo" viewBox="0 0 22 22"><rect x="1" y="3" width="20" height="4.2" rx="2.1" fill="#0067C0"/><rect x="1" y="9" width="20" height="4.2" rx="2.1" fill="#177CAA"/><rect x="1" y="15" width="13" height="4.2" rx="2.1" fill="#4E9AD0"/></svg>
   <div class="secs">
     <div class="sec on" title="Почта (Ctrl+1)"><svg class="i"><use href="#i-mail"/></svg></div>
     <div class="sec c-cal" title="Календарь (Ctrl+2)"><svg class="i"><use href="#i-cal"/></svg></div>
@@ -309,7 +308,7 @@ table.spec tr.total td{font-weight:600;background:var(--hover)}
       </div>
       <div class="msg">
         <div class="l1"><span class="from">Дмитрий Орлов</span><span class="time">пн 11:20</span></div>
-        <div class="l2"><svg class="i xs" style="color:var(--ipink)"><use href="#i-cal"/></svg><span class="subj">Ревью релиза: перенос на 16:00</span></div>
+        <div class="l2"><svg class="i xs" style="color:var(--iblue)"><use href="#i-cal"/></svg><span class="subj">Ревью релиза: перенос на 16:00</span></div>
       </div>
       <div class="msg">
         <div class="l1"><span class="from">Сервис-деск</span><span class="time">пн 09:12</span></div>
