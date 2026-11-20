@@ -1018,6 +1018,16 @@ SPA как PWA, паттерны mobile Outlook. Дизайн-эталон — D
 | mod-webmail-9 | WEB-09 (офлайн-кэш, очередь исходящих) | A | mod-webmail-4 | 4 |
 | mod-webmail-10 | WEB-10 (SAML 2.0 SP, после v1) | B | mod-webmail-2 | 4 |
 | mod-webmail-11 | WEB-11 (deploy: web/dist в образе, webmail-check образом, архив выпуска) | B | mod-webmail-1 | 4 |
+| mod-webmail-12 | WEB-12 (лимит JMAP-сессий, keyword-маски — межполосный PR) | B | mod-webmail-3 | 4 |
+| mod-webmail-13 | WEB-13 (полный планировщик, календари рядом/наложением) | A | mod-webmail-6 | 4 |
+| mod-webmail-14 | WEB-14 (настройки: vacation, правила Sieve, подпись) | A | mod-webmail-7 | 4 |
+| mod-webmail-15 | WEB-15 (общие ящики, «Взять в работу») | A | mod-webmail-3 | 4 |
+| mod-webmail-16 | WEB-16 (просмотр вложений, сохранить все, EML) | A | mod-webmail-4 | 4 |
+| mod-webmail-17 | WEB-17 (задачи, после v1) | B | v1 | 4 |
+
+Покрытие функций Postman матрицей паритета — `docs/design/webmail/PARITY.md` (по 170 позициям
+реестра: волна веб-клиента либо явное решение «не переносится»; решение владельца 21.11 о цветах:
+категория «Тендеры» — розовый из палитры DESIGN.md, один из цветов категорий, не специальный).
 
 ## Открытые вопросы
 
