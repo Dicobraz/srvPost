@@ -406,6 +406,7 @@ pub async fn check(
     }
     doctor_dns::check_with(cfg, dns, store.as_ref(), &doctor, cause, report).await;
     internal_keys(cfg, store.as_ref(), cause, report).await;
+    reply_keys(cfg, store.as_ref(), cause, report).await;
     internal_pki(cfg, SystemTime::now(), report).await;
     dav_well_known(cfg, report);
     admin_audit(cfg, store.as_ref(), cause, report).await;
@@ -1666,6 +1667,84 @@ async fn internal_key<F, Fut>(
     }
 }
 
+/// Ключи метки ответа (APP-77, SMTP-51; секция `smtp.reply.keys`): каждый ключ читается из хранилища секретов
+/// по `SecretRef` и достаточен для XChaCha20-Poly1305 (32 байта); активный в наборе один. Набор пуст —
+/// предупреждение: метки Message-ID и BATV не ставятся и не проверяются (признак «ответ на наше письмо» —
+/// только по хэшу Message-ID), BATV — режим журнала. `cause` — причина отказавшего хранилища секретов
+/// (FIX-10): отказ чтения ключа — `warn` с ней, не `fail` (узел работает на прочитанных секретах).
+pub async fn reply_keys(
+    cfg: &Config,
+    store: Option<&Arc<dyn SecretStore>>,
+    cause: Option<&str>,
+    report: &mut Report,
+) {
+    let id = "smtp.reply.keys";
+    let keys = match cfg.section::<tp_smtp::SmtpConfig>(crate::sections::SMTP) {
+        Ok(smtp) => smtp.reply.keys.clone(),
+        Err(_) => return,
+    };
+    if keys.is_empty() {
+        report.push(
+            id,
+            Status::Warn,
+            "нет".to_owned(),
+            "метки ответа не ставятся и не проверяются: признак «ответ на наше письмо» — только по хэшу \
+             Message-ID; BATV — режим журнала"
+                .to_owned(),
+        );
+        return;
+    }
+    let value = format!(
+        "{} ({})",
+        keys.len(),
+        keys.iter()
+            .map(|k| format!("{}{}", k.id, if k.active { "*" } else { "" }))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let Some(store) = store else {
+        report.push(
+            id,
+            Status::Skipped,
+            value,
+            "хранилище секретов не настроено",
+        );
+        return;
+    };
+    let mut short = Vec::new();
+    for key in &keys {
+        match store.get(&key.secret).await {
+            Ok(secret) => {
+                if secret.expose().as_bytes().len() < 32 {
+                    short.push(key.id.clone());
+                }
+            }
+            Err(e) => {
+                let (status, msg) = dependent(cause, &e, "чтение ключа метки ответа");
+                report.push(id, status, value, msg);
+                return;
+            }
+        }
+    }
+    if let Some(first) = short.pop() {
+        report.push(
+            id,
+            Status::Fail,
+            value,
+            format!("ключ {first}: не меньше 32 байт"),
+        );
+    } else if keys.iter().filter(|k| k.active).count() != 1 {
+        report.push(
+            id,
+            Status::Fail,
+            value,
+            "активный ключ в наборе должен быть один".to_owned(),
+        );
+    } else {
+        report.push(id, Status::Ok, value, "ключи меток читаются".to_owned());
+    }
+}
+
 /// Закрытые ключи внутренних каналов (APP-36) — по правилу `tls.key` (APP-35): ключ межузлового канала
 /// (`cluster.rpc.tls.key`; загрузка `NodeTls`, как при запуске) и ключ клиентского сертификата СУБД
 /// (`database.tls.key`) подходят к своим сертификатам. При ссылке на секрет файл `key_file` не читается; без
@@ -2192,6 +2271,104 @@ mod tests {
         ] {
             assert_eq!(locale_status(enc, ctype).0, Status::Fail, "{enc} {ctype}");
         }
+    }
+
+    /// APP-77: ключи метки ответа (`smtp.reply.keys`) — из хранилища секретов; без ключей — предупреждение
+    /// (метки не ставятся и не проверяются, BATV — режим журнала), короткий ключ и не один активный — отказ.
+    #[tokio::test]
+    async fn reply_keys_check() {
+        use tp_contracts::secrets::SecretRef;
+        use tp_testkit::MemSecretStore;
+
+        const BASE: &str = "domain: example.org\nprofile: dev\ndatabase:\n  url: postgres://x@y/z?sslmode=disable\n  tls: { allow_plaintext: true }\nblob:\n  url: file:///tmp/b\n";
+        let cfg = |extra: &str| {
+            sections::registry()
+                .expect("registry")
+                .parse(&format!("{BASE}{extra}"), Vec::new())
+                .expect("config")
+        };
+        async fn check(
+            cfg: &tp_platform::Config,
+            store: Option<Arc<dyn SecretStore>>,
+            cause: Option<&str>,
+        ) -> Report {
+            let mut report = Report::default();
+            reply_keys(cfg, store.as_ref(), cause, &mut report).await;
+            report
+        }
+
+        // Набор пуст — предупреждение: метки не ставятся и не проверяются, BATV — режим журнала.
+        let report = check(
+            &cfg(""),
+            Some(Arc::new(MemSecretStore::default()) as Arc<dyn SecretStore>),
+            None,
+        )
+        .await;
+        let keys = report.get("smtp.reply.keys").expect("smtp.reply.keys");
+        assert_eq!(keys.status, Status::Warn, "{report:?}");
+        assert!(keys.message.contains("BATV"), "{}", keys.message);
+
+        // Ключ читается и достаточен — OK.
+        let store = Arc::new(MemSecretStore::default());
+        store.set(
+            &SecretRef::new("thepost/reply", "k1").expect("ref"),
+            "a".repeat(32),
+        );
+        let section = "smtp:\n  reply:\n    keys:\n      - id: k1\n        secret: { secret: \"thepost/reply#k1\" }\n        active: true\n";
+        let report = check(
+            &cfg(section),
+            Some(store.clone() as Arc<dyn SecretStore>),
+            None,
+        )
+        .await;
+        assert_eq!(
+            report.get("smtp.reply.keys").map(|c| c.status),
+            Some(Status::Ok),
+            "{report:?}"
+        );
+
+        // Хранилище секретов недоступно (причина уже известна) — предупреждение с ней, не отказ (FIX-10).
+        store.fail_next(Error::UNAVAILABLE);
+        let report = check(
+            &cfg(section),
+            Some(store.clone() as Arc<dyn SecretStore>),
+            Some("secrets.login: проверка не успела"),
+        )
+        .await;
+        let keys = report.get("smtp.reply.keys").expect("smtp.reply.keys");
+        assert_eq!(keys.status, Status::Warn, "{report:?}");
+        assert!(
+            keys.message.contains("хранилище секретов"),
+            "{}",
+            keys.message
+        );
+
+        // Ключ короче 32 байт — отказ.
+        store.set(
+            &SecretRef::new("thepost/reply", "short").expect("ref"),
+            "a".repeat(16),
+        );
+        let short = "smtp:\n  reply:\n    keys:\n      - id: short\n        secret: { secret: \"thepost/reply#short\" }\n        active: true\n";
+        let report = check(
+            &cfg(short),
+            Some(store.clone() as Arc<dyn SecretStore>),
+            None,
+        )
+        .await;
+        let keys = report.get("smtp.reply.keys").expect("smtp.reply.keys");
+        assert_eq!(keys.status, Status::Fail, "{report:?}");
+        assert!(keys.message.contains("32 байт"), "{}", keys.message);
+
+        // Активного нет — отказ: подписывать метки нечем.
+        store.set(
+            &SecretRef::new("thepost/reply", "k2").expect("ref"),
+            "b".repeat(32),
+        );
+        let no_active = "smtp:\n  reply:\n    keys:\n      - id: k1\n        secret: { secret: \"thepost/reply#k1\" }\n      - id: k2\n        secret: { secret: \"thepost/reply#k2\" }\n";
+        let report = check(&cfg(no_active), Some(store as Arc<dyn SecretStore>), None).await;
+        let keys = report.get("smtp.reply.keys").expect("smtp.reply.keys");
+        assert_eq!(keys.status, Status::Fail, "{report:?}");
+        assert!(keys.message.contains("активный"), "{}", keys.message);
     }
 
     /// APP-29: `/.well-known/caldav` и `carddav` ведут на `/dav/` — по `jmap.autoconfig` и слушателям `http`.

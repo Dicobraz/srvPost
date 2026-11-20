@@ -53,7 +53,7 @@ use crate::modules;
 use crate::protocols::{
     Bound, HttpRole, ImapRole, InProcessRole, IndexerRole, LogPause, SmtpRole, Sockets,
 };
-use crate::roles::{ItipPurge, Maintenance, PendingRole, Purge, ScheduledVerify};
+use crate::roles::{ItipPurge, Maintenance, PendingRole, Purge, ScheduledVerify, ThreadBinder};
 use crate::secrets;
 use crate::sections::{self, BLOB, BlobSection, CLUSTER, ClusterSection, HttpSection};
 use crate::services::{Base, EdgeServices, Services};
@@ -227,7 +227,13 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
     let bus = bus.bus;
     let meta = PgMeta::new(pool, meta_cfg).with_bus(bus.clone());
 
-    let ext = modules::activate_of(&cfg, &migrations, modules).await?;
+    let mut ext = modules::activate_of(&cfg, &migrations, modules).await?;
+    // Удержание беседы целиком (APP-77, решение 125 е, CTR-94): окончательное удаление письма удержанной
+    // беседы запрещает хук базовой поставки над `ThreadStore` узла (`PgMeta`, META-86) — тот же, что у
+    // приёма, JMAP и Admin API; модуль «Соответствие требованиям» ставит свой хук после него.
+    ext.add_decision_hook(Arc::new(tp_contracts::thread::ThreadHoldHook::new(
+        Arc::new(meta.clone()) as Arc<dyn tp_contracts::thread::ThreadStore>,
+    )))?;
     let store = ext.secret_store().unwrap_or(store);
     // Учёт BLOB роли maintenance — по всем шардам справочника (FIX-04): GC, «сироты» и сверка не удалят объект, на
     // который ссылается только другой шард. Кэш справочника сбрасывают `ShardsChanged`, `ConfigReloaded`, `Resync`;
@@ -343,6 +349,13 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         services.dkim.clone(),
         aux.clone(),
     ));
+    // Ротация ключей метки ответа без перезапуска (APP-77, SMTP-51): активный подписывает новые метки,
+    // прежние проверяют до конца срока меток.
+    tokio::spawn(apply_reply(
+        reloader.subscribe(),
+        services.reply.clone(),
+        aux.clone(),
+    ));
     // Лимиты частоты и доверенные подсети `ratelimit` без перезапуска (PLT-32).
     tokio::spawn(
         services
@@ -448,6 +461,9 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
             meta: meta.clone(),
             interval: maintenance_cfg.purge_interval,
             admin_token_retention: maintenance_cfg.admin_token_retention,
+            // Записи об отправленном старше `smtp.reply.max_age` (APP-77, SMTP-51) — признак ответа по
+            // записи старше срока не выдаётся.
+            sent_max_age: smtp_reply_max_age(&cfg),
             probe: {
                 let mail = services.mail.clone();
                 crate::metrics::register_purge(&metrics, move || mail.trash_stats())
@@ -471,6 +487,13 @@ async fn start_data(started: Started, shutdown: CancellationToken) -> Result<Run
         audit_export: Some(audit_export),
         card_reindex: Some(meta.clone()),
         gal: Some(gal),
+        // Фоновая привязка существующих писем к беседам по `thread_key` (APP-77, META-86): письма, принятые
+        // до включения привязки и положенные клиентом (APPEND), — порциями, без простоя.
+        threads: Some(ThreadBinder {
+            meta: meta.clone(),
+            tenant: services.tenant,
+            interval: maintenance_cfg.purge_interval,
+        }),
     };
     let mut setup = RoleSetup {
         cfg: &cfg,
@@ -900,6 +923,34 @@ async fn apply_dkim(
             Err(e) => tracing::warn!(error = %e, "секция smtp.dkim не применена"),
         }
     }
+}
+
+/// Ключи метки ответа из перечитанной секции `smtp.reply` (APP-77, SMTP-51 — без перезапуска): активный
+/// подписывает новые метки, прежние проверяют до конца срока меток.
+async fn apply_reply(
+    mut rx: tokio::sync::watch::Receiver<Arc<Config>>,
+    marks: Arc<tp_smtp::reply::ReplyMarks>,
+    shutdown: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            changed = rx.changed() => if changed.is_err() { return },
+        }
+        let section = rx.borrow_and_update().section::<SmtpConfig>(sections::SMTP);
+        match section {
+            Ok(smtp) => marks.update(smtp.reply.clone()),
+            Err(e) => tracing::warn!(error = %e, "секция smtp.reply не применена"),
+        }
+    }
+}
+
+/// Срок хранения записи об отправленном (`smtp.reply.max_age`, APP-77): очистка роли maintenance удаляет
+/// записи старше него; секция не читается — умолчание `smtp.reply` (30 суток).
+fn smtp_reply_max_age(cfg: &Config) -> Duration {
+    cfg.section::<SmtpConfig>(sections::SMTP)
+        .map(|smtp| smtp.reply.max_age)
+        .unwrap_or_else(|_| tp_smtp::config::ReplyConfig::default().max_age)
 }
 
 /// Срок и размер кэша политики доверия из перечитанной секции `trust` (APP-76, SRS 5.5 — без перезапуска).

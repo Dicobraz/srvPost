@@ -113,6 +113,9 @@ pub struct Maintenance {
     /// Заполнение книги GAL «Организация» из каталога — LDAP или PostgreSQL (`maintenance.gal_interval`, APP-49,
     /// APP-51); `None` — не выполняется (тесты без PostgreSQL).
     pub gal: Option<Arc<crate::gal::GalSync>>,
+    /// Фоновая привязка существующих писем к беседам по `thread_key` (APP-77, META-86); `None` — не
+    /// выполняется (тесты без PostgreSQL).
+    pub threads: Option<ThreadBinder>,
 }
 
 /// Показатели проверки целостности BLOB по расписанию для `/metrics` (`crate::metrics::register_verify`).
@@ -312,19 +315,23 @@ impl ScheduledVerify {
 /// Очистка по сроку в роли maintenance (APP-32, APP-39): надгробия DAV старше `meta.dav.tombstone_ttl`, записи
 /// журнала автоответов старше `meta.sieve.vacation_log_ttl`, журнал доставки старше `meta.delivery.retention`,
 /// завершённые и отменённые отправки JMAP старше `meta.submissions.retention`, аудит ящиков старше
-/// `meta.mailbox_audit.retention` — сроки знает [`PgMeta`]; токены `admin init`, истёкшие раньше `maintenance.admin_token_retention` назад;
-/// применённые сервером сообщения входящих планирования старше `dav.schedule_processed_ttl` ([`ItipPurge`], APP-53).
-/// Удаление по сроку идемпотентно, повтор удаляет только оставшееся: как и истечение корзины, работает на каждом
-/// узле с ролью без лизы.
+/// `meta.mailbox_audit.retention`, записи об отправленных письмах старше `smtp.reply.max_age`
+/// (`SentLog::purge_before`, APP-77) — сроки знает [`PgMeta`]; токены `admin init`, истёкшие раньше
+/// `maintenance.admin_token_retention` назад; применённые сервером сообщения входящих планирования старше
+/// `dav.schedule_processed_ttl` ([`ItipPurge`], APP-53). Удаление по сроку идемпотентно, повтор удаляет только
+/// оставшееся: как и истечение корзины, работает на каждом узле с ролью без лизы.
 #[derive(Clone)]
 pub struct Purge {
     /// Метаданные: шаги `purge_dav_tombstones`, `purge_vacation_log`, `purge_expired_delivery`,
-    /// `expire_old_submissions`, `purge_expired_mailbox_audit` и `LocalAdminTokens::prune`.
+    /// `expire_old_submissions`, `purge_expired_mailbox_audit`, `purge_sent_log` и `LocalAdminTokens::prune`.
     pub meta: PgMeta,
     /// Период (`maintenance.purge_interval`); первый проход — при запуске роли.
     pub interval: Duration,
     /// Срок хранения токенов `admin init` после истечения (`maintenance.admin_token_retention`).
     pub admin_token_retention: Duration,
+    /// Срок хранения записи об отправленном (`smtp.reply.max_age`, SMTP-51): старше — `purge_sent_log`
+    /// (APP-77); признак ответа по записи старше срока не выдаётся.
+    pub sent_max_age: Duration,
     /// Показатели шагов для `/metrics` (`crate::metrics::register_purge`, APP-52).
     pub probe: PurgeProbe,
     /// Очистка входящих планирования (DAV-32, APP-53); `None` — шага нет (`dav.schedule_keep_processed: false`:
@@ -388,6 +395,93 @@ impl ItipPurge {
     }
 }
 
+/// Фоновая привязка существующих писем к беседам в роли maintenance (APP-77, META-86): письма, принятые до
+/// включения привязки, и положенные клиентом (APPEND, черновики) связываются в беседы по `thread_key`
+/// `MessageMeta` ([`PgMeta::bind_unthreaded_messages`]) порциями, без простоя — приём писем не блокируется.
+/// Первый проход — при запуске роли, затем с периодом [`ThreadBinder::interval`] (`maintenance.purge_interval`):
+/// узел с ролью обслуживает ящики и после перезапуска дообрабатывает оставшееся; привязка идемпотентна,
+/// работает на каждом узле с ролью без лизы.
+#[derive(Clone)]
+pub struct ThreadBinder {
+    /// Хранилище бесед (`PgMeta`): порция фоновой привязки по `thread_key`.
+    pub meta: PgMeta,
+    /// Организация узла.
+    pub tenant: TenantId,
+    /// Период проходов; уже привязанное письмо не переносится (привязка неизменяема, RFC 8621 §3).
+    pub interval: Duration,
+}
+
+/// Учётных записей в одной странице обхода [`ThreadBinder`].
+const BIND_PAGE: usize = 500;
+
+impl ThreadBinder {
+    /// Один проход: учётные записи организации страницами [`BIND_PAGE`], у каждой — порции фоновой привязки
+    /// до нуля; ошибка одной учётной записи — в журнал, обход продолжается, итог прохода — первая ошибка
+    /// (повтор — в следующий проход).
+    pub async fn step(&self) -> Result<()> {
+        let mut failed = None;
+        let mut after: Option<String> = None;
+        loop {
+            let page = AccountStore::list(&self.meta, self.tenant, "", after.as_deref(), BIND_PAGE)
+                .await?;
+            for account in &page {
+                let scope = AccountScope {
+                    tenant: self.tenant,
+                    account: account.id,
+                };
+                loop {
+                    match self.meta.bind_unthreaded_messages(scope, 500).await {
+                        Ok(0) => break,
+                        Ok(bound) => tracing::debug!(
+                            account = %account.id,
+                            bound,
+                            "фон связал письма с беседами"
+                        ),
+                        Err(e) => {
+                            tracing::warn!(
+                                account = %account.id,
+                                error = %e,
+                                "существующие письма не привязаны к беседам: повтор в следующий проход"
+                            );
+                            failed.get_or_insert(e);
+                            break;
+                        }
+                    }
+                }
+            }
+            match page.last() {
+                Some(last) if page.len() == BIND_PAGE => {
+                    after = Some(last.login.to_lowercase());
+                }
+                _ => break,
+            }
+        }
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Проходы с периодом [`ThreadBinder::interval`] до остановки; остановка прерывает и идущий проход
+    /// (незавершённая порция откатывается, следующий запуск продолжит с необработанного письма).
+    pub async fn run(self, shutdown: CancellationToken) {
+        let mut tick = tokio::time::interval(self.interval.max(Duration::from_millis(1)));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                _ = tick.tick() => {}
+            }
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                done = self.step() => if let Err(e) = done {
+                    tracing::warn!(error = %e, "проход привязки бесед не завершён");
+                }
+            }
+        }
+    }
+}
+
 /// Итог шага очистки: число удалённых записей (`None` — журнал удаляется секциями по суткам, числа нет) или ошибка.
 pub type PurgeOutcome<'a> = std::result::Result<Option<u64>, &'a tp_contracts::Error>;
 
@@ -404,6 +498,8 @@ pub struct Purged {
     pub submissions: Result<u64>,
     /// Аудит ящиков: удаляется секциями по суткам, числа записей нет.
     pub mailbox_audit: Result<()>,
+    /// Записи об отправленных письмах (`SentLog::purge_before`, APP-77).
+    pub sent_log: Result<u64>,
     /// Токены `admin init`.
     pub admin_tokens: Result<u64>,
     /// Применённые сообщения входящих планирования ([`ItipPurge`]); `None` — шага нет.
@@ -412,12 +508,13 @@ pub struct Purged {
 
 impl Purged {
     /// Шаги прохода — значения метки `step` показателей [`PurgeProbe`], в порядке [`Purged::steps`].
-    pub const STEPS: [&'static str; 7] = [
+    pub const STEPS: [&'static str; 8] = [
         "purge_dav_tombstones",
         "purge_vacation_log",
         "purge_expired_delivery",
         "expire_old_submissions",
         "purge_expired_mailbox_audit",
+        "purge_sent_log",
         "prune_admin_tokens",
         "purge_processed_itip",
     ];
@@ -430,13 +527,23 @@ impl Purged {
         fn sections(r: &Result<()>) -> PurgeOutcome<'_> {
             r.as_ref().map(|()| None)
         }
-        let [dav, vacation, delivery, submissions, audit, tokens, itip] = Self::STEPS;
+        let [
+            dav,
+            vacation,
+            delivery,
+            submissions,
+            audit,
+            sent_log,
+            tokens,
+            itip,
+        ] = Self::STEPS;
         let mut steps = vec![
             (dav, counted(&self.dav_tombstones)),
             (vacation, counted(&self.vacation_log)),
             (delivery, sections(&self.delivery_log)),
             (submissions, counted(&self.submissions)),
             (audit, sections(&self.mailbox_audit)),
+            (sent_log, counted(&self.sent_log)),
             (tokens, counted(&self.admin_tokens)),
         ];
         steps.extend(self.itip_processed.as_ref().map(|r| (itip, counted(r))));
@@ -508,6 +615,7 @@ impl Purge {
             delivery_log: self.meta.purge_expired_delivery().await,
             submissions: self.meta.expire_old_submissions().await,
             mailbox_audit: self.meta.purge_expired_mailbox_audit().await,
+            sent_log: self.purge_sent_log().await,
             admin_tokens: self.prune_admin_tokens().await,
             itip_processed: match &self.itip {
                 Some(itip) => Some(itip.step(&self.meta).await),
@@ -543,6 +651,20 @@ impl Purge {
             tp_contracts::Error::invalid("maintenance.admin_token_retention вне диапазона")
         })?;
         LocalAdminTokens::prune(&self.meta, before).await
+    }
+
+    /// Удаляет записи об отправленных письмах старше `smtp.reply.max_age` ([`Purge::sent_max_age`]) по всем
+    /// организациям (APP-77, SMTP-51): признак «ответ на наше письмо» по записи старше срока не выдаётся,
+    /// срок хранения — не меньше `smtp.reply.max_age`.
+    async fn purge_sent_log(&self) -> Result<u64> {
+        let now = (system_now())();
+        let before = match TryFrom::try_from(self.sent_max_age) {
+            Ok(age) => now.checked_sub(age),
+            Err(_) => None,
+        }
+        .ok_or_else(|| tp_contracts::Error::invalid("smtp.reply.max_age вне диапазона"))?;
+        let purged = tp_contracts::reply::SentLog::purge_before(&self.meta, before).await?;
+        Ok(purged as u64)
     }
 
     /// Проходы с периодом [`Purge::interval`] до остановки; остановка прерывает и идущий проход (незавершённая
@@ -676,6 +798,12 @@ impl RoleService for Maintenance {
             let token = ctx.shutdown.clone();
             tokio::spawn(async move { gal.run(token).await })
         });
+        // Фоновая привязка существующих писем к беседам (APP-77): первый проход при запуске, затем по периоду;
+        // на каждом узле с ролью без лизы (привязка идемпотентна, уже привязанное не переносится).
+        let threads = self.threads.clone().map(|threads| {
+            let token = ctx.shutdown.clone();
+            tokio::spawn(async move { threads.run(token).await })
+        });
         ctx.ready.set(true);
         let gal = async move {
             match gal {
@@ -719,7 +847,13 @@ impl RoleService for Maintenance {
                 None => Ok(()),
             }
         };
-        let (gc, orphans, trash, disabled, purge, verify, audit_export, card_reindex, gal, ()) = tokio::join!(
+        let threads = async move {
+            match threads {
+                Some(task) => task.await,
+                None => Ok(()),
+            }
+        };
+        let (
             gc,
             orphans,
             trash,
@@ -729,6 +863,19 @@ impl RoleService for Maintenance {
             audit_export,
             card_reindex,
             gal,
+            threads,
+            (),
+        ) = tokio::join!(
+            gc,
+            orphans,
+            trash,
+            disabled,
+            purge,
+            verify,
+            audit_export,
+            card_reindex,
+            gal,
+            threads,
             consume(
                 self.events.clone(),
                 self.sinks.clone(),
@@ -746,6 +893,7 @@ impl RoleService for Maintenance {
             ("audit-export", audit_export),
             ("card-reindex", card_reindex),
             ("gal", gal),
+            ("thread-bind", threads),
         ] {
             if let Err(e) = done {
                 return Err(tp_contracts::Error::Internal(format!("{what}: {e}")));
@@ -957,6 +1105,7 @@ mod tests {
             audit_export: None,
             card_reindex: None,
             gal: None,
+            threads: None,
         };
         let (ctx, shutdown, ready) = ctx();
         let task = tokio::spawn(async move { role.run(ctx).await });
@@ -1091,6 +1240,7 @@ mod tests {
             audit_export: None,
             card_reindex: None,
             gal: None,
+            threads: None,
         };
         let (ctx, shutdown, _ready) = ctx();
         let task = tokio::spawn(async move { role.run(ctx).await });
@@ -1291,10 +1441,42 @@ mod tests {
         };
         assert_eq!(token_ids().await.len(), 3);
 
+        // APP-77: записи об отправленном старше `smtp.reply.max_age` (30 сут) — шаг `purge_sent_log`
+        // удаляет, свежая на месте (признак ответа по старой записи не выдаётся).
+        use tp_contracts::reply::{MessageIdHash, SentLog, SentRecord};
+        let sent = |id: u8, at| {
+            let meta = meta.clone();
+            async move {
+                SentLog::record(
+                    &meta,
+                    SentRecord {
+                        tenant,
+                        account: account.id,
+                        tag: vec![id; 16],
+                        message_id_hash: MessageIdHash([id; 32]),
+                        recipients: vec!["peer@partner.example".to_owned()],
+                        thread: None,
+                        sent_at: at,
+                    },
+                )
+                .await
+                .expect("sent record");
+            }
+        };
+        sent(1, now - 40 * day).await;
+        sent(2, now).await;
+        assert!(
+            SentLog::by_tag(&meta, tenant, &[1u8; 16])
+                .await
+                .expect("by_tag")
+                .is_some()
+        );
+
         let purge = Purge {
             meta: meta.clone(),
             interval: Duration::from_secs(3600),
             admin_token_retention: 30 * day,
+            sent_max_age: 30 * day,
             probe: PurgeProbe::new(),
             itip: None,
         };
@@ -1307,7 +1489,22 @@ mod tests {
         assert_eq!(done.dav_tombstones.expect("dav"), 1);
         assert_eq!(done.vacation_log.expect("vacation"), 1);
         done.delivery_log.expect("delivery");
+        assert_eq!(done.sent_log.expect("sent_log"), 1);
         assert_eq!(done.admin_tokens.expect("tokens"), 1);
+        assert!(
+            SentLog::by_tag(&meta, tenant, &[1u8; 16])
+                .await
+                .expect("by_tag")
+                .is_none(),
+            "старая запись об отправленном удалена"
+        );
+        assert!(
+            SentLog::by_tag(&meta, tenant, &[2u8; 16])
+                .await
+                .expect("by_tag")
+                .is_some(),
+            "свежая запись об отправленном на месте"
+        );
         assert_eq!(
             delivery_senders().await,
             ["fresh@example.net"],
@@ -1366,6 +1563,7 @@ mod tests {
             audit_export: None,
             card_reindex: None,
             gal: None,
+            threads: None,
         };
         let (ctx, shutdown, _ready) = ctx();
         let task = tokio::spawn(async move { role.run(ctx).await });
