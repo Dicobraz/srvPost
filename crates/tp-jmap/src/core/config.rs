@@ -50,7 +50,7 @@ pub struct JmapConfig {
     /// не принимает (`urn:ietf:params:jmap:error:limit`, `maxSessionsPerAccount` — как делают Exchange
     /// и Gmail, активные не вытесняются); `0` — без лимита. Мотивация — WEB-03: веб-клиент держит одно
     /// соединение push на пользователя, но чужие клиенты (Postman, Thunderbird) легальны — сервер
-    /// ограничивает честно и настраиваемо (защита от чужих клиентов и инцидентов).
+    /// ограничивает честно и настраиваемо (защита от чужих клиентов и инцидентов). По умолчанию 10 — как у Gmail IMAP (10 параллельных соединений на пользователя), решение владельца 21.11 по PR #297.
     pub session_limit: u32,
     /// Окно активности HTTP-сессии (WEB-12): сессия без запросов дольше окна освобождает слот —
     /// окно же определяет, когда упавший клиент перестаёт занимать лимит.
@@ -212,7 +212,7 @@ impl Default for JmapConfig {
             query_candidates_max: 256,
             header_window: 262_144,
             max_submission_recipients: 100,
-            session_limit: 20,
+            session_limit: 10,
             session_window: Duration::from_secs(5 * 60),
             push_min_ping: Duration::from_secs(10),
             upload_ttl: Duration::from_secs(7 * 24 * 3600),
