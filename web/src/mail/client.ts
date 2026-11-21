@@ -23,4 +23,11 @@ export const keys = {
   email: (id: string) => ["email", id] as const,
   thread: (id: string) => ["thread", id] as const,
   full: (id: string) => ["full", id] as const,
+  // --- WEB-06: календарь ---
+  calendars: () => ["calendars"] as const,
+  calendarEvents: (after: string, before: string) => ["calendar-events", after, before] as const,
+  directory: (type: string) => ["directory", type] as const,
+  busy: (principalId: string, after: string, before: string) =>
+    ["busy", principalId, after, before] as const,
+  selfPrincipal: () => ["self-principal"] as const,
 };

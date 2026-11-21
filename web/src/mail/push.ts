@@ -208,8 +208,14 @@ export class PushHub {
     }
     this.ws = ws;
     ws.onopen = () => {
-      // RFC 8887 §2: включение push — не Request, отдельный тип сообщения.
-      ws.send(JSON.stringify({ "@type": "WebSocketPushEnable", dataTypes: ["Email", "Thread", "Mailbox"] }));
+      // RFC 8887 §2: включение push — не Request, отдельный тип сообщения. Календарь (WEB-06):
+      // сервер неизвестные типы игнорирует (без календарей состояния этих типов не приходят).
+      ws.send(
+        JSON.stringify({
+          "@type": "WebSocketPushEnable",
+          dataTypes: ["Email", "Thread", "Mailbox", "Calendar", "CalendarEvent", "CalendarEventNotification"],
+        }),
+      );
       this.transport = null;
       this.status = "live";
       this.backoffMs = BACKOFF_BASE_MS;
@@ -227,9 +233,10 @@ export class PushHub {
   }
 
   private openEventSource(eventSourceUrl: string, accessToken: string): void {
-    // Шаблон eventSourceUrl (RFC 8620 §7.3): типы почты, поток держим открытым, ping раз в 4 минуты.
+    // Шаблон eventSourceUrl (RFC 8620 §7.3): типы почты и календаря (WEB-06), поток держим
+    // открытым, ping раз в 4 минуты.
     const url = eventSourceUrl
-      .replace("{types}", "Email,Thread,Mailbox")
+      .replace("{types}", "Email,Thread,Mailbox,Calendar,CalendarEvent,CalendarEventNotification")
       .replace("{closeafter}", "no")
       .replace("{ping}", "240");
     const full = `${url}${url.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(accessToken)}`;
