@@ -33,8 +33,13 @@ use tp_contracts::{Error, Result};
 const MAIL: &str = "/mail/";
 
 /// Политика содержимого: только свой источник. Встроенные стили — для CSS клиента, `data:` — значки и шрифты.
+/// `media-src`/`frame-src` c `blob:` — просмотрщик вложений (WEB-16): PDF/видео/аудио рендерятся
+/// из блобов, созданных самим приложением (октеты получены fetch'ем с Authorization и жёстким MIME);
+/// `sandbox` на этих iframe отключает плагины и рендер PDF (whatwg/html#3958) — потому без него,
+/// стороннего содержимого в блобах нет (HTML-вложения не рендерятся как HTML вовсе).
 const CSP_HEAD: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-                        img-src 'self' data:; font-src 'self' data:; connect-src 'self'";
+                        img-src 'self' data:; font-src 'self' data:; connect-src 'self'; \
+                        media-src 'self' blob:; frame-src 'self' blob:";
 const CSP_TAIL: &str =
     "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
@@ -486,6 +491,9 @@ mod tests {
             let csp = h[header::CONTENT_SECURITY_POLICY].to_str().expect("csp");
             assert!(csp.starts_with("default-src 'self'; script-src 'self';"));
             assert!(csp.contains("connect-src 'self' https://idp.example.org;"));
+            // Просмотрщик вложений (WEB-16): blob: только в media/frame (PDF/видео из своих блобов).
+            assert!(csp.contains("media-src 'self' blob:"));
+            assert!(csp.contains("frame-src 'self' blob:"));
             assert!(csp.contains("frame-ancestors 'none'"));
             assert!(!csp.contains("http://") && !csp.contains('*'));
             assert_eq!(h[header::X_FRAME_OPTIONS], "DENY");
