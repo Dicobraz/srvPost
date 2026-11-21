@@ -6,6 +6,8 @@
   Клавиши — по event.code: физические, раскладка RU/EN не мешает (буквы — Key*).
   Голые j/k — навигация (схема «Одиночные клавиши» Postman, удобнее на ноутбуке).
   F6 — фокус-роум по трём панелям (дерево → список → чтение).
+  WEB-05: Ctrl+K — палитра команд (palette.*), F3/Shift+F3 — совпадения поиска в открытом письме
+  (работают и в полях ввода — как в Postman).
 */
 
 /** Действия почты, привязанные к клавишам (страница передаёт замыкания). */
@@ -31,6 +33,11 @@ export interface MailHotkeyActions {
   focusFolders(): void;
   /** Закрыть чтение/свернуть поток (Esc). */
   escape(): void;
+  /** Палитра команд и писем (Ctrl+K, WEB-05). */
+  openPalette(): void;
+  /** Совпадения поиска в открытом письме: следующее/предыдущее (F3/Shift+F3, WEB-05). */
+  findNext(): void;
+  findPrev(): void;
 }
 
 /** Поле ввода: буквы и цифры там остаются вводу (Ctrl-команды действуют и там). */
@@ -70,6 +77,10 @@ export function handleMailKeydown(event: KeyboardEvent, actions: MailHotkeyActio
         event.preventDefault();
         actions.compose();
         return true;
+      case "KeyK":
+        event.preventDefault();
+        actions.openPalette();
+        return true;
       case "KeyY":
         event.preventDefault();
         actions.focusFolders();
@@ -90,6 +101,15 @@ export function handleMailKeydown(event: KeyboardEvent, actions: MailHotkeyActio
     }
   }
   if (alt) return false;
+
+  // F3/Shift+F3 — совпадения в открытом письме: и в поле ввода тоже (поиск в Postman работает,
+  // пока пользователь не снял фокус с поля). Остальные голые клавиши в поле остаются вводу.
+  if (code === "F3") {
+    event.preventDefault();
+    if (event.shiftKey) actions.findPrev();
+    else actions.findNext();
+    return true;
+  }
 
   // В поле ввода голые клавиши остаются вводу.
   if (isTypingTarget(event.target)) return false;
@@ -145,6 +165,7 @@ export function handleMailKeydown(event: KeyboardEvent, actions: MailHotkeyActio
 /** Подсказка клавиш для строки состояния и подсказок (таблица PARITY.md). */
 export const KEYMAP_HINTS: Array<{ keys: string; action: string }> = [
   { keys: "Ctrl+N", action: "Новое письмо" },
+  { keys: "Ctrl+K", action: "Палитра команд" },
   { keys: "Ctrl+R / Ctrl+Shift+R", action: "Ответить / всем" },
   { keys: "Ctrl+F", action: "Переслать" },
   { keys: "Ctrl+Q / Ctrl+U", action: "Прочитано / непрочитано" },
@@ -152,6 +173,7 @@ export const KEYMAP_HINTS: Array<{ keys: string; action: string }> = [
   { keys: "1–9", action: "Категория" },
   { keys: "J / K или ↓ / ↑", action: "По списку" },
   { keys: "Enter", action: "Открыть письмо" },
+  { keys: "F3 / Shift+F3", action: "Совпадения в письме" },
   { keys: "F6", action: "Между панелями" },
   { keys: "Ctrl+Y", action: "К дереву папок" },
   { keys: "Esc", action: "Свернуть / закрыть" },

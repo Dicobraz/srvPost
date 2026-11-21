@@ -1,16 +1,22 @@
 /*
-  Раздел «Почта» (WEB-03/04) — ядро веб-почты: три-панель по макету docs/design/webmail/01
+  Раздел «Почта» (WEB-03/04/05) — ядро веб-почты: три-панель по макету docs/design/webmail/01
   (папки | список | чтение), потоки (группировка — по умолчанию), быстрые фильтры, перетаскивание,
   контекстные меню (без модалок — inline-подтверждения), тосты с Undo (undo-send — WEB-04),
   one-modifier хоткеи (keymap.ts). Данные — JMAP через mail/queries.ts; push — mail/push.ts
   (одно соединение на пользователя, лидер вкладок). Композер — вкладка /compose (WEB-04, макет 02):
   новое письмо, ответ/ответ всем/пересылка, черновик — «Изменить черновик» в контекст-меню.
+  WEB-05 — поиск: строка в шапке с debounce 300 мс (FTS сервера: морфология, «ё», поля
+  from:/кому:/тема:/тело:, транслитерация раскладки — keyboard-map.ts), чипы области над
+  результатами (PARITY search.*), уточнения кликом (отправитель/папка/период/категория),
+  сниппеты совпадений (SearchSnippet/get), сохранённые фильтры (search.save_filter) рядом
+  под быстрыми, F3/Shift+F3 — совпадения в открытом письме (highlight.ts), палитра команд
+  Ctrl+K (palette.tsx) — команды и письма одним вводом.
 */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 
-import { mailboxSet, type EmailSummary, type Mailbox } from "../api/jmap";
+import { mailboxSet, type EmailSummary, type Mailbox, type SearchSnippet } from "../api/jmap";
 import { useJmap, useJmapReady, usePushHub } from "../mail/context";
 import { keys, queryClient } from "../mail/client";
 import {
@@ -30,11 +36,37 @@ import { CATEGORIES, categoryByNumber, categoriesOf, type QuickFilterKind } from
 import { handleMailKeydown, KEYMAP_HINTS, type MailHotkeyActions } from "../mail/keymap";
 import { FLAGGED_FOLDER, FolderTree } from "../mail/folder-tree";
 import { MessageList, useQuickCounts, type ListRow } from "../mail/message-list";
-import { ReadingPane } from "../mail/reading-pane";
+import { ReadingPane, type MatchState } from "../mail/reading-pane";
 import { ContextMenu, type MenuState, type MenuItem } from "../mail/context-menu";
+import { CommandPalette, type PaletteCommand } from "../mail/palette";
+import { isHlState, sendHlCommand } from "../mail/highlight";
+import {
+  EMPTY_SEARCH,
+  highlightTerms,
+  isSearchActive,
+  monthPeriod,
+  type SearchRefinement,
+  type SearchScope,
+} from "../mail/search";
+import {
+  applySavedFilter,
+  loadSavedFilters,
+  removeSavedFilter,
+  saveFilter,
+  type SavedFilter,
+} from "../mail/saved-filters";
 import { Icon } from "../mail/icons";
 import { useToast } from "../mail/toast";
-import { loadDensity, loadThreadView, saveDensity, saveThreadView, type Density, type ThreadView } from "../mail/settings";
+import {
+  loadDensity,
+  loadThreadView,
+  loadTranslit,
+  saveDensity,
+  saveThreadView,
+  saveTranslit,
+  type Density,
+  type ThreadView,
+} from "../mail/settings";
 import { allowImagesForDomain, areImagesAllowedFor } from "../mail/sanitize";
 
 /** Раздел «Почта»: заставка/ошибка сессии, затем приложение. */
@@ -86,7 +118,20 @@ function MailApp() {
   const [quick, setQuick] = useState<QuickFilterKind | null>(null);
   const [filters, setFilters] = useState({ unread: false, attachment: false });
   const [sort, setSort] = useState<WindowArgs["sort"]>("date-desc");
-  const [search, setSearch] = useState("");
+  // Поиск (WEB-05): ввод в поле — сразу, запрос — после debounce 300 мс; чипы области,
+  // уточнения кликом и сохранённые фильтры — как в Postman (PARITY search.*).
+  const [searchInput, setSearchInput] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [scope, setScope] = useState<SearchScope>("all");
+  const [recent30, setRecent30] = useState(false);
+  const [refinements, setRefinements] = useState<SearchRefinement[]>([]);
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(loadSavedFilters);
+  const [savingName, setSavingName] = useState<string | null>(null);
+  const [translit, setTranslit] = useState<boolean>(loadTranslit);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // Подсветка письма (hl-state из iframe) — привязана к письму: смена выделения сама
+  // убирает счётчик прошлой подсветки (без setState в эффекте).
+  const [hl, setHl] = useState<{ emailId: string; count: number; index: number } | null>(null);
   const [density, setDensityState] = useState<Density>(loadDensity);
   const [threadView, setThreadViewState] = useState<ThreadView>(loadThreadView);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -97,6 +142,9 @@ function MailApp() {
   const [imagesForEmail, setImagesForEmail] = useState<Record<string, boolean>>({});
   const [renameRow, setRenameRow] = useState<{ id: string; name: string } | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const bodyFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   const dragRef = useRef<EmailSummary[]>([]);
   const treeRef = useRef<HTMLDivElement | null>(null);
@@ -118,6 +166,17 @@ function MailApp() {
 
   const mailboxId = folder && folder !== FLAGGED_FOLDER ? folder : null;
   const flagged = folder === FLAGGED_FOLDER;
+  // Debounce поиска 300 мс (как в Postman): ввод живёт в поле, запрос — после тишины.
+  // Пустой ввод сбрасывает запрос сразу (таймер 0), непустой — после 300 мс.
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setSearchText(searchInput.trim()),
+      searchInput.trim() ? 300 : 0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  const searchActive = isSearchActive({ text: searchText, refinements });
   const args: WindowArgs = useMemo(
     () => ({
       mailboxId,
@@ -127,11 +186,20 @@ function MailApp() {
       attachment: filters.attachment,
       sort,
       grouped: threadView === "grouped",
-      search: search.trim() ? search.trim() : null,
+      search: searchText.trim() ? searchText.trim() : null,
+      scopeAll: scope === "all",
+      recent30,
+      refinements,
+      translit,
     }),
-    [mailboxId, quick, flagged, filters, sort, threadView, search],
+    [mailboxId, quick, flagged, filters, sort, threadView, searchText, scope, recent30, refinements, translit],
   );
   const windowQuery = useMailWindow(args);
+  // Сниппеты совпадений всех загруженных страниц (SearchSnippet/get) — строка списка их рендерит.
+  const snippets = useMemo<Record<string, SearchSnippet>>(
+    () => Object.assign({}, ...(windowQuery.data?.pages.map((p) => p.snippets) ?? [])),
+    [windowQuery.data],
+  );
   const junkId = mailboxes?.find((m) => m.role === "junk")?.id ?? null;
   const archiveId = mailboxes?.find((m) => m.role === "archive")?.id ?? null;
   const inboxId = mailboxes?.find((m) => m.role === "inbox")?.id ?? null;
@@ -186,6 +254,121 @@ function MailApp() {
     return [selected.id];
   }, [selected, selectedThread, args.grouped]);
   const stackFull = useEmailsFull(stackIds);
+
+  // WEB-05: термы подсветки F3 — из активного поиска (текст без уточнений); письмо открыто
+  // не из результатов (пустой поиск) — подсветки нет. iframe тела регистрируется страницей.
+  const hlTerms = useMemo(
+    () => (searchActive ? highlightTerms(searchText, translit) : []),
+    [searchActive, searchText, translit],
+  );
+  const selectedRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedRef.current = selectedId; // свежее выделение для обработчика сообщений iframe
+  });
+  const onBodyFrame = useCallback((frame: HTMLIFrameElement | null) => {
+    bodyFrameRef.current = frame;
+    if (!frame) setHl(null);
+  }, []);
+
+  // Состояние подсветки (hl-state) — сообщения из srcdoc активного письма.
+  const matchState: MatchState | null =
+    hl && hl.emailId === selectedId ? { count: hl.count, index: hl.index } : null;
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.source === bodyFrameRef.current?.contentWindow && isHlState(e.data)) {
+        setHl({ emailId: selectedRef.current ?? "", count: e.data.count, index: e.data.index });
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
+  // ---------- Поиск (WEB-05): чипы, уточнения, сохранённые фильтры ----------
+
+  const clearSearch = useCallback(() => {
+    setSearchInput("");
+    setSearchText("");
+    setHl(null);
+  }, []);
+
+  /** filters.reset: сброс запроса, чипов области и уточнений. */
+  const resetFilters = () => {
+    clearSearch();
+    setScope(EMPTY_SEARCH.scope);
+    setRecent30(false);
+    setRefinements([]);
+    setFilters({ unread: false, attachment: false });
+  };
+
+  /** Уточнение запроса кликом: чип добавляется один раз (повторный клик — ничего). */
+  const addRefinement = (chip: SearchRefinement) => {
+    setRefinements((prev) =>
+      prev.some((r) => r.kind === chip.kind && r.value === chip.value) ? prev : [...prev, chip],
+    );
+  };
+  const refineSender = (email: EmailSummary) => {
+    const from = email.from?.[0];
+    if (!from) return;
+    addRefinement({ kind: "from", value: from.email, label: `От: ${from.name?.trim() || from.email}` });
+  };
+  const refinePeriod = (email: EmailSummary) => {
+    const period = monthPeriod(email.receivedAt);
+    addRefinement({ kind: "period", value: period.after, before: period.before, label: period.label });
+  };
+  const refineCategory = (category: { keyword: string; name: string }) => {
+    addRefinement({ kind: "category", value: category.keyword, label: category.name });
+  };
+  const refineFolder = (id: string, name: string) => {
+    addRefinement({ kind: "folder", value: id, label: `Папка: ${name}` });
+  };
+  const removeRefinement = (chip: SearchRefinement) => {
+    setRefinements((prev) => prev.filter((r) => !(r.kind === chip.kind && r.value === chip.value)));
+  };
+
+  /** Имя папки письма для чипа в строке (режим «Везде» — как в Postman). */
+  const folderNameOf = useCallback(
+    (email: EmailSummary): string | null => {
+      const id = Object.keys(email.mailboxIds)[0];
+      return (id && mailboxes?.find((m) => m.id === id)?.name) ?? null;
+    },
+    [mailboxes],
+  );
+
+  const applySaved = (saved: SavedFilter) => {
+    const state = applySavedFilter(saved);
+    setSearchInput(state.text);
+    setSearchText(state.text);
+    setScope(state.scope);
+    setRecent30(state.recent30);
+    setFilters({ unread: state.unread, attachment: state.attachment });
+    setRefinements(state.refinements);
+    toast.show(`Фильтр «${saved.name}» применён`);
+  };
+  const deleteSaved = (id: string) => setSavedFilters(removeSavedFilter(id));
+  const confirmSave = () => {
+    const query = {
+      text: searchText,
+      scope,
+      unread: filters.unread,
+      attachment: filters.attachment,
+      recent30,
+      refinements,
+    };
+    const name = (savingName ?? "").trim();
+    if (!searchActive && !name) {
+      setSavingName(null);
+      return;
+    }
+    setSavedFilters(saveFilter(name || searchText, query));
+    setSavingName(null);
+    toast.show("Поиск сохранён рядом с быстрыми фильтрами");
+  };
+
+  const openFromList = (email: EmailSummary) => {
+    setSelectedId(email.id);
+    setCollapsedReading(true);
+    if (!email.keywords.$seen) setSeen([email], true);
+  };
 
   // ---------- Действия ----------
 
@@ -467,6 +650,9 @@ function MailApp() {
         treeRef.current?.focus();
       },
       escape: escapeAction,
+      openPalette: () => setPaletteOpen(true),
+      findNext: () => sendHlCommand(bodyFrameRef.current, "hl-next"),
+      findPrev: () => sendHlCommand(bodyFrameRef.current, "hl-prev"),
     }),
     [rows, selectedId, selected, archiveId, expanded],
   );
@@ -480,6 +666,34 @@ function MailApp() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // ---------- Палитра команд (Ctrl+K, WEB-05): реестр — из хоткеев keymap.ts ----------
+
+  const commands = useMemo<PaletteCommand[]>(() => [
+    { id: "compose", label: "Новое письмо", hint: "Ctrl+N", icon: "pen", run: () => openCompose() },
+    { id: "reply", label: "Ответить", hint: "Ctrl+R", icon: "reply", run: () => selected && replyTo(selected, "reply") },
+    { id: "reply-all", label: "Ответить всем", hint: "Ctrl+Shift+R", icon: "reply", run: () => selected && replyTo(selected, "reply-all") },
+    { id: "forward", label: "Переслать", hint: "Ctrl+F", icon: "fwd", run: () => selected && replyTo(selected, "forward") },
+    { id: "read", label: "Отметить прочитанным", hint: "Ctrl+Q", icon: "check", run: () => selected && setSeen([selected], true) },
+    { id: "unread", label: "Отметить непрочитанным", hint: "Ctrl+U", icon: "mail", run: () => selected && setSeen([selected], false) },
+    { id: "flag", label: selected?.keywords.$flagged ? "Снять флаг" : "Поставить флаг", icon: "flag", run: () => selected && setFlagged([selected], !selected.keywords.$flagged) },
+    { id: "delete", label: "Удалить", hint: "Del", icon: "trash", run: () => selected && deleteEmails([selected]) },
+    { id: "archive", label: "В архив", hint: "Backspace", icon: "arch", run: () => selected && archiveId && moveTo([selected], archiveId, "В архив") },
+    ...CATEGORIES.map((c, i) => ({
+      id: `cat-${c.id}`,
+      label: `Категория: ${c.name}`,
+      hint: String(i + 1),
+      icon: "list" as const,
+      run: () => selected && categorize([selected], i + 1),
+    })),
+    { id: "find", label: "Найти в письмах", hint: "Поиск", icon: "search", run: () => searchInputRef.current?.focus() },
+    { id: "reset-search", label: "Сбросить поиск и фильтры", icon: "x", run: resetFilters },
+    { id: "save-search", label: "Сохранить текущий поиск", icon: "check", run: () => setSavingName(searchText) },
+    { id: "density", label: density === "normal" ? "Плотность: компактная" : "Плотность: обычная", icon: "list", run: () => { const next = density === "normal" ? "compact" : "normal"; setDensityState(next); saveDensity(next); } },
+    { id: "threads", label: threadView === "grouped" ? "Потоки: как в Outlook" : "Потоки: группировка", icon: "thread", run: () => { const next = threadView === "grouped" ? "outlook" : "grouped"; setThreadViewState(next); saveThreadView(next); } },
+    { id: "folders", label: "К дереву папок", hint: "Ctrl+Y", icon: "folder", run: () => { focusIndex.current = 0; treeRef.current?.focus(); } },
+    { id: "panels", label: "Между панелями", hint: "F6", icon: "list", run: () => { focusIndex.current = (focusIndex.current + 1) % focusOrder.length; focusOrder[focusIndex.current]?.current?.focus(); } },
+  ], [selected, archiveId, density, threadView, searchText]);
 
   // ---------- Рендер ----------
 
@@ -519,13 +733,32 @@ function MailApp() {
           <Icon name="trash" size={16} />
           Удалить
         </button>
-        <input
-          className="search"
-          type="search"
-          placeholder="Поиск (FTS сервера — развёрнуто в WEB-05)"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        <div className="searchbar">
+          <Icon name="search" size={16} />
+          <input
+            ref={searchInputRef}
+            className="search"
+            type="text"
+            placeholder="Поиск · from: кому: тема: тело:"
+            aria-label="Поиск по письмам"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              // Сброс поиска Escape (WEB-05): запрос и подсветка — прочь, чипы — отдельной кнопкой.
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                clearSearch();
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+          />
+          {searchInput && (
+            <button type="button" className="clr" aria-label="Очистить поиск" onClick={clearSearch}>
+              <Icon name="x" size={12} />
+            </button>
+          )}
+        </div>
         <span className="settings">
           <button
             type="button"
@@ -565,6 +798,18 @@ function MailApp() {
                   <option value="grouped">Группировка</option>
                   <option value="outlook">Как в Outlook</option>
                 </select>
+              </label>
+              <label>
+                Транслитерация раскладки
+                <input
+                  type="checkbox"
+                  checked={translit}
+                  onChange={(e) => {
+                    setTranslit(e.target.checked);
+                    saveTranslit(e.target.checked);
+                  }}
+                  title="Запрос в чужой раскладке пробуется и как qwerty→йцукен (rdfhnfk → квартал)"
+                />
               </label>
               <div className="cap">
                 {KEYMAP_HINTS.map((h) => (
@@ -634,6 +879,28 @@ function MailApp() {
             isFetchingNext={windowQuery.isFetchingNextPage}
             sort={sort}
             onSort={() => setSort((s) => (s === "date-desc" ? "date-asc" : s === "date-asc" ? "from" : "date-desc"))}
+            searchActive={searchActive}
+            scope={scope}
+            onScope={setScope}
+            recent30={recent30}
+            onRecent30={setRecent30}
+            snippets={snippets}
+            refinements={refinements}
+            onRemoveRefinement={removeRefinement}
+            onRefineSender={refineSender}
+            onRefineCategory={refineCategory}
+            onRefinePeriod={refinePeriod}
+            onRefineFolder={refineFolder}
+            folderNameOf={folderNameOf}
+            onResetFilters={resetFilters}
+            savedFilters={savedFilters}
+            onApplySaved={applySaved}
+            onDeleteSaved={deleteSaved}
+            savingName={savingName}
+            onSavingName={setSavingName}
+            onSaveConfirm={confirmSave}
+            onSaveCancel={() => setSavingName(null)}
+            onSaveStart={() => setSavingName(searchText)}
           />
         </div>
 
@@ -644,6 +911,11 @@ function MailApp() {
               .map((id) => queryClient.getQueryData<EmailSummary>(keys.email(id)))
               .filter((e): e is EmailSummary => Boolean(e))}
             stackFull={stackFull}
+            highlightTerms={hlTerms}
+            matchState={matchState}
+            onBodyFrame={onBodyFrame}
+            onRefineSender={refineSender}
+            onRefinePeriod={refinePeriod}
             toggles={{
               imagesThisEmail: Boolean(selectedId && imagesForEmail[selectedId]),
               imagesForDomain: selected ? areImagesAllowedFor(selected.from?.[0]?.email.split("@")[1] ?? "") : false,
@@ -688,6 +960,15 @@ function MailApp() {
       </div>
 
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
+
+      {/* Палитра команд и писем (Ctrl+K, WEB-05): ввод фильтрует команды + письма (FTS top-5). */}
+      <CommandPalette
+        open={paletteOpen}
+        commands={commands}
+        onClose={() => setPaletteOpen(false)}
+        onOpenEmail={openFromList}
+        translit={translit}
+      />
     </div>
   );
 }
