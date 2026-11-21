@@ -38,8 +38,8 @@ const MAIL: &str = "/mail/";
 /// `sandbox` на этих iframe отключает плагины и рендер PDF (whatwg/html#3958) — потому без него,
 /// стороннего содержимого в блобах нет (HTML-вложения не рендерятся как HTML вовсе).
 const CSP_HEAD: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-                        img-src 'self' data:; font-src 'self' data:; connect-src 'self'; \
-                        media-src 'self' blob:; frame-src 'self' blob:";
+                        img-src 'self' data:; font-src 'self' data:; \
+                        media-src 'self' blob:; frame-src 'self' blob:; connect-src 'self'";
 const CSP_TAIL: &str =
     "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
