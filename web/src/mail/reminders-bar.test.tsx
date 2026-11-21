@@ -1,13 +1,14 @@
 // Полоса «Напоминания» (WEB-19): секции и счётчики, клик-навигация (секция → фильтр «Почты»,
-// письмо → открыть), свёрнутость в localStorage. Данные (useReminders) подменяются на границе
-// модуля queries — полоса тестируется как компонент оболочки, без JMAP.
+// письмо → открыть — через напоминания-шину reminders.ts), свёрнутость в localStorage. Данные
+// (useReminders) подменяются на границе модуля queries — полоса тестируется как компонент
+// оболочки, без JMAP и роутера.
 import { cleanup, fireEvent, render, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import type { EmailSummary } from "../api/jmap";
 import { queryClient } from "./client";
 import { RemindersBar } from "./reminders-bar";
+import { takeReminderNavigation } from "./reminders";
 
 vi.mock("./queries", () => ({
   useReminders: vi.fn(),
@@ -17,28 +18,8 @@ import { useReminders } from "./queries";
 
 const mockedReminders = vi.mocked(useReminders);
 
-/** Куда пришла навигация полосы (секция/письмо). */
-function LocationProbe() {
-  const location = useLocation();
-  return <div data-testid="loc">{location.pathname + location.search}</div>;
-}
-
-function renderBar(initial = "/calendar"): ReturnType<typeof within> {
-  const view = render(
-    <MemoryRouter initialEntries={[initial]}>
-      <Routes>
-        <Route
-          path="*"
-          element={
-            <>
-              <RemindersBar />
-              <LocationProbe />
-            </>
-          }
-        />
-      </Routes>
-    </MemoryRouter>,
-  );
+function renderBar(): ReturnType<typeof within> {
+  const view = render(<RemindersBar />);
   return within(view.container);
 }
 
@@ -72,6 +53,7 @@ function dayWord(offset: number): string {
 beforeEach(() => {
   localStorage.clear();
   queryClient.clear();
+  takeReminderNavigation(); // шина переходов между тестами пуста
   mockedReminders.mockReset();
 });
 
@@ -108,20 +90,20 @@ test("секции по срочности, счётчики и ближайши
   expect(within(bar).getByText("Ждём ответа")).toBeTruthy(); // подпись пункта ожидания
 });
 
-test("клик по секции — «Почта» с быстрым фильтром, клик по письму — открыть", () => {
+test("клик по секции — быстрый фильтр «Почты», клик по письму — открыть (шина переходов)", () => {
   mockedReminders.mockReturnValue([
     item("e1", "Счёт с истёкшим сроком", { "pm.due.2020-01-01t0900": true }),
     item("e5", "Ответ коллеге", { "pm.wait": true }),
   ]);
-  const page = renderBar("/calendar");
+  const page = renderBar();
   const bar = page.getByRole("region", { name: "Напоминания" });
   fireEvent.click(within(bar).getByRole("button", { name: /^Ждём ответа/ }));
-  expect(page.getByTestId("loc").textContent).toBe("/?quick=wait");
+  expect(takeReminderNavigation()).toEqual({ quick: "wait" });
   fireEvent.click(within(bar).getByText("Счёт с истёкшим сроком"));
-  expect(page.getByTestId("loc").textContent).toBe("/?open=e1");
+  expect(takeReminderNavigation()).toEqual({ open: "e1" });
   // Секция «Просрочено» — тот же фильтр «Срок» (маска pm.due).
   fireEvent.click(within(bar).getByRole("button", { name: /^Просрочено/ }));
-  expect(page.getByTestId("loc").textContent).toBe("/?quick=due");
+  expect(takeReminderNavigation()).toEqual({ quick: "due" });
 });
 
 test("свёрнутость: счётчик остаётся, хранится в localStorage и переживает перезагрузку", () => {

@@ -240,6 +240,33 @@ export function reminderTextOf(keywords: Keywords, now: Date): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+// ---------- Навигация полосы → раздел «Почта» (WEB-19) ----------
+
+/** Переход от полосы: быстрый фильтр «Почты» (клик по секции) или письмо открыть (клик по пункту). */
+export interface ReminderNavigation {
+  quick?: "due" | "wait";
+  open?: string;
+}
+
+/** Событие окна: «Почта» смонтирована и применит переход сразу (setState в колбэке события). */
+export const REMINDER_NAV_EVENT = "thepost-reminders-nav";
+
+let pendingNavigation: ReminderNavigation | null = null;
+
+/** Клик полосы: полоса живёт над роутом — переход применит «Почта», и событием, если она уже
+ * смонтирована, или «с руки» при монтировании (клик из Календаря/Контактов). */
+export function sendReminderNavigation(nav: ReminderNavigation): void {
+  pendingNavigation = nav;
+  window.dispatchEvent(new CustomEvent(REMINDER_NAV_EVENT));
+}
+
+/** Забрать переход (один раз): при монтировании «Почты» и в обработчике события. */
+export function takeReminderNavigation(): ReminderNavigation | null {
+  const nav = pendingNavigation;
+  pendingNavigation = null;
+  return nav;
+}
+
 // ---------- Пресеты пикера и поля ввода ----------
 
 /** Пресет «Завтра 9:00» (местное время). */

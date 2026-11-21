@@ -17,8 +17,10 @@ import {
   reminderTextOf,
   reminderWord,
   remindersTotal,
+  sendReminderNavigation,
   setReminderGeneralPatch,
   setReminderPatch,
+  takeReminderNavigation,
   toInputDate,
   toInputTime,
   type ReminderItem,
@@ -179,4 +181,12 @@ test("поля пикера: дата/время — туда и обратно;
   expect(fromInputDateTime("2026-11-25", null)?.getTime()).toBe(new Date(2026, 10, 25, 23, 59, 59, 999).getTime());
   expect(fromInputDateTime("не дата", "09:30")).toBeNull();
   expect(fromInputDateTime("2026-11-25", "25:99")).toBeNull();
+});
+
+test("шина переходов полосы: послано — забрано один раз, новое затирает прежнее", () => {
+  expect(takeReminderNavigation()).toBeNull();
+  sendReminderNavigation({ quick: "wait" });
+  sendReminderNavigation({ open: "e1" });
+  expect(takeReminderNavigation()).toEqual({ open: "e1" });
+  expect(takeReminderNavigation()).toBeNull();
 });

@@ -17,24 +17,17 @@
   справочника контактов); ответ из общего ящика — «От» его адрес (право проверяет сервер).
   WEB-19 — напоминания: полоса «Напоминания» живёт в оболочке (App.tsx над роутом, все разделы),
   здесь — установка слов pm.due/pm.wait/pm.expire («Напомнить…»/«Ждать ответа…»/«Исчезнет…»,
-  inline-пикер, Ctrl+.) и приём ?quick=/?open от полосы.
+  inline-пикер, Ctrl+.) и приём переходов полосы (клик секции — быстрый фильтр, клик письма —
+  открыть; событие полосы — reminders.ts).
 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router";
+import { useNavigate } from "react-router";
 
-import {
-  mailboxSet,
-  emailGet,
-  SUMMARY_PROPERTIES,
-  type EmailSummary,
-  type Mailbox,
-  type SearchSnippet,
-} from "../api/jmap";
+import { mailboxSet, type EmailSummary, type Mailbox, type SearchSnippet } from "../api/jmap";
 import { useJmap, useJmapReady, usePushHub } from "../mail/context";
 import { keys, queryClient } from "../mail/client";
 import {
-  cacheEmails,
   keywordPatch,
   movePatch,
   undoEntries,
@@ -48,7 +41,7 @@ import {
   type UndoEntry,
   type WindowArgs,
 } from "../mail/queries";
-import { CATEGORIES, QUICK_FILTERS, categoryByNumber, categoriesOf, type QuickFilterKind } from "../mail/keywords";
+import { CATEGORIES, categoryByNumber, categoriesOf, type QuickFilterKind } from "../mail/keywords";
 import {
   clearReminderKindPatch,
   clearRemindersPatch,
@@ -57,7 +50,10 @@ import {
   reminderTextOf,
   setReminderGeneralPatch,
   setReminderPatch,
+  REMINDER_NAV_EVENT,
+  takeReminderNavigation,
   type ReminderKind,
+  type ReminderNavigation,
 } from "../mail/reminders";
 import { ReminderPicker, type ReminderPickerState } from "../mail/reminder-picker";
 import { handleMailKeydown, KEYMAP_HINTS, type MailHotkeyActions } from "../mail/keymap";
@@ -220,54 +216,6 @@ function MailApp() {
   const sharedCtx = sharedAccounts.find((a) => a.id === sharedId) ?? null;
   const windowAccountId = sharedCtx?.id ?? env.accountId;
   const quickCounts = useQuickCounts(null, sharedCtx?.id);
-
-  // ---------- Параметры от полосы «Напоминания» (WEB-19) ----------
-  // ?quick=due|wait — быстрый фильтр (механика wave 3), ?open=<id> — открыть письмо из полосы.
-  // Параметр применяем и убираем из адреса (replace): повторный клик по тому же пункту полосы
-  // сработает снова, а перезагрузка страницы не уводит от списка.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const quickParam = searchParams.get("quick");
-  const openParam = searchParams.get("open");
-  useEffect(() => {
-    if (!quickParam || !QUICK_FILTERS.some((f) => f.kind === quickParam)) return;
-    setQuick(quickParam as QuickFilterKind);
-    const next = new URLSearchParams(searchParams);
-    next.delete("quick");
-    setSearchParams(next, { replace: true });
-  }, [quickParam, searchParams, setSearchParams]);
-  useEffect(() => {
-    if (!openParam) return;
-    const consume = () => {
-      const next = new URLSearchParams(searchParams);
-      next.delete("open");
-      setSearchParams(next, { replace: true });
-    };
-    const cached = queryClient.getQueryData<EmailSummary>(keys.email(openParam));
-    if (cached) {
-      setSelectedId(cached.id);
-      setCollapsedReading(true);
-      if (!cached.keywords.$seen) setSeen([cached], true);
-      consume();
-      return;
-    }
-    let alive = true;
-    emailGet<EmailSummary>(env.apiUrl, env.authorization, env.accountId, [openParam], SUMMARY_PROPERTIES)
-      .then((list) => {
-        const email = list[0];
-        if (!alive || !email) return;
-        cacheEmails(list); // чтение берёт письмо из общего кэша, как из списка
-        setSelectedId(email.id);
-        setCollapsedReading(true);
-        if (!email.keywords.$seen) setSeen([email], true);
-      })
-      .catch(() => {
-        // Письмо недоступно (удалено/нет права) — остаёмся в списке.
-      });
-    consume();
-    return () => {
-      alive = false;
-    };
-  }, [openParam, searchParams, setSearchParams, env]);
 
   // Синхронизация: тик push/таймера — время в строке состояния.
   useEffect(() => {
@@ -630,44 +578,78 @@ function MailApp() {
 
   /** Поставить/переставить напоминание: слова общее + с датой (S5-04), тост с Undo — как остальные
    * правки слов. */
-  const applyReminder = useCallback(
-    (email: EmailSummary, kind: ReminderKind, at: Date | null) => {
-      const timed = kind !== "wait"; // «Ждать ответа» — дата без времени (конец дня)
-      const updates = updateFor([email.id], (cached) =>
-        at ? setReminderPatch(cached.keywords, kind, at, timed) : setReminderGeneralPatch(cached.keywords, kind),
-      );
-      const when = at ? reminderDueText({ at, timed }, new Date()) : null;
-      const label =
-        kind === "due"
-          ? `Напоминание: ${when ?? "поставлено"}`
-          : kind === "expire"
-            ? `Исчезнет: ${when ?? "поставлено"}`
-            : at
-              ? `Ждём ответа — ${when}`
-              : "Ждём ответа";
-      void applyUpdate(updates, label);
-    },
-    [updateMut],
-  );
+  const applyReminder = (email: EmailSummary, kind: ReminderKind, at: Date | null) => {
+    const timed = kind !== "wait"; // «Ждать ответа» — дата без времени (конец дня)
+    const updates = updateFor([email.id], (cached) =>
+      at ? setReminderPatch(cached.keywords, kind, at, timed) : setReminderGeneralPatch(cached.keywords, kind),
+    );
+    const when = at ? reminderDueText({ at, timed }, new Date()) : null;
+    const label =
+      kind === "due"
+        ? `Напоминание: ${when ?? "поставлено"}`
+        : kind === "expire"
+          ? `Исчезнет: ${when ?? "поставлено"}`
+          : at
+            ? `Ждём ответа — ${when}`
+            : "Ждём ответа";
+    void applyUpdate(updates, label);
+  };
 
   /** Снять напоминание: один вид (пикер) или все слова (пункт «Снять напоминание»). */
-  const clearReminder = useCallback((email: EmailSummary, kind: ReminderKind | null) => {
+  const clearReminder = (email: EmailSummary, kind: ReminderKind | null) => {
     const updates = updateFor([email.id], (cached) =>
       kind ? clearReminderKindPatch(cached.keywords, kind) : clearRemindersPatch(cached.keywords),
     );
     void applyUpdate(updates, "Напоминание снято");
-  }, [updateMut]);
+  };
 
   /** Открыть inline-пикер у точки вызова (контекст-меню, панель чтения, палитра, Ctrl+.). */
-  const openReminderPicker = useCallback((email: EmailSummary, kind: ReminderKind, x: number, y: number) => {
+  const openReminderPicker = (email: EmailSummary, kind: ReminderKind, x: number, y: number) => {
     setReminderEdit({ email, kind, x, y });
-  }, []);
+  };
 
   /** Пикер в центре окна — из палитры и по Ctrl+. (точки вызова без координат мыши). */
-  const remindSelected = useCallback(() => {
+  const remindSelected = () => {
     if (!selected) return;
     openReminderPicker(selected, "due", Math.max(24, Math.round(window.innerWidth / 2) - 150), 140);
-  }, [selected, openReminderPicker]);
+  };
+
+  // Переходы полосы «Напоминания» → «Почта» (WEB-19): полоса живёт над роутом, переход приходит
+  // событием, когда «Почта» уже смонтирована, или «с руки» при монтировании (клик из Календаря).
+  // Применение — в обработчике события (setState в колбэке внешней системы — допустимо) и
+  // во время рендера охраняемым патчем React («storing information from previous renders»):
+  // эффект с setState каскадит рендеры (react-hooks/set-state-in-effect, правило дома).
+  const [barNav, setBarNav] = useState<ReminderNavigation | null>(null);
+  const [appliedBarNav, setAppliedBarNav] = useState<ReminderNavigation | null>(null);
+  const [tookPendingNav, setTookPendingNav] = useState(false);
+  if (!tookPendingNav) {
+    // Первый рендер после перехода из другого раздела — забираем «с руки».
+    setTookPendingNav(true);
+    const pending = takeReminderNavigation();
+    if (pending) setBarNav(pending);
+  }
+  if (barNav && barNav !== appliedBarNav) {
+    setAppliedBarNav(barNav); // переход применён — повторно не применяем (и на двойном рендере)
+    if (barNav.quick) setQuick(barNav.quick);
+    if (barNav.open) {
+      setSelectedId(barNav.open);
+      setCollapsedReading(true);
+    }
+  }
+  useEffect(() => {
+    const onNav = () => {
+      const nav = takeReminderNavigation();
+      if (!nav) return;
+      setAppliedBarNav(nav); // применено здесь — рендер-патч не повторит
+      if (nav.quick) setQuick(nav.quick);
+      if (nav.open) {
+        setSelectedId(nav.open);
+        setCollapsedReading(true);
+      }
+    };
+    window.addEventListener(REMINDER_NAV_EVENT, onNav);
+    return () => window.removeEventListener(REMINDER_NAV_EVENT, onNav);
+  }, []);
 
   // Композер — вкладка /compose (WEB-04): новое письмо, ответы и пересылка, черновик.
   // Ответ письму общего ящика (WEB-15): источник — по accountId владельца («От» — общий адрес).

@@ -5,11 +5,11 @@
   (Email/query по маскам слов pm.due/pm.wait/pm.expire); живое обновление — инвалидация по
   StateChange (push и delta-sync, sync.ts) и мутациям слов; границы «сейчас» (Просрочено/Сегодня)
   двигает минутный тик. Группировка и подписи — reminders.ts. Клик по секции — раздел «Почта» с
-  быстрым фильтром (?quick=due|wait, механика wave 3), клик по письму — открыть (?open=<id>).
-  Свёрнутый вид — счётчик; свёрнутость — localStorage. Нет напоминаний — полосы нет.
+  быстрым фильтром (механика wave 3: Срок/Ждём), клик по письму — открыть; переход — через
+  sendReminderNavigation (reminders.ts). Свёрнутый вид — счётчик; свёрнутость — localStorage.
+  Нет напоминаний — полосы нет.
 */
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
 
 import type { EmailSummary } from "../api/jmap";
 import { lifecycleOf, waitLabel } from "./keywords";
@@ -21,6 +21,7 @@ import {
   reminderMomentsOf,
   REMINDER_SECTIONS,
   remindersTotal,
+  sendReminderNavigation,
   type ReminderGroups,
   type ReminderItem,
   type ReminderSectionId,
@@ -79,7 +80,6 @@ function sectionsOf(groups: ReminderGroups): ReminderSectionView[] {
 }
 
 export function RemindersBar() {
-  const navigate = useNavigate();
   const emails = useReminders();
   const [open, setOpen] = useState(loadOpen);
   // Границы «сейчас» (Просрочено → Сегодня → Далее) двигает минутный тик; данные приходят
@@ -102,8 +102,8 @@ export function RemindersBar() {
   if (total === 0) return null; // напоминаний нет — полоса не занимает место
   const overdueCount = groups.overdue.length;
 
-  const openEmail = (id: string) => navigate(`/?open=${encodeURIComponent(id)}`);
-  const openSection = (quick: string) => navigate(`/?quick=${quick}`);
+  const openEmail = (id: string) => sendReminderNavigation({ open: id });
+  const openSection = (quick: "due" | "wait") => sendReminderNavigation({ quick });
 
   return (
     <div className="rembar" role="region" aria-label="Напоминания">
