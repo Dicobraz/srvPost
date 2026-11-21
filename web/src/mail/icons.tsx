@@ -129,6 +129,42 @@ const PATHS: Record<string, JSX.Element> = {
     </>
   ),
   folder: <path d="M3.5 6.5a2 2 0 012-2h4l2 2.5h7a2 2 0 012 2v9a2 2 0 01-2 2h-13a2 2 0 01-2-2v-11.5z" />,
+  // WEB-04 (композер) — значки макета 02: чипы, форматирование, таблицы, undo-send.
+  x: <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />,
+  table: (
+    <>
+      <rect x="4" y="5" width="16" height="14" rx="1.5" />
+      <path d="M4 10h16M10.5 10v9" />
+    </>
+  ),
+  list: (
+    <>
+      <path d="M9 6.5h11M9 12h11M9 17.5h11" />
+      <circle cx="5.2" cy="6.5" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="5.2" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="5.2" cy="17.5" r="1.1" fill="currentColor" stroke="none" />
+    </>
+  ),
+  quote: (
+    <>
+      <path d="M6.5 9.5h4v4h-2.5l-1 3.5" />
+      <path d="M14.5 9.5h4v4h-2.5l-1 3.5" />
+    </>
+  ),
+  link: (
+    <>
+      <path d="M9.5 14.5l5-5" />
+      <path d="M8.5 11.5L6 14a3.5 3.5 0 005 5l2.5-2.5" />
+      <path d="M15.5 12.5L18 10a3.5 3.5 0 00-5-5l-2.5 2.5" />
+    </>
+  ),
+  undo: (
+    <>
+      <path d="M8 6L4 10l4 4" />
+      <path d="M4 10h9.5a6 6 0 016 6v1" />
+    </>
+  ),
+  check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
 };
 
 export type IconName = keyof typeof PATHS | string;

@@ -7,17 +7,19 @@ import { ContactsPage } from "./pages/contacts";
 import { MailPage } from "./pages/mail";
 import { LoginPage } from "./pages/login";
 import { CallbackPage } from "./pages/callback";
+import { ComposerPage } from "./compose/Composer";
 import { AuthProvider, useAuth } from "./auth/session";
 import { JmapProvider } from "./mail/context";
 import { ToastProvider } from "./mail/toast";
 import { queryClient } from "./mail/client";
 import { useTheme, type ThemeChoice } from "./theme";
 
-// Оболочка веб-клиента (WEB-01/02/03): разделы Почта / Календарь / Контакты. Шов «Каналы» скрыт
-// до запуска чата (решение 20.11): видимой навигации нет — маршрут /channels зарезервирован
-// (страница-заглушка не рендерится пользователю), чтобы вписать веб-чат без переделки маршрутов.
-// Данные почты — JMAP того же узла (WEB-03): JmapProvider — сессия и push, ToastProvider — тосты
-// с Undo (каркас волны 4), QueryClientProvider — кэш TanStack Query.
+// Оболочка веб-клиента (WEB-01/02/03/04): разделы Почта / Календарь / Контакты, композер —
+// вкладкой /compose (макет 02). Шов «Каналы» скрыт до запуска чата (решение 20.11): видимой
+// навигации нет — маршрут /channels зарезервирован (страница-заглушка не рендерится
+// пользователю), чтобы вписать веб-чат без переделки маршрутов. Данные почты — JMAP того же
+// узла (WEB-03): JmapProvider — сессия и push, ToastProvider — тосты с Undo (undo-send ~15 с,
+// WEB-04), QueryClientProvider — кэш TanStack Query.
 const SECTIONS = [
   { to: "/", label: "Почта", end: true },
   { to: "/calendar", label: "Календарь", end: false },
@@ -87,6 +89,8 @@ function Shell() {
       <main className="content">
         <Routes>
           <Route path="/" element={<MailPage />} />
+          {/* Композер — вкладкой приложения (WEB-04, макет 02), не модалка; письмо — её источник. */}
+          <Route path="/compose" element={<ComposerPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/contacts" element={<ContactsPage />} />
           {/* Шов «Каналы»: маршрут зарезервирован (решение 2026-11-17), в навигации скрыт. */}

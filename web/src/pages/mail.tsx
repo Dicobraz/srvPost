@@ -1,12 +1,14 @@
 /*
-  Раздел «Почта» (WEB-03) — ядро веб-почты: три-панель по макету docs/design/webmail/01
+  Раздел «Почта» (WEB-03/04) — ядро веб-почты: три-панель по макету docs/design/webmail/01
   (папки | список | чтение), потоки (группировка — по умолчанию), быстрые фильтры, перетаскивание,
-  контекстные меню (без модалок — inline-подтверждения), тосты с Undo, one-modifier хоткеи
-  (keymap.ts). Данные — JMAP через mail/queries.ts; push — mail/push.ts (одно соединение на
-  пользователя, лидер вкладок). Композер (новое письмо/ответы) — волна 4: команды — тосты-заглушки.
+  контекстные меню (без модалок — inline-подтверждения), тосты с Undo (undo-send — WEB-04),
+  one-modifier хоткеи (keymap.ts). Данные — JMAP через mail/queries.ts; push — mail/push.ts
+  (одно соединение на пользователя, лидер вкладок). Композер — вкладка /compose (WEB-04, макет 02):
+  новое письмо, ответ/ответ всем/пересылка, черновик — «Изменить черновик» в контекст-меню.
 */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router";
 
 import { mailboxSet, type EmailSummary, type Mailbox } from "../api/jmap";
 import { useJmap, useJmapReady, usePushHub } from "../mail/context";
@@ -71,6 +73,7 @@ function MailApp() {
   const env = useJmap();
   const hub = usePushHub();
   const toast = useToast();
+  const navigate = useNavigate();
   const mailboxes = useMailboxes();
   const flaggedCount = useFlaggedCount();
   const quickCounts = useQuickCounts(null);
@@ -256,7 +259,10 @@ function MailApp() {
       .catch((e: unknown) => toast.show(e instanceof Error ? e.message : "Удалить не удалось."));
   };
 
-  const replyStub = (kind: string) => toast.show(`${kind} — волна 4: композер ещё не подключён.`);
+  // Композер — вкладка /compose (WEB-04): новое письмо, ответы и пересылка, черновик.
+  const openCompose = (query: string = "") => navigate(`/compose${query}`);
+  const replyTo = (email: EmailSummary, kind: "reply" | "reply-all" | "forward") =>
+    navigate(`/compose?kind=${kind}&email=${encodeURIComponent(email.id)}`);
 
   // ---------- Контекстные меню (без модалок) ----------
 
@@ -264,9 +270,12 @@ function MailApp() {
     const inTrash = Boolean(trashId && email.mailboxIds[trashId]);
     const inJunk = Boolean(junkId && email.mailboxIds[junkId]);
     const items: MenuItem[] = [
-      { label: "Ответить", onSelect: () => replyStub("Ответ") },
-      { label: "Ответить всем", onSelect: () => replyStub("Ответ всем") },
-      { label: "Переслать", onSelect: () => replyStub("Пересылка") },
+      { label: "Ответить", onSelect: () => replyTo(email, "reply") },
+      { label: "Ответить всем", onSelect: () => replyTo(email, "reply-all") },
+      { label: "Переслать", onSelect: () => replyTo(email, "forward") },
+      ...(email.keywords.$draft
+        ? [{ label: "Изменить черновик", onSelect: () => openCompose(`?draft=${encodeURIComponent(email.id)}`) }]
+        : []),
       { label: "", separator: true },
       email.keywords.$seen
         ? { label: "Отметить непрочитанным", onSelect: () => setSeen([email], false) }
@@ -436,10 +445,19 @@ function MailApp() {
       archiveSelected: () => {
         if (selected && archiveId) moveTo([selected], archiveId, "В архив");
       },
-      reply: () => replyStub("Ответ"),
-      replyAll: () => replyStub("Ответ всем"),
-      forward: () => replyStub("Пересылка"),
-      compose: () => replyStub("Новое письмо"),
+      reply: () => {
+        if (selected) replyTo(selected, "reply");
+        else openCompose();
+      },
+      replyAll: () => {
+        if (selected) replyTo(selected, "reply-all");
+        else openCompose();
+      },
+      forward: () => {
+        if (selected) replyTo(selected, "forward");
+        else openCompose();
+      },
+      compose: () => openCompose(),
       focusNextPanel: (backward?: boolean) => {
         focusIndex.current = (focusIndex.current + (backward ? focusOrder.length - 1 : 1)) % focusOrder.length;
         focusOrder[focusIndex.current]?.current?.focus();
@@ -485,15 +503,15 @@ function MailApp() {
     <div className={`mail${selectedId ? " reading" : ""}`} data-density={density}>
       {/* Командная строка: одна акцентная кнопка + тихие команды + поиск (макет 01) */}
       <div className="cmd">
-        <button type="button" className="btn-acc" onClick={() => replyStub("Новое письмо")} title="Новое письмо (Ctrl+N) — композер примет волна 4">
+        <button type="button" className="btn-acc" onClick={() => openCompose()} title="Новое письмо (Ctrl+N)">
           <Icon name="pen" size={16} />
           Новое письмо
         </button>
-        <button type="button" className="btn-q" onClick={() => replyStub("Ответ")} title="Ответить (Ctrl+R)">
+        <button type="button" className="btn-q" onClick={() => selected && replyTo(selected, "reply")} disabled={!selected} title="Ответить (Ctrl+R)">
           <Icon name="reply" size={16} />
           Ответить
         </button>
-        <button type="button" className="btn-q" onClick={() => replyStub("Пересылка")} title="Переслать (Ctrl+F)">
+        <button type="button" className="btn-q" onClick={() => selected && replyTo(selected, "forward")} disabled={!selected} title="Переслать (Ctrl+F)">
           <Icon name="fwd" size={16} />
           Переслать
         </button>

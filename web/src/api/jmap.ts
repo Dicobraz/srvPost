@@ -1,7 +1,9 @@
-// Клиент JMAP (WEB-03): сессия (RFC 8620 §2), запросы API окнами, Mailbox/Email/Thread — get/query/
-// set/changes; same-origin запросы с заголовком Authorization — `Bearer` (OIDC-токен SPA) или `Basic`
-// (логин + пароль приложения); сервер проверяет оба (`tp-jmap/core/http.rs`). Проверка пароля
-// приложения — `GET /jmap/session`: сессия JMAP и есть ответ сервера; 401 — неверная пара.
+// Клиент JMAP (WEB-03/04): сессия (RFC 8620 §2), запросы API окнами, Mailbox/Email/Thread — get/
+// query/set/changes; WEB-04 добавил Identity/get и EmailSubmission/set (RFC 8621 §6–7, капабилити
+// submission) и загрузку блобов (`uploadUrl` — POST файла стримом из File API); same-origin запросы
+// с заголовком Authorization — `Bearer` (OIDC-токен SPA) или `Basic` (логин + пароль приложения);
+// сервер проверяет оба (`tp-jmap/core/http.rs`). Проверка пароля приложения — `GET /jmap/session`:
+// сессия JMAP и есть ответ сервера; 401 — неверная пара.
 // Push (RFC 8620 §7, RFC 8887) — `mail/push.ts`; состояние — TanStack Query (`mail/queries.ts`).
 
 import type { Session } from "../auth/store";
@@ -13,6 +15,8 @@ export const JMAP_SESSION = "/.well-known/jmap";
 export const CAP_CORE = "urn:ietf:params:jmap:core";
 /** Капабилити почты (RFC 8621): Mailbox, Email, Thread, SearchSnippet. */
 export const CAP_MAIL = "urn:ietf:params:jmap:mail";
+/** Капабилити отправки (RFC 8621 §6–7): Identity, EmailSubmission. */
+export const CAP_SUBMISSION = "urn:ietf:params:jmap:submission";
 /** Капабилити WebSocket (RFC 8887): адрес `/jmap/ws` и признак push. */
 export const CAP_WEBSOCKET = "urn:ietf:params:jmap:websocket";
 
@@ -108,12 +112,18 @@ export interface EmailSummary {
   hasAttachment: boolean;
 }
 
-/** Полное письмо для чтения: тела (htmlBody/textBody) и вложения. */
+/** Полное письмо для чтения: тела (htmlBody/textBody), вложения, все получатели и messageId —
+ * для ответов (In-Reply-To/References, WEB-04). */
 export interface EmailFull extends EmailSummary {
   textBody: EmailBodyPart[] | null;
   htmlBody: EmailBodyPart[] | null;
   attachments: EmailBodyPart[] | null;
   bodyValues: Record<string, EmailBodyValue>;
+  cc: EmailAddress[] | null;
+  bcc: EmailAddress[] | null;
+  /** Message-ID письма (строки без угловых скобок, RFC 8621 §4.1.2.7) или null. */
+  messageId: string[] | null;
+  references: string[] | null;
 }
 
 /** Объект Thread (RFC 8621 §3): письма беседы по возрастанию времени. */
@@ -138,8 +148,18 @@ export const SUMMARY_PROPERTIES = [
   "hasAttachment",
 ] as const;
 
-/** Свойства полного письма: краткое плюс тела и вложения. */
-export const FULL_PROPERTIES = [...SUMMARY_PROPERTIES, "textBody", "htmlBody", "attachments", "bodyValues"];
+/** Свойства полного письма: краткое плюс тела, вложения, получатели и цепочки ответа (WEB-04). */
+export const FULL_PROPERTIES = [
+  ...SUMMARY_PROPERTIES,
+  "textBody",
+  "htmlBody",
+  "attachments",
+  "bodyValues",
+  "cc",
+  "bcc",
+  "messageId",
+  "references",
+];
 
 /** Состояние JMAP-ошибки метода (`error`-ответ, RFC 8620 §3.6.1) — показывается пользователю. */
 export interface MethodError {
@@ -317,9 +337,13 @@ export async function callMethod(
   method: string,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Капабилити по типу данных (RFC 8620 §3.2): почта — Email/Thread/Mailbox, отправка — Identity/
+  // EmailSubmission (WEB-04); остальное — ядро.
   const using = method.startsWith("Mailbox") || method.startsWith("Email") || method.startsWith("Thread")
     ? [CAP_CORE, CAP_MAIL]
-    : [CAP_CORE];
+    : method.startsWith("Identity") || method.startsWith("EmailSubmission")
+      ? [CAP_CORE, CAP_SUBMISSION]
+      : [CAP_CORE];
   const body = await jmapCall(apiUrl, authorization, using, [[method, args, "c0"]]);
   const [, result] = body.methodResponses[0];
   return result;
@@ -510,4 +534,156 @@ export async function mailboxSet(
       (result.notUpdated as Record<string, unknown> | undefined) ??
       (result.notDestroyed as Record<string, unknown> | undefined) ?? {},
   };
+}
+
+// ---------- WEB-04: композер — Identity, черновики (Email/set), отправка (EmailSubmission), загрузка ----------
+
+/** Адрес отправителя (RFC 8621 §6): из Identity/get; подписи ведёт каталог (`Identity/set` — forbidden). */
+export interface Identity {
+  id: string;
+  name: string;
+  email: string;
+  replyTo: EmailAddress[] | null;
+  bcc: EmailAddress[] | null;
+  /** Подпись каталога: текст и HTML (берётся в композер). */
+  textSignature: string;
+  htmlSignature: string;
+  mayDelete: boolean;
+}
+
+/** `Identity/get` без идентификаторов — адреса отправителя учётной записи. */
+export async function identitiesGet(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+): Promise<Identity[]> {
+  const result = await callMethod(apiUrl, authorization, "Identity/get", { accountId });
+  return parseGet<Identity>(result).list;
+}
+
+/** Ответ JMAP set-метода: только интересующая часть — созданные и ошибки остальных операций. */
+export interface SetResult {
+  created: Record<string, { id?: string } & Record<string, unknown>>;
+  errors: Record<string, { type?: string; description?: string }>;
+  destroyed: string[];
+}
+
+function parseSet(result: Record<string, unknown>): SetResult {
+  return {
+    created: (result.created as SetResult["created"] | null) ?? {},
+    errors: (result.notCreated as SetResult["errors"] | undefined) ??
+      (result.notUpdated as SetResult["errors"] | undefined) ??
+      (result.notDestroyed as SetResult["errors"] | undefined) ?? {},
+    destroyed: (result.destroyed as string[] | null) ?? [],
+  };
+}
+
+/** `Email/set` создание (RFC 8621 §5): черновик ($draft) или письмо в «Отправленные» перед отправкой. */
+export async function emailSetCreate(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  creates: Record<string, Record<string, unknown>>,
+): Promise<SetResult> {
+  const result = await callMethod(apiUrl, authorization, "Email/set", { accountId, create: creates });
+  return parseSet(result);
+}
+
+/** Создание EmailSubmission (RFC 8621 §7.4): письмо по ссылке `#<create id>` того же запроса. */
+export interface SubmissionCreate {
+  identityId: string;
+  /** Идентификатор письма или ссылка `#<cid>` на созданное в этом же запросе. */
+  emailId: string;
+  /** Срок отложенной отправки (UTCDate); окно undo-send ~15 с — если сервер поддерживает. */
+  sendAt?: string;
+  /** `onSuccessDestroyEmail` — сервер уничтожит черновик после отправки. */
+  onSuccessDestroyEmail?: string[];
+}
+
+/** Объект EmailSubmission из ответа: статус undo и доставка по получателям. */
+export interface Submission {
+  id: string;
+  identityId: string;
+  emailId: string;
+  threadId: string;
+  sendAt: string;
+  undoStatus: "pending" | "final" | "canceled";
+  deliveryStatus: Record<string, { smtpReply: string; delivered: string; displayed: string }> | null;
+}
+
+/** `EmailSubmission/set` создание + отмена отложенной отправки (`undoStatus: canceled`). */
+export async function submissionSet(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  changes: {
+    create?: Record<string, SubmissionCreate>;
+    update?: Record<string, Record<string, unknown>>;
+  },
+): Promise<SetResult> {
+  const result = await callMethod(apiUrl, authorization, "EmailSubmission/set", {
+    accountId,
+    ...(changes.create && Object.keys(changes.create).length > 0 ? { create: changes.create } : {}),
+    ...(changes.update && Object.keys(changes.update).length > 0 ? { update: changes.update } : {}),
+  });
+  return parseSet(result);
+}
+
+/** Ответ загрузки блоба (RFC 8620 §6.1): идентификатор для вложений письма. */
+export interface UploadResult {
+  accountId: string;
+  blobId: string;
+  type: string;
+  size: number;
+}
+
+/**
+ * Загрузка файла в блоб (`POST uploadUrl` сессии, RFC 8620 §6.1): тело — File (File API) — браузер
+ * читает файл частями и не держит его в памяти вкладки целиком; отмена — AbortController, прогресс —
+ * через XHR (fetch не даёт upload.onprogress). Превышение `maxSizeUpload` — HTTP 413 (честная ошибка).
+ */
+export function uploadBlob(
+  uploadUrl: string,
+  authorization: string | null,
+  accountId: string,
+  file: File,
+  options: { onProgress?: (loaded: number, total: number) => void; signal?: AbortSignal } = {},
+): Promise<UploadResult> {
+  const url = uploadUrl
+    .replace("{accountId}", encodeURIComponent(accountId))
+    .replace("{blobId}", "")
+    .replace("{name}", "")
+    .replace("{type}", file.type || "application/octet-stream");
+  // XHR ради прогресса и отмены; Authorization — как в jmapFetch.
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", url);
+  if (authorization) xhr.setRequestHeader("Authorization", authorization);
+  xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+  if (options.onProgress) {
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) options.onProgress?.(e.loaded, e.total);
+    };
+  }
+  const done = new Promise<UploadResult>((resolve, reject) => {
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as UploadResult);
+        } catch {
+          reject(new Error("Ответ узла на загрузку — не JSON."));
+        }
+      } else if (xhr.status === 413) {
+        reject(new Error("Файл больше лимита узла (maxSizeUpload)."));
+      } else if (xhr.status === 401) {
+        reject(new Error("Сессия истекла: войдите заново."));
+      } else {
+        reject(new Error(`Узел ответил ошибкой HTTP ${xhr.status} при загрузке.`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Сеть недоступна: загрузка не выполнена."));
+    xhr.onabort = () => reject(new DOMException("Загрузка отменена.", "AbortError"));
+  });
+  options.signal?.addEventListener("abort", () => xhr.abort(), { once: true });
+  xhr.send(file);
+  return done;
 }

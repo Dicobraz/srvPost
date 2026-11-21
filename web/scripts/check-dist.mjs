@@ -17,6 +17,8 @@ const INERT = [
   /^https?:\/\/reactrouter\.com\//, // документация react-router в сообщениях
   /^https?:\/\/(www\.)?github\.com\//, // ссылки на исходники и полифилы в сообщениях (react-router, react-markdown)
   /^https?:\/\/fb\.me\//, // подсказки prop-types в предупреждениях
+  /^https?:\/\/prosemirror\.net\//, // документация prosemirror в тексте сборки (TipTap, WEB-04)
+  /^\/\/i\.test$/, // хвост regex-литерала вида …https?:\/\//i.test в коде библиотек — не адрес
   /^https?:\/\/127\.0\.0\.1(:\d+)?\/?$/, // база разбора адресов в oidc-client-ts (запросов нет)
 ];
 const TEXT = /\.(html|js|mjs|css|svg|txt|json|webmanifest)$/;
