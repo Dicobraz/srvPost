@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { QueryClientProvider } from "@tanstack/react-query";
 
 import { CalendarPage } from "./pages/calendar";
@@ -76,6 +76,22 @@ function Account() {
 }
 
 function Shell() {
+  const navigate = useNavigate();
+  // Ctrl+1..3 — разделы (макет 01: Почта/Календарь/Контакты); в полях ввода тоже — навигация
+  // приложения, не ввод (keymap почты цифры сознательно пропускает).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      const routes = ["Digit1", "Digit2", "Digit3"];
+      const at = routes.indexOf(e.code);
+      if (at === -1) return;
+      e.preventDefault();
+      navigate(["/", "/calendar", "/contacts"][at]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navigate]);
+
   return (
     <div className="shell">
       <header className="header">
