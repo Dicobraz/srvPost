@@ -177,11 +177,25 @@ body {
 }
 
 @media (max-width: 640px) {
-  .nav {
+  /* Полоса «Напоминания» (WEB-19): чип-счётчик над нижней навигацией, разворот — те же секции. */
+  .rembar {
     order: 3;
     border-bottom: none;
     border-top: 1px solid var(--c-frame, #bac1c6);
+  }
+  .nav {
+    order: 4;
+    border-bottom: none;
+    border-top: 1px solid var(--c-frame, #bac1c6);
     justify-content: space-around;
+  }
+  .rembar .rem-sections {
+    flex-direction: column;
+  }
+  .rembar .rem-sec {
+    border-right: none;
+    border-bottom: 1px solid var(--c-frame, #bac1c6);
+    min-width: 0;
   }
 }
 
@@ -3287,4 +3301,293 @@ body {
 
 .cal-panel .ct-row .cal-x {
   flex: none;
+}
+
+/* --- WEB-19: напоминания — постоянная полоса «Напоминания» над разделами (App.tsx) ---
+   Полоса живёт вне .mail, поэтому несёт свои токены поверх темы; янтарный — только сроки
+   (DESIGN.md), красный не трогаем. Свёрнутый вид — счётчик; мобильный — чип над нижней
+   навигацией (media 640 выше), разворот — те же секции. */
+.rembar {
+  --r-panel: var(--c-panel, #ffffff);
+  --r-text: var(--c-text, #161616);
+  --r-muted: var(--c-muted, #5f6b78);
+  --r-frame: var(--c-frame, #bac1c6);
+  --r-fill: #edf2f6;
+  --r-amber-bg: #f8dea8; /* --m-duebg светлой темы */
+  --r-amber-tx: #664700; /* --m-duetx светлой темы */
+  border-bottom: 1px solid var(--r-frame);
+  background: var(--r-panel);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--r-text);
+  flex: none;
+}
+
+[data-theme="dark"] .rembar {
+  --r-fill: #1b2229;
+  --r-amber-bg: #6c5005;
+  --r-amber-tx: #f7e2b8;
+}
+
+.rembar .rem-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 6px 16px;
+  font: inherit;
+  color: var(--r-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.rembar .rem-toggle:hover {
+  background: var(--r-fill);
+}
+
+.rembar .rem-count {
+  font-weight: 600;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--r-fill);
+  color: var(--r-muted);
+}
+
+/* «Просрочено» — янтарным: заливка сроков из макета, не красный. */
+.rembar .rem-count.over {
+  background: var(--r-amber-bg);
+  color: var(--r-amber-tx);
+}
+
+.rembar .rem-sub {
+  color: var(--r-amber-tx);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rembar .rem-chev {
+  margin-left: auto;
+  color: var(--r-muted);
+}
+
+.rembar .rem-sections {
+  display: flex;
+  align-items: stretch;
+  border-top: 1px solid var(--r-frame);
+  flex-wrap: wrap;
+}
+
+.rembar .rem-sec {
+  flex: 1;
+  min-width: 220px;
+  padding: 4px 8px 6px;
+  border-right: 1px solid var(--r-frame);
+}
+
+.rembar .rem-sec:last-child {
+  border-right: none;
+}
+
+.rembar .rem-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--r-text);
+  padding: 3px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.rembar .rem-sec-head:hover {
+  background: var(--r-fill);
+}
+
+.rembar .rem-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--r-fill);
+  color: var(--r-muted);
+}
+
+.rembar .rem-sec.overdue .rem-badge {
+  background: var(--r-amber-bg);
+  color: var(--r-amber-tx);
+}
+
+.rembar .rem-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--r-text);
+  padding: 3px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.rembar .rem-item:hover {
+  background: var(--r-fill);
+}
+
+.rembar .rem-item .subj {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rembar .rem-item .when {
+  flex: none;
+  font-size: 12px;
+  color: var(--r-muted);
+}
+
+.rembar .rem-item .when.over {
+  color: var(--r-amber-tx);
+  font-weight: 600;
+}
+
+.rembar .rem-later {
+  color: var(--r-muted);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+/* Inline-пикер напоминания (WEB-19): панель у точки вызова, без модалок — как контекстное меню. */
+.rem-pick {
+  position: fixed;
+  z-index: 24;
+  width: 300px;
+  padding: 10px 12px;
+  background: var(--m-panel);
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(22, 22, 22, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--m-text);
+}
+
+.rem-pick .cap {
+  font-weight: 600;
+}
+
+.rem-pick .cur {
+  color: var(--m-muted);
+  font-size: 12px;
+}
+
+.rem-pick .row {
+  display: flex;
+  gap: 8px;
+}
+
+.rem-pick .row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  color: var(--m-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.rem-pick .row input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--m-frame);
+  border-radius: 6px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  font: inherit;
+  padding: 3px 6px;
+}
+
+.rem-pick .presets {
+  display: flex;
+  gap: 6px;
+}
+
+.rem-pick .presets button {
+  border: 1px solid var(--m-frame);
+  background: none;
+  color: var(--m-acc);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rem-pick .presets button:hover {
+  background: var(--m-hover);
+}
+
+.rem-pick .acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rem-pick .acts .sp {
+  flex: 1;
+}
+
+.rem-pick .lk {
+  border: none;
+  background: none;
+  color: var(--m-acc);
+  font: inherit;
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+
+.rem-pick .lk:disabled {
+  color: var(--m-muted);
+  cursor: default;
+}
+
+.rem-pick .ok {
+  border: none;
+  border-radius: 4px;
+  background: var(--m-accbtn);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  font-size: 12.5px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rem-pick .ok:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Полоса напоминания письма в панели чтения (WEB-19): нейтральная подложка, как у «Взято». */
+.strip.remind {
+  background: var(--m-fill);
+  color: var(--m-text);
 }

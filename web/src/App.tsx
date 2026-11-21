@@ -12,6 +12,7 @@ import { ComposerPage } from "./compose/Composer";
 import { AuthProvider, useAuth } from "./auth/session";
 import { JmapProvider } from "./mail/context";
 import { ToastProvider } from "./mail/toast";
+import { RemindersBar } from "./mail/reminders-bar";
 import { queryClient } from "./mail/client";
 import { useTheme, type ThemeChoice } from "./theme";
 
@@ -104,6 +105,9 @@ function Shell() {
         </span>
       </header>
       <Nav />
+      {/* Полоса «Напоминания» (WEB-19, решение владельца «всегда перед глазами»): над роутом —
+       * видна на всех разделах; живое обновление — push и минутный тик внутри полосы. */}
+      <RemindersBar />
       <main className="content">
         <Routes>
           <Route path="/" element={<MailPage />} />

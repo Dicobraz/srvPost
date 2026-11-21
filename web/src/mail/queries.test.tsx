@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 
 import { CAP_MAIL, CAP_WEBSOCKET, type EmailSummary, type JmapSession } from "../api/jmap";
 import { keys, queryClient } from "./client";
-import { keywordPatch, movePatch, undoEntries, useFlaggedCount } from "./queries";
+import { keywordPatch, movePatch, undoEntries, useFlaggedCount, useReminders } from "./queries";
 import { envFromSession } from "./sync";
 
 beforeEach(() => {
@@ -75,4 +75,13 @@ test("useFlaggedCount без провайдера — ошибка програ�
       ),
     });
   }).toThrow("useJmap вне JmapProvider");
+});
+
+test("useReminders (WEB-19) без сессии JMAP — пусто и без запроса: полоса живёт во всей оболочке", () => {
+  const { result } = renderHook(() => useReminders(), {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+  expect(result.current).toEqual([]);
 });

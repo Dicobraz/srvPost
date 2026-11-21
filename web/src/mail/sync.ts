@@ -26,6 +26,8 @@ export async function handleSyncEvent(env: JmapEnv): Promise<void> {
   void queryClient.invalidateQueries({ queryKey: ["mailboxes"] });
   void queryClient.invalidateQueries({ queryKey: ["count"] });
   void queryClient.invalidateQueries({ queryKey: ["window"] });
+  // Полоса напоминаний (WEB-19): слова pm.* мог поставить Postman или соседняя вкладка.
+  void queryClient.invalidateQueries({ queryKey: ["reminders"] });
   if (!syncState) return;
   let state = syncState;
   for (let round = 0; round < 8; round += 1) {

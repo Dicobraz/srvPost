@@ -23,6 +23,8 @@ export const keys = {
   email: (id: string) => ["email", id] as const,
   thread: (id: string) => ["thread", id] as const,
   full: (id: string) => ["full", id] as const,
+  /** Полоса напоминаний (WEB-19): письма со словами pm.due/pm.wait/pm.expire. */
+  reminders: (accountId: string) => ["reminders", accountId] as const,
   // --- WEB-06: календарь ---
   calendars: () => ["calendars"] as const,
   calendarEvents: (after: string, before: string) => ["calendar-events", after, before] as const,
