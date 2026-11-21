@@ -98,7 +98,7 @@ describe("взять и вернуть — патчи слов", () => {
 
   test("вернуть: снимает все слова «взял» и общее слово", () => {
     const remove = releaseKeywordChanges({
-      TAKEN: true,
+      [TAKEN]: true,
       "pm.taken.2026-10-22t1042z.me@x.org": true,
       $seen: true,
     });
