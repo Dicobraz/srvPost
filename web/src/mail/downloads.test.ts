@@ -131,14 +131,14 @@ test("blobUrl сессии: accountId/blobId/name по шаблону", () => {
 });
 
 test("fetchBlob: Authorization и MIME как у вложения; 401 — честный текст", async () => {
-  const headers: Record<string, string> = {};
+  let sentAuth: string | null = null;
   let status = 200;
   globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-    for (const [k, v] of Object.entries(new Headers(init?.headers))) headers[k] = v;
+    sentAuth = new Headers(init?.headers).get("authorization");
     return new Response(new Uint8Array([1, 2, 3]), { status });
   }) as unknown as typeof fetch;
   const blob = await fetchBlob("https://node.example/blob", "Bearer t", "application/pdf");
-  expect(headers.authorization).toBe("Bearer t"); // Headers нормализует имя заголовка
+  expect(sentAuth).toBe("Bearer t");
   expect(blob.type).toBe("application/pdf");
   expect(blob.size).toBe(3);
   status = 401;
