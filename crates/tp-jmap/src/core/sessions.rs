@@ -94,6 +94,7 @@ impl Sessions {
     }
 
     /// Сколько сессий учётной записи учитывается сейчас: истёкшие окна снимаются (диагностика и тесты).
+    #[cfg(test)]
     pub(crate) fn count(&self, scope: AccountScope) -> usize {
         if self.inner.limit == 0 {
             return 0;
@@ -200,6 +201,7 @@ struct Inner<'a> {
 
 impl Inner<'_> {
     /// Сколько сессий учётной записи учитывается: соединения push и HTTP-сессии в окне.
+    #[cfg(test)]
     fn count(&self, scope: AccountScope) -> usize {
         match self.state.accounts.get(&scope) {
             Some(active) => active.push.len() + active.recent.len(),
@@ -216,8 +218,8 @@ impl Inner<'_> {
         let limit = self.limit as usize;
         let state = &mut *self.state;
         let active = state.accounts.entry(scope).or_default();
-        if active.recent.contains_key(&key) {
-            active.recent.insert(key, now);
+        if let Some(at) = active.recent.get_mut(&key) {
+            *at = now;
             return true;
         }
         if active.push.len() + active.recent.len() >= limit {
