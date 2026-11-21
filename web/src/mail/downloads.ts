@@ -29,18 +29,25 @@ export function formatSize(size: number): string {
   return `${size} Б`;
 }
 
-/** Нелегальные в имени файла Windows: путь (/ \), служебные (< > : " | ? *) и управляющие. */
-const ILLEGAL_NAME = /[/\\<>:"|?*\u0000-\u001f\u007f]/g;
+/** Нелегальные в имени файла Windows: путь (/ \) и служебные (< > : " | ? *); управляющие
+ * символы заменяются тем же циклом (без regex — правило no-control-regex). */
+const ILLEGAL_CHARS = '/\\<>:"|?*';
 /** Резервные имена Windows (без расширения) — к ним добавляется префикс. */
 const RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 /** Предел длины имени: запас до лимита файловой системы с путём пользователя. */
 const MAX_NAME = 150;
 
-/** Безопасное имя файла для anchor download: путь и нелегальные символы — в «_», хвостовые
- * точки/пробелы (Windows их теряет) долой, резервные имена Windows — с префиксом, длина — до
- * 150 знаков с сохранением расширения; кириллица и прочий Unicode остаются. Пустое — fallback. */
+/** Безопасное имя файла для anchor download: путь, нелегальные и управляющие символы — в «_»,
+ * хвостовые точки/пробелы (Windows их теряет) долой, резервные имена Windows — с префиксом,
+ * длина — до 150 знаков с сохранением расширения; кириллица и прочий Unicode остаются.
+ * Пустое — fallback. */
 export function sanitizeFilename(raw: string, fallback = "вложение"): string {
-  let name = raw.replace(ILLEGAL_NAME, "_").trim().replace(/[ .]+$/, "");
+  let name = "";
+  for (const ch of raw) {
+    const code = ch.codePointAt(0) ?? 0;
+    name += code <= 0x1f || code === 0x7f || ILLEGAL_CHARS.includes(ch) ? "_" : ch;
+  }
+  name = name.trim().replace(/[ .]+$/, "");
   const stem = name.includes(".") ? name.slice(0, name.indexOf(".")) : name;
   if (RESERVED.test(stem)) name = `_${name}`;
   const chars = Array.from(name); // по кодовым точкам: эмодзи и суррогаты не рвём
