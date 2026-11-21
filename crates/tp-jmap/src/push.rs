@@ -279,7 +279,7 @@ impl fmt::Debug for EventSourceQuery {
 /// Параметры `/jmap/ws` и Bearer-токен query (WEB-18): значение — сам токен, без префикса схемы;
 /// `Debug` значение маскирует (в журнале — только признак наличия).
 #[derive(Deserialize)]
-struct WsQuery {
+pub(crate) struct WsQuery {
     access_token: Option<String>,
 }
 
