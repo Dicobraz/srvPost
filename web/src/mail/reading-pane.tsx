@@ -2,23 +2,24 @@
   Чтение (WEB-03): письмо — панель по макету 01. Беседа: «N писем · участников · Развернуть все»;
   тело HTML — hostile input (sanitize.ts): sandboxed iframe без same-origin, внешние картинки —
   opt-in (баннер «Загрузить / Всегда для домена», решение в localStorage), подменённые ссылки —
-  красная полоса безопасности; text/plain — <pre>-вью. Вложения — ссылки скачивания (blob).
-  Карточка приглашения (.ics) — кнопки ответа живые (WEB-06, JMAP-50): метод веб-почты
-  Invitation/respond; приглашение в «Спаме» — структурированная ошибка и перенос письма
-  (invite-respond.ts). WEB-05 — поиск: клик-уточнения по отправителю и дате письма (чипы
-  панели фильтров, click-refinements); подсветка совпадений F3/Shift+F3 — термы поиска
-  передаются в srcdoc (highlight.ts), счётчик совпадений — рядом с темой.
+  красная полоса безопасности; text/plain — <pre>-вью. Вложения (WEB-16): клик по чипу — вкладка
+  просмотра (attachment-viewer.tsx), кнопка на чипе — скачать, «Сохранить все» — серия
+  blob-download с паузой (downloads.ts). Карточка приглашения (.ics) — кнопки ответа живые
+  (WEB-06, JMAP-50): метод веб-почты Invitation/respond; приглашение в «Спаме» —
+  структурированная ошибка и перенос письма (invite-respond.ts). WEB-05 — поиск: клик-уточнения
+  по отправителю и дате письма (чипы панели фильтров, click-refinements); подсветка совпадений
+  F3/Shift+F3 — термы поиска передаются в srcdoc (highlight.ts), счётчик совпадений — рядом
+  с темой.
 */
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  blobUrl,
   type EmailBodyPart,
   type EmailFull,
   type EmailSummary,
-  type JmapSession,
 } from "../api/jmap";
 import { useJmap } from "./context";
+import { downloadAttachment, sanitizeFilename, saveAllAttachments } from "./downloads";
 import {
   buildBodyDoc,
   plainTextHtml,
@@ -91,6 +92,9 @@ interface ReadingPaneProps {
   /** Полоса «Взято» письма общего ящика; null — письмо не из общего ящика, полосы нет. */
   take: TakeStrip | null;
   onTake(): void;
+  // --- WEB-16: вложения ---
+  /** Открыть вложение во вкладке просмотра (маршрут /mail/:id/attach/:partId). */
+  onOpenAttachment(emailId: string, part: EmailBodyPart): void;
   // --- WEB-19: напоминания ---
   /** Текст напоминаний письма («До ср · Ждём ответа») или null — напоминаний нет. */
   reminder: string | null;
@@ -198,18 +202,17 @@ function EmailBody({
   summary,
   full,
   toggles,
-  session,
-  accountId,
   highlightTerms,
   onBodyFrame,
+  onOpenAttachment,
 }: {
   summary: EmailSummary;
   full: EmailFull | null;
   toggles: ReadToggles;
-  session: JmapSession;
-  accountId: string;
   highlightTerms: string[];
   onBodyFrame(frame: HTMLIFrameElement | null): void;
+  /** Открыть вложение во вкладке просмотра (WEB-16). */
+  onOpenAttachment(part: EmailBodyPart): void;
 }) {
   const senderDomain = senderOf(summary).address.split("@")[1] ?? "";
   const allowImages = toggles.imagesThisEmail || toggles.imagesForDomain;
@@ -292,8 +295,9 @@ function EmailBody({
       {attachments.length > 0 && (
         <div className="atts">
           {attachments.map((p) => (
-            <AttachmentChip key={p.partId ?? p.blobId} part={p} session={session} accountId={accountId} />
+            <AttachmentChip key={p.partId ?? p.blobId} part={p} onOpen={onOpenAttachment} />
           ))}
+          {attachments.length > 1 && <SaveAllButton parts={attachments} />}
         </div>
       )}
 
@@ -324,16 +328,72 @@ function EmailBody({
   );
 }
 
-/** Вложение: имя, размер, скачивание (downloadUrl сессии; сохранение всех — WEB-16). */
-function AttachmentChip({ part, session, accountId }: { part: EmailBodyPart; session: JmapSession; accountId: string }) {
+/** Вложение (WEB-16): клик по имени — вкладка просмотра (attachment-viewer.tsx, в приложении —
+ * не модалка), кнопка на чипе — скачать на диск. Скачивание — блоб с Authorization (сервер
+ * отдаёт блобы только по входу, прямая ссылка downloadUrl без заголовка не работает),
+ * имя — sanitized (downloads.ts). */
+function AttachmentChip({ part, onOpen }: { part: EmailBodyPart; onOpen(part: EmailBodyPart): void }) {
+  const env = useJmap();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
   const name = part.name ?? "вложение";
-  const url = part.blobId ? blobUrl(session, accountId, part.blobId, name) : null;
+  const download = async () => {
+    setBusy(true);
+    try {
+      await downloadAttachment(env, env.accountId, part);
+      toast.show(`Скачано: ${sanitizeFilename(name)}`);
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Скачать не удалось.");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <a className="att" href={url ?? undefined} download={name}>
-      <Icon name="doc" size={16} />
-      {name}
-      <span className="sz">{formatSize(part.size)}</span>
-    </a>
+    <span className="att attbtn">
+      <button type="button" className="att-open" title={`Открыть просмотр: ${name}`} onClick={() => onOpen(part)}>
+        <Icon name="doc" size={16} />
+        {name}
+        <span className="sz">{formatSize(part.size)}</span>
+      </button>
+      <button
+        type="button"
+        className="att-dl"
+        aria-label={`Скачать ${name}`}
+        title={`Скачать ${name}`}
+        disabled={busy}
+        onClick={() => void download()}
+      >
+        <Icon name="download" size={14} />
+      </button>
+    </span>
+  );
+}
+
+/** «Сохранить все вложения» (WEB-16, PARITY attach.save_all): серия blob-download с паузой —
+ * браузеры блокируют мульти-download подряд; тосты о старте и итоге (сколько не скачалось). */
+function SaveAllButton({ parts }: { parts: EmailBodyPart[] }) {
+  const env = useJmap();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const saveAll = async () => {
+    setBusy(true);
+    toast.show(`Сохраняем вложения: ${parts.length}…`);
+    try {
+      const outcome = await saveAllAttachments(env, env.accountId, parts);
+      toast.show(
+        outcome.failed === 0
+          ? `Сохранено файлов: ${outcome.saved}`
+          : `Сохранено файлов: ${outcome.saved}, не удалось: ${outcome.failed}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" className="att-all" disabled={busy} onClick={() => void saveAll()}>
+      <Icon name="download" size={14} />
+      Сохранить все
+    </button>
   );
 }
 
@@ -526,6 +586,7 @@ export function ReadingPane({
   onRefinePeriod,
   take,
   onTake,
+  onOpenAttachment,
   reminder,
   onRemind,
   onReminderClear,
@@ -607,10 +668,9 @@ export function ReadingPane({
             summary={m}
             full={stackFull[m.id] ?? null}
             toggles={toggles}
-            session={env.session}
-            accountId={env.accountId}
             highlightTerms={highlightTerms}
             onBodyFrame={onBodyFrame}
+            onOpenAttachment={(part) => onOpenAttachment(m.id, part)}
           />
         </div>
       ))}

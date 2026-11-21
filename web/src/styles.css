@@ -3591,3 +3591,233 @@ body {
   background: var(--m-fill);
   color: var(--m-text);
 }
+
+/*
+  Вложения (WEB-16): чип в панели чтения — имя открывает вкладку просмотра, кнопка со значком —
+  скачивание; «Сохранить все» — ссылка-кнопка в ряду чипов.
+*/
+.att.attbtn {
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.att .att-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.att .att-dl {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: none;
+  color: var(--m-muted);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+}
+
+.att .att-dl:hover,
+.att .att-open:hover {
+  color: var(--m-acc);
+}
+
+.att .att-dl:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.att-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: var(--m-acc);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.att-all:hover {
+  text-decoration: underline;
+}
+
+.att-all:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/*
+  Вкладка просмотра вложения (WEB-16) — маршрут /mail/:id/attach/:partId, стиль вкладки
+  композера (командная строка + карточка, в приложении — не модалка). Переменные темы — те же,
+  что у .compose (вкладка вне .mail). Решение по sandbox PDF — в комментарии
+  attachment-viewer.tsx и в PR.
+*/
+.attachview {
+  --m-screen: var(--c-screen, #e9eef3);
+  --m-panel: var(--c-panel, #ffffff);
+  --m-text: var(--c-text, #161616);
+  --m-muted: var(--c-muted, #5f6b78);
+  --m-frame: var(--c-frame, #bac1c6);
+  --m-err: var(--c-err, #c62828);
+  --m-hover: #edf2f6;
+  --m-fill: #e4eaf0;
+  --m-div: #dce3e8;
+  --m-acc: #0067c0;
+  --m-accbtn: #0067c0;
+  --m-tint: #dff0ff;
+  --m-tinttext: #234e82;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  color: var(--m-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+[data-theme="dark"] .attachview {
+  --m-hover: #1b2229;
+  --m-fill: #232b33;
+  --m-div: #262f38;
+  --m-acc: #7cc4f0;
+  --m-accbtn: #2b6ca8;
+  --m-tint: #23364f;
+  --m-tinttext: #bfddff;
+}
+
+.attachview .attachview-spread {
+  flex: 1;
+}
+
+.attachview .main {
+  flex: 1;
+  padding: 2px 8px 6px;
+  min-height: 0;
+  display: flex;
+}
+
+.attachview .card {
+  flex: 1;
+  background: var(--m-panel);
+  border-radius: 8px;
+  padding: 12px 22px 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.attachview .card .empty {
+  margin: auto;
+  color: var(--m-muted);
+}
+
+/* Шапка вложения: значок, имя, размер, счётчик «2/5». */
+.attachview .avhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--m-div);
+  color: var(--m-i-blue, #2f6db5);
+  min-width: 0;
+}
+
+.attachview .avhead .ttl {
+  color: var(--m-text);
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachview .avhead .sz {
+  color: var(--m-muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.attachview .avhead .cnt {
+  color: var(--m-acc);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Тело вьювера: медиа по центру, PDF и текст — на всю высоту карточки. */
+.attachview .avbody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: 10px;
+}
+
+.attachview .avmedia {
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+  border-radius: 4px;
+}
+
+.attachview .avaudio {
+  margin: auto;
+  width: min(420px, 100%);
+}
+
+.attachview .avframe {
+  flex: 1;
+  width: 100%;
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.attachview .avpre {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+}
+
+/* Честный отказ: нет встроенного просмотра или текст больше лимита — «Скачать». */
+.attachview .avnone {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--m-muted);
+  text-align: center;
+  max-width: 420px;
+}
+
+.attachview .avnone .btn-acc {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 4px;
+  background: var(--m-accbtn);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}

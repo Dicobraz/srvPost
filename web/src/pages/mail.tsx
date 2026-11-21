@@ -19,12 +19,15 @@
   здесь — установка слов pm.due/pm.wait/pm.expire («Напомнить…»/«Ждать ответа…»/«Исчезнет…»,
   inline-пикер, Ctrl+.) и приём переходов полосы (клик секции — быстрый фильтр, клик письма —
   открыть; событие полосы — reminders.ts).
+  WEB-16 — вложения: клик по чипу — вкладка просмотра /mail/:id/attach/:partId (attachment-viewer),
+  «Сохранить все» и скачивание по чипу — downloads.ts; «Скачать письмо (.eml)» — raw blobId
+  письма (mail.export, PARITY).
 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 
-import { mailboxSet, type EmailSummary, type Mailbox, type SearchSnippet } from "../api/jmap";
+import { mailboxSet, type EmailBodyPart, type EmailSummary, type Mailbox, type SearchSnippet } from "../api/jmap";
 import { useJmap, useJmapReady, usePushHub } from "../mail/context";
 import { keys, queryClient } from "../mail/client";
 import {
@@ -60,6 +63,7 @@ import { handleMailKeydown, KEYMAP_HINTS, type MailHotkeyActions } from "../mail
 import { FLAGGED_FOLDER, FolderTree } from "../mail/folder-tree";
 import { MessageList, useQuickCounts, type ListRow } from "../mail/message-list";
 import { ReadingPane, type MatchState, type TakeStrip } from "../mail/reading-pane";
+import { downloadEmailEml } from "../mail/downloads";
 import {
   sharedAccountId,
   sharedMailAccounts,
@@ -659,6 +663,25 @@ function MailApp() {
       `/compose?kind=${kind}&email=${encodeURIComponent(email.id)}${sharedCtx ? `&account=${encodeURIComponent(sharedCtx.id)}` : ""}`,
     );
 
+  // Вкладка просмотра вложения (WEB-16): маршрут /mail/:id/attach/:partId; письмо общего
+  // ящика — с accountId владельца (как композер).
+  const openAttachment = useCallback(
+    (emailId: string, part: EmailBodyPart) => {
+      const key = part.partId ?? part.blobId ?? "";
+      navigate(
+        `/mail/${encodeURIComponent(emailId)}/attach/${encodeURIComponent(key)}${sharedCtx ? `?account=${encodeURIComponent(sharedCtx.id)}` : ""}`,
+      );
+    },
+    [navigate, sharedCtx],
+  );
+
+  /** «Скачать письмо» (WEB-16, mail.export): raw blobId письма → «<тема>.eml». */
+  const downloadEml = (email: EmailSummary) => {
+    void downloadEmailEml(env, email)
+      .then((name) => toast.show(`Письмо скачано: ${name}`))
+      .catch((e: unknown) => toast.show(e instanceof Error ? e.message : "Скачать письмо не удалось."));
+  };
+
   // ---------- Контекстные меню (без модалок) ----------
 
   const emailMenu = (email: EmailSummary, x: number, y: number): MenuItem[] => {
@@ -693,6 +716,9 @@ function MailApp() {
       });
     }
     items.push(
+      { label: "", separator: true },
+      // Скачать письмо (WEB-16, mail.export): исходник .eml — открывается в Postman.
+      { label: "Скачать письмо (.eml)", onSelect: () => downloadEml(email) },
       { label: "", separator: true },
       // Напоминания (WEB-19): «Напомнить…» — inline-пикер (дата+время, пресеты), «Ждать ответа…»
       // и «Исчезнет…» — тот же пикер с датой по желанию, «Снять напоминание» — убрать слова.
@@ -1179,6 +1205,7 @@ function MailApp() {
             }}
             take={takeStrip}
             onTake={takeSelected}
+            onOpenAttachment={openAttachment}
             reminder={reminderText}
             onRemind={(x, y) => selected && openReminderPicker(selected, "due", x, y)}
             onReminderClear={() => selected && clearReminder(selected, null)}

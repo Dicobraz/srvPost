@@ -9,6 +9,7 @@ import { MailPage } from "./pages/mail";
 import { LoginPage } from "./pages/login";
 import { CallbackPage } from "./pages/callback";
 import { ComposerPage } from "./compose/Composer";
+import { AttachmentViewerPage } from "./mail/attachment-viewer";
 import { AuthProvider, useAuth } from "./auth/session";
 import { JmapProvider } from "./mail/context";
 import { ToastProvider } from "./mail/toast";
@@ -113,6 +114,8 @@ function Shell() {
           <Route path="/" element={<MailPage />} />
           {/* Композер — вкладкой приложения (WEB-04, макет 02), не модалка; письмо — её источник. */}
           <Route path="/compose" element={<ComposerPage />} />
+          {/* Просмотр вложения — вкладкой приложения (WEB-16, стиль композера), не модалка. */}
+          <Route path="/mail/:id/attach/:partId" element={<AttachmentViewerPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           {/* Контакты (WEB-07): раздел и карточка — табом приложения (DESIGN.md), не модалкой. */}
           <Route path="/contacts" element={<ContactsPage />} />
