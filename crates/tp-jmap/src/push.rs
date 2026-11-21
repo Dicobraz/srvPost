@@ -12,8 +12,16 @@
 //!
 //! WebSocket: `Request` → `Response` (или `RequestError`) с `requestId`; `WebSocketPushEnable` (`dataTypes`,
 //! `pushState`) / `WebSocketPushDisable` включают и выключают `StateChange` с `pushState`.
+//!
+//! Аутентификация (WEB-18, решение #292 — вариант 1, путь Stalwart): заголовок `Authorization`; без
+//! заголовка — Bearer-токен из query-параметра `access_token` (браузер не ставит заголовки на
+//! WebSocket и EventSource; клиент веба передаёт чистый токен OIDC) — только на этих двух маршрутах,
+//! на остальных запросах query-токен не принимается. Значение параметра не печатается: запросы push
+//! и аутентификация не логируются, `Debug` параметров значение маскирует. Соединение занимает слот
+//! сессии учётной записи (WEB-12) одинаково для заголовка и query.
 
 use std::convert::Infallible;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -247,12 +255,40 @@ async fn tick(t: Option<&mut Interval>) {
     }
 }
 
-/// Параметры `eventSourceUrl`.
-#[derive(Debug, Deserialize)]
+/// Параметры `eventSourceUrl` и Bearer-токен query (WEB-18): значение — сам токен, без префикса
+/// схемы; `Debug` значение маскирует (в журнале — только признак наличия).
+#[derive(Deserialize)]
 pub(crate) struct EventSourceQuery {
     types: Option<String>,
     closeafter: Option<String>,
     ping: Option<u64>,
+    access_token: Option<String>,
+}
+
+impl fmt::Debug for EventSourceQuery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventSourceQuery")
+            .field("types", &self.types)
+            .field("closeafter", &self.closeafter)
+            .field("ping", &self.ping)
+            .field("access_token", &self.access_token.is_some())
+            .finish()
+    }
+}
+
+/// Параметры `/jmap/ws` и Bearer-токен query (WEB-18): значение — сам токен, без префикса схемы;
+/// `Debug` значение маскирует (в журнале — только признак наличия).
+#[derive(Deserialize)]
+struct WsQuery {
+    access_token: Option<String>,
+}
+
+impl fmt::Debug for WsQuery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WsQuery")
+            .field("access_token", &self.access_token.is_some())
+            .finish()
+    }
 }
 
 struct Source {
@@ -307,14 +343,19 @@ fn source_stream(src: Source) -> impl Stream<Item = Result<SseEvent, Infallible>
     })
 }
 
-/// `GET eventSourceUrl` (RFC 8620 §7.3): события `state` (`StateChange`) и `ping`.
+/// `GET eventSourceUrl` (RFC 8620 §7.3): события `state` (`StateChange`) и `ping`. Аутентификация —
+/// заголовок `Authorization`, без него — `access_token` из query (WEB-18, только здесь и `/jmap/ws`);
+/// токен не логируется (запросы push не логируются, `Debug` параметров маскирует значение).
 pub(crate) async fn eventsource(
     State(j): State<Arc<Jmap>>,
     Query(q): Query<EventSourceQuery>,
     peer: Peer,
     headers: HeaderMap,
 ) -> Response {
-    let p = match j.authenticate(&headers, peer.0).await {
+    let p = match j
+        .authenticate_push(&headers, q.access_token.as_deref(), peer.0)
+        .await
+    {
         Ok(p) => p,
         Err(e) => return auth_error(&e),
     };
@@ -370,14 +411,21 @@ fn scope_of(p: &Principal) -> AccountScope {
     }
 }
 
-/// `GET /jmap/ws` (RFC 8887): переход на WebSocket с подпротоколом `jmap`.
+/// `GET /jmap/ws` (RFC 8887): переход на WebSocket с подпротоколом `jmap`. Аутентификация —
+/// заголовок `Authorization`, без него — `access_token` из query (WEB-18, только здесь и
+/// `/jmap/eventsource/`); токен не логируется (запросы push не логируются, `Debug` параметров
+/// маскирует значение).
 pub(crate) async fn websocket(
     State(j): State<Arc<Jmap>>,
+    Query(q): Query<WsQuery>,
     peer: Peer,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let p = match j.authenticate(&headers, peer.0).await {
+    let p = match j
+        .authenticate_push(&headers, q.access_token.as_deref(), peer.0)
+        .await
+    {
         Ok(p) => p,
         Err(e) => return auth_error(&e),
     };
@@ -614,10 +662,26 @@ mod tests {
 
     /// Открывает EventSource с параметрами `query` и дочитывает заголовки ответа.
     async fn eventsource_query(addr: std::net::SocketAddr, query: &str) -> (TcpStream, Vec<u8>) {
+        eventsource_with(addr, query, "Authorization: Bearer token-1\r\n").await
+    }
+
+    /// Открывает EventSource без заголовка `Authorization` — токен в query (WEB-18).
+    async fn eventsource_open_query_token(
+        addr: std::net::SocketAddr,
+        query: &str,
+    ) -> (TcpStream, Vec<u8>) {
+        eventsource_with(addr, query, "").await
+    }
+
+    /// Открывает EventSource с параметрами `query` и заголовками `headers` (без завершающей пустой
+    /// строки), дочитывает заголовки ответа.
+    async fn eventsource_with(
+        addr: std::net::SocketAddr,
+        query: &str,
+        headers: &str,
+    ) -> (TcpStream, Vec<u8>) {
         let mut s = TcpStream::connect(addr).await.expect("connect");
-        let req = format!(
-            "GET /jmap/eventsource/?{query} HTTP/1.0\r\nHost: x\r\nAuthorization: Bearer token-1\r\n\r\n"
-        );
+        let req = format!("GET /jmap/eventsource/?{query} HTTP/1.0\r\nHost: x\r\n{headers}\r\n");
         s.write_all(req.as_bytes()).await.expect("write");
         let mut buf = Vec::new();
         let mut chunk = [0u8; 1024];
@@ -633,6 +697,28 @@ mod tests {
         assert!(head.contains("200 ok"), "{head}");
         assert!(head.contains("text/event-stream"), "{head}");
         (s, buf)
+    }
+
+    /// Статус и заголовки ответа на сырой запрос (keep-alive: чтение до пустой строки, тело не ждём).
+    async fn head_of(addr: std::net::SocketAddr, req: &str) -> String {
+        let mut s = TcpStream::connect(addr).await.expect("connect");
+        s.write_all(req.as_bytes()).await.expect("write");
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = tokio::time::timeout(WAIT, s.read(&mut chunk))
+                .await
+                .expect("no response")
+                .expect("read");
+            assert!(n > 0, "closed before headers");
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// Статус ответа на сырой запрос.
+    fn status(head: &str) -> &str {
+        head.split(' ').nth(1).unwrap_or_default()
     }
 
     /// Дочитывает поток EventSource до закрытия; первое событие `state` — `StateChange`.
@@ -811,6 +897,185 @@ mod tests {
         )
         .await;
         assert_eq!(next_json(&mut ws2).await["requestId"], "r2");
+    }
+
+    /// WEB-18: WebSocket без заголовка `Authorization`, Bearer-токен в query (`?access_token=`) —
+    /// подключение, подписка и `StateChange` работают (браузер не ставит заголовки на WebSocket).
+    #[tokio::test]
+    async fn websocket_query_token() {
+        let env = Env::new().await;
+        let addr = serve(env.jmap.clone()).await;
+        let acc = env.account();
+        let mut req = format!("ws://{addr}/jmap/ws?access_token=token-1")
+            .into_client_request()
+            .expect("request");
+        req.headers_mut()
+            .insert("Sec-WebSocket-Protocol", "jmap".parse().expect("header"));
+        let tcp = TcpStream::connect(addr).await.expect("connect");
+        let (mut ws, resp) = client_async(req, tcp).await.expect("handshake");
+        assert_eq!(
+            resp.headers()
+                .get("sec-websocket-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("jmap")
+        );
+
+        send(
+            &mut ws,
+            json!({"@type": "WebSocketPushEnable", "dataTypes": ["Email"]}),
+        )
+        .await;
+        env.deliver(
+            env.mailbox(SpecialUse::Inbox),
+            &mail("PushQuery", "a@x.test", "", "b"),
+            Flags::new(),
+        )
+        .await;
+        let c = next_json(&mut ws).await;
+        assert_eq!(c["@type"], "StateChange", "{c}");
+        assert!(c["changed"][&acc]["Email"].is_string(), "{c}");
+    }
+
+    /// WEB-18: EventSource без заголовка `Authorization`, Bearer-токен в query — подписка и событие
+    /// `state` работают.
+    #[tokio::test]
+    async fn eventsource_query_token() {
+        let env = Env::new().await;
+        let addr = serve(env.jmap.clone()).await;
+        let acc = env.account();
+        let (s, buf) = eventsource_open_query_token(
+            addr,
+            "types=*&closeafter=state&ping=0&access_token=token-1",
+        )
+        .await;
+        env.deliver(
+            env.mailbox(SpecialUse::Inbox),
+            &mail("PushQuery", "a@x.test", "", "b"),
+            Flags::new(),
+        )
+        .await;
+        let v = eventsource_state_change(s, buf).await;
+        assert!(v["changed"][&acc]["Email"].is_string(), "{v}");
+    }
+
+    /// WEB-18: на push-маршрутах токен в query проверяется как заголовочный — неверный или чужой
+    /// (неизвестный серверу) токен даёт 401 на обоих маршрутах; заголовок есть, но неверен — отказ
+    /// и при валидном query-токене (перехода к query нет).
+    #[tokio::test]
+    async fn push_query_token_rejected() {
+        let env = Env::new().await;
+        let addr = serve(env.jmap.clone()).await;
+
+        // WebSocket: полный апгрейд с неверным токеном в query — 401 до перехода.
+        let head = head_of(
+            addr,
+            "GET /jmap/ws?access_token=nope HTTP/1.1\r\nHost: x\r\n\
+             Connection: Upgrade\r\nUpgrade: websocket\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Protocol: jmap\r\n\r\n",
+        )
+        .await;
+        assert_eq!(status(&head), "401", "{head}");
+        assert!(head.to_lowercase().contains("www-authenticate"), "{head}");
+
+        // EventSource: неверный токен — 401 (HTTP/1.0 — ответ дочитывается до закрытия соединения).
+        let (st, head, _) = crate::testenv::http10(
+            addr,
+            b"GET /jmap/eventsource/?types=*&ping=0&access_token=nope HTTP/1.0\r\nHost: x\r\n\r\n",
+        )
+        .await;
+        assert_eq!(st, 401, "{head}");
+
+        // Неверный заголовок не спасает даже валидный query-токен.
+        let (st, head, _) = crate::testenv::http10(
+            addr,
+            b"GET /jmap/eventsource/?types=*&ping=0&access_token=token-1 HTTP/1.0\r\nHost: x\r\n\
+              Authorization: Bearer nope\r\n\r\n",
+        )
+        .await;
+        assert_eq!(st, 401, "{head}");
+    }
+
+    /// WEB-18: query-токен принимают только два push-маршрута — `/jmap/api` и `/jmap/session` с
+    /// валидным `access_token` в query и без заголовка отвечают 401 (заголовок-only).
+    #[tokio::test]
+    async fn api_rejects_query_token() {
+        let env = Env::new().await;
+        let addr = serve(env.jmap.clone()).await;
+        let (st, head, _) = crate::testenv::http10(
+            addr,
+            b"POST /jmap/api?access_token=token-1 HTTP/1.0\r\nHost: x\r\n\
+              Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        )
+        .await;
+        assert_eq!(st, 401, "{head}");
+        let (st, head, _) = crate::testenv::http10(
+            addr,
+            b"GET /jmap/session?access_token=token-1 HTTP/1.0\r\nHost: x\r\n\r\n",
+        )
+        .await;
+        assert_eq!(st, 401, "{head}");
+    }
+
+    /// WEB-12 + WEB-18: соединение push, принятое по query-токену, занимает слот сессии учётной
+    /// записи наравне с заголовочным путём: второе соединение сверх лимита — problem details 400,
+    /// после закрытия первого слот освобождается.
+    #[tokio::test]
+    async fn query_token_session_limit() {
+        let cfg = JmapConfig {
+            session_limit: 1,
+            ..JmapConfig::default()
+        };
+        let env = Env::with(cfg, Vec::new()).await;
+        env.auth.add_token("token-2", env.principal.clone());
+        let addr = serve(env.jmap.clone()).await;
+        let (s, _) =
+            eventsource_open_query_token(addr, "types=*&ping=0&access_token=token-1").await;
+
+        // Второе соединение (заголовком, другим токеном той же записи) сверх лимита — 400.
+        let (st, head, body) = crate::testenv::http10(
+            addr,
+            b"GET /jmap/eventsource/?types=*&ping=0 HTTP/1.0\r\nHost: x\r\n\
+              Authorization: Bearer token-2\r\n\r\n",
+        )
+        .await;
+        assert_eq!(st, 400, "{head}");
+        assert!(head.contains("application/problem+json"), "{head}");
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("maxSessionsPerAccount"), "{body}");
+
+        // Закрытие первого соединения освобождает слот — заголовочный путь снова входит
+        // (сервер обрабатывает закрытие не мгновенно — повтор с попытками, отказ не паникует).
+        drop(s);
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let ok = tokio::time::timeout(Duration::from_millis(500), async {
+                let mut stream = TcpStream::connect(addr).await.expect("connect");
+                stream
+                    .write_all(
+                        b"GET /jmap/eventsource/?types=*&ping=0 HTTP/1.0\r\nHost: x\r\n\
+                          Authorization: Bearer token-2\r\n\r\n",
+                    )
+                    .await
+                    .expect("write");
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut chunk).await.expect("read");
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                String::from_utf8_lossy(&buf).contains("200 OK")
+            })
+            .await
+            .unwrap_or(false);
+            if ok {
+                return;
+            }
+        }
+        panic!("слот не освободился после закрытия соединения push");
     }
 
     /// Изменение автоответа (`SieveChanged`) → `StateChange` с типами `VacationResponse` и `SieveScript`.

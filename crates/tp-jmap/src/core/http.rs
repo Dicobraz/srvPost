@@ -1,7 +1,10 @@
 //! HTTP JMAP (RFC 8620 §2, §3.1): `/.well-known/jmap` и `/jmap/session` — объект сессии,
 //! `POST /jmap/api` — запрос API. Аутентификация — `Authorization: Bearer` (OAuth 2.0) или
-//! `Basic` (пароль приложения) через [`Authenticator`](tp_contracts::auth::Authenticator).
-//! Загрузка и скачивание blob — `crate::blob`, push (EventSource, WebSocket) — `crate::push`;
+//! `Basic` (пароль приложения) через [`Authenticator`](tp_contracts::auth::Authenticator);
+//! на двух маршрутах push (`/jmap/ws`, `/jmap/eventsource`) без заголовка принимается и
+//! Bearer-токен из query-параметра `access_token` ([`Jmap::authenticate_push`], WEB-18) —
+//! браузер не ставит заголовки на WebSocket и EventSource. Загрузка и скачивание blob —
+//! `crate::blob`, push (EventSource, WebSocket) — `crate::push`;
 //! автонастройка клиентов (`/.well-known/caldav`, `/.well-known/carddav`, Thunderbird, `.mobileconfig`) — `crate::autoconfig`.
 
 use std::convert::Infallible;
@@ -120,6 +123,35 @@ impl Jmap {
         peer: Option<IpAddr>,
     ) -> tp_contracts::Result<Principal> {
         let (creds, _) = Self::credentials(headers)?;
+        self.d.auth.verify(creds, peer).await
+    }
+
+    /// Субъект запроса push (WEB-18, решение #292 — вариант 1, путь Stalwart): заголовок
+    /// `Authorization`; заголовка нет — Bearer-токен из query-параметра `access_token` (браузер не
+    /// ставит заголовки на WebSocket и EventSource). Заголовок есть, но неверен, — отказ без
+    /// перехода к query; значение параметра — сам токен (клиент веба передаёт чистый токен OIDC,
+    /// префикс схемы в параметре не предусмотрен), `Basic` в query не принимается. Проверка — тот же
+    /// [`Authenticator`](tp_contracts::auth::Authenticator), что и для заголовка (учёт сессий
+    /// WEB-12 ведётся дальше по субъекту — `enter_push` — одинаково для обоих путей).
+    ///
+    /// Токен в журналы не попадает: обработчики push и аутентификация запрос не логируют (ни
+    /// трейсов запросов, ни печатей query в коде нет — гарантия WEB-18), `Debug` параметров
+    /// запросов (`crate::push::EventSourceQuery`, `crate::push::WsQuery`) значение маскирует.
+    pub(crate) async fn authenticate_push(
+        &self,
+        headers: &HeaderMap,
+        access_token: Option<&str>,
+        peer: Option<IpAddr>,
+    ) -> tp_contracts::Result<Principal> {
+        let creds = if headers.contains_key(header::AUTHORIZATION) {
+            Self::credentials(headers)?.0
+        } else {
+            let token = access_token
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .ok_or(Error::Forbidden)?;
+            Credentials::Bearer(token.to_owned())
+        };
         self.d.auth.verify(creds, peer).await
     }
 
