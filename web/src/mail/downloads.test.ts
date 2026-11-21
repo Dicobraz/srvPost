@@ -138,7 +138,7 @@ test("fetchBlob: Authorization и MIME как у вложения; 401 — че�
     return new Response(new Uint8Array([1, 2, 3]), { status });
   }) as unknown as typeof fetch;
   const blob = await fetchBlob("https://node.example/blob", "Bearer t", "application/pdf");
-  expect(headers.Authorization).toBe("Bearer t");
+  expect(headers.authorization).toBe("Bearer t"); // Headers нормализует имя заголовка
   expect(blob.type).toBe("application/pdf");
   expect(blob.size).toBe(3);
   status = 401;
@@ -156,7 +156,7 @@ test("downloadAttachment: сохраняется под sanitized именем",
     saved.push((this as HTMLAnchorElement).download);
   });
   await downloadAttachment(ENV, "acc1", part({ name: "../плохое<имя>.pdf" }));
-  expect(saved).toEqual([".._плохое_имя.pdf"]);
+  expect(saved).toEqual([".._плохое_имя_.pdf"]); // и < и > — в «_»
 });
 
 test("downloadEmailEml: raw blobId письма под «<тема>.eml»", async () => {
