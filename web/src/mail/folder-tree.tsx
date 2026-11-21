@@ -4,11 +4,14 @@
   остальные папки — по имени с отступом родителя. Счётчики непрочитанных; перетаскивание письма
   (drop — перенос, решение #134: «Спам» — обычный перенос); inline-создание папки; контекстное
   меню — переименование/удаление (удаление с письмами — inline-подтверждение).
+  WEB-15 — секция «Общие»: общие ящики сессии (JMAP-49) по строке на ящик; папки чужого аккаунта
+  Mailbox/get делегату не отдаёт, поэтому ветка — ящик целиком (ключ `shared:<accountId>`).
 */
 import { useState } from "react";
 
 import type { Mailbox } from "../api/jmap";
 import { Icon, type IconName } from "./icons";
+import { sharedFolderKey, type SharedMailAccount } from "./shared";
 
 /** Виртуальная папка «Отмеченные» ($flagged — письма из всех папок). */
 export const FLAGGED_FOLDER = "flagged";
@@ -66,7 +69,7 @@ export function buildTree(mailboxes: Mailbox[], flaggedUnread: number): TreeRow[
 interface FolderTreeProps {
   mailboxes: Mailbox[];
   flaggedUnread: number;
-  selected: string | null; // id папки или FLAGGED_FOLDER
+  selected: string | null; // id папки, FLAGGED_FOLDER или shared:<accountId>
   onSelect(id: string | null): void;
   /** Письмо перетащили на папку (перенос, Email/set mailboxIds). */
   onDropTo(mailboxId: string): void;
@@ -79,6 +82,10 @@ interface FolderTreeProps {
   onRenameDraft(id: string, name: string): void;
   onRename(id: string, name: string): void;
   onCancelRename(): void;
+  /** Общие ящики сессии (WEB-15, JMAP-49) — секция «Общие»; пусто — секции нет. */
+  shared?: SharedMailAccount[];
+  /** Счётчики непрочитанных общих ящиков (accountId → писем). */
+  sharedUnread?: Record<string, number>;
 }
 
 export function FolderTree({
@@ -93,11 +100,14 @@ export function FolderTree({
   onRenameDraft,
   onRename,
   onCancelRename,
+  shared = [],
+  sharedUnread = {},
 }: FolderTreeProps) {
   const rows = buildTree(mailboxes, flaggedUnread);
   const [dropId, setDropId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  const [sharedOpen, setSharedOpen] = useState(true);
 
   return (
     <nav className="tree" aria-label="Папки">
@@ -164,6 +174,34 @@ export function FolderTree({
           </button>
         );
       })}
+      {shared.length > 0 && (
+        <>
+          <button
+            type="button"
+            className="fold tgroup"
+            aria-expanded={sharedOpen}
+            onClick={() => setSharedOpen((v) => !v)}
+            title="Общие ящики: доступны по правам (ACL)"
+          >
+            <Icon name="folder" size={16} />
+            <span className="name">Общие</span>
+          </button>
+          {sharedOpen &&
+            shared.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className={["fold", "child", "shared", selected === sharedFolderKey(a.id) ? "on" : ""].join(" ").trim()}
+                onClick={() => onSelect(sharedFolderKey(a.id))}
+                title={`${a.name} — общий ящик${a.readOnly ? " · только чтение" : ""}`}
+              >
+                <Icon name="person" size={16} />
+                <span className="name">{a.name}</span>
+                {(sharedUnread[a.id] ?? 0) > 0 && <span className="n">{sharedUnread[a.id]}</span>}
+              </button>
+            ))}
+        </>
+      )}
       {creating ? (
         <form
           className="fold"

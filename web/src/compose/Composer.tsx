@@ -20,6 +20,7 @@ import { emailGet, identitiesGet, FULL_PROPERTIES, type EmailFull, type Identity
 import { useJmap } from "../mail/context";
 import { queryClient } from "../mail/client";
 import { useMailboxes } from "../mail/queries";
+import { sharedMailAccounts, type SharedMailAccount } from "../mail/shared";
 import { Icon } from "../mail/icons";
 import { useToast } from "../mail/toast";
 import { sanitizeComposeHtml } from "./word-paste";
@@ -31,7 +32,7 @@ import { loadContactSources, domainsOf } from "./contacts";
 import { loadSendHistory } from "./send-history";
 import { mergeSuggestions } from "../contacts/autocomplete";
 import { composeWarnings, type Warning } from "./warnings";
-import { snapshotHasContent, type Attachment, type ComposeSnapshot } from "./model";
+import { fromOptions, snapshotHasContent, type Attachment, type ComposeSnapshot, type FromChoice } from "./model";
 import {
   forwardQuoteHtml,
   forwardAttachments,
@@ -162,6 +163,13 @@ export function ComposerPage() {
     if (kind !== "new" || !toParam) return [];
     return parseRecipients(toParam).filter((r) => isValidEmail(r.email));
   }, [kind, toParam]);
+  // Ответ на письмо общего ящика (WEB-15): источник — по accountId владельца; «От» по умолчанию —
+  // общий адрес (право отправки проверяет сервер — SendAs/SendOnBehalf).
+  const sharedAccounts = useMemo(() => sharedMailAccounts(env.session), [env.session]);
+  const sourceAccount = useMemo(
+    () => sharedAccounts.find((a) => a.id === params.get("account")) ?? null,
+    [sharedAccounts, params],
+  );
 
   // Identity отправителя (Send As — из JMAP Identity/get; право проверяет сервер — честная ошибка).
   const identities = useQuery<Identity[]>({
@@ -171,14 +179,14 @@ export function ComposerPage() {
   });
   const identity = identities.data?.[0] ?? null;
 
-  // Источник ответа/пересылки или восстанавливаемый черновик.
+  // Источник ответа/пересылки или восстанавливаемый черновик (общий ящик — по его accountId).
   const source = useQuery<EmailFull | null>({
-    queryKey: ["compose-source", sourceId ?? draftId ?? ""],
+    queryKey: ["compose-source", sourceAccount?.id ?? env.accountId, sourceId ?? draftId ?? ""],
     queryFn: async () => {
       const list = await emailGet<EmailFull>(
         env.apiUrl,
         env.authorization,
-        env.accountId,
+        sourceAccount?.id ?? env.accountId,
         [sourceId ?? draftId ?? ""],
         FULL_PROPERTIES,
       );
@@ -235,13 +243,15 @@ export function ComposerPage() {
   // иначе начальное содержимое осталось бы от прежнего письма.
   return (
     <Composer
-      key={sourceId ?? draftId ?? kind}
+      key={`${sourceId ?? draftId ?? kind}-${sourceAccount?.id ?? ""}`}
       identity={identity}
       identities={identities.data ?? []}
       kind={kind}
       source={sourceId ? (source.data ?? null) : null}
       draft={draftId ? (source.data ?? null) : null}
       prefillTo={prefillTo}
+      sharedAccounts={sharedAccounts}
+      sourceAccount={sourceAccount}
     />
   );
 }
@@ -256,9 +266,13 @@ interface ComposerProps {
   draft: EmailFull | null;
   /** Получатель из карточки контакта (WEB-07 «Написать») — новое письмо. */
   prefillTo: Recipient[];
+  /** Общие ящики сессии (WEB-15) — варианты «От» с их адресами. */
+  sharedAccounts: SharedMailAccount[];
+  /** Ответ из общего ящика: «От» по умолчанию — его адрес. */
+  sourceAccount: SharedMailAccount | null;
 }
 
-function Composer({ identity, identities, kind, source, draft, prefillTo }: ComposerProps) {
+function Composer({ identity, identities, kind, source, draft, prefillTo, sharedAccounts, sourceAccount }: ComposerProps) {
   const env = useJmap();
   const toast = useToast();
   const navigate = useNavigate();
@@ -283,13 +297,28 @@ function Composer({ identity, identities, kind, source, draft, prefillTo }: Comp
   );
   const knownDomains = useMemo(() => domainsOf(candidates), [candidates]);
 
-  // Адрес отправителя (Send As): переключение — состояние; права проверяет сервер.
-  const [fromId, setFromId] = useState(identity.id);
-  const from = identities.find((i) => i.id === fromId) ?? identity;
+  // Адрес отправителя (Send As, WEB-15): свои identity плюс адреса общих ящиков сессии.
+  // Отправка всегда от своей identity (identityId); общий адрес — только заголовок From,
+  // право SendAs/SendOnBehalf проверяет сервер (честная ошибка — тост).
+  const choices = useMemo(() => fromOptions(identity, identities, env.session), [identity, identities, env.session]);
+  const defaultChoice = useMemo(() => {
+    if (sourceAccount) {
+      const shared = choices.find((c) => c.shared && c.email === sourceAccount.name);
+      if (shared) return shared;
+    }
+    return choices.find((c) => c.email === identity.email) ?? choices[0];
+  }, [choices, sourceAccount, identity.email]);
+  const [fromEmail, setFromEmail] = useState(defaultChoice.email);
+  const choice = choices.find((c) => c.email === fromEmail) ?? defaultChoice;
+  const from = useMemo(() => ({ name: choice.name, email: choice.email }), [choice]);
+  const fromIdentity: Identity = choice.shared
+    ? { ...identity, name: choice.name, email: choice.email }
+    : identity;
 
   // Начальное содержимое — один раз на вкладку (ComposerPage гарантирует готовность данных).
   // Получатель из контакта — в новое письмо; ответ/пересылка и черновик его не перебивают.
-  const [initial] = useState(() => buildInitial(kind, draft, source, identity, env.selfAddress));
+  // Ответ из общего ящика — «От» по умолчанию его адрес (fromIdentity).
+  const [initial] = useState(() => buildInitial(kind, draft, source, fromIdentity, env.selfAddress));
   const [to, setTo] = useState<Recipient[]>(initial.to.length > 0 ? initial.to : prefillTo);
   const [cc, setCc] = useState<Recipient[]>(initial.cc);
   const [bcc, setBcc] = useState<Recipient[]>(initial.bcc);
@@ -418,7 +447,9 @@ function Composer({ identity, identities, kind, source, draft, prefillTo }: Comp
       const snapshot = snapshotWith({});
       const result = await sendMessage(env, snapshot, {
         sentMailboxId,
-        identityId: from.id,
+        // Отправка — от своей identity (RFC 8621 §7.1: identity учётной записи); From письма —
+        // выбранный адрес (общий ящик — право SendAs/SendOnBehalf проверяет сервер).
+        identityId: identity.id,
         destroyDraftId: saver?.draftId ?? null,
         undoable: supportsUndoSend(env.session, env.accountId),
         references: source && kind !== "forward" ? replyReferences(source) : undefined,
@@ -528,16 +559,17 @@ function Composer({ identity, identities, kind, source, draft, prefillTo }: Comp
         <div className={`card${dropHot ? " drop" : ""}`}>
           <div className="frow">
             <span className="lbl">От</span>
-            {identities.length > 1 ? (
+            {choices.length > 1 ? (
               <select
                 className="fromsel"
-                value={fromId}
-                onChange={(e) => setFromId(e.target.value)}
+                value={choice.email}
+                onChange={(e) => setFromEmail(e.target.value)}
                 aria-label="Адрес отправителя (Send As)"
+                title={choice.shared ? "Общий ящик · отправка от имени, право проверяет сервер" : "Адрес отправителя (Send As)"}
               >
-                {identities.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.name || i.email} &lt;{i.email}&gt;
+                {choices.map((c: FromChoice) => (
+                  <option key={c.email} value={c.email}>
+                    {c.shared ? `${c.email} (общий ящик)` : `${c.name || c.email} <${c.email}>`}
                   </option>
                 ))}
               </select>

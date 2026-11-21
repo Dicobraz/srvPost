@@ -8,6 +8,7 @@
   F6 — фокус-роум по трём панелям (дерево → список → чтение).
   WEB-05: Ctrl+K — палитра команд (palette.*), F3/Shift+F3 — совпадения поиска в открытом письме
   (работают и в полях ввода — как в Postman).
+  WEB-15: Ctrl+J — «Взять в работу» письма общего ящика (mail.take Postman).
 */
 
 /** Действия почты, привязанные к клавишам (страница передаёт замыкания). */
@@ -38,6 +39,8 @@ export interface MailHotkeyActions {
   /** Совпадения поиска в открытом письме: следующее/предыдущее (F3/Shift+F3, WEB-05). */
   findNext(): void;
   findPrev(): void;
+  /** «Взять в работу»/«Вернуть» — письмо общего ящика (Ctrl+J, WEB-15). */
+  takeSelected(): void;
 }
 
 /** Поле ввода: буквы и цифры там остаются вводу (Ctrl-команды действуют и там). */
@@ -76,6 +79,11 @@ export function handleMailKeydown(event: KeyboardEvent, actions: MailHotkeyActio
       case "KeyN":
         event.preventDefault();
         actions.compose();
+        return true;
+      case "KeyJ":
+        // «Взять в работу» письма общего ящика (WEB-15, как mail.take Postman).
+        event.preventDefault();
+        actions.takeSelected();
         return true;
       case "KeyK":
         event.preventDefault();
@@ -166,6 +174,7 @@ export function handleMailKeydown(event: KeyboardEvent, actions: MailHotkeyActio
 export const KEYMAP_HINTS: Array<{ keys: string; action: string }> = [
   { keys: "Ctrl+N", action: "Новое письмо" },
   { keys: "Ctrl+K", action: "Палитра команд" },
+  { keys: "Ctrl+J", action: "Взять в работу" },
   { keys: "Ctrl+R / Ctrl+Shift+R", action: "Ответить / всем" },
   { keys: "Ctrl+F", action: "Переслать" },
   { keys: "Ctrl+Q / Ctrl+U", action: "Прочитано / непрочитано" },

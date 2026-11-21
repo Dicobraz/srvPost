@@ -41,6 +41,8 @@ export interface ListRow {
   threadExpanded: boolean;
   /** Письмо внутри развёрнутого потока — с отступом темы. */
   threadChild: boolean;
+  /** «Назначено: …» — письмо общего ящика взято в работу (WEB-15); null — метки нет. */
+  takenLabel?: string | null;
 }
 
 /** Чип уточнения (панель фильтров) для рендера с крестиком. */
@@ -111,13 +113,14 @@ interface MessageListProps {
   onSaveStart(): void;
 }
 
-/** Счётчики быстрых фильтров окна (кэш TanStack, ключ — папка). */
-export function useQuickCounts(mailboxId: string | null): Partial<Record<QuickFilterKind, number>> {
+/** Счётчики быстрых фильтров окна (кэш TanStack, ключ — папка); общий ящик — по его accountId
+ * (WEB-15). */
+export function useQuickCounts(mailboxId: string | null, accountId?: string): Partial<Record<QuickFilterKind, number>> {
   const env = useJmap();
   const base: Record<string, unknown> = mailboxId ? { inMailbox: mailboxId } : {};
   return (
     useQuery<Partial<Record<QuickFilterKind, number>>>({
-      queryKey: ["quick-counts", mailboxId],
+      queryKey: ["quick-counts", accountId ?? env.accountId, mailboxId],
       queryFn: async () => {
         const masks: Array<[QuickFilterKind, Record<string, unknown>]> = [
           ["threat", { hasKeyword: "pm.threat" }],
@@ -131,7 +134,7 @@ export function useQuickCounts(mailboxId: string | null): Partial<Record<QuickFi
           const q = await emailQuery(
             env.apiUrl,
             env.authorization,
-            env.accountId,
+            accountId ?? env.accountId,
             { operator: "AND", conditions: [base, mask] },
             [{ property: "receivedAt", isAscending: false }],
             { limit: 0, total: true },
@@ -387,6 +390,12 @@ export function MessageList({
                     )}
                     {wait && !due && <span className="st">{wait}</span>}
                     {expire && !due && !wait && <span className="st">{expire}</span>}
+                    {row.takenLabel && (
+                      <span className="st taken" title="Письмо общего ящика взято в работу">
+                        <Icon name="person" size={14} />
+                        {row.takenLabel}
+                      </span>
+                    )}
                     <span
                       className={searchActive ? "time rfx" : "time"}
                       title={searchActive ? "Уточнить: этот месяц" : undefined}

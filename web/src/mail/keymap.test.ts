@@ -26,6 +26,7 @@ function actions(): { act: MailHotkeyActions; calls: string[] } {
     openPalette: () => calls.push("palette"),
     findNext: () => calls.push("findNext"),
     findPrev: () => calls.push("findPrev"),
+    takeSelected: () => calls.push("take"),
   };
   return { act, calls };
 }
@@ -104,6 +105,14 @@ test("WEB-05: Ctrl+K — палитра команд; F3/Shift+F3 — совпа
   expect(handleMailKeydown(key("F3"), act)).toBe(true);
   expect(handleMailKeydown(key("F3", { shift: true }), act)).toBe(true);
   expect(calls).toEqual(["palette", "findNext", "findPrev"]);
+});
+
+test("WEB-15: Ctrl+J — «Взять в работу», голая J — навигация по списку", () => {
+  const { act, calls } = actions();
+  expect(handleMailKeydown(key("KeyJ", { ctrl: true }), act)).toBe(true);
+  expect(handleMailKeydown(key("KeyJ"), act)).toBe(true);
+  expect(KEYMAP_HINTS.some((h) => h.keys === "Ctrl+J" && h.action === "Взять в работу")).toBe(true);
+  expect(calls).toEqual(["take", "next"]);
 });
 
 test("WEB-05: F3 работает и в поле ввода (поиск не мешает навигации по совпадениям)", () => {
