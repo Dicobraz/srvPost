@@ -31,7 +31,7 @@ import { isSearchActive, searchFilter } from "./search";
 import type { SearchRefinement } from "./search";
 import { keys, queryClient } from "./client";
 import { rememberSyncState } from "./sync";
-import { useJmap } from "./context";
+import { useJmap, useJmapOrNull } from "./context";
 import type { JmapEnv } from "./types";
 
 /** Аргументы окна списка: папка, быстрые фильтры, сортировка, вид потоков. */
@@ -302,6 +302,41 @@ export function useSharedUnreads(accountIds: string[]): Record<string, number> {
   return query.data ?? {};
 }
 
+/** Письма с напоминаниями (WEB-19, полоса «Напоминания»): Email/query по маскам общих слов —
+ * `pm.due`/`pm.wait`/`pm.expire`; и Postman, и веб ставят общее слово рядом с датой (S5-04),
+ * поэтому общего слова фильтру достаточно. Свои письма (общий ящик — отдельно: Email/set чужому
+ * accountId сервер не отдаёт, там напоминание не поставить). Письма кладутся в общий кэш по id —
+ * клик по пункту полосы открывает письмо без похода в сеть. Сессии нет (заставка/ошибка почты) —
+ * пусто, без запроса: полоса живёт во всей оболочке. */
+export function useReminders(): EmailSummary[] {
+  const env = useJmapOrNull();
+  const accountId = env?.accountId ?? "none";
+  const query = useQuery<EmailSummary[]>({
+    queryKey: keys.reminders(accountId),
+    queryFn: async () => {
+      const e = env as JmapEnv; // enabled = есть env
+      const filter: EmailQueryFilter = {
+        operator: "OR",
+        conditions: [{ hasKeyword: "pm.due" }, { hasKeyword: "pm.wait" }, { hasKeyword: "pm.expire" }],
+      };
+      const q = await emailQuery(
+        e.apiUrl,
+        e.authorization,
+        e.accountId,
+        filter,
+        [{ property: "receivedAt", isAscending: false }],
+        { limit: 200, total: false },
+      );
+      const summaries = await fetchChunked<EmailSummary>(e, e.accountId, q.ids, SUMMARY_PROPERTIES);
+      cacheEmails(summaries);
+      return summaries;
+    },
+    enabled: Boolean(env),
+    staleTime: 30_000,
+  });
+  return query.data ?? [];
+}
+
 // ---------- Мутации (Email/set): оптимистичный кэш, Undo — обратный патч ----------
 
 /** Ключевые слова письма (патч keywords — Map слово → true/false). */
@@ -348,6 +383,8 @@ function invalidateAfterChange(): void {
   void queryClient.invalidateQueries({ queryKey: ["window"] });
   void queryClient.invalidateQueries({ queryKey: ["mailboxes"] });
   void queryClient.invalidateQueries({ queryKey: ["count"] });
+  // Полоса напоминаний (WEB-19): слова pm.* меняются мутациями — пересчитать сразу.
+  void queryClient.invalidateQueries({ queryKey: ["reminders"] });
 }
 
 /** Аргумент мутации обновления: патчи и учётная запись (общий ящик — accountId владельца, WEB-15). */

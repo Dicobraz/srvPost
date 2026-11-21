@@ -165,6 +165,13 @@ const PATHS: Record<string, JSX.Element> = {
     </>
   ),
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  // WEB-19: колокольчик напоминаний (полоса «Напоминания», пикер).
+  bell: (
+    <>
+      <path d="M6.5 10.5a5.5 5.5 0 0111 0c0 4 1.5 5.5 1.5 5.5h-14s1.5-1.5 1.5-5.5z" />
+      <path d="M10 19.5a2.2 2.2 0 004 0" />
+    </>
+  ),
 };
 
 export type IconName = keyof typeof PATHS | string;

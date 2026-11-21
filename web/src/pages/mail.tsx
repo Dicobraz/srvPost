@@ -15,6 +15,10 @@
   письма — Email/query по его accountId), «Взять/Забрать себе/Вернуть» (Ctrl+J, слова `pm.taken…`
   как в Postman), метка «Назначено: …» в строке и полоса «Взято в работу» в чтении (имена — из
   справочника контактов); ответ из общего ящика — «От» его адрес (право проверяет сервер).
+  WEB-19 — напоминания: полоса «Напоминания» живёт в оболочке (App.tsx над роутом, все разделы),
+  здесь — установка слов pm.due/pm.wait/pm.expire («Напомнить…»/«Ждать ответа…»/«Исчезнет…»,
+  inline-пикер, Ctrl+.) и приём переходов полосы (клик секции — быстрый фильтр, клик письма —
+  открыть; событие полосы — reminders.ts).
 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -38,6 +42,20 @@ import {
   type WindowArgs,
 } from "../mail/queries";
 import { CATEGORIES, categoryByNumber, categoriesOf, type QuickFilterKind } from "../mail/keywords";
+import {
+  clearReminderKindPatch,
+  clearRemindersPatch,
+  hasReminderWords,
+  reminderDueText,
+  reminderTextOf,
+  setReminderGeneralPatch,
+  setReminderPatch,
+  REMINDER_NAV_EVENT,
+  takeReminderNavigation,
+  type ReminderKind,
+  type ReminderNavigation,
+} from "../mail/reminders";
+import { ReminderPicker, type ReminderPickerState } from "../mail/reminder-picker";
 import { handleMailKeydown, KEYMAP_HINTS, type MailHotkeyActions } from "../mail/keymap";
 import { FLAGGED_FOLDER, FolderTree } from "../mail/folder-tree";
 import { MessageList, useQuickCounts, type ListRow } from "../mail/message-list";
@@ -171,6 +189,8 @@ function MailApp() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [collapsedReading, setCollapsedReading] = useState(true);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  // Пикер напоминания (WEB-19): письмо, вид (Напомнить/Ждать/Исчезнет) и точка вызова.
+  const [reminderEdit, setReminderEdit] = useState<ReminderPickerState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [imagesForEmail, setImagesForEmail] = useState<Record<string, boolean>>({});
   const [renameRow, setRenameRow] = useState<{ id: string; name: string } | null>(null);
@@ -548,6 +568,89 @@ function MailApp() {
     if (selected) takeEmail(selected);
   }, [selected, takeEmail]);
 
+  // ---------- Напоминания (WEB-19): слова pm.due/pm.wait/pm.expire как в Postman ----------
+
+  /** Что стоит на письме — для полосы чтения («До ср · Ждём ответа») и пункта меню «Снять». */
+  const reminderText = useMemo(
+    () => (selected ? reminderTextOf(selected.keywords, new Date()) : null),
+    [selected],
+  );
+
+  /** Поставить/переставить напоминание: слова общее + с датой (S5-04), тост с Undo — как остальные
+   * правки слов. */
+  const applyReminder = (email: EmailSummary, kind: ReminderKind, at: Date | null) => {
+    const timed = kind !== "wait"; // «Ждать ответа» — дата без времени (конец дня)
+    const updates = updateFor([email.id], (cached) =>
+      at ? setReminderPatch(cached.keywords, kind, at, timed) : setReminderGeneralPatch(cached.keywords, kind),
+    );
+    const when = at ? reminderDueText({ at, timed }, new Date()) : null;
+    const label =
+      kind === "due"
+        ? `Напоминание: ${when ?? "поставлено"}`
+        : kind === "expire"
+          ? `Исчезнет: ${when ?? "поставлено"}`
+          : at
+            ? `Ждём ответа — ${when}`
+            : "Ждём ответа";
+    void applyUpdate(updates, label);
+  };
+
+  /** Снять напоминание: один вид (пикер) или все слова (пункт «Снять напоминание»). */
+  const clearReminder = (email: EmailSummary, kind: ReminderKind | null) => {
+    const updates = updateFor([email.id], (cached) =>
+      kind ? clearReminderKindPatch(cached.keywords, kind) : clearRemindersPatch(cached.keywords),
+    );
+    void applyUpdate(updates, "Напоминание снято");
+  };
+
+  /** Открыть inline-пикер у точки вызова (контекст-меню, панель чтения, палитра, Ctrl+.). */
+  const openReminderPicker = (email: EmailSummary, kind: ReminderKind, x: number, y: number) => {
+    setReminderEdit({ email, kind, x, y });
+  };
+
+  /** Пикер в центре окна — из палитры и по Ctrl+. (точки вызова без координат мыши). */
+  const remindSelected = () => {
+    if (!selected) return;
+    openReminderPicker(selected, "due", Math.max(24, Math.round(window.innerWidth / 2) - 150), 140);
+  };
+
+  // Переходы полосы «Напоминания» → «Почта» (WEB-19): полоса живёт над роутом, переход приходит
+  // событием, когда «Почта» уже смонтирована, или «с руки» при монтировании (клик из Календаря).
+  // Применение — в обработчике события (setState в колбэке внешней системы — допустимо) и
+  // во время рендера охраняемым патчем React («storing information from previous renders»):
+  // эффект с setState каскадит рендеры (react-hooks/set-state-in-effect, правило дома).
+  const [barNav, setBarNav] = useState<ReminderNavigation | null>(null);
+  const [appliedBarNav, setAppliedBarNav] = useState<ReminderNavigation | null>(null);
+  const [tookPendingNav, setTookPendingNav] = useState(false);
+  if (!tookPendingNav) {
+    // Первый рендер после перехода из другого раздела — забираем «с руки».
+    setTookPendingNav(true);
+    const pending = takeReminderNavigation();
+    if (pending) setBarNav(pending);
+  }
+  if (barNav && barNav !== appliedBarNav) {
+    setAppliedBarNav(barNav); // переход применён — повторно не применяем (и на двойном рендере)
+    if (barNav.quick) setQuick(barNav.quick);
+    if (barNav.open) {
+      setSelectedId(barNav.open);
+      setCollapsedReading(true);
+    }
+  }
+  useEffect(() => {
+    const onNav = () => {
+      const nav = takeReminderNavigation();
+      if (!nav) return;
+      setAppliedBarNav(nav); // применено здесь — рендер-патч не повторит
+      if (nav.quick) setQuick(nav.quick);
+      if (nav.open) {
+        setSelectedId(nav.open);
+        setCollapsedReading(true);
+      }
+    };
+    window.addEventListener(REMINDER_NAV_EVENT, onNav);
+    return () => window.removeEventListener(REMINDER_NAV_EVENT, onNav);
+  }, []);
+
   // Композер — вкладка /compose (WEB-04): новое письмо, ответы и пересылка, черновик.
   // Ответ письму общего ящика (WEB-15): источник — по accountId владельца («От» — общий адрес).
   const openCompose = (query: string = "") => navigate(`/compose${query}`);
@@ -558,7 +661,7 @@ function MailApp() {
 
   // ---------- Контекстные меню (без модалок) ----------
 
-  const emailMenu = (email: EmailSummary): MenuItem[] => {
+  const emailMenu = (email: EmailSummary, x: number, y: number): MenuItem[] => {
     const inTrash = Boolean(trashId && email.mailboxIds[trashId]);
     const inJunk = Boolean(junkId && email.mailboxIds[junkId]);
     const items: MenuItem[] = [
@@ -590,6 +693,15 @@ function MailApp() {
       });
     }
     items.push(
+      { label: "", separator: true },
+      // Напоминания (WEB-19): «Напомнить…» — inline-пикер (дата+время, пресеты), «Ждать ответа…»
+      // и «Исчезнет…» — тот же пикер с датой по желанию, «Снять напоминание» — убрать слова.
+      { label: "Напомнить…", onSelect: () => openReminderPicker(email, "due", x, y) },
+      { label: "Ждать ответа…", onSelect: () => openReminderPicker(email, "wait", x, y) },
+      { label: "Исчезнет…", onSelect: () => openReminderPicker(email, "expire", x, y) },
+      ...(hasReminderWords(email.keywords)
+        ? [{ label: "Снять напоминание", onSelect: () => clearReminder(email, null) }]
+        : []),
       { label: "", separator: true },
       {
         label: "В архив",
@@ -767,8 +879,9 @@ function MailApp() {
       findNext: () => sendHlCommand(bodyFrameRef.current, "hl-next"),
       findPrev: () => sendHlCommand(bodyFrameRef.current, "hl-prev"),
       takeSelected,
+      remindSelected,
     }),
-    [rows, selectedId, selected, archiveId, expanded, takeSelected],
+    [rows, selectedId, selected, archiveId, expanded, takeSelected, remindSelected],
   );
   const actionsRef = useRef<MailHotkeyActions>(actions);
   useEffect(() => {
@@ -789,6 +902,7 @@ function MailApp() {
     { id: "reply-all", label: "Ответить всем", hint: "Ctrl+Shift+R", icon: "reply", run: () => selected && replyTo(selected, "reply-all") },
     { id: "forward", label: "Переслать", hint: "Ctrl+F", icon: "fwd", run: () => selected && replyTo(selected, "forward") },
     { id: "take", label: selected ? TAKE_LABELS[takeActOf(selected.keywords, env.selfAddress)] : TAKE_LABELS.take, hint: "Ctrl+J", icon: "person", run: () => takeSelected() },
+    { id: "remind", label: selected ? `Напомнить… (${reminderText ?? "срока нет"})` : "Напомнить…", hint: "Ctrl+.", icon: "bell", run: remindSelected },
     { id: "read", label: "Отметить прочитанным", hint: "Ctrl+Q", icon: "check", run: () => selected && setSeen([selected], true) },
     { id: "unread", label: "Отметить непрочитанным", hint: "Ctrl+U", icon: "mail", run: () => selected && setSeen([selected], false) },
     { id: "flag", label: selected?.keywords.$flagged ? "Снять флаг" : "Поставить флаг", icon: "flag", run: () => selected && setFlagged([selected], !selected.keywords.$flagged) },
@@ -808,7 +922,7 @@ function MailApp() {
     { id: "threads", label: threadView === "grouped" ? "Потоки: как в Outlook" : "Потоки: группировка", icon: "thread", run: () => { const next = threadView === "grouped" ? "outlook" : "grouped"; setThreadViewState(next); saveThreadView(next); } },
     { id: "folders", label: "К дереву папок", hint: "Ctrl+Y", icon: "folder", run: () => { focusIndex.current = 0; treeRef.current?.focus(); } },
     { id: "panels", label: "Между панелями", hint: "F6", icon: "list", run: () => { focusIndex.current = (focusIndex.current + 1) % focusOrder.length; focusOrder[focusIndex.current]?.current?.focus(); } },
-  ], [selected, archiveId, density, threadView, searchText, env.selfAddress, takeSelected]);
+  ], [selected, archiveId, density, threadView, searchText, env.selfAddress, takeSelected, remindSelected, reminderText]);
 
   // ---------- Рендер ----------
 
@@ -987,7 +1101,7 @@ function MailApp() {
               if (!email.keywords.$seen) setSeen([email], true);
             }}
             onToggleThread={toggleThread}
-            onRowMenu={(email, x, y) => setMenu({ x, y, items: emailMenu(email) })}
+            onRowMenu={(email, x, y) => setMenu({ x, y, items: emailMenu(email, x, y) })}
             onDragStartEmail={(email) => {
               dragRef.current = [email];
             }}
@@ -1065,6 +1179,9 @@ function MailApp() {
             }}
             take={takeStrip}
             onTake={takeSelected}
+            reminder={reminderText}
+            onRemind={(x, y) => selected && openReminderPicker(selected, "due", x, y)}
+            onReminderClear={() => selected && clearReminder(selected, null)}
           />
         </div>
       </div>
@@ -1083,6 +1200,22 @@ function MailApp() {
       </div>
 
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
+
+      {/* Пикер напоминания (WEB-19): inline-панель у точки вызова — из меню, чтения, палитры, Ctrl+. */}
+      {reminderEdit && (
+        <ReminderPicker
+          state={reminderEdit}
+          onApply={(at) => {
+            applyReminder(reminderEdit.email, reminderEdit.kind, at);
+            setReminderEdit(null);
+          }}
+          onClear={() => {
+            clearReminder(reminderEdit.email, reminderEdit.kind);
+            setReminderEdit(null);
+          }}
+          onClose={() => setReminderEdit(null)}
+        />
+      )}
 
       {/* Палитра команд и писем (Ctrl+K, WEB-05): ввод фильтрует команды + письма (FTS top-5). */}
       <CommandPalette

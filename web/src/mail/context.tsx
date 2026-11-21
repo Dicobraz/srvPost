@@ -25,6 +25,12 @@ export function useJmap(): JmapEnv {
   return value;
 }
 
+/** Среда запросов или null (сессия ещё не готова или с ошибкой): полоса напоминаний (WEB-19)
+ * живёт во всей оболочке — на всех разделах, включая заставки почты. */
+export function useJmapOrNull(): JmapEnv | null {
+  return useContext(JmapContext);
+}
+
 /** Состояние сессии для страницы почты: загрузка, ошибка сети/входа, готово. */
 export type JmapReady =
   | { state: "loading" }

@@ -91,6 +91,52 @@ interface ReadingPaneProps {
   /** Полоса «Взято» письма общего ящика; null — письмо не из общего ящика, полосы нет. */
   take: TakeStrip | null;
   onTake(): void;
+  // --- WEB-19: напоминания ---
+  /** Текст напоминаний письма («До ср · Ждём ответа») или null — напоминаний нет. */
+  reminder: string | null;
+  /** Открыть пикер напоминания у кнопки вызова (координаты — в окне). */
+  onRemind(x: number, y: number): void;
+  /** Снять напоминание (все слова pm.due/pm.wait/pm.expire). */
+  onReminderClear(): void;
+}
+
+/** Полоса напоминания письма (WEB-19): что стоит и когда — «Напомнить…» открывает inline-пикер,
+ * «Снять» убирает слова pm.due/pm.wait/pm.expire (в полосе «Напоминания» письмо исчезнет сразу —
+ * инвалидация по мутации). */
+function ReminderBar({
+  reminder,
+  onRemind,
+  onReminderClear,
+}: {
+  reminder: string | null;
+  onRemind(x: number, y: number): void;
+  onReminderClear(): void;
+}) {
+  const open = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    onRemind(Math.round(r.left), Math.round(r.bottom + 6));
+  };
+  return (
+    <div className="strip remind">
+      <Icon name="bell" size={16} />
+      {reminder ? (
+        <span>
+          <b>Напоминание:</b> {reminder}
+        </span>
+      ) : (
+        <span>Напоминания нет</span>
+      )}
+      <span className="sp" />
+      {reminder && (
+        <button type="button" className="lk" onClick={onReminderClear}>
+          Снять
+        </button>
+      )}
+      <button type="button" className="lk" onClick={open}>
+        Напомнить…
+      </button>
+    </div>
+  );
 }
 
 /** Полоса над письмом: никто не взял — «Взять в работу»; взял коллега — «Взято в работу: имя ·
@@ -480,6 +526,9 @@ export function ReadingPane({
   onRefinePeriod,
   take,
   onTake,
+  reminder,
+  onRemind,
+  onReminderClear,
 }: ReadingPaneProps) {
   const env = useJmap();
   const refinable = highlightTerms.length > 0; // уточнения кликом — только в режиме поиска (WEB-05)
@@ -505,6 +554,7 @@ export function ReadingPane({
           </span>
         )}
       </h3>
+      <ReminderBar reminder={reminder} onRemind={onRemind} onReminderClear={onReminderClear} />
       {take && <TakeBar take={take} onTake={onTake} />}
       {stack.length > 1 && (
         <div className="tbar">
