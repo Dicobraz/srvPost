@@ -525,6 +525,11 @@ SRS 5.1. `Authenticator`: `verify(Credentials, peer: Option<IpAddr>) -> Result<P
 (`Forbidden`); `None` — только когда адрес неизвестен (вызов без соединения клиента), счётчики по адресу и подсети тогда не ведутся.
 Протоколы передают адрес соединения (`ConnInfo::client` — из заголовка PROXY или адрес TCP-собеседника), HTTP (Basic, Bearer: `tp-dav`,
 `tp-jmap`, `tp-admin`) — адрес из расширения запроса `ConnectInfo<SocketAddr>`, которое ставит `tp_platform::service_http`.
+Исключение HTTP-маршрутов push (WEB-18, решение #292 — вариант 1, путь Stalwart): `/jmap/ws` и `/jmap/eventsource` без заголовка
+`Authorization` принимают Bearer-токен из query-параметра `access_token` (браузер не ставит заголовки на WebSocket и EventSource):
+только эти два маршрута (остальные — заголовок-only), значение параметра — сам токен без префикса схемы (`Basic` в query не
+принимается), проверка — тот же `Authenticator` с адресом соединения, слот сессии учётной записи — одинаково с заголовком; значение
+токена в журналы не печатается (запросы push не логируются, `Debug` параметров этих маршрутов маскирует значение).
 `Authorizer`: `rights(&Principal, &Resource) -> Rights`, `check(.., required)` (по умолчанию через `rights`),
 `send_right(&Principal, from) -> Option<SendRight::{SendAs, SendOnBehalf}>`; `Resource::{ Account, Mailbox }`. Права на календари и
 адресные книги — `SharingAuthorizer` (раздел Sharing).
@@ -1722,3 +1727,10 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   round-trip тесты `Email/set`→`Email/get`) и лимит параллельных JMAP-сессий учётной записи
   (`jmap.session_limit`, окно `jmap.session_window`; превышение — `urn:ietf:params:jmap:error:limit`
   с `maxSessionsPerAccount`, `tp-jmap/src/core/sessions.rs`).
+- 2026-11-21 — WEB-18 (волна mod-webmail-18, решение #292 — вариант 1, путь Stalwart): push-токен по query —
+  маршруты `/jmap/ws` и `/jmap/eventsource` без заголовка `Authorization` принимают Bearer-токен из
+  query-параметра `access_token` (значение — сам токен, `Basic` в query не принимается; остальные маршруты —
+  заголовок-only); проверка тем же `Authenticator` с адресом соединения (CTR-57), слот сессии WEB-12
+  (`enter_push`) — одинаково для обоих путей; значение токена в журналы не печатается (запросы push не
+  логируются, `Debug` параметров push-маршрутов маскирует значение) — `tp-jmap/src/core/http.rs`
+  (`authenticate_push`), `tp-jmap/src/push.rs`.
