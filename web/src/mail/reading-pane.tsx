@@ -3,24 +3,41 @@
   тело HTML — hostile input (sanitize.ts): sandboxed iframe без same-origin, внешние картинки —
   opt-in (баннер «Загрузить / Всегда для домена», решение в localStorage), подменённые ссылки —
   красная полоса безопасности; text/plain — <pre>-вью. Вложения — ссылки скачивания (blob).
-  Карточка приглашения (.ics) — заглушка по макету: кнопки ответа disabled с подсказкой
-  «в разработке» (ответы примет волна 6, JMAP-50).
-  WEB-05 — поиск: клик-уточнения по отправителю и дате письма (чипы панели фильтров, click-
-  refinements); подсветка совпадений F3/Shift+F3 — термы поиска передаются в srcdoc (highlight.ts),
-  счётчик совпадений — рядом с темой.
+  Карточка приглашения (.ics) — кнопки ответа живые (WEB-06, JMAP-50): метод веб-почты
+  Invitation/respond; приглашение в «Спаме» — структурированная ошибка и перенос письма
+  (invite-respond.ts). WEB-05 — поиск: клик-уточнения по отправителю и дате письма (чипы
+  панели фильтров, click-refinements); подсветка совпадений F3/Shift+F3 — термы поиска
+  передаются в srcdoc (highlight.ts), счётчик совпадений — рядом с темой.
 */
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { blobUrl, type EmailBodyPart, type EmailFull, type EmailSummary, type JmapSession } from "../api/jmap";
+import {
+  blobUrl,
+  type EmailBodyPart,
+  type EmailFull,
+  type EmailSummary,
+  type JmapSession,
+} from "../api/jmap";
 import { useJmap } from "./context";
 import {
   buildBodyDoc,
   plainTextHtml,
   sanitizeEmailHtml,
 } from "./sanitize";
-import { dayRibbon, formatInvitationWhen, isInvitationPart, parseInvitation } from "./invite";
+import { dayRibbon, formatInvitationWhen, isInvitationPart, parseInvitation, type Invitation } from "./invite";
+import {
+  canRespondToInvitations,
+  errorText,
+  inboxOf,
+  isJunkError,
+  moveToInbox,
+  respondToInvitation,
+  type ParticipationStatus,
+} from "./invite-respond";
+import { useMailboxes } from "./queries";
 import { Icon } from "./icons";
 import { initials } from "./message-list";
+import { useToast } from "./toast";
 
 /** Панель параметров чтения письма: разрешение картинок на это письмо/домен. */
 export interface ReadToggles {
@@ -189,7 +206,7 @@ function EmailBody({
         </div>
       )}
 
-      {invitation && <InvitationCard invitation={invitation} />}
+      {invitation && <InvitationCard invitation={invitation} emailId={summary.id} />}
 
       <div className="bodym">
         {bodyHtml === null ? (
@@ -229,13 +246,88 @@ function AttachmentChip({ part, session, accountId }: { part: EmailBodyPart; ses
   );
 }
 
-/** Карточка приглашения (заглушка волны 3): детали, лента «Ваш день», кнопки disabled. */
-function InvitationCard({ invitation }: { invitation: ReturnType<typeof parseInvitation> }) {
-  if (!invitation) return null;
+/** Статус ответа карточки: подпись чипа в заголовке и подсказка строки. */
+const ANSWER_LABELS: Record<ParticipationStatus, string> = {
+  accepted: "Принято",
+  tentative: "Под вопросом",
+  declined: "Отклонено",
+};
+
+/** Карточка приглашения (WEB-06): детали, лента «Ваш день», ответ методом веб-почты
+ * (JMAP-50). Приглашение в «Спаме» — структурированная ошибка `invitationInJunk`: inline
+ * полоса «сначала перенесите письмо», кнопка переноса во «Входящие» и повтор ответа.
+ * (Экспорт для тестов спам-сценария.) */
+export function InvitationCard({
+  invitation,
+  emailId,
+}: {
+  invitation: Invitation;
+  emailId: string;
+}) {
+  const env = useJmap();
+  const toast = useToast();
+  const mailboxes = useMailboxes();
+  const canRespond = canRespondToInvitations(env);
+  const [pending, setPending] = useState<ParticipationStatus | null>(null);
+  const [answered, setAnswered] = useState<ParticipationStatus | null>(null);
+  const [junkBlocked, setJunkBlocked] = useState(false);
+  const [lastStatus, setLastStatus] = useState<ParticipationStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const respond = async (status: ParticipationStatus): Promise<void> => {
+    setPending(status);
+    setError(null);
+    try {
+      const outcome = await respondToInvitation(env, emailId, status);
+      if (outcome.kind === "applied") {
+        setAnswered(status);
+        setJunkBlocked(false);
+        toast.show(
+          `Ответ отправлен: ${ANSWER_LABELS[status].toLowerCase()} — организатор получит обновление календаря`,
+        );
+      } else if (outcome.kind === "refused") {
+        setError(outcome.reason);
+      } else if (isJunkError(outcome)) {
+        setLastStatus(status);
+        setJunkBlocked(true);
+      } else {
+        setError(errorText(outcome));
+      }
+    } catch {
+      setError("Сеть недоступна: ответ не отправлен.");
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const moveAndRespond = async (): Promise<void> => {
+    const inbox = inboxOf(mailboxes);
+    if (!inbox) {
+      setError("Папка «Входящие» не найдена — перенесите письмо из «Спама» вручную.");
+      return;
+    }
+    setPending(lastStatus ?? "accepted");
+    try {
+      const moved = await moveToInbox(env, emailId, inbox.id);
+      if (!moved) {
+        setError("Перенос не удался — попробуйте ещё раз.");
+        return;
+      }
+      setJunkBlocked(false);
+      toast.show("Письмо перенесено из «Спама» во «Входящие»");
+      if (lastStatus) await respond(lastStatus);
+    } catch {
+      setError("Сеть недоступна: перенос не выполнен.");
+    } finally {
+      setPending(null);
+    }
+  };
+
   const now = new Date();
   const ribbon = invitation.start && invitation.end ? dayRibbon(invitation.start, invitation.end, now) : null;
   const hours = ribbon?.filter((r) => "hour" in r) as Array<{ hour: number; label: string }> | null;
   const invite = ribbon?.find((r) => "invite" in r) as { top: number; height: number; nowTop: number | null } | undefined;
+  const busy = pending !== null;
   return (
     <div className="inv">
       <div className="ih">
@@ -243,7 +335,7 @@ function InvitationCard({ invitation }: { invitation: ReturnType<typeof parseInv
           <Icon name="cal" size={16} />
         </span>
         <span className="ttl">Приглашение: {invitation.summary || "(без названия)"}</span>
-        <span className="chip">Ждёт ответа</span>
+        <span className="chip">{answered ? ANSWER_LABELS[answered] : "Ждёт ответа"}</span>
       </div>
       <div className="det">
         <b>{formatInvitationWhen(invitation.start, invitation.end)}</b>
@@ -273,17 +365,55 @@ function InvitationCard({ invitation }: { invitation: ReturnType<typeof parseInv
           </div>
         </div>
       )}
+      {junkBlocked && (
+        <div className="inv-junk" role="alert">
+          <span>
+            <b>Приглашение лежит в «Спаме».</b> Сначала перенесите письмо, затем ответьте —
+            сервер не применяет ответы из спама.
+          </span>
+          <button type="button" className="lk" disabled={busy} onClick={() => void moveAndRespond()}>
+            Перенести из «Спама» и ответить
+          </button>
+        </div>
+      )}
+      {error && (
+        <div className="inv-err" role="alert">
+          ▲ {error}
+        </div>
+      )}
       <div className="invacts">
-        <button type="button" className="ibtn acc" disabled title="В разработке — ответы на встречи примет волна 6">
+        <button
+          type="button"
+          className="ibtn acc"
+          disabled={!canRespond || busy || answered !== null}
+          title={canRespond ? undefined : "Ответы на встречи недоступны на этом узле"}
+          onClick={() => void respond("accepted")}
+        >
           ✓ Принять
         </button>
-        <button type="button" className="ibtn tint" disabled title="В разработке — ответы на встречи примет волна 6">
+        <button
+          type="button"
+          className="ibtn tint"
+          disabled={!canRespond || busy || answered !== null}
+          title={canRespond ? undefined : "Ответы на встречи недоступны на этом узле"}
+          onClick={() => void respond("tentative")}
+        >
           ? Под вопросом
         </button>
-        <button type="button" className="ibtn tint" disabled title="В разработке — ответы на встречи примет волна 6">
+        <button
+          type="button"
+          className="ibtn tint"
+          disabled={!canRespond || busy || answered !== null}
+          title={canRespond ? undefined : "Ответы на встречи недоступны на этом узле"}
+          onClick={() => void respond("declined")}
+        >
           ✕ Отклонить
         </button>
-        <span className="invnote">Ответ уйдёт через календарь сервера</span>
+        <span className="invnote">
+          {answered
+            ? `Ответ «${ANSWER_LABELS[answered]}» ушёл через календарь сервера`
+            : "Ответ уйдёт через календарь сервера"}
+        </span>
       </div>
     </div>
   );

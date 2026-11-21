@@ -8,6 +8,7 @@ import { createContext, useContext, useEffect, useMemo, type ReactNode } from "r
 import { useQuery } from "@tanstack/react-query";
 
 import { authHeader, fetchSession, websocketUrl, type JmapSession } from "../api/jmap";
+import { handleCalendarSyncEvent } from "../calendar/sync";
 import { useAuth } from "../auth/session";
 import { queryClient, keys } from "./client";
 import { envFromSession, handleSyncEvent, resetSyncState } from "./sync";
@@ -81,6 +82,8 @@ export function JmapProvider({ children, hub }: JmapProviderProps) {
 
   // Push: один транспорт на пользователя (лидер вкладок); события — в delta-sync. Источник читает
   // свежий токен OIDC на каждое (пере)подключение — renew не обрывает соединение искусственно.
+  // Календарь (WEB-06) слушает тот же канал: типы Calendar/CalendarEvent включены в enable,
+  // StateChange перечитывает видимый период (calendar/sync.ts).
   useEffect(() => {
     if (!env) return;
     const source = (): PushSource => ({
@@ -90,7 +93,10 @@ export function JmapProvider({ children, hub }: JmapProviderProps) {
         ? env.authorization.slice("Bearer ".length)
         : null,
     });
-    const unsubscribe = pushHub.subscribe(() => void handleSyncEvent(env));
+    const unsubscribe = pushHub.subscribe(() => {
+      void handleSyncEvent(env);
+      handleCalendarSyncEvent(env);
+    });
     pushHub.start(source);
     return () => {
       unsubscribe();

@@ -1430,6 +1430,47 @@ body {
   font-size: 12px;
 }
 
+/* Спам-ошибка карточки приглашения (WEB-06, JMAP-50): приглашение в «Спаме» — перенос и
+   повтор; ошибки метода — inline-полоса (красный — только безопасность/отказ). */
+.inv-junk {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  border-radius: 6px;
+  background: var(--m-duebg);
+  color: var(--m-duetx);
+  font-size: 12.5px;
+  padding: 6px 12px;
+  margin: 6px 0 7px;
+}
+
+.inv-junk .lk {
+  border: none;
+  background: none;
+  color: var(--m-duetx);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.inv-junk .lk:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.inv-err {
+  border-radius: 6px;
+  background: var(--m-threatbg);
+  color: var(--m-threattx);
+  font-size: 12.5px;
+  padding: 6px 12px;
+  margin: 6px 0 7px;
+}
+
 /* Тело письма — sandboxed iframe (CSS письма изолирован). */
 .bodym {
   flex: 1;
@@ -2189,3 +2230,741 @@ body {
   white-space: nowrap;
   padding: 0 4px;
 }
+
+/*
+  Календарь (WEB-06) — планировочная сетка на токенах почты (макет 01): командная строка
+  («Создать встречу» — акцент), панель календарей, карточка сетки (день/неделя — время,
+  месяц — недели), чипы событий цветом календаря, панель встречи/деталей справа (inline,
+  не модалки). Красный — только опасное действие (отмена встречи).
+*/
+.cal {
+  --cal-default: #4687d8;
+  --cal-tint: rgba(70, 135, 216, 0.16);
+  --cal-hours: 56px;
+  --cal-row: 48px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  color: var(--m-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cal-empty {
+  margin: 4rem auto;
+  max-width: 26rem;
+  background: var(--m-panel);
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+
+.cal-empty h1 {
+  margin-top: 0;
+  color: var(--m-acc);
+}
+
+.cal-empty p {
+  color: var(--m-muted);
+}
+
+/* Командная строка календаря: акцентная кнопка, виды, навигация, заголовок периода. */
+.cal-cmd {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  flex: none;
+}
+
+.cal-cmd .btn-acc {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 4px;
+  background: var(--m-accbtn);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.cal-cmd .btn-acc:hover {
+  filter: brightness(1.05);
+}
+
+.cal-views {
+  display: flex;
+  gap: 2px;
+  background: var(--m-hover);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.cal-views .cal-view {
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--m-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cal-views .cal-view.on {
+  background: var(--m-panel);
+  box-shadow: 0 1px 2px rgba(22, 22, 22, 0.12);
+  font-weight: 600;
+}
+
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.cal-nav .cal-arrow,
+.cal-nav .cal-today {
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--m-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cal-nav .cal-arrow {
+  width: 28px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.cal-nav .cal-today {
+  padding: 0 10px;
+  font-weight: 600;
+  color: var(--m-acc);
+}
+
+.cal-nav .cal-arrow:hover,
+.cal-nav .cal-today:hover {
+  background: var(--m-hover);
+}
+
+.cal-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 0 8px;
+}
+
+.cal-cmd .sp {
+  flex: 1;
+}
+
+.cal-main {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  padding: 2px 8px 6px;
+  min-height: 0;
+}
+
+/* Панель «Календари» — на фоне окна, как дерево папок почты. */
+.cal-side {
+  width: 200px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 2px;
+  overflow-y: auto;
+}
+
+.cal-side-cap {
+  color: var(--m-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+}
+
+.cal-side .cal-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.cal-side .cal-item:hover {
+  background: var(--m-hover);
+}
+
+.cal-side .cal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  flex: none;
+}
+
+.cal-side .cal-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-side .cal-tag {
+  color: var(--m-muted);
+  font-size: 10.5px;
+  border: 1px solid var(--m-frame);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex: none;
+}
+
+.cal-side-note {
+  color: var(--m-muted);
+  padding: 4px 8px;
+}
+
+/* Карточка сетки. */
+.cal-card {
+  flex: 1;
+  min-width: 0;
+  background: var(--m-panel);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Сетка времени: шапка дней, полоса «Весь день», часы, колонки. */
+.cal-timegrid {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.cal-thead,
+.cal-allday {
+  display: grid;
+  border-bottom: 1px solid var(--m-div);
+  flex: none;
+}
+
+.cal-allday {
+  background: var(--m-panel);
+  min-height: 30px;
+}
+
+.cal-corner,
+.cal-allday-cap {
+  font-size: 10.5px;
+  color: var(--m-muted);
+  padding: 4px 6px 0 6px;
+  text-align: right;
+}
+
+.cal-dayhead {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 0;
+  border-left: 1px solid var(--m-div);
+  font-size: 12px;
+  color: var(--m-muted);
+}
+
+.cal-dayhead.today {
+  color: var(--m-acc);
+  font-weight: 600;
+}
+
+.cal-dayhead .dt {
+  font-size: 14px;
+  color: var(--m-text);
+}
+
+.cal-dayhead.today .dt {
+  color: var(--m-acc);
+}
+
+.cal-allday-cell {
+  border-left: 1px solid var(--m-div);
+  padding: 2px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cal-tbody {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.cal-body {
+  display: grid;
+  position: relative;
+}
+
+.cal-hours {
+  border-right: none;
+}
+
+.cal-hourlab {
+  font-size: 10.5px;
+  color: var(--m-muted);
+  text-align: right;
+  padding: 1px 6px 0 0;
+  box-sizing: content-box;
+}
+
+.cal-daycol {
+  position: relative;
+  border-left: 1px solid var(--m-div);
+  /* Линии часов: линия каждые 48px, без линии на границе суток. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--m-div) 0,
+    var(--m-div) 1px,
+    transparent 1px,
+    transparent var(--cal-row)
+  );
+  background-position: 0 0;
+}
+
+.cal-daycol.today {
+  background-color: color-mix(in srgb, var(--m-acc) 4%, transparent);
+}
+
+/* Занятость (principals:availability, read-only): заштрихованная полоса времени. */
+.cal-busy {
+  position: absolute;
+  left: 0;
+  right: 4px;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(120, 120, 120, 0.12),
+    rgba(120, 120, 120, 0.12) 4px,
+    transparent 4px,
+    transparent 8px
+  );
+  pointer-events: auto;
+  z-index: 1;
+}
+
+.cal-nowline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1.5px solid var(--m-selbar);
+  z-index: 3;
+}
+
+.cal-nowline::after {
+  content: attr(data-now);
+  position: absolute;
+  left: 0;
+  top: -8px;
+  font-size: 10px;
+  color: var(--m-selbar);
+  background: var(--m-panel);
+  padding: 0 3px;
+  line-height: 1;
+}
+
+/* Чип события: полоса цвета календаря, подложка тем же цветом. */
+.cal-chip {
+  position: absolute;
+  border: none;
+  border-left-width: 3px;
+  border-left-style: solid;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.25;
+  padding: 1px 6px;
+  text-align: left;
+  overflow: hidden;
+  cursor: pointer;
+  color: var(--m-text);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.cal-chip.timed {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  align-items: baseline;
+  padding: 1px 5px;
+}
+
+.cal-chip .t {
+  color: var(--m-muted);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-chip .ttl {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.cal-chip.allday,
+.cal-chip.month {
+  position: static;
+  width: 100%;
+  flex-direction: row;
+  gap: 4px;
+  align-items: baseline;
+  padding: 1px 5px;
+}
+
+.cal-chip.month {
+  margin-bottom: 2px;
+}
+
+.cal-more {
+  border: none;
+  background: none;
+  color: var(--m-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 4px;
+  text-align: left;
+}
+
+.cal-more:hover {
+  color: var(--m-acc);
+}
+
+/* Сетка месяца: недели рядами, ячейки дня. */
+.cal-month {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.cal-month-head {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-bottom: 1px solid var(--m-div);
+  flex: none;
+}
+
+.cal-month-wd {
+  text-align: center;
+  padding: 6px 0;
+  color: var(--m-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.cal-month-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.cal-month-row {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  min-height: 90px;
+}
+
+.cal-month-row + .cal-month-row {
+  border-top: 1px solid var(--m-div);
+}
+
+.cal-month-cell {
+  border-left: 1px solid var(--m-div);
+  padding: 3px 5px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.cal-month-row .cal-month-cell:first-child {
+  border-left: none;
+}
+
+.cal-month-cell.out .cal-month-day {
+  color: var(--m-muted);
+  opacity: 0.6;
+}
+
+.cal-month-day {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.cal-month-cell.today .cal-month-day {
+  color: #fff;
+  background: var(--m-accbtn);
+  border-radius: 9px;
+  width: 20px;
+  text-align: center;
+}
+
+/* Панель встречи/деталей (inline справа, не модалка). */
+.cal-panel {
+  width: 360px;
+  flex: none;
+  background: var(--m-panel);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cal-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--m-div);
+  flex: none;
+  font-size: 14px;
+}
+
+.cal-panel-head .cal-x {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--m-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 3px;
+  display: inline-flex;
+}
+
+.cal-panel-head .cal-x:hover {
+  background: var(--m-hover);
+}
+
+.cal-panel-body {
+  flex: 1;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.cal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--m-muted);
+  font-size: 12px;
+}
+
+.cal-field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.cal-field-row .cal-field {
+  flex: 1;
+}
+
+.cal-field input,
+.cal-field select,
+.cal-field textarea {
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  min-width: 0;
+}
+
+.cal-field textarea {
+  resize: vertical;
+}
+
+/* Полоса занятости формы: 24 часа, блоки занятости, подпись часов. */
+.cal-busystrip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cal-busy-cap {
+  font-size: 11px;
+  color: var(--m-muted);
+  font-weight: 600;
+}
+
+.cal-busy-bar {
+  position: relative;
+  height: 44px;
+  border: 1px solid var(--m-div);
+  border-radius: 4px;
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--m-div) 0,
+    var(--m-div) 1px,
+    transparent 1px,
+    transparent calc(100% / 12)
+  );
+  overflow: hidden;
+}
+
+.cal-busy-hours {
+  display: flex;
+  justify-content: space-between;
+  color: var(--m-muted);
+  font-size: 10.5px;
+}
+
+.cal-warn {
+  background: var(--m-duebg);
+  color: var(--m-duetx);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+
+.cal-panel-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--m-div);
+  flex: none;
+  flex-wrap: wrap;
+}
+
+.cal-panel-foot .sp {
+  flex: 1;
+}
+
+.cal-note {
+  color: var(--m-muted);
+  font-size: 12px;
+}
+
+.cal-when {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.cal-when.muted {
+  font-weight: 400;
+  color: var(--m-muted);
+  font-size: 12.5px;
+}
+
+.cal-line {
+  color: var(--m-muted);
+  font-size: 12.5px;
+}
+
+.cal-people {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cal-person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cal-person-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.cal-actions .sp {
+  flex: 1;
+}
+
+.button-danger {
+  border-color: var(--m-err);
+  color: var(--m-err);
+}
+
+.button-danger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Поле участников в панели: форма композера переезжает своей сеткой (макет 02). */
+.cal-panel .frow {
+  min-height: 34px;
+}
+
+.cal-panel .frow .lbl {
+  width: 72px;
+  text-align: left;
+  color: var(--m-muted);
+}
+
+.cal-panel .ac {
+  left: 80px;
+  width: 270px;
+  max-width: calc(100% - 80px);
+}
+
+/* Узкий экран: панель календарей скрыта, панель встречи — во всю ширину. */
+@media (max-width: 900px) {
+  .cal-side {
+    display: none;
+  }
+
+  .cal-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    width: auto;
+    border-radius: 0;
+  }
+}
+

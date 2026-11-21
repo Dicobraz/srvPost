@@ -19,6 +19,15 @@ export const CAP_MAIL = "urn:ietf:params:jmap:mail";
 export const CAP_SUBMISSION = "urn:ietf:params:jmap:submission";
 /** Капабилити WebSocket (RFC 8887): адрес `/jmap/ws` и признак push. */
 export const CAP_WEBSOCKET = "urn:ietf:params:jmap:websocket";
+/** Капабилити календарей (draft-ietf-jmap-calendars): Calendar, CalendarEvent. */
+export const CAP_CALENDARS = "urn:ietf:params:jmap:calendars";
+/** Капабилити участников организации (RFC 9670): Principal — справочник людей и ресурсов. */
+export const CAP_PRINCIPALS = "urn:ietf:params:jmap:principals";
+/** Капабилити занятости (draft-ietf-jmap-calendars): Principal/getAvailability. */
+export const CAP_AVAILABILITY = "urn:ietf:params:jmap:principals:availability";
+/** Капабилити планирования The Post (метод веб-почты JMAP-50): Invitation/respond и
+ * рассылка приглашений после CalendarEvent/set. */
+export const CAP_ITIP = "urn:thepost:params:jmap:itip";
 
 /** Учётная запись сессии: имя, личная ли, права; капабилити — по типам данных. */
 export interface JmapAccount {
@@ -330,6 +339,20 @@ export async function jmapCall(
   return (await response.json()) as ResponseBody;
 }
 
+/** Парный вызов метода и разбор ответа: одна пара «запрос-ответ» с одним call id.
+ * Капабилити — по умолчанию (см. callMethod); свои списки — календарю (WEB-06). */
+export async function callMethodUsing(
+  apiUrl: string,
+  authorization: string | null,
+  using: string[],
+  method: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const body = await jmapCall(apiUrl, authorization, using, [[method, args, "c0"]]);
+  const [, result] = body.methodResponses[0];
+  return result;
+}
+
 /** Парный вызов метода и разбор ответа: одна пара «запрос-ответ» с одним call id. */
 export async function callMethod(
   apiUrl: string,
@@ -338,16 +361,25 @@ export async function callMethod(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   // Капабилити по типу данных (RFC 8620 §3.2): почта — Email/Thread/Mailbox и SearchSnippet
-  // (RFC 8621 §5, WEB-05), отправка — Identity/EmailSubmission (WEB-04); остальное — ядро.
+  // (RFC 8621 §5, WEB-05), отправка — Identity/EmailSubmission (WEB-04), календарь и участники —
+  // WEB-06; остальное — ядро.
   const using = method.startsWith("Mailbox") || method.startsWith("Email") ||
       method.startsWith("Thread") || method.startsWith("SearchSnippet")
     ? [CAP_CORE, CAP_MAIL]
     : method.startsWith("Identity") || method.startsWith("EmailSubmission")
       ? [CAP_CORE, CAP_SUBMISSION]
-      : [CAP_CORE];
-  const body = await jmapCall(apiUrl, authorization, using, [[method, args, "c0"]]);
-  const [, result] = body.methodResponses[0];
-  return result;
+      : method.startsWith("Calendar")
+        ? [CAP_CORE, CAP_CALENDARS]
+        : method.startsWith("Invitation")
+          // Метод веб-почты JMAP-50 — под своей capability узла; узлы без планирования её не
+          // объявляют (кнопки ответа клиент показывает только при ней).
+          ? [CAP_CORE, CAP_ITIP]
+          : method.startsWith("Principal")
+            // Занятость (getAvailability) — отдельным вызовом (callMethodUsing): узел без
+            // хранилища занятости отклонил бы неизвестную capability целиком.
+            ? [CAP_CORE, CAP_PRINCIPALS]
+            : [CAP_CORE];
+  return callMethodUsing(apiUrl, authorization, using, method, args);
 }
 
 /** Общий разбор ответа get-методов: объекты и не найденные идентификаторы. */
@@ -598,6 +630,8 @@ export async function identitiesGet(
 /** Ответ JMAP set-метода: только интересующая часть — созданные и ошибки остальных операций. */
 export interface SetResult {
   created: Record<string, { id?: string } & Record<string, unknown>>;
+  /** Изменённые объекты (id → null или серверные поля) — правки CalendarEvent/set (WEB-06). */
+  updated?: Record<string, unknown | null>;
   errors: Record<string, { type?: string; description?: string }>;
   destroyed: string[];
 }
@@ -605,6 +639,7 @@ export interface SetResult {
 function parseSet(result: Record<string, unknown>): SetResult {
   return {
     created: (result.created as SetResult["created"] | null) ?? {},
+    updated: (result.updated as SetResult["updated"] | undefined) ?? {},
     errors: (result.notCreated as SetResult["errors"] | undefined) ??
       (result.notUpdated as SetResult["errors"] | undefined) ??
       (result.notDestroyed as SetResult["errors"] | undefined) ?? {},
@@ -720,4 +755,248 @@ export function uploadBlob(
   options.signal?.addEventListener("abort", () => xhr.abort(), { once: true });
   xhr.send(file);
   return done;
+}
+
+// ---------- WEB-06: календарь — Calendar, CalendarEvent, Principal, Invitation/respond ----------
+
+/** Капабилити учётной записи объявлена (сессия — верхний уровень и её аккаунты). */
+export function hasCapability(session: JmapSession, accountId: string, cap: string): boolean {
+  const account = session.accounts[accountId]?.accountCapabilities ?? {};
+  return Boolean(session.capabilities?.[cap] || account[cap]);
+}
+
+/** Календарь (draft-ietf-jmap-calendars §2): коллекция CalDAV с цветом и подпиской. */
+export interface CalendarObject {
+  id: string;
+  name: string;
+  description: string | null;
+  /** Цвет из макета/CalDAV (#rrggbb); null — клиент берёт цвет по умолчанию. */
+  color: string | null;
+  sortOrder: number;
+  isDefault: boolean;
+  isSubscribed: boolean;
+  isVisible: boolean;
+  timeZone: string | null;
+}
+
+const CALENDAR_PROPERTIES = [
+  "id", "name", "description", "color", "sortOrder", "isDefault", "isSubscribed",
+  "isVisible", "timeZone",
+];
+
+/** `Calendar/get` без идентификаторов — свои и подписанные календари. */
+export async function calendarsGet(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+): Promise<{ list: CalendarObject[]; state: string }> {
+  const result = await callMethod(apiUrl, authorization, "Calendar/get", {
+    accountId,
+    properties: CALENDAR_PROPERTIES,
+  });
+  return {
+    list: parseGet<CalendarObject>(result).list,
+    state: (result.state as string) ?? "",
+  };
+}
+
+/** Участник встречи (JSCalendar Participant, минимум для веб-почты). */
+export interface EventParticipant {
+  name?: string;
+  calendarAddress?: string;
+  roles?: Record<string, boolean>;
+  participationStatus?: string;
+  expectReply?: boolean;
+}
+
+/** Место встречи (JSCalendar Location, минимум). */
+export interface EventLocation {
+  name?: string;
+}
+
+/** Вхождение события (JSCalendar 2.0 из draft-ietf-jmap-calendars + свойства JMAP):
+ * сервер отдаёт события и вхождения повторов (`expandRecurrences` — синтетический id). */
+export interface CalendarEventObject {
+  id: string;
+  uid: string;
+  title: string | null;
+  description: string | null;
+  start: string;
+  duration: string | null;
+  timeZone: string | null;
+  showWithoutTime?: boolean;
+  locations: Record<string, EventLocation> | null;
+  participants: Record<string, EventParticipant> | null;
+  organizerCalendarAddress: string | null;
+  /** true — вошедший организатор (его можно править и отменять). */
+  isOrigin?: boolean;
+  /** У вхождения повтора — время вхождения (LocalDateTime) и идентификатор события-основы. */
+  recurrenceId: string | null;
+  baseEventId: string | null;
+  calendarIds: Record<string, boolean>;
+  /** Абсолютное время вхождения (UTCDate) — по запросу в properties, для размещения чипов. */
+  utcStart: string | null;
+  utcEnd: string | null;
+}
+
+/** Свойства вхождений для просмотра и формы: размещение — по utcStart/utcEnd. */
+export const CALENDAR_EVENT_PROPERTIES = [
+  "id", "uid", "title", "description", "start", "duration", "timeZone", "showWithoutTime",
+  "locations", "participants", "organizerCalendarAddress", "isOrigin", "recurrenceId",
+  "baseEventId", "calendarIds", "utcStart", "utcEnd",
+];
+
+/** `CalendarEvent/query` с развёрткой повторов (`expandRecurrences` — вхождения интервала)
+ * и `CalendarEvent/get` кусками — события видимого периода (после/до — UTCDate). */
+export async function calendarEventsInRange(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  after: string,
+  before: string,
+): Promise<CalendarEventObject[]> {
+  const query = await callMethod(apiUrl, authorization, "CalendarEvent/query", {
+    accountId,
+    filter: { after, before },
+    expandRecurrences: true,
+    sort: [{ property: "start" }],
+    limit: 1000,
+    calculateTotal: false,
+  });
+  const ids = (query.ids as string[] | undefined) ?? [];
+  const out: CalendarEventObject[] = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const result = await callMethod(apiUrl, authorization, "CalendarEvent/get", {
+      accountId,
+      ids: ids.slice(i, i + 200),
+      properties: CALENDAR_EVENT_PROPERTIES,
+    });
+    out.push(...parseGet<CalendarEventObject>(result).list);
+  }
+  return out;
+}
+
+/** Изменения CalendarEvent/set: создание/правка/отмена (рассылка приглашений — сервером). */
+export async function calendarEventSet(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  changes: {
+    create?: Record<string, Record<string, unknown>>;
+    update?: Record<string, Record<string, unknown>>;
+    destroy?: string[];
+  },
+  sendSchedulingMessages: boolean,
+): Promise<SetResult> {
+  const result = await callMethod(apiUrl, authorization, "CalendarEvent/set", {
+    accountId,
+    sendSchedulingMessages,
+    ...(changes.create && Object.keys(changes.create).length > 0 ? { create: changes.create } : {}),
+    ...(changes.update && Object.keys(changes.update).length > 0 ? { update: changes.update } : {}),
+    ...(changes.destroy && changes.destroy.length > 0 ? { destroy: changes.destroy } : {}),
+  });
+  return parseSet(result);
+}
+
+/** Участник организации (RFC 9670 Principal): человек (individual), помещение (location),
+ * оборудование (resource) — справочник для формы встречи. */
+export interface PrincipalObject {
+  id: string;
+  type: "individual" | "location" | "resource";
+  name: string;
+  email: string;
+}
+
+/** `Principal/query` по типу + `Principal/get` — справочник формы встречи (люди, комнаты). */
+export async function principalsByType(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  type: "individual" | "location" | "resource",
+): Promise<PrincipalObject[]> {
+  const query = await callMethod(apiUrl, authorization, "Principal/query", {
+    accountId,
+    filter: { type },
+    sort: [{ property: "name" }],
+    limit: 500,
+  });
+  const ids = (query.ids as string[] | undefined) ?? [];
+  if (ids.length === 0) return [];
+  return principalGet(apiUrl, authorization, accountId, ids);
+}
+
+/** `Principal/get` по идентификаторам (свой участник — id своей учётной записи). */
+export async function principalGet(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  ids: string[],
+): Promise<PrincipalObject[]> {
+  if (ids.length === 0) return [];
+  const result = await callMethod(apiUrl, authorization, "Principal/get", {
+    accountId,
+    ids,
+    properties: ["id", "type", "name", "email"],
+  });
+  return parseGet<PrincipalObject>(result).list;
+}
+
+/** Период занятости участника (draft-ietf-jmap-calendars): свободен/занят, деталей нет. */
+export interface BusyPeriod {
+  utcStart: string;
+  utcEnd: string;
+  busyStatus: "confirmed" | "tentative" | "unavailable";
+}
+
+/** `Principal/getAvailability`: занятость участника в интервале (UTCDate, read-only) —
+ * подсветка занятых слотов в форме. Отдельный вызов: узел без хранилища занятости не
+ * объявляет capability, и её в `using` включают только при ней. */
+export async function principalAvailability(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  principalId: string,
+  utcStart: string,
+  utcEnd: string,
+): Promise<BusyPeriod[]> {
+  const result = await callMethodUsing(
+    apiUrl,
+    authorization,
+    [CAP_CORE, CAP_PRINCIPALS, CAP_AVAILABILITY],
+    "Principal/getAvailability",
+    { accountId, id: principalId, utcStart, utcEnd },
+  );
+  if (isMethodError(result)) {
+    throw new JmapHttpError(0, result.description ?? result.type);
+  }
+  return (result.list as BusyPeriod[] | undefined) ?? [];
+}
+
+/** Ответ на приглашение (метод веб-почты JMAP-50, `Invitation/respond`): сервер сам читает
+ * письмо, проверяет папку и спам-вердикт, применяет iTIP и рассылает REPLY. Отказ —
+ * структурированная ошибка (`invitationInJunk` — «сначала перенесите письмо», `senderBlocked`). */
+export type InvitationResult = {
+  accountId: string;
+  participationStatus: string;
+  /** false — приём не внёс приглашение (чужой организатор), причина — в reason. */
+  applied: boolean;
+  reason: string | null;
+  calendarEventId: string | null;
+};
+
+/** `Invitation/respond`: статус accepted/tentative/declined; ошибка метода — как объект ошибки. */
+export async function invitationRespond(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  emailId: string,
+  participationStatus: "accepted" | "tentative" | "declined",
+): Promise<InvitationResult | MethodError> {
+  const result = await callMethod(apiUrl, authorization, "Invitation/respond", {
+    accountId,
+    emailId,
+    participationStatus,
+  });
+  if (isMethodError(result)) return result as MethodError;
+  return result as unknown as InvitationResult;
 }
