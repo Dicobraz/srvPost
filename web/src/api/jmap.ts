@@ -337,9 +337,10 @@ export async function callMethod(
   method: string,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  // Капабилити по типу данных (RFC 8620 §3.2): почта — Email/Thread/Mailbox, отправка — Identity/
-  // EmailSubmission (WEB-04); остальное — ядро.
-  const using = method.startsWith("Mailbox") || method.startsWith("Email") || method.startsWith("Thread")
+  // Капабилити по типу данных (RFC 8620 §3.2): почта — Email/Thread/Mailbox и SearchSnippet
+  // (RFC 8621 §5, WEB-05), отправка — Identity/EmailSubmission (WEB-04); остальное — ядро.
+  const using = method.startsWith("Mailbox") || method.startsWith("Email") ||
+      method.startsWith("Thread") || method.startsWith("SearchSnippet")
     ? [CAP_CORE, CAP_MAIL]
     : method.startsWith("Identity") || method.startsWith("EmailSubmission")
       ? [CAP_CORE, CAP_SUBMISSION]
@@ -375,7 +376,8 @@ export async function mailboxesGet(
   return { list: parseGet<Mailbox>(result).list, state: (result.state as string) ?? "" };
 }
 
-/** Условие фильтра `Email/query` (RFC 8621 §4.4.1): маски и папки — `mail/keywords.ts`. */
+/** Условие фильтра `Email/query` (RFC 8621 §4.4.1): маски и папки — `mail/keywords.ts`; поля
+ * текста (WEB-05): from/to/subject/body — серверный FTS (Tantivy, морфология, «ё»). */
 export interface EmailQueryFilter {
   inMailbox?: string;
   inMailboxOtherThan?: string[];
@@ -386,7 +388,10 @@ export interface EmailQueryFilter {
   text?: string;
   from?: string;
   to?: string;
+  cc?: string;
+  bcc?: string;
   subject?: string;
+  body?: string;
   before?: string;
   after?: string;
   operator?: "AND" | "OR" | "NOT";
@@ -440,6 +445,35 @@ export async function emailGet<T extends EmailSummary | EmailFull>(
     properties,
   });
   return parseGet<T>(result).list;
+}
+
+// ---------- WEB-05: поиск — сниппеты совпадений (SearchSnippet/get, RFC 8621 §5) ----------
+
+/** Сниппет поиска письма: подсвеченные `<mark>` фрагменты темы и текста (null — совпадения нет). */
+export interface SearchSnippet {
+  emailId: string;
+  subject: string | null;
+  preview: string | null;
+}
+
+/** `SearchSnippet/get`: фрагменты совпадений по фильтру для списка писем (не больше
+ * maxObjectsInGet идентификаторов — вызывающий делит на куски, как Email/get). */
+export async function searchSnippetsGet(
+  apiUrl: string,
+  authorization: string | null,
+  accountId: string,
+  filter: EmailQueryFilter,
+  emailIds: string[],
+): Promise<SearchSnippet[]> {
+  if (emailIds.length === 0) return [];
+  const result = await callMethod(apiUrl, authorization, "SearchSnippet/get", {
+    accountId,
+    filter,
+    emailIds,
+  });
+  return ((result.list as SearchSnippet[] | undefined) ?? []).filter(
+    (s): s is SearchSnippet => typeof s?.emailId === "string",
+  );
 }
 
 /** `Email/changes` (RFC 8620 §5.2): delta-sync по state-строке — что обновилось и что пропало. */

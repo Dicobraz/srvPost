@@ -16,15 +16,19 @@ import {
   emailSetDestroy,
   emailSetUpdate,
   mailboxesGet,
+  searchSnippetsGet,
   threadGet,
   type EmailFull,
   type EmailQueryFilter,
   type EmailQuerySort,
   type EmailSummary,
   type Mailbox,
+  type SearchSnippet,
   type Thread,
 } from "../api/jmap";
 import { quickFilterFilters, type QuickFilterKind } from "./keywords";
+import { isSearchActive, searchFilter } from "./search";
+import type { SearchRefinement } from "./search";
 import { keys, queryClient } from "./client";
 import { rememberSyncState } from "./sync";
 import { useJmap } from "./context";
@@ -38,16 +42,25 @@ export interface WindowArgs {
   quick: QuickFilterKind | null;
   /** Только отмеченные ($flagged) — виртуальная папка. */
   flagged: boolean;
-  /** Только непрочитанные ($seen нет). */
+  /** Только непрочитанные ($seen нет) — вне поиска фильтр списка, в поиске чип search.unread. */
   unread: boolean;
-  /** Только с вложениями. */
+  /** Только с вложениями (вне поиска фильтр, в поиске чип search.attachments). */
   attachment: boolean;
   /** Сортировка: сначала новые/старые/по отправителю. */
   sort: "date-desc" | "date-asc" | "from";
   /** Вид потока: группировка (collapseThreads) или плоский список («как в Outlook»). */
   grouped: boolean;
-  /** Поиск по тексту (FTS сервера; развёрнуто — WEB-05). */
+  /** Поиск по тексту (FTS сервера; операторы и транслитерация — search.ts). */
   search: string | null;
+  // --- WEB-05: поиск и фильтры ---
+  /** Область поиска: true — «Везде» (без папки), false — «В папке» (текущая). */
+  scopeAll: boolean;
+  /** Чип «30 дней» (search.recent): письма за последние 30 дней. */
+  recent30: boolean;
+  /** Уточнения кликом (отправитель/папка/период/категория) — чипы панели фильтров. */
+  refinements: SearchRefinement[];
+  /** Транслитерация раскладки (настройка): запрос пробуется и как qwerty→йцукен. */
+  translit: boolean;
 }
 
 /** Страница окна (дозагрузка при скролле): идентификаторы строк списка. */
@@ -56,14 +69,32 @@ export interface WindowPage {
   ids: string[];
   /** Всего в выборке — только на первой странице. */
   total: number | null;
+  /** Сниппеты совпадений (режим поиска, SearchSnippet/get); нет сниппета — превью как было. */
+  snippets: Record<string, SearchSnippet>;
 }
 
 /** Страница окна (дозагрузка при скролле) и кусок Email/get — не выше типового maxObjectsInGet. */
 const PAGE = 100;
 const CHUNK = 64;
 
-/** Условие фильтра окна: папка + маски фильтров (keywords.ts). */
+/** Условие фильтра окна: в режиме поиска — сборка search.ts (чипы, уточнения, транслитерация),
+ * вне поиска — папка + маски фильтров (keywords.ts). */
 function filterFor(args: WindowArgs): EmailQueryFilter {
+  if (isSearchActive({ text: args.search ?? "", refinements: args.refinements })) {
+    const built = searchFilter({
+      text: args.search ?? "",
+      scopeAll: args.scopeAll,
+      unread: args.unread,
+      attachment: args.attachment,
+      recent30: args.recent30,
+      refinements: args.refinements,
+      mailboxId: args.mailboxId,
+      flagged: args.flagged,
+      quick: args.quick,
+      translit: args.translit,
+    });
+    if (built) return built;
+  }
   const parts: EmailQueryFilter[] = [];
   if (args.flagged) parts.push({ hasKeyword: "$flagged" });
   if (args.unread) parts.push({ notKeyword: "$seen" });
@@ -91,8 +122,9 @@ function sortFor(sort: WindowArgs["sort"]): EmailQuerySort[] {
   }
 }
 
-/** Нормализация: письма кладутся в кэш по id — список и чтение читают одно и то же. */
-function cacheEmails(summaries: EmailSummary[]): void {
+/** Нормализация: письма кладутся в кэш по id — список и чтение читают одно и то же.
+ * (Экспорт для палитры команд WEB-05: письма из поиска палитры открываются панелью чтения.) */
+export function cacheEmails(summaries: EmailSummary[]): void {
   for (const s of summaries) queryClient.setQueryData(keys.email(s.id), s);
 }
 
@@ -132,6 +164,25 @@ export function useMailWindow(args: WindowArgs) {
       );
       const summaries = await fetchChunked<EmailSummary>(env, query.ids, SUMMARY_PROPERTIES);
       cacheEmails(summaries);
+      // Сниппеты совпадений (WEB-05): SearchSnippet/get с тем же фильтром — на каждую страницу
+      // окна. Сервер без сниппетов или без совпадений в тексте — превью как было (fallback UI).
+      const snippets: Record<string, SearchSnippet> = {};
+      if (args.search) {
+        try {
+          for (let i = 0; i < query.ids.length; i += CHUNK) {
+            const list = await searchSnippetsGet(
+              env.apiUrl,
+              env.authorization,
+              env.accountId,
+              filterFor(args),
+              query.ids.slice(i, i + CHUNK),
+            );
+            for (const s of list) snippets[s.emailId] = s;
+          }
+        } catch {
+          // Сниппеты — усиление, не требование: без них список показывает обычное превью.
+        }
+      }
       if (args.grouped) {
         // Потоки: счётчик «N писем» и участники — по Thread/get; письма потока тоже в кэше
         // (разворот потока не ходит в сеть, если его письма уже загружены).
@@ -146,7 +197,7 @@ export function useMailWindow(args: WindowArgs) {
         }
         cacheThreads(threads);
       }
-      return { ids: query.ids, total: position === 0 ? query.total : null };
+      return { ids: query.ids, total: position === 0 ? query.total : null, snippets };
     },
     initialPageParam: 0,
     getNextPageParam: (_lastPage, pages, lastPageParam) => {

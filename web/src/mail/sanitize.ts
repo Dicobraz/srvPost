@@ -9,6 +9,8 @@
 */
 import DOMPurify from "dompurify";
 
+import { HIGHLIGHT_STYLE, highlightScript } from "./highlight";
+
 /** Результат подготовки HTML письма: чистый srcdoc и сведения для полос над телом. */
 export interface SanitizedHtml {
   /** Документ для `srcdoc` sandboxed iframe (со своим CSP и мини-скриптом кликов). */
@@ -19,9 +21,11 @@ export interface SanitizedHtml {
   spoofedLinks: Array<{ text: string; href: string; domain: string }>;
 }
 
-/** Опции: разрешены ли внешние картинки (баннер — opt-in на письмо и на домен отправителя). */
+/** Опции: разрешены ли внешние картинки (баннер — opt-in) и термы подсветки поиска (WEB-05, F3). */
 export interface SanitizeOptions {
   allowImages: boolean;
+  /** Термы подсветки совпадений: пусто/не задано — скрипт подсветки не встраивается. */
+  highlight?: string[];
 }
 
 /** Мини-скрипт srcdoc-документа: клик по подменённой ссылке — баннер с адресом (внутри iframe). */
@@ -65,8 +69,10 @@ function csp(allowImages: boolean): string {
   ].join("; ");
 }
 
-/** Собрать srcdoc-документ письма: чистый HTML, CSP, подложка ссылок. */
-function buildDoc(bodyHtml: string, allowImages: boolean): string {
+/** Собрать srcdoc-документ письма: чистый HTML, CSP, подложка ссылок; термы подсветки —
+ * когда письмо открыто из результатов поиска (WEB-05, F3). */
+function buildDoc(bodyHtml: string, allowImages: boolean, highlight?: string[]): string {
+  const hl = highlight && highlight.length > 0 ? `<style>${HIGHLIGHT_STYLE}</style><script>${highlightScript(highlight)}</script>` : "";
   return `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${csp(allowImages)}">
 <meta name="color-scheme" content="light dark">
@@ -76,7 +82,7 @@ function buildDoc(bodyHtml: string, allowImages: boolean): string {
   table{max-width:100%}
   img{max-width:100%}
 </style>
-<script>${CLICK_GUARD}</script></head><body>${bodyHtml}</body></html>`;
+<script>${CLICK_GUARD}</script>${hl}</head><body>${bodyHtml}</body></html>`;
 }
 
 /** Домен адреса ссылки; отностительный/битый — null. База — origin приложения (same-origin),
@@ -113,7 +119,8 @@ const PURIFY_CONFIG: Parameters<typeof DOMPurify.sanitize>[1] = {
   WHOLE_DOCUMENT: false,
 };
 
-/** Подготовка HTML письма: санитайзер → картинки (opt-in) → ссылки (spoofed) → srcdoc. */
+/** Подготовка HTML письма: санитайзер → картинки (opt-in) → ссылки (spoofed) → srcdoc
+ * (термы подсветки — srcdoc получает скрипт F3-подсветки, WEB-05). */
 export function sanitizeEmailHtml(html: string, options: SanitizeOptions): SanitizedHtml {
   const clean = DOMPurify.sanitize(html, PURIFY_CONFIG);
   // Контейнер — обычный div: разметка уже прошла санитайзер (скриптов нет), innerHTML не исполняет.
@@ -171,7 +178,7 @@ export function sanitizeEmailHtml(html: string, options: SanitizeOptions): Sanit
   }
 
   return {
-    doc: buildDoc(root.innerHTML, options.allowImages),
+    doc: buildDoc(root.innerHTML, options.allowImages, options.highlight),
     blockedImageHosts: [...blockedImageHosts],
     spoofedLinks,
   };
@@ -186,8 +193,8 @@ export function plainTextHtml(text: string): string {
 }
 
 /** srcdoc для простого тела (текст или уже sanitized html) — общий вход чтения. */
-export function buildBodyDoc(bodyHtml: string, allowImages: boolean): string {
-  return buildDoc(bodyHtml, allowImages);
+export function buildBodyDoc(bodyHtml: string, allowImages: boolean, highlight?: string[]): string {
+  return buildDoc(bodyHtml, allowImages, highlight);
 }
 
 /** Домены, для которых пользователь разрешил картинки («Всегда для домена», localStorage). */

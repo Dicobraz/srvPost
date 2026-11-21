@@ -314,20 +314,52 @@ body {
   filter: brightness(1.05);
 }
 
-.cmd .search {
+/* Поисковая строка (WEB-05): поле с лупой и сбросом; запрос — с debounce 300 мс. */
+.cmd .searchbar {
   margin-left: auto;
-  width: 270px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 320px;
   height: 28px;
   border: 1px solid var(--m-frame);
   border-radius: 4px;
   background: var(--m-panel);
-  color: var(--m-text);
-  padding: 0 9px;
-  font: inherit;
+  color: var(--m-muted);
+  padding: 0 8px;
 }
 
-.cmd .search:focus {
+.cmd .searchbar input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--m-text);
+  font: inherit;
+  outline: none;
+}
+
+.cmd .searchbar input::placeholder {
+  color: var(--m-muted);
+}
+
+.cmd .searchbar:focus-within {
   outline: 1px solid var(--m-acc);
+}
+
+.cmd .searchbar .clr {
+  border: none;
+  background: none;
+  color: var(--m-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 3px;
+}
+
+.cmd .searchbar .clr:hover {
+  background: var(--m-hover);
 }
 
 /* Настройки чтения: inline-панель у шестерёнки, не модалка. */
@@ -672,20 +704,24 @@ body {
   display: none;
 }
 
-/* Быстрые фильтры: порядок по срочности, равная ширина. */
-.qf {
+/* Быстрые фильтры (закладки поверх нижнего края) и сохранённые фильтры рядом под ними
+   (WEB-05, search.save_filter): обёртка — абсолютный низ карточки списка. */
+.qfwrap {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 34px;
   background: var(--m-panel);
   border-top: 1px solid var(--m-div);
+  box-shadow: 0 -4px 8px rgba(22, 22, 22, 0.05);
+  z-index: 2;
+}
+
+.qf {
+  height: 34px;
   display: flex;
   gap: 4px;
   padding: 5px 8px;
-  box-shadow: 0 -4px 8px rgba(22, 22, 22, 0.05);
-  z-index: 2;
 }
 
 .qf .f {
@@ -722,7 +758,7 @@ body {
   color: var(--m-i-amber);
 }
 
-/* Панель простых фильтров: строка над списком (прочитанность, вложения). */
+/* Панель простых фильтров (вне поиска) и чипы области поиска (WEB-05): строка над списком. */
 .filters {
   display: flex;
   gap: 4px;
@@ -745,6 +781,301 @@ body {
   background: var(--m-tint);
   color: var(--m-tinttext);
   border-color: var(--m-tinttext);
+}
+
+.filters .f.act {
+  border-color: transparent;
+  color: var(--m-acc);
+  font-weight: 600;
+}
+
+.filters .sep {
+  width: 1px;
+  background: var(--m-div);
+  margin: 0 2px;
+}
+
+.filters .sp {
+  flex: 1;
+}
+
+/* Уточнение кликом (click-refinement) — чип с крестиком (панель фильтров и строки). */
+.filters .rf {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--m-acc);
+  color: var(--m-acc);
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 0 4px 0 8px;
+  background: var(--m-panel);
+}
+
+.filters .rf .x {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 3px;
+  line-height: 1.2;
+}
+
+/* Кликабельные элементы строк/чтения в режиме поиска (уточнения кликом). */
+.rfx {
+  cursor: pointer;
+}
+
+.rfx:hover {
+  text-decoration: underline;
+  color: var(--m-acc);
+}
+
+/* Чип папки в строке результатов «Везде» (как в Postman) — уточняет запрос кликом. */
+.msg .fchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--m-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: none;
+}
+
+.msg .fchip:hover {
+  color: var(--m-acc);
+}
+
+/* Сниппет совпадений (WEB-05): третья строка в обычной плотности, <mark> сервера — янтарным. */
+.msg .l3 {
+  display: flex;
+  align-items: center;
+  height: 19px;
+  color: var(--m-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.msg .l3 mark {
+  background: var(--m-duebg);
+  color: var(--m-duetx);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.msg .subj mark {
+  background: var(--m-duebg);
+  color: var(--m-duetx);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Компактная плотность: сниппет тоже скрыт. */
+.mail[data-density="compact"] .msg .l3 {
+  display: none;
+}
+
+/* Счётчик совпадений F3 рядом с темой письма. */
+.read h3 .hlcnt {
+  margin-left: 10px;
+  vertical-align: middle;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--m-duetx);
+  background: var(--m-duebg);
+  border-radius: 9px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+/* Сохранённые фильтры (search.save_filter) — ряд под быстрыми фильтрами. */
+.saved {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--m-div);
+  height: 34px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.saved .sfchip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--m-frame);
+  border-radius: 4px;
+  background: var(--m-panel);
+  overflow: hidden;
+  flex: none;
+}
+
+.saved .sfchip .nm {
+  border: none;
+  background: none;
+  color: var(--m-text);
+  font-size: 12px;
+  padding: 1px 4px 1px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.saved .sfchip .nm:hover {
+  color: var(--m-acc);
+}
+
+.saved .sfchip .x {
+  border: none;
+  background: none;
+  color: var(--m-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 5px;
+  line-height: 1.2;
+}
+
+.saved .sfchip .x:hover {
+  color: var(--m-err);
+}
+
+.saved .sfform input {
+  height: 24px;
+  border: 1px solid var(--m-acc);
+  border-radius: 4px;
+  background: var(--m-panel);
+  color: var(--m-text);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 6px;
+  width: 180px;
+}
+
+/* Палитра команд (Ctrl+K, WEB-05): overlay по принципу макета — токены почты, тень, верх-центр. */
+.palbg {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(22, 22, 22, 0.28);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 72px 16px 16px;
+}
+
+.pal {
+  width: 560px;
+  max-width: 100%;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--m-panel);
+  border: 1px solid var(--m-frame);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(22, 22, 22, 0.28);
+  overflow: hidden;
+}
+
+.pal .pin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--m-div);
+  color: var(--m-muted);
+}
+
+.pal .pin input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--m-text);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.pal .pin .esc {
+  border: 1px solid var(--m-frame);
+  border-radius: 3px;
+  font-size: 11px;
+  padding: 0 5px;
+  color: var(--m-muted);
+}
+
+.pal .pitems {
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.pal .pitems .pempty {
+  color: var(--m-muted);
+  padding: 12px 10px;
+}
+
+.pal .pi {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  padding: 0 10px;
+  font: inherit;
+  color: var(--m-text);
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+
+.pal .pi.on {
+  background: var(--m-tint);
+}
+
+.pal .pi .lbl {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pal .pi .hint {
+  color: var(--m-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.pal .pi .hint.mail {
+  color: var(--m-acc);
+}
+
+.pal .pi svg {
+  color: var(--m-muted);
+  flex: none;
+}
+
+.pal .pi .pic {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.pal .pfoot {
+  border-top: 1px solid var(--m-div);
+  color: var(--m-muted);
+  font-size: 12px;
+  padding: 6px 12px;
+  flex: none;
 }
 
 /* Чтение. */

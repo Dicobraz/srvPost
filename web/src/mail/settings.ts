@@ -48,3 +48,22 @@ export function loadThreadView(): ThreadView {
 export function saveThreadView(view: ThreadView): void {
   save(VIEW_KEY, view);
 }
+
+// --- WEB-05: транслитерация раскладки (переключатель в настройках) ---
+
+const TRANSLIT_KEY = "thepost-webmail-translit";
+
+/** Транслитерация раскладки (qwerty→йцукен, WEB-05): по умолчанию включена — как в Postman. */
+export function loadTranslit(): boolean {
+  try {
+    const value = localStorage.getItem(TRANSLIT_KEY);
+    if (value === null) return true;
+    return value === "on";
+  } catch {
+    return true;
+  }
+}
+
+export function saveTranslit(on: boolean): void {
+  save(TRANSLIT_KEY, on ? "on" : "off");
+}

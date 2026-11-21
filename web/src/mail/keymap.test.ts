@@ -23,6 +23,9 @@ function actions(): { act: MailHotkeyActions; calls: string[] } {
     focusNextPanel: (backward) => calls.push(backward ? "focusPrev" : "focusNext"),
     focusFolders: () => calls.push("focusFolders"),
     escape: () => calls.push("escape"),
+    openPalette: () => calls.push("palette"),
+    findNext: () => calls.push("findNext"),
+    findPrev: () => calls.push("findPrev"),
   };
   return { act, calls };
 }
@@ -93,4 +96,22 @@ test("Alt в схеме не используется; таблица клави
   const withAlt = new KeyboardEvent("keydown", { code: "KeyR", ctrlKey: false, altKey: true, cancelable: true });
   expect(handleMailKeydown(withAlt, act)).toBe(false);
   expect(KEYMAP_HINTS.some((h) => h.keys === "1–9" && h.action === "Категория")).toBe(true);
+});
+
+test("WEB-05: Ctrl+K — палитра команд; F3/Shift+F3 — совпадения в письме", () => {
+  const { act, calls } = actions();
+  expect(handleMailKeydown(key("KeyK", { ctrl: true }), act)).toBe(true);
+  expect(handleMailKeydown(key("F3"), act)).toBe(true);
+  expect(handleMailKeydown(key("F3", { shift: true }), act)).toBe(true);
+  expect(calls).toEqual(["palette", "findNext", "findPrev"]);
+});
+
+test("WEB-05: F3 работает и в поле ввода (поиск не мешает навигации по совпадениям)", () => {
+  const { act, calls } = actions();
+  const input = document.createElement("input");
+  expect(handleMailKeydown(key("F3", {}, input), act)).toBe(true);
+  expect(handleMailKeydown(key("KeyJ", {}, input), act)).toBe(false);
+  expect(calls).toEqual(["findNext"]);
+  expect(KEYMAP_HINTS.some((h) => h.keys === "Ctrl+K" && h.action === "Палитра команд")).toBe(true);
+  expect(KEYMAP_HINTS.some((h) => h.keys === "F3 / Shift+F3")).toBe(true);
 });

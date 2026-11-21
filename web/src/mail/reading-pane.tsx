@@ -5,8 +5,11 @@
   красная полоса безопасности; text/plain — <pre>-вью. Вложения — ссылки скачивания (blob).
   Карточка приглашения (.ics) — заглушка по макету: кнопки ответа disabled с подсказкой
   «в разработке» (ответы примет волна 6, JMAP-50).
+  WEB-05 — поиск: клик-уточнения по отправителю и дате письма (чипы панели фильтров, click-
+  refinements); подсветка совпадений F3/Shift+F3 — термы поиска передаются в srcdoc (highlight.ts),
+  счётчик совпадений — рядом с темой.
 */
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { blobUrl, type EmailBodyPart, type EmailFull, type EmailSummary, type JmapSession } from "../api/jmap";
 import { useJmap } from "./context";
@@ -29,6 +32,12 @@ export interface ReadToggles {
   onAllowDomain(): void;
 }
 
+/** Состояние подсветки письма (hl-state из srcdoc): совпадений и текущий номер. */
+export interface MatchState {
+  count: number;
+  index: number;
+}
+
 interface ReadingPaneProps {
   summary: EmailSummary | null;
   /** Письма развёрнутой беседы (стопка) или только выбранное. */
@@ -39,6 +48,16 @@ interface ReadingPaneProps {
   collapsed: boolean;
   prevNext: { prev: string | null; next: string | null };
   onPrevNext(id: string): void;
+  // --- WEB-05 ---
+  /** Термы подсветки активного поиска (пусто — письмо открыто не из поиска, без подсветки). */
+  highlightTerms: string[];
+  /** Счётчик совпадений подсветки (hl-state из iframe). */
+  matchState: MatchState | null;
+  /** Регистрация iframe тела (для команд F3; последний смонтированный — активный). */
+  onBodyFrame(frame: HTMLIFrameElement | null): void;
+  /** Уточнения кликом (только в режиме поиска): отправитель и период. */
+  onRefineSender(email: EmailSummary): void;
+  onRefinePeriod(email: EmailSummary): void;
 }
 
 /** Тип письма для вкладки/строки: конверт синий (макет). */
@@ -65,22 +84,37 @@ function formatSize(size: number): string {
   return `${size} Б`;
 }
 
-/** Тело письма: HTML — sanitized iframe; текст — <pre>; вложения и приглашение — из Email/get. */
+/** Тело письма: HTML — sanitized iframe; текст — <pre>; вложения и приглашение — из Email/get.
+ * Термы поиска — в srcdoc (подсветка F3, WEB-05): iframe перерисовывается при смене термов. */
 function EmailBody({
   summary,
   full,
   toggles,
   session,
   accountId,
+  highlightTerms,
+  onBodyFrame,
 }: {
   summary: EmailSummary;
   full: EmailFull | null;
   toggles: ReadToggles;
   session: JmapSession;
   accountId: string;
+  highlightTerms: string[];
+  onBodyFrame(frame: HTMLIFrameElement | null): void;
 }) {
   const senderDomain = senderOf(summary).address.split("@")[1] ?? "";
   const allowImages = toggles.imagesThisEmail || toggles.imagesForDomain;
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+
+  // Регистрация iframe тела: активный (последний смонтированный) получает команды F3.
+  useEffect(() => {
+    onBodyFrame(frameRef.current);
+    return () => onBodyFrame(null);
+  }, [onBodyFrame]);
+
+  // Ключ memo — строка термов: смена поиска перерисовывает srcdoc с новым скриптом подсветки.
+  const termsKey = highlightTerms.join("\u0001");
 
   const bodyHtml = useMemo(() => {
     if (!full) return null;
@@ -97,10 +131,12 @@ function EmailBody({
     return { html: "", plain: false };
   }, [full]);
 
+  const terms = useMemo(() => termsKey.split("\u0001").filter(Boolean), [termsKey]);
+
   const sanitized = useMemo(() => {
     if (!bodyHtml || bodyHtml.plain) return null;
-    return sanitizeEmailHtml(bodyHtml.html, { allowImages });
-  }, [bodyHtml, allowImages]);
+    return sanitizeEmailHtml(bodyHtml.html, { allowImages, highlight: terms });
+  }, [bodyHtml, allowImages, terms]);
 
   const attachments = (full?.attachments ?? []).filter((p) => !isInvitationPart(p.type) && p.disposition !== "inline");
   const calendarPart = (full?.attachments ?? []).find((p) => isInvitationPart(p.type));
@@ -161,6 +197,7 @@ function EmailBody({
         ) : sanitized ? (
           // HTML письма — srcdoc-документ санитайзера (CSP + click-guard внутри, CSS изолирован)
           <iframe
+            ref={frameRef}
             title="Тело письма"
             sandbox="allow-popups allow-popups-to-escape-sandbox allow-scripts"
             srcDoc={sanitized.doc}
@@ -168,9 +205,10 @@ function EmailBody({
         ) : (
           // text/plain — безопасный <pre> (plainTextHtml, без внешних адресов и картинок)
           <iframe
+            ref={frameRef}
             title="Текст письма"
             sandbox="allow-popups allow-popups-to-escape-sandbox allow-scripts"
-            srcDoc={buildBodyDoc(bodyHtml?.html ?? "", false)}
+            srcDoc={buildBodyDoc(bodyHtml?.html ?? "", false, terms)}
           />
         )}
       </div>
@@ -251,8 +289,23 @@ function InvitationCard({ invitation }: { invitation: ReturnType<typeof parseInv
   );
 }
 
-export function ReadingPane({ summary, stack, stackFull, toggles, onExpandAll, collapsed, prevNext, onPrevNext }: ReadingPaneProps) {
+export function ReadingPane({
+  summary,
+  stack,
+  stackFull,
+  toggles,
+  onExpandAll,
+  collapsed,
+  prevNext,
+  onPrevNext,
+  highlightTerms,
+  matchState,
+  onBodyFrame,
+  onRefineSender,
+  onRefinePeriod,
+}: ReadingPaneProps) {
   const env = useJmap();
+  const refinable = highlightTerms.length > 0; // уточнения кликом — только в режиме поиска (WEB-05)
   if (!summary) {
     return (
       <section className="read" aria-label="Чтение">
@@ -267,7 +320,14 @@ export function ReadingPane({ summary, stack, stackFull, toggles, onExpandAll, c
   }
   return (
     <section className="read" aria-label="Чтение">
-      <h3>{summary.subject ?? "(без темы)"}</h3>
+      <h3>
+        {summary.subject ?? "(без темы)"}
+        {matchState && matchState.count > 0 && (
+          <span className="hlcnt" title="Совпадения поиска в письме (F3 — дальше, Shift+F3 — назад)">
+            {matchState.index < 0 ? matchState.count : `${matchState.index + 1}/${matchState.count}`}
+          </span>
+        )}
+      </h3>
       {stack.length > 1 && (
         <div className="tbar">
           Беседа: {stack.length} писем · {participants.size} участник(ов)
@@ -289,9 +349,28 @@ export function ReadingPane({ summary, stack, stackFull, toggles, onExpandAll, c
           <div className="mhead">
             <div className="ava">{initials(senderOf(m).name)}</div>
             <div className="who">
-              <b>{senderOf(m).name}</b> <span className="adr">&lt;{senderOf(m).address}&gt;</span>
+              <b
+                className={refinable ? "rfx" : undefined}
+                title={refinable ? "Уточнить: письма этого отправителя" : undefined}
+                onClick={
+                  refinable
+                    ? () => onRefineSender(m)
+                    : undefined
+                }
+              >
+                {senderOf(m).name}
+              </b>{" "}
+              <span className="adr">&lt;{senderOf(m).address}&gt;</span>
               <div className="meta">
-                {formatDate(m.receivedAt)} · Кому: {(m.to ?? []).map((t) => t.name?.trim() || t.email).join(", ") || env.selfAddress}
+                <span
+                  className={refinable ? "rfx" : undefined}
+                  title={refinable ? "Уточнить: этот месяц" : undefined}
+                  onClick={refinable ? () => onRefinePeriod(m) : undefined}
+                >
+                  {formatDate(m.receivedAt)}
+                </span>
+                {" · Кому: "}
+                {(m.to ?? []).map((t) => t.name?.trim() || t.email).join(", ") || env.selfAddress}
               </div>
             </div>
             <div className="right" />
@@ -302,6 +381,8 @@ export function ReadingPane({ summary, stack, stackFull, toggles, onExpandAll, c
             toggles={toggles}
             session={env.session}
             accountId={env.accountId}
+            highlightTerms={highlightTerms}
+            onBodyFrame={onBodyFrame}
           />
         </div>
       ))}
