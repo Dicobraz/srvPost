@@ -127,7 +127,7 @@ test("группировка: Просрочено ≤ сейчас, Сегод�
   );
   expect(groups.overdue.map((i) => i.id)).toEqual(["a", "b"]);
   expect(groups.today.map((i) => i.id)).toEqual(["c", "d"]);
-  expect(groups.next.map((i) => i.id)).toEqual(["e", "f", "j"]);
+  expect(groups.next.map((i) => i.id)).toEqual(["e", "j", "f"]); // ближайший срок — выше
   expect(groups.later).toBe(1);
   expect(groups.wait.map((i) => i.id)).toEqual(["i", "h"]); // дольше ждём — выше, без даты — в конце
   expect(remindersTotal(groups)).toBe(10);

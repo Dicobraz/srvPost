@@ -87,7 +87,8 @@ test("секции по срочности, счётчики и ближайши
   expect(within(bar).getByText("Счёт с истёкшим сроком")).toBeTruthy();
   expect(within(bar).getByText(/Просрочено \d+ д/)).toBeTruthy();
   expect(within(bar).getByText("В пределах семи дней")).toBeTruthy();
-  expect(within(bar).getByText("Ждём ответа")).toBeTruthy(); // подпись пункта ожидания
+  // «Ждём ответа» — заголовок секции и подпись пункта ожидания (текст узла — у обоих).
+  expect(within(bar).getAllByText("Ждём ответа").length).toBe(2);
 });
 
 test("клик по секции — быстрый фильтр «Почты», клик по письму — открыть (шина переходов)", () => {
