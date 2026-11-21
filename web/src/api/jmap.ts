@@ -21,6 +21,8 @@ export const CAP_SUBMISSION = "urn:ietf:params:jmap:submission";
 export const CAP_WEBSOCKET = "urn:ietf:params:jmap:websocket";
 /** Капабилити календарей (draft-ietf-jmap-calendars): Calendar, CalendarEvent. */
 export const CAP_CALENDARS = "urn:ietf:params:jmap:calendars";
+/** Капабилити адресных книг и карточек (RFC 9610): AddressBook, ContactCard. */
+export const CAP_CONTACTS = "urn:ietf:params:jmap:contacts";
 /** Капабилити участников организации (RFC 9670): Principal — справочник людей и ресурсов. */
 export const CAP_PRINCIPALS = "urn:ietf:params:jmap:principals";
 /** Капабилити занятости (draft-ietf-jmap-calendars): Principal/getAvailability. */
@@ -362,7 +364,7 @@ export async function callMethod(
 ): Promise<Record<string, unknown>> {
   // Капабилити по типу данных (RFC 8620 §3.2): почта — Email/Thread/Mailbox и SearchSnippet
   // (RFC 8621 §5, WEB-05), отправка — Identity/EmailSubmission (WEB-04), календарь и участники —
-  // WEB-06; остальное — ядро.
+  // WEB-06, адресные книги и карточки — RFC 9610 (WEB-07); остальное — ядро.
   const using = method.startsWith("Mailbox") || method.startsWith("Email") ||
       method.startsWith("Thread") || method.startsWith("SearchSnippet")
     ? [CAP_CORE, CAP_MAIL]
@@ -370,7 +372,9 @@ export async function callMethod(
       ? [CAP_CORE, CAP_SUBMISSION]
       : method.startsWith("Calendar")
         ? [CAP_CORE, CAP_CALENDARS]
-        : method.startsWith("Invitation")
+        : method.startsWith("AddressBook") || method.startsWith("ContactCard")
+          ? [CAP_CORE, CAP_CONTACTS]
+          : method.startsWith("Invitation")
           // Метод веб-почты JMAP-50 — под своей capability узла; узлы без планирования её не
           // объявляют (кнопки ответа клиент показывает только при ней).
           ? [CAP_CORE, CAP_ITIP]
