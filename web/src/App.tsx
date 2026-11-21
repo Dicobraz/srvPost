@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 
 import { CalendarPage } from "./pages/calendar";
 import { ContactsPage } from "./pages/contacts";
+import { ContactCardPage } from "./pages/contact-card";
 import { MailPage } from "./pages/mail";
 import { LoginPage } from "./pages/login";
 import { CallbackPage } from "./pages/callback";
@@ -92,6 +93,7 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [navigate]);
 
+
   return (
     <div className="shell">
       <header className="header">
@@ -108,7 +110,9 @@ function Shell() {
           {/* Композер — вкладкой приложения (WEB-04, макет 02), не модалка; письмо — её источник. */}
           <Route path="/compose" element={<ComposerPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
+          {/* Контакты (WEB-07): раздел и карточка — табом приложения (DESIGN.md), не модалкой. */}
           <Route path="/contacts" element={<ContactsPage />} />
+          <Route path="/contacts/:id" element={<ContactCardPage />} />
           {/* Шов «Каналы»: маршрут зарезервирован (решение 2026-11-17), в навигации скрыт. */}
           <Route path="/channels" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
