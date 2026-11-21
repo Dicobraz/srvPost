@@ -27,8 +27,9 @@ import { RecipientsField } from "./RecipientsField";
 import { ComposeEditor } from "./Editor";
 import { DraftSaver, saveDraftOnce } from "./drafts";
 import { formatSize, uploadAttachment } from "./attachments";
-import { loadContacts, domainsOf } from "./contacts";
+import { loadContactSources, domainsOf } from "./contacts";
 import { loadSendHistory } from "./send-history";
+import { mergeSuggestions } from "../contacts/autocomplete";
 import { composeWarnings, type Warning } from "./warnings";
 import { snapshotHasContent, type Attachment, type ComposeSnapshot } from "./model";
 import {
@@ -41,7 +42,7 @@ import {
   subjectFor,
 } from "./quote";
 import { UNDO_SEND_SECONDS, sendMessage, cancelSend, supportsUndoSend } from "./send";
-import type { Recipient } from "./recipients";
+import { isValidEmail, parseRecipients, type Recipient } from "./recipients";
 
 /** Ключ локальной подписи (настройки — WEB-14; пока localStorage, пометка в PR). */
 const SIGNATURE_KEY = "thepost-webmail-signature";
@@ -155,6 +156,12 @@ export function ComposerPage() {
     kindParam === "reply" || kindParam === "reply-all" || kindParam === "forward" ? kindParam : "new";
   const sourceId = params.get("email");
   const draftId = params.get("draft");
+  // Получатель из карточки контакта (WEB-07 «Написать»): параметр маршрута /compose?to=….
+  const toParam = params.get("to");
+  const prefillTo = useMemo(() => {
+    if (kind !== "new" || !toParam) return [];
+    return parseRecipients(toParam).filter((r) => isValidEmail(r.email));
+  }, [kind, toParam]);
 
   // Identity отправителя (Send As — из JMAP Identity/get; право проверяет сервер — честная ошибка).
   const identities = useQuery<Identity[]>({
@@ -234,6 +241,7 @@ export function ComposerPage() {
       kind={kind}
       source={sourceId ? (source.data ?? null) : null}
       draft={draftId ? (source.data ?? null) : null}
+      prefillTo={prefillTo}
     />
   );
 }
@@ -246,9 +254,11 @@ interface ComposerProps {
   source: EmailFull | null;
   /** Черновик сервера для восстановления. */
   draft: EmailFull | null;
+  /** Получатель из карточки контакта (WEB-07 «Написать») — новое письмо. */
+  prefillTo: Recipient[];
 }
 
-function Composer({ identity, identities, kind, source, draft }: ComposerProps) {
+function Composer({ identity, identities, kind, source, draft, prefillTo }: ComposerProps) {
   const env = useJmap();
   const toast = useToast();
   const navigate = useNavigate();
@@ -260,28 +270,27 @@ function Composer({ identity, identities, kind, source, draft }: ComposerProps) 
   const draftsMailboxId = mailboxes?.find((m) => m.role === "drafts")?.id ?? null;
   const sentMailboxId = mailboxes?.find((m) => m.role === "sent")?.id ?? null;
 
-  // Подсказки: адресная книга (капабилити contacts есть) + локальная история отправок.
+  // Подсказки (WEB-07): личные книги и GAL (капабилити contacts есть) + локальная история
+  // отправок; слияние и порядок — как в Postman (contacts/autocomplete.ts).
   const contacts = useQuery({
-    queryKey: ["contacts", env.accountId],
-    queryFn: () => loadContacts(env),
+    queryKey: ["contact-snapshot", env.accountId],
+    queryFn: () => loadContactSources(env),
     staleTime: 60_000,
   });
   const candidates = useMemo(
-    () => [
-      ...(contacts.data ?? []),
-      ...loadSendHistory().map((h) => ({ recipient: { name: h.name, email: h.email }, source: "История" })),
-    ],
+    () => mergeSuggestions(contacts.data?.personal ?? [], contacts.data?.gal ?? [], loadSendHistory()),
     [contacts.data],
   );
-  const knownDomains = useMemo(() => domainsOf(contacts.data ?? []), [contacts.data]);
+  const knownDomains = useMemo(() => domainsOf(candidates), [candidates]);
 
   // Адрес отправителя (Send As): переключение — состояние; права проверяет сервер.
   const [fromId, setFromId] = useState(identity.id);
   const from = identities.find((i) => i.id === fromId) ?? identity;
 
   // Начальное содержимое — один раз на вкладку (ComposerPage гарантирует готовность данных).
+  // Получатель из контакта — в новое письмо; ответ/пересылка и черновик его не перебивают.
   const [initial] = useState(() => buildInitial(kind, draft, source, identity, env.selfAddress));
-  const [to, setTo] = useState<Recipient[]>(initial.to);
+  const [to, setTo] = useState<Recipient[]>(initial.to.length > 0 ? initial.to : prefillTo);
   const [cc, setCc] = useState<Recipient[]>(initial.cc);
   const [bcc, setBcc] = useState<Recipient[]>(initial.bcc);
   const [subject, setSubject] = useState(initial.subject);

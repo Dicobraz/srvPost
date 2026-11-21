@@ -1,13 +1,17 @@
 /*
-  Контакты для автодополнения (WEB-04): адресная книга из JMAP ContactCard (JSContact, RFC 9553),
-  если в сессии есть капабилити contacts (учётная запись с адресной книгой, `tp-dav`). Нет
-  капабилити — пусто (остаётся история отправок, send-history.ts). Поиск пока локальный: снимок
-  карточек — ContactCard/query окном + ContactCard/get; серверный поиск по тексту (text-needle)
-  подставит WEB-05/07. GAL в вебе появится с контактами (WEB-07, пометка в PR).
+  Контакты для автодополнения (WEB-07, дооснащение WEB-04): личные книги и книга «Организация»
+  (GAL) из JMAP ContactCard (JSContact, RFC 9553/9610) + локальная история отправок сливаются
+  в порядке Postman (contacts/autocomplete.ts). Разделение источников — по книгам: AddressBook/get
+  даёт myRights, книга без права записи (GAL «Организация» из LDAP/PostgreSQL) подписывается
+  «Справочник», свои — «Контакты» (макет 02). Нет капабилити contacts — пусто без запроса
+  (ввод адреса руками работает всегда). Поиск подсказок — локальный по снимку, раскладко-
+  устойчивый (recipients.ts/suggest: вариант qwerty→йцукен).
 */
 
-import { callMethod, type JmapSession } from "../api/jmap";
+import type { JmapSession } from "../api/jmap";
 import type { JmapEnv } from "../mail/types";
+import { addressBooksGet, contactCardSnapshot } from "../contacts/client";
+import { emailsOf, fullNameOf, isGroupCard, type AddressBookObject, type ContactCard } from "../contacts/model";
 import type { Suggestion } from "./recipients";
 
 /** Капабилити адресной книги (RFC 9610): ContactCard, AddressBook. */
@@ -19,62 +23,41 @@ export function hasContacts(session: JmapSession, accountId: string): boolean {
   return Boolean(caps[CAP_CONTACTS]);
 }
 
-/** Первая почта карточки JSContact: emails — карта «ключ → {address, pref?}». */
-function firstEmail(emails: unknown): string | null {
-  if (typeof emails !== "object" || emails === null) return null;
-  const entries = Object.values(emails as Record<string, { address?: unknown; pref?: unknown }>);
-  const sorted = [...entries].sort((a, b) => Number(b?.pref ?? 0) - Number(a?.pref ?? 0));
-  for (const e of sorted) {
-    if (typeof e?.address === "string" && e.address.includes("@")) return e.address;
-  }
-  return null;
+/** Карточка → подсказка: полное имя и первый (предпочтительный) адрес; без адреса карточка
+ * в подсказки не попадает. */
+function suggestionOf(card: ContactCard, source: string): Suggestion | null {
+  const email = emailsOf(card)[0];
+  if (!email) return null;
+  return { recipient: { name: fullNameOf(card) || null, email }, source };
 }
 
-/** Полное имя карточки JSContact: name.full или компоненты. */
-function fullName(name: unknown): string | null {
-  if (typeof name === "object" && name !== null) {
-    const full = (name as { full?: unknown }).full;
-    if (typeof full === "string" && full.trim()) return full.trim();
-    const components = (name as { components?: Array<{ value?: unknown }> }).components;
-    const joined = (components ?? [])
-      .map((c) => (typeof c.value === "string" ? c.value : ""))
-      .join(" ")
-      .trim();
-    if (joined) return joined;
-  }
-  return null;
-}
-
-/**
- * Снимок контактов для подсказок: все карточки учётной записи (лимит 500) — имя и почта.
- * Нет капабилити или запрос не удался (чужая книга, нет прав) — пусто без ошибки: подсказки
- * необязательны, ввод адреса работает всегда.
- */
-export async function loadContacts(env: JmapEnv): Promise<Suggestion[]> {
-  if (!hasContacts(env.session, env.accountId)) return [];
+/** Снимок источников подсказок: личные («Контакты») и справочник («Справочник»). Группы
+ * (kind=group) и карточки без адреса не участвуют. Ошибка запроса — пусто без ошибки:
+ * подсказки необязательны. */
+export async function loadContactSources(env: JmapEnv): Promise<{ personal: Suggestion[]; gal: Suggestion[] }> {
+  if (!hasContacts(env.session, env.accountId)) return { personal: [], gal: [] };
   try {
-    const query = await callMethod(env.apiUrl, env.authorization, "ContactCard/query", {
-      accountId: env.accountId,
-      position: 0,
-      limit: 500,
-    });
-    const ids = (query.ids as string[] | undefined) ?? [];
-    if (ids.length === 0) return [];
-    const get = await callMethod(env.apiUrl, env.authorization, "ContactCard/get", {
-      accountId: env.accountId,
-      ids,
-      properties: ["name", "emails"],
-    });
-    const list = ((get.list as Array<{ name?: unknown; emails?: unknown }> | undefined) ?? []).flatMap(
-      (card) => {
-        const email = firstEmail(card.emails);
-        if (!email) return [];
-        return [{ recipient: { name: fullName(card.name), email }, source: "Контакты" }];
-      },
-    );
-    return list;
+    let books: AddressBookObject[] = [];
+    try {
+      books = await addressBooksGet(env.apiUrl, env.authorization, env.accountId);
+    } catch {
+      // Нет книг (или метод не отвечает) — карточки всё равно читаются ниже.
+    }
+    // Книга без права записи — read-only справочник (GAL «Организация», чужая общая книга).
+    const galBooks = new Set(books.filter((b) => !b.myRights?.mayWrite).map((b) => b.id));
+    const cards = await contactCardSnapshot(env.apiUrl, env.authorization, env.accountId);
+    const personal: Suggestion[] = [];
+    const gal: Suggestion[] = [];
+    for (const card of cards) {
+      if (isGroupCard(card)) continue;
+      const s = suggestionOf(card, "Контакты");
+      if (!s) continue;
+      const inGal = Object.keys(card.addressBookIds as Record<string, boolean> ?? {}).some((id) => galBooks.has(id));
+      (inGal ? gal : personal).push(inGal ? { ...s, source: "Справочник" } : s);
+    }
+    return { personal, gal };
   } catch {
-    return [];
+    return { personal: [], gal: [] };
   }
 }
 
