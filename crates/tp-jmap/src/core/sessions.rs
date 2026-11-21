@@ -291,7 +291,7 @@ mod tests {
         let a = s.enter_push(scope).expect("push первой");
         assert!(s.enter(scope, 1), "http второй");
         assert!(s.enter_push(scope).is_none(), "push третьей сверх лимита");
-        assert!(s.enter(scope, 2).is_none(), "http третьей сверх лимита");
+        assert!(!s.enter(scope, 2), "http третьей сверх лимита");
         assert!(s.enter(scope, 1), "активная не страдает");
         drop(a);
         assert!(s.enter(scope, 2), "слот освободился с закрытием push");
