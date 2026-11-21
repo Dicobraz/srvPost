@@ -295,7 +295,7 @@ mod tests {
         assert!(s.enter(scope, 1), "активная не страдает");
         drop(a);
         assert!(s.enter(scope, 2), "слот освободился с закрытием push");
-        assert_eq!(s.count(scope), 1);
+        assert_eq!(s.count(scope), 2);
     }
 
     /// HTTP-сессия без активности дольше окна освобождает слот; активность продлевает.

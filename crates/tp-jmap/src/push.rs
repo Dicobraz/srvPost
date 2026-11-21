@@ -744,7 +744,8 @@ mod tests {
         let addr = serve(env.jmap.clone()).await;
         let mut ws = connect(addr).await;
 
-        // Второе соединение сверх лимита — структурированный отказ до перехода.
+        // Второе соединение сверх лимита — структурированный отказ до перехода (keep-alive:
+        // читаем заголовки и тело ответа, не ждём закрытия соединения).
         let mut s = TcpStream::connect(addr).await.expect("connect");
         let req = "GET /jmap/ws HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer token-2\r\n\
                    Connection: Upgrade\r\nUpgrade: websocket\r\n\
@@ -752,10 +753,15 @@ mod tests {
                    Sec-WebSocket-Protocol: jmap\r\n\r\n";
         s.write_all(req.as_bytes()).await.expect("write");
         let mut buf = Vec::new();
-        tokio::time::timeout(WAIT, s.read_to_end(&mut buf))
-            .await
-            .expect("no close")
-            .expect("read");
+        let mut chunk = [0u8; 1024];
+        while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = tokio::time::timeout(WAIT, s.read(&mut chunk))
+                .await
+                .expect("no response")
+                .expect("read");
+            assert!(n > 0, "closed before headers");
+            buf.extend_from_slice(&chunk[..n]);
+        }
         let text = String::from_utf8_lossy(&buf);
         let status = text.split(' ').nth(1).unwrap_or_default().to_owned();
         assert_eq!(status, "400", "{text}");
@@ -771,17 +777,27 @@ mod tests {
         .await;
         assert_eq!(next_json(&mut ws).await["requestId"], "r");
 
-        // Закрытие соединения освобождает слот.
+        // Закрытие соединения освобождает слот (сервер обрабатывает Close не мгновенно —
+        // reconnect с повторами до лимита).
         ws.send(WsMessage::Close(None)).await.expect("close");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let tcp = TcpStream::connect(addr).await.expect("connect");
-        let mut req = format!("ws://{addr}/jmap/ws")
-            .into_client_request()
-            .expect("request");
-        let h = req.headers_mut();
-        h.insert("Authorization", "Bearer token-2".parse().expect("header"));
-        h.insert("Sec-WebSocket-Protocol", "jmap".parse().expect("header"));
-        let (mut ws2, resp) = client_async(req, tcp).await.expect("handshake");
+        let (mut ws2, resp) = {
+            let mut got = None;
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let tcp = TcpStream::connect(addr).await.expect("connect");
+                let mut req = format!("ws://{addr}/jmap/ws")
+                    .into_client_request()
+                    .expect("request");
+                let h = req.headers_mut();
+                h.insert("Authorization", "Bearer token-2".parse().expect("header"));
+                h.insert("Sec-WebSocket-Protocol", "jmap".parse().expect("header"));
+                if let Ok(v) = client_async(req, tcp).await {
+                    got = Some(v);
+                    break;
+                }
+            }
+            got.expect("handshake after slot release")
+        };
         assert_eq!(
             resp.headers()
                 .get("sec-websocket-protocol")
