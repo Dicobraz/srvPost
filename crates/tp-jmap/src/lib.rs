@@ -6,6 +6,7 @@
 //! - `email_query` — Email/query, Email/queryChanges: фильтры, сортировка, collapseThreads, текст через `SearchIndex`;
 //!   SearchSnippet/get (RFC 8621 §5);
 //! - `email_set` — Email/set (черновики, keywords, mailboxIds, удаление в корзину), Email/import, Email/copy (§4.6–4.8);
+//! - [`keywords`] — маски ключевых слов Postman (WEB-12): категории, сроки, угроза; карта — `docs/CONTRACTS.md#Mail keywords`;
 //! - `blob` — загрузка и скачивание blob, Blob/copy (RFC 8620 §6);
 //! - [`submission`] — Identity/get, set и EmailSubmission/get, changes, query, queryChanges, set: отправка сразу и
 //!   отложенная (`sendAt`, отмена) через [`Outbound`](tp_contracts::queue::Outbound), записи — `SubmissionStore` (RFC 8621 §6–7);
@@ -72,6 +73,7 @@ mod email_set;
 #[doc(hidden)]
 pub mod fuzz;
 mod invitation;
+pub mod keywords;
 mod mailbox;
 mod orgchart;
 mod principal;
