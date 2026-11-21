@@ -20,7 +20,9 @@ use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
 use tp_contracts::Error;
 use tp_contracts::auth::{Credentials, Principal};
+use tp_contracts::meta::AccountScope;
 
+use super::sessions::session_key;
 use super::{Jmap, Problem};
 
 /// Адрес клиента HTTP-соединения: расширение запроса `ConnectInfo<SocketAddr>`, которое ставит сервер HTTP
@@ -38,6 +40,21 @@ impl<S: Send + Sync> FromRequestParts<S> for Peer {
                 .get::<ConnectInfo<SocketAddr>>()
                 .map(|c| c.0.ip()),
         ))
+    }
+}
+
+/// Отказ входа: неверные данные или недоступен каталог — ошибка аутентификации (401), превышен лимит
+/// параллельных сессий учётной записи (WEB-12) — problem details 400 ([`Problem::session_limit`]).
+pub(crate) enum Entry {
+    Auth(Error),
+    Limit(Problem),
+}
+
+/// Ответ на отказ входа: 401 с `WWW-Authenticate` или problem details (`application/problem+json`).
+pub(crate) fn auth_reject(e: Entry) -> Response {
+    match e {
+        Entry::Auth(e) => auth_error(&e),
+        Entry::Limit(p) => problem(&p),
     }
 }
 
@@ -69,13 +86,9 @@ impl Jmap {
             .with_state(self)
     }
 
-    /// Субъект по заголовку `Authorization` запроса клиента `peer` (адрес соединения — для защиты от перебора,
-    /// CTR-57; `None` — запрос без соединения клиента); нет заголовка или неверные данные — `Forbidden`.
-    pub async fn authenticate(
-        &self,
-        headers: &HeaderMap,
-        peer: Option<IpAddr>,
-    ) -> tp_contracts::Result<Principal> {
+    /// Учётные данные из заголовка `Authorization` и ключ сессии клиента (WEB-12); нет заголовка или
+    /// неверный формат — `Forbidden`.
+    fn credentials(headers: &HeaderMap) -> tp_contracts::Result<(Credentials, u64)> {
         let value = headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
@@ -95,7 +108,39 @@ impl Jmap {
         } else {
             return Err(Error::Forbidden);
         };
+        let key = session_key(&creds);
+        Ok((creds, key))
+    }
+
+    /// Субъект по заголовку `Authorization` запроса клиента `peer` (адрес соединения — для защиты от перебора,
+    /// CTR-57; `None` — запрос без соединения клиента); нет заголовка или неверные данные — `Forbidden`.
+    pub async fn authenticate(
+        &self,
+        headers: &HeaderMap,
+        peer: Option<IpAddr>,
+    ) -> tp_contracts::Result<Principal> {
+        let (creds, _) = Self::credentials(headers)?;
         self.d.auth.verify(creds, peer).await
+    }
+
+    /// Вход с учётом параллельных сессий учётной записи (WEB-12): субъект и ключ сессии; занятие или
+    /// обновление слота HTTP-сессии (`jmap.session_limit`, окно `jmap.session_window`). Сессий сверх
+    /// лимита — [`Entry::Limit`]: структурированная ошибка `limit`, активные сессии не вытесняются.
+    pub(crate) async fn authenticate_session(
+        &self,
+        headers: &HeaderMap,
+        peer: Option<IpAddr>,
+    ) -> std::result::Result<(Principal, u64), Entry> {
+        let (creds, key) = Self::credentials(headers).map_err(Entry::Auth)?;
+        let p = self.d.auth.verify(creds, peer).await.map_err(Entry::Auth)?;
+        let scope = AccountScope {
+            tenant: p.tenant,
+            account: p.account,
+        };
+        if !self.sessions.enter(scope, key) {
+            return Err(Entry::Limit(Problem::session_limit()));
+        }
+        Ok((p, key))
     }
 
     pub(crate) fn base_url(&self, headers: &HeaderMap) -> String {
@@ -144,9 +189,9 @@ pub(crate) fn auth_error(e: &Error) -> Response {
 }
 
 async fn session(State(j): State<Arc<Jmap>>, peer: Peer, headers: HeaderMap) -> Response {
-    let p = match j.authenticate(&headers, peer.0).await {
-        Ok(p) => p,
-        Err(e) => return auth_error(&e),
+    let (p, _) = match j.authenticate_session(&headers, peer.0).await {
+        Ok(v) => v,
+        Err(e) => return auth_reject(e),
     };
     let s = j.session(&p, &j.base_url(&headers)).await;
     let mut resp = json(StatusCode::OK, "application/json", &s);
@@ -158,9 +203,9 @@ async fn session(State(j): State<Arc<Jmap>>, peer: Peer, headers: HeaderMap) -> 
 }
 
 async fn api(State(j): State<Arc<Jmap>>, peer: Peer, headers: HeaderMap, body: Body) -> Response {
-    let p = match j.authenticate(&headers, peer.0).await {
-        Ok(p) => p,
-        Err(e) => return auth_error(&e),
+    let (p, _) = match j.authenticate_session(&headers, peer.0).await {
+        Ok(v) => v,
+        Err(e) => return auth_reject(e),
     };
     let limit = usize::try_from(j.cfg.max_size_request).unwrap_or(usize::MAX);
     let Ok(body) = to_bytes(body, limit).await else {

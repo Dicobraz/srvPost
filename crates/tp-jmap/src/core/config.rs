@@ -46,6 +46,17 @@ pub struct JmapConfig {
     pub header_window: u64,
     /// Получателей конверта в одной отправке `EmailSubmission/set`; больше — `tooManyRecipients`.
     pub max_submission_recipients: u32,
+    /// Наибольшее число параллельных сессий учётной записи (WEB-12): новые сессии сверх лимита сервер
+    /// не принимает (`urn:ietf:params:jmap:error:limit`, `maxSessionsPerAccount` — как делают Exchange
+    /// и Gmail, активные не вытесняются); `0` — без лимита. Мотивация — WEB-03: веб-клиент держит одно
+    /// соединение push на пользователя, но чужие клиенты (Postman, Thunderbird) легальны — сервер
+    /// ограничивает честно и настраиваемо (защита от чужих клиентов и инцидентов).
+    pub session_limit: u32,
+    /// Окно активности HTTP-сессии (WEB-12): сессия без запросов дольше окна освобождает слот —
+    /// окно же определяет, когда упавший клиент перестаёт занимать лимит.
+    #[serde(with = "duration")]
+    #[schemars(with = "duration::HumanDuration")]
+    pub session_window: Duration,
     /// Наименьший период `ping` EventSource (RFC 8620 §7.3): меньший период клиента увеличивается до него.
     #[serde(with = "duration")]
     #[schemars(with = "duration::HumanDuration")]
@@ -201,6 +212,8 @@ impl Default for JmapConfig {
             query_candidates_max: 256,
             header_window: 262_144,
             max_submission_recipients: 100,
+            session_limit: 20,
+            session_window: Duration::from_secs(5 * 60),
             push_min_ping: Duration::from_secs(10),
             upload_ttl: Duration::from_secs(7 * 24 * 3600),
             autoconfig: AutoconfigConfig::default(),
