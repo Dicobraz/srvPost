@@ -385,13 +385,14 @@ impl Jmap {
             }
         }
         let caches = query_cache::Caches::new(cfg.query_cache.clone());
+        let sessions = sessions::Sessions::new(cfg.session_limit, cfg.session_window);
         Ok(Self {
             d,
             cfg,
             inflight: Mutex::new(HashMap::new()),
             uploads: Mutex::new(HashMap::new()),
             caches: Mutex::new(caches),
-            sessions: sessions::Sessions::new(cfg.session_limit, cfg.session_window),
+            sessions,
             uploaded: crate::blob::Uploads::default(),
             mail_flow: None,
             profile_signer: None,

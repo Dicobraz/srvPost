@@ -135,20 +135,27 @@ impl Sessions {
             });
         }
         let mut state = self.lock();
-        let mut inner = Inner {
-            state: &mut state,
-            limit: self.inner.limit,
-            window: self.inner.window,
+        {
+            let mut inner = Inner {
+                state: &mut state,
+                limit: self.inner.limit,
+                window: self.inner.window,
+            };
+            inner.sweep();
+            inner.expire(scope, Instant::now());
+        }
+        let limit = self.inner.limit as usize;
+        let state: &mut State = &mut state;
+        let busy = match state.accounts.get(&scope) {
+            Some(a) => a.push.len() + a.recent.len(),
+            None => 0,
         };
-        inner.sweep();
-        inner.expire(scope, Instant::now());
-        let active = inner.active(scope);
-        if active.push.len() + active.recent.len() >= self.inner.limit as usize {
+        if busy >= limit {
             return None;
         }
-        inner.state.next += 1;
-        let id = inner.state.next;
-        active.push.insert(id);
+        state.next += 1;
+        let id = state.next;
+        state.accounts.entry(scope).or_default().push.insert(id);
         Some(PushSession {
             sessions: self.clone(),
             scope,
@@ -192,16 +199,12 @@ struct Inner<'a> {
 }
 
 impl Inner<'_> {
-    fn active(&mut self, scope: AccountScope) -> &mut Active {
-        self.state.accounts.entry(scope).or_default()
-    }
-
     /// Сколько сессий учётной записи учитывается: соединения push и HTTP-сессии в окне.
-    fn count(&mut self, scope: AccountScope) -> usize {
-        let Some(active) = self.state.accounts.get(&scope) else {
-            return 0;
-        };
-        active.push.len() + active.recent.len()
+    fn count(&self, scope: AccountScope) -> usize {
+        match self.state.accounts.get(&scope) {
+            Some(active) => active.push.len() + active.recent.len(),
+            None => 0,
+        }
     }
 
     fn enter(&mut self, scope: AccountScope, key: u64, now: Instant) -> bool {
@@ -210,12 +213,14 @@ impl Inner<'_> {
             self.sweep();
         }
         self.expire(scope, now);
-        let active = self.active(scope);
+        let limit = self.limit as usize;
+        let state = &mut *self.state;
+        let active = state.accounts.entry(scope).or_default();
         if active.recent.contains_key(&key) {
             active.recent.insert(key, now);
             return true;
         }
-        if active.push.len() + active.recent.len() >= self.limit as usize {
+        if active.push.len() + active.recent.len() >= limit {
             return false;
         }
         active.recent.insert(key, now);
