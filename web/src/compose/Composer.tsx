@@ -250,7 +250,6 @@ export function ComposerPage() {
       source={sourceId ? (source.data ?? null) : null}
       draft={draftId ? (source.data ?? null) : null}
       prefillTo={prefillTo}
-      sharedAccounts={sharedAccounts}
       sourceAccount={sourceAccount}
     />
   );
