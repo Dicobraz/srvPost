@@ -133,7 +133,7 @@ test("blobUrl сессии: accountId/blobId/name по шаблону", () => {
 test("fetchBlob: Authorization и MIME как у вложения; 401 — честный текст", async () => {
   const headers: Record<string, string> = {};
   let status = 200;
-  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     for (const [k, v] of Object.entries(new Headers(init?.headers))) headers[k] = v;
     return new Response(new Uint8Array([1, 2, 3]), { status });
   }) as unknown as typeof fetch;

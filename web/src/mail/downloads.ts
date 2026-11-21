@@ -10,7 +10,7 @@
   Выбор вьювера — viewerKind по MIME (изображение/PDF/видео/аудио/текст); текстовый файл
   больше TEXT_VIEW_LIMIT — просмотр недоступен, честный отказ с «Скачать».
 */
-import { blobUrl, type EmailBodyPart, type EmailSummary } from "../api/jmap";
+import { blobUrl, type EmailBodyPart, type EmailFull, type EmailSummary } from "../api/jmap";
 import { isInvitationPart } from "./invite";
 import type { JmapEnv } from "./types";
 
@@ -179,7 +179,7 @@ export function viewerKind(type: string | null | undefined, size: number): Viewe
 
 /** Список вложений письма для просмотра и «Сохранить все»: без приглашения (.ics — своя
  * карточка) и inline-частей — как в полосе вложений чтения. */
-export function attachmentParts(full: Pick<EmailSummary, "attachments">): EmailBodyPart[] {
+export function attachmentParts(full: Pick<EmailFull, "attachments">): EmailBodyPart[] {
   return (full.attachments ?? []).filter((p) => !isInvitationPart(p.type) && p.disposition !== "inline");
 }
 
