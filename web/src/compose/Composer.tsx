@@ -266,13 +266,11 @@ interface ComposerProps {
   draft: EmailFull | null;
   /** Получатель из карточки контакта (WEB-07 «Написать») — новое письмо. */
   prefillTo: Recipient[];
-  /** Общие ящики сессии (WEB-15) — варианты «От» с их адресами. */
-  sharedAccounts: SharedMailAccount[];
   /** Ответ из общего ящика: «От» по умолчанию — его адрес. */
   sourceAccount: SharedMailAccount | null;
 }
 
-function Composer({ identity, identities, kind, source, draft, prefillTo, sharedAccounts, sourceAccount }: ComposerProps) {
+function Composer({ identity, identities, kind, source, draft, prefillTo, sourceAccount }: ComposerProps) {
   const env = useJmap();
   const toast = useToast();
   const navigate = useNavigate();
