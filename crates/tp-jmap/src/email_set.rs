@@ -1255,4 +1255,82 @@ mod tests {
         assert_eq!(flag_of("a]"), None);
         assert_eq!(flag_of(""), None);
     }
+
+    /// WEB-12: round-trip всех масок карты «Postman keyword → смысл → окно веба»
+    /// (CONTRACTS.md#Mail keywords): `Email/set` → `Email/get` возвращает ровно канон.
+    #[tokio::test]
+    async fn keyword_masks_round_trip() {
+        use crate::keywords::{
+            CATEGORY_PREFIX, DUE, DUE_PREFIX, EXPIRE, EXPIRE_PREFIX, THREAT, WAIT, WAIT_PREFIX,
+        };
+
+        let env = Env::new().await;
+        let inbox = env.mailbox(SpecialUse::Inbox);
+        let id = env
+            .deliver(inbox, &mail("Маски", "a@x.test", "", "body"), Flags::new())
+            .await
+            .to_string();
+        let acc = env.account();
+        // Категории, сроки (общий признак и с датой/временем), угроза — все маски карты.
+        let words: Vec<String> = vec![
+            format!("{CATEGORY_PREFIX}clients"),
+            format!("{CATEGORY_PREFIX}team"),
+            format!("{CATEGORY_PREFIX}tenders"),
+            format!("{CATEGORY_PREFIX}services"),
+            DUE.into(),
+            format!("{DUE_PREFIX}2026-11-25t1800"),
+            WAIT.into(),
+            format!("{WAIT_PREFIX}2026-12-01"),
+            EXPIRE.into(),
+            format!("{EXPIRE_PREFIX}2026-12-31t2359"),
+            THREAT.into(),
+        ];
+        let set: Value = words
+            .iter()
+            .map(|w| (w.clone(), json!(true)))
+            .collect::<Map<_, _>>()
+            .into();
+        env.call(
+            "Email/set",
+            json!({"accountId": acc, "update": {&id: {"keywords": set}}}),
+            "Email/set",
+        )
+        .await;
+        let want: Value = words
+            .iter()
+            .map(|w| (w.clone(), json!(true)))
+            .collect::<Map<_, _>>()
+            .into();
+        assert_eq!(get(&env, &id).await["keywords"], want, "{words:?}");
+    }
+
+    /// WEB-12: регистронезависимость — слово в любом регистре приводится к канону (нижний регистр):
+    /// `T` времени и категории Postman; слово из примера карточки с точками в дате — не канон
+    /// (веб его не разбирает), но как keyword round-trip проходит.
+    #[tokio::test]
+    async fn keyword_masks_normalized() {
+        let env = Env::new().await;
+        let inbox = env.mailbox(SpecialUse::Inbox);
+        let id = env
+            .deliver(inbox, &mail("Маски", "a@x.test", "", "body"), Flags::new())
+            .await
+            .to_string();
+        let acc = env.account();
+        env.call(
+            "Email/set",
+            json!({"accountId": acc, "update": {&id: {"keywords": {
+                "pm.cat.TENDERS": true, "pm.due.2026-11-25T1800": true,
+                "pm.due.2026.11.25T1800": true, "pm.THREAT": true,
+            }}}}),
+            "Email/set",
+        )
+        .await;
+        assert_eq!(
+            get(&env, &id).await["keywords"],
+            json!({
+                "pm.cat.tenders": true, "pm.due.2026-11-25t1800": true,
+                "pm.due.2026.11.25t1800": true, "pm.threat": true,
+            })
+        );
+    }
 }

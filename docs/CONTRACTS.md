@@ -189,6 +189,29 @@ CTR-25: раздел журнала событий — `Partition { shard, index
   Admin API восстанавливает через него, а не через `TrashStore::restore`, чтобы клиенты получили `MailboxChanged`.
   Письмо не в корзине и не скрыто — `Invalid`.
 
+## Mail keywords
+Маски ключевых слов Postman (WEB-12; SRS Postman S5-02/S5-03/S5-04; константы — `tp_jmap::keywords`,
+round-trip тесты — `tp-jmap/src/email_set.rs`): сроки, категории и угрозы в вебе (WEB-03: полосы и чипы
+категорий, клавиши 1–9, быстрые фильтры «Угрозы/Срок/Ждём/Мне/Истекают», метки сроков) работают на
+keywords писем. Стандартных JMAP-ключей для категорий и сроков нет — сервер хранит маски как обычные
+keywords (RFC 8621 §4.1.1) и ничего не интерпретирует; читает их веб-клиент (`web/src/mail/keywords.ts`).
+
+| Keyword Postman | Смысл | Окно веба (WEB-03) |
+|---|---|---|
+| `pm.cat.<id>` | Категория письма (таблица категорий аккаунта; умолчания веба: `clients`, `team`, `tenders`, `services`) | Полоса и чип категории, клавиши 1–9 |
+| `pm.threat` | Угроза | Быстрый фильтр «Угрозы», красная метка |
+| `pm.due` | Срок (признак без даты) | Быстрый фильтр «Срок» |
+| `pm.due.<ГГГГ-ММ-ДД>[tЧЧММ]` | Срок с датой (и временем) | Метка «До <дн>»/«Просрочено N д» |
+| `pm.wait` | Ждём ответа (признак без даты) | Быстрый фильтр «Ждём» |
+| `pm.wait.<ГГГГ-ММ-ДД>[tЧЧММ]` | Ждём ответа с датой (и временем) | Метка «Ждём ответа» |
+| `pm.expire` | Исчезнет (признак без даты) | Быстрый фильтр «Истекают» |
+| `pm.expire.<ГГГГ-ММ-ДД>[tЧЧММ]` | Исчезнет с датой (и временем) | Метка «Исчезнет через N д» |
+
+Канон слова — нижний регистр целиком (нормализация IMAP-флагов в `Email/set`, `flag_of`); время —
+строчная `t` и `ЧЧММ`. Postman ставит рядом и слово с датой, и общее слово (S5-04): в вебе дата и
+признак сливаются, а не перезаписывают друг друга. Быстрый фильтр по слову с датой сервером не
+выразим (`hasKeyword` ищет слово целиком) — фильтр идёт по общему слову рядом.
+
 ## EventBus
 SRS 2.1, 2.8 (решение 2026-11-01). Сигналы «изменилось X»: `publish(Event)`, `subscribe(AccountScope) -> EventStream`, `subscribe_system()`.
 `Event { tenant, account: Option, kind }`, `kind: MailboxChanged { mailbox, modseq } | MailboxListChanged | QueueReady | ConfigReloaded |
@@ -1694,3 +1717,8 @@ JSON в JMAP (`session_object`, аргументы и результат `call`)
   только хэш, META-34). In-memory — `MemAvailabilitySource`, `MemCalendarPublications`; набор
   `suite::calendar::calendar_publications`. PostgreSQL — META-34; источники — JMAP-19 (`urn:thepost:availability`),
   публикация — JMAP-20 (`urn:thepost:calendarpublish`) и DAV-20.
+- 2026-11-21 — WEB-12 (волна mod-webmail-12): раздел «Mail keywords» — карта масок ключевых слов Postman
+  (`pm.cat.*`, `pm.due[.дата]`, `pm.wait[.дата]`, `pm.expire[.дата]`, `pm.threat`; константы `tp_jmap::keywords`,
+  round-trip тесты `Email/set`→`Email/get`) и лимит параллельных JMAP-сессий учётной записи
+  (`jmap.session_limit`, окно `jmap.session_window`; превышение — `urn:ietf:params:jmap:error:limit`
+  с `maxSessionsPerAccount`, `tp-jmap/src/core/sessions.rs`).

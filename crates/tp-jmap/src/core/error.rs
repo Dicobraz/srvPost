@@ -49,6 +49,16 @@ impl Problem {
         }
     }
 
+    /// Превышен лимит параллельных сессий учётной записи (WEB-12, `jmap.session_limit`): новая сессия
+    /// не принимается, активные не вытесняются — клиенту предлагают подождать (окно активности
+    /// `jmap.session_window` освобождает слоты).
+    pub fn session_limit() -> Self {
+        Self {
+            limit: Some("maxSessionsPerAccount"),
+            ..Self::new("limit", "слишком много сессий; подождите и повторите позже")
+        }
+    }
+
     /// Ошибка HTTP вне запроса API (загрузка, скачивание, push): код и описание, тип `about:blank`.
     pub fn http(status: u16, detail: impl Into<String>) -> Self {
         Self {

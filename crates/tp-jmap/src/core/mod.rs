@@ -45,6 +45,7 @@ pub mod error;
 pub mod http;
 pub(crate) mod query_cache;
 pub mod request;
+pub(crate) mod sessions;
 #[cfg(test)]
 mod tests;
 
@@ -219,6 +220,8 @@ pub struct Jmap {
     pub(crate) threads: Option<Arc<dyn ThreadStore>>,
     /// Кэш списков идентификаторов `Email/query` и ответов `Email/get` (PERF-02).
     pub(crate) caches: Mutex<query_cache::Caches>,
+    /// Учёт параллельных сессий учётных записей (WEB-12, `jmap.session_limit`).
+    pub(crate) sessions: sessions::Sessions,
     stop: watch::Sender<bool>,
     /// Открытые соединения push: закрытие по `AccountDisabled` (JMAP-41).
     pub(crate) push: crate::disable::Sessions,
@@ -382,12 +385,14 @@ impl Jmap {
             }
         }
         let caches = query_cache::Caches::new(cfg.query_cache.clone());
+        let sessions = sessions::Sessions::new(cfg.session_limit, cfg.session_window);
         Ok(Self {
             d,
             cfg,
             inflight: Mutex::new(HashMap::new()),
             uploads: Mutex::new(HashMap::new()),
             caches: Mutex::new(caches),
+            sessions,
             uploaded: crate::blob::Uploads::default(),
             mail_flow: None,
             profile_signer: None,

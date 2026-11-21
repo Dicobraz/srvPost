@@ -26,7 +26,7 @@ use tp_contracts::meta::{AccountScope, BodyPart};
 use tp_contracts::{BlobHash, BlobKey, Error, Gen, MessageId, Result, TenantId};
 
 use crate::core::error::{MethodError, MethodResult};
-use crate::core::http::{Peer, auth_error, json as json_response, problem};
+use crate::core::http::{Peer, auth_reject, json as json_response, problem};
 use crate::core::request::{object, parse_args};
 use crate::core::{Ctx, Jmap, Problem};
 use crate::email_get::{is_multipart, leaf_path};
@@ -399,9 +399,9 @@ pub(crate) async fn upload(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let p = match j.authenticate(&headers, peer.0).await {
-        Ok(p) => p,
-        Err(e) => return auth_error(&e),
+    let (p, _) = match j.authenticate_session(&headers, peer.0).await {
+        Ok(v) => v,
+        Err(e) => return auth_reject(e),
     };
     if account != p.account.to_string() {
         return problem(&Problem::http(404, "account not found"));
@@ -481,9 +481,9 @@ pub(crate) async fn download(
     peer: Peer,
     headers: HeaderMap,
 ) -> Response {
-    let p = match j.authenticate(&headers, peer.0).await {
-        Ok(p) => p,
-        Err(e) => return auth_error(&e),
+    let (p, _) = match j.authenticate_session(&headers, peer.0).await {
+        Ok(v) => v,
+        Err(e) => return auth_reject(e),
     };
     if account != p.account.to_string() {
         return problem(&Problem::http(404, "account not found"));

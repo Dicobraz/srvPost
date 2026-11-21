@@ -32,8 +32,9 @@ use tp_contracts::bus::{EventKind, EventStream};
 use tp_contracts::dav::CollectionKind;
 use tp_contracts::meta::AccountScope;
 
-use crate::core::http::{Peer, auth_error};
+use crate::core::http::{Peer, auth_error, problem};
 use crate::core::request::state_string;
+use crate::core::sessions::PushSession;
 use crate::core::{Jmap, Problem};
 use crate::disable::Registration;
 
@@ -260,6 +261,8 @@ struct Source {
     stop: watch::Receiver<bool>,
     /// Соединение учётной записи: запрет входа завершает поток.
     session: Registration,
+    /// Слот сессии учётной записи (WEB-12): держится, пока поток открыт.
+    _slot: PushSession,
     ping: Option<(Interval, u64)>,
     close_after_state: bool,
     done: bool,
@@ -316,6 +319,11 @@ pub(crate) async fn eventsource(
         Err(e) => return auth_error(&e),
     };
     let scope = scope_of(&p);
+    // Сессия учётной записи (WEB-12): сверх лимита — структурированная ошибка `limit`.
+    let slot = match j.sessions.enter_push(scope) {
+        Some(slot) => slot,
+        None => return problem(&Problem::session_limit()),
+    };
     let events = match j.d.bus.subscribe(scope).await {
         Ok(s) => s,
         Err(e) => {
@@ -347,6 +355,7 @@ pub(crate) async fn eventsource(
         events,
         stop: j.stopping(),
         session: j.push_session(scope),
+        _slot: slot,
         ping,
         close_after_state: q.closeafter.as_deref() == Some("state"),
         done: false,
@@ -372,8 +381,14 @@ pub(crate) async fn websocket(
         Ok(p) => p,
         Err(e) => return auth_error(&e),
     };
+    let scope = scope_of(&p);
+    // Сессия учётной записи (WEB-12): сверх лимита — структурированная ошибка `limit` до перехода.
+    let slot = match j.sessions.enter_push(scope) {
+        Some(slot) => slot,
+        None => return problem(&Problem::session_limit()),
+    };
     ws.protocols(["jmap"])
-        .on_upgrade(move |socket| ws_session(j, p, socket))
+        .on_upgrade(move |socket| ws_session(j, p, slot, socket))
 }
 
 fn request_error(p: &Problem, id: Option<&Value>) -> Value {
@@ -455,7 +470,7 @@ async fn ws_message(
     }
 }
 
-async fn ws_session(j: Arc<Jmap>, p: Principal, mut socket: WebSocket) {
+async fn ws_session(j: Arc<Jmap>, p: Principal, _slot: PushSession, mut socket: WebSocket) {
     let scope = scope_of(&p);
     let mut events = match j.d.bus.subscribe(scope).await {
         Ok(s) => s,
@@ -536,6 +551,7 @@ mod tests {
     use tp_contracts::{AccountId, DomainId};
 
     use super::{ALL_TYPES, EVERY_TYPE};
+    use crate::JmapConfig;
     use crate::testenv::{Env, mail, serve};
 
     const WAIT: Duration = Duration::from_secs(5);
@@ -712,6 +728,89 @@ mod tests {
         let v = eventsource_state_change(s, buf).await;
         assert!(v["changed"][&acc]["Email"].is_string(), "{v}");
         assert!(v["changed"][&acc]["Mailbox"].is_string(), "{v}");
+    }
+
+    /// WEB-12: открытое соединение push занимает слот сессии на всё время соединения; сверх лимита —
+    /// problem details 400 (`limit`, `maxSessionsPerAccount`) до перехода WebSocket, принятое соединение
+    /// не страдает; закрытие освобождает слот.
+    #[tokio::test]
+    async fn websocket_session_limit() {
+        let cfg = JmapConfig {
+            session_limit: 1,
+            ..JmapConfig::default()
+        };
+        let env = Env::with(cfg, Vec::new()).await;
+        env.auth.add_token("token-2", env.principal.clone());
+        let addr = serve(env.jmap.clone()).await;
+        let mut ws = connect(addr).await;
+
+        // Второе соединение сверх лимита — структурированный отказ до перехода (keep-alive:
+        // читаем заголовки и тело ответа, не ждём закрытия соединения).
+        let mut s = TcpStream::connect(addr).await.expect("connect");
+        let req = "GET /jmap/ws HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer token-2\r\n\
+                   Connection: Upgrade\r\nUpgrade: websocket\r\n\
+                   Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
+                   Sec-WebSocket-Protocol: jmap\r\n\r\n";
+        s.write_all(req.as_bytes()).await.expect("write");
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = tokio::time::timeout(WAIT, s.read(&mut chunk))
+                .await
+                .expect("no response")
+                .expect("read");
+            assert!(n > 0, "closed before headers");
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let status = text.split(' ').nth(1).unwrap_or_default().to_owned();
+        assert_eq!(status, "400", "{text}");
+        assert!(text.contains("application/problem+json"), "{text}");
+        assert!(text.contains("maxSessionsPerAccount"), "{text}");
+
+        // Принятое соединение не страдает.
+        send(
+            &mut ws,
+            json!({"@type": "Request", "id": "r", "using": ["urn:ietf:params:jmap:core"],
+                   "methodCalls": [["Core/echo", {}, "c"]]}),
+        )
+        .await;
+        assert_eq!(next_json(&mut ws).await["requestId"], "r");
+
+        // Закрытие соединения освобождает слот (сервер обрабатывает Close не мгновенно —
+        // reconnect с повторами до лимита).
+        ws.send(WsMessage::Close(None)).await.expect("close");
+        let (mut ws2, resp) = {
+            let mut got = None;
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let tcp = TcpStream::connect(addr).await.expect("connect");
+                let mut req = format!("ws://{addr}/jmap/ws")
+                    .into_client_request()
+                    .expect("request");
+                let h = req.headers_mut();
+                h.insert("Authorization", "Bearer token-2".parse().expect("header"));
+                h.insert("Sec-WebSocket-Protocol", "jmap".parse().expect("header"));
+                if let Ok(v) = client_async(req, tcp).await {
+                    got = Some(v);
+                    break;
+                }
+            }
+            got.expect("handshake after slot release")
+        };
+        assert_eq!(
+            resp.headers()
+                .get("sec-websocket-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("jmap")
+        );
+        send(
+            &mut ws2,
+            json!({"@type": "Request", "id": "r2", "using": ["urn:ietf:params:jmap:core"],
+                   "methodCalls": [["Core/echo", {}, "c"]]}),
+        )
+        .await;
+        assert_eq!(next_json(&mut ws2).await["requestId"], "r2");
     }
 
     /// Изменение автоответа (`SieveChanged`) → `StateChange` с типами `VacationResponse` и `SieveScript`.

@@ -347,3 +347,51 @@ async fn basic_passes_connection_address() {
     let local = Some(std::net::IpAddr::from([127, 0, 0, 1]));
     assert_eq!(env.auth.peers(), [local, local]);
 }
+
+/// WEB-12: лимит параллельных сессий учётной записи — N+1-я сессия получает структурированную ошибку
+/// `limit` (`maxSessionsPerAccount`), принятые не страдают; окно активности освобождает слоты.
+#[tokio::test]
+async fn session_limit() {
+    let cfg = JmapConfig {
+        session_limit: 2,
+        session_window: std::time::Duration::from_millis(200),
+        ..JmapConfig::default()
+    };
+    let env = Env::with(cfg, Vec::new()).await;
+    env.auth.add_token("token-2", env.principal.clone());
+    env.auth.add_token("token-3", env.principal.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let router = env.jmap.clone().router();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let get = |token: &str| {
+        format!(
+            "GET /jmap/session HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+        )
+    };
+    let (code, _, _) = http(addr, get("token-1")).await;
+    assert_eq!(code, 200);
+    let (code, _, _) = http(addr, get("token-2")).await;
+    assert_eq!(code, 200);
+    let (code, head, body) = http(addr, get("token-3")).await;
+    assert_eq!(code, 400, "{head}");
+    assert!(head.contains("application/problem+json"), "{head}");
+    let p: Value = serde_json::from_str(&body).expect("problem");
+    assert_eq!(p["type"], "urn:ietf:params:jmap:error:limit");
+    assert_eq!(p["limit"], "maxSessionsPerAccount");
+    assert_eq!(
+        p["detail"],
+        "слишком много сессий; подождите и повторите позже"
+    );
+    // Принятые сессии не страдают.
+    let (code, _, _) = http(addr, get("token-1")).await;
+    assert_eq!(code, 200);
+    let (code, _, _) = http(addr, get("token-2")).await;
+    assert_eq!(code, 200);
+    // Окно активности освободило слоты — бывшая лишняя сессия входит.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let (code, _, _) = http(addr, get("token-3")).await;
+    assert_eq!(code, 200);
+}
