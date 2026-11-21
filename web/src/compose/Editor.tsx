@@ -132,7 +132,8 @@ export function ComposeEditor({ initialHtml, onChange, onFiles, onPickFiles }: E
     const url = linkUrl.trim();
     setLinkOpen(false);
     if (!url) return;
-    const href = /^https?:\/\//i.test(url) || url.includes("@") ? url : `https://${url}`;
+    const lower = url.toLowerCase();
+    const href = lower.startsWith("http://") || lower.startsWith("https://") || url.includes("@") ? url : `https://${url}`;
     const safe = href.replace(/"/g, "%22");
     if (editor.state.selection.empty) {
       editor.chain().focus().insertContent(`<a href="${safe}">${safe}</a>`).run();
