@@ -11,6 +11,10 @@
   сниппеты совпадений (SearchSnippet/get), сохранённые фильтры (search.save_filter) рядом
   под быстрыми, F3/Shift+F3 — совпадения в открытом письме (highlight.ts), палитра команд
   Ctrl+K (palette.tsx) — команды и письма одним вводом.
+  WEB-15 — общие ящики и «Взять в работу»: секция «Общие» в дереве (строка на общий ящик сессии,
+  письма — Email/query по его accountId), «Взять/Забрать себе/Вернуть» (Ctrl+J, слова `pm.taken…`
+  как в Postman), метка «Назначено: …» в строке и полоса «Взято в работу» в чтении (имена — из
+  справочника контактов); ответ из общего ящика — «От» его адрес (право проверяет сервер).
 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,6 +33,7 @@ import {
   useFlaggedCount,
   useMailWindow,
   useMailboxes,
+  useSharedUnreads,
   type UndoEntry,
   type WindowArgs,
 } from "../mail/queries";
@@ -36,7 +41,18 @@ import { CATEGORIES, categoryByNumber, categoriesOf, type QuickFilterKind } from
 import { handleMailKeydown, KEYMAP_HINTS, type MailHotkeyActions } from "../mail/keymap";
 import { FLAGGED_FOLDER, FolderTree } from "../mail/folder-tree";
 import { MessageList, useQuickCounts, type ListRow } from "../mail/message-list";
-import { ReadingPane, type MatchState } from "../mail/reading-pane";
+import { ReadingPane, type MatchState, type TakeStrip } from "../mail/reading-pane";
+import {
+  sharedAccountId,
+  sharedMailAccounts,
+  TAKE_LABELS,
+  takeActOf,
+  takenBy,
+  takenOf,
+  takePatchOf,
+} from "../mail/shared";
+import { useContactSnapshot } from "../contacts/queries";
+import { emailsOf, fullNameOf } from "../contacts/model";
 import { ContextMenu, type MenuState, type MenuItem } from "../mail/context-menu";
 import { CommandPalette, type PaletteCommand } from "../mail/palette";
 import { isHlState, sendHlCommand } from "../mail/highlight";
@@ -108,10 +124,27 @@ function MailApp() {
   const navigate = useNavigate();
   const mailboxes = useMailboxes();
   const flaggedCount = useFlaggedCount();
-  const quickCounts = useQuickCounts(null);
   const updateMut = useEmailUpdateMutation();
   const destroyMut = useEmailDestroyMutation();
   const qc = useQueryClient();
+  // Общие ящики сессии (WEB-15, JMAP-49) и их счётчики; имена коллег — из справочника (контакты
+  // и GAL своей учётной записи), нет карточки — адрес как есть.
+  const sharedAccounts = useMemo(() => sharedMailAccounts(env.session), [env.session]);
+  const sharedUnread = useSharedUnreads(sharedAccounts.map((a) => a.id));
+  const contacts = useContactSnapshot();
+  const takenNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const card of contacts) {
+      const name = fullNameOf(card);
+      if (!name) continue;
+      for (const email of emailsOf(card)) map.set(email.toLowerCase(), name);
+    }
+    return map;
+  }, [contacts]);
+  const nameOf = useCallback(
+    (who: string) => takenNames.get(who.toLowerCase()) ?? who,
+    [takenNames],
+  );
 
   // Панели и окно списка.
   const [folderRaw, setFolder] = useState<string | null>(null);
@@ -157,6 +190,12 @@ function MailApp() {
   // папок, без setState в эффекте (каскадный рендер недопустим).
   const inboxFallback = mailboxes?.find((m) => m.role === "inbox")?.id ?? mailboxes?.[0]?.id ?? null;
   const folder = folderRaw ?? inboxFallback;
+  // Контекст окна (WEB-15): общий ящик — выбор «shared:<accountId>»; запросы письма — с его
+  // accountId, потоки и сниппеты делегату сервер не отдаёт — плоский список без них.
+  const sharedId = sharedAccountId(folder);
+  const sharedCtx = sharedAccounts.find((a) => a.id === sharedId) ?? null;
+  const windowAccountId = sharedCtx?.id ?? env.accountId;
+  const quickCounts = useQuickCounts(null, sharedCtx?.id);
 
   // Синхронизация: тик push/таймера — время в строке состояния.
   useEffect(() => {
@@ -164,7 +203,7 @@ function MailApp() {
     return hub.subscribe(() => setLastSync(new Date()));
   }, [hub]);
 
-  const mailboxId = folder && folder !== FLAGGED_FOLDER ? folder : null;
+  const mailboxId = !sharedCtx && folder && folder !== FLAGGED_FOLDER ? folder : null;
   const flagged = folder === FLAGGED_FOLDER;
   // Debounce поиска 300 мс (как в Postman): ввод живёт в поле, запрос — после тишины.
   // Пустой ввод сбрасывает запрос сразу (таймер 0), непустой — после 300 мс.
@@ -179,20 +218,21 @@ function MailApp() {
   const searchActive = isSearchActive({ text: searchText, refinements });
   const args: WindowArgs = useMemo(
     () => ({
+      accountId: windowAccountId,
       mailboxId,
       quick,
       flagged,
       unread: filters.unread,
       attachment: filters.attachment,
       sort,
-      grouped: threadView === "grouped",
+      grouped: !sharedCtx && threadView === "grouped",
       search: searchText.trim() ? searchText.trim() : null,
       scopeAll: scope === "all",
       recent30,
       refinements,
       translit,
     }),
-    [mailboxId, quick, flagged, filters, sort, threadView, searchText, scope, recent30, refinements, translit],
+    [windowAccountId, mailboxId, quick, flagged, filters, sort, threadView, searchText, scope, recent30, refinements, translit, sharedCtx],
   );
   const windowQuery = useMailWindow(args);
   // Сниппеты совпадений всех загруженных страниц (SearchSnippet/get) — строка списка их рендерит.
@@ -206,14 +246,25 @@ function MailApp() {
   const trashId = mailboxes?.find((m) => m.role === "trash")?.id ?? null;
 
   // Строки списка: представители потоков из окна, письма потоков — из кэша (нормализация id).
+  // Общий ящик (WEB-15): у взятых писем метка «Назначено: …» (имя — из справочника).
   const flatIds = useMemo(() => windowQuery.data?.pages.flatMap((p) => p.ids) ?? [], [windowQuery.data]);
+  const takenLabelOf = useCallback(
+    (email: EmailSummary): string | null => {
+      if (!sharedCtx) return null;
+      const t = takenOf(email.keywords);
+      if (!t) return null;
+      return `Назначено: ${takenBy(t, env.selfAddress) ? "вы" : nameOf(t.who)}`;
+    },
+    [sharedCtx, env.selfAddress, nameOf],
+  );
   const rows = useMemo<ListRow[]>(() => {
     const out: ListRow[] = [];
     for (const id of flatIds) {
       const email = queryClient.getQueryData<EmailSummary>(keys.email(id));
       if (!email) continue;
+      const takenLabel = takenLabelOf(email);
       if (!args.grouped) {
-        out.push({ email, threadCount: 1, threadUnread: email.keywords.$seen ? 0 : 1, threadExpanded: false, threadChild: false });
+        out.push({ email, threadCount: 1, threadUnread: email.keywords.$seen ? 0 : 1, threadExpanded: false, threadChild: false, takenLabel });
         continue;
       }
       const thread = queryClient.getQueryData<{ emailIds: string[] }>(keys.thread(email.threadId));
@@ -224,14 +275,14 @@ function MailApp() {
       const threadUnread = threadEmails.filter((e) => !e.keywords.$seen).length;
       if (expanded.has(email.threadId)) {
         for (const m of threadEmails) {
-          out.push({ email: m, threadCount: threadEmails.length, threadUnread, threadExpanded: true, threadChild: true });
+          out.push({ email: m, threadCount: threadEmails.length, threadUnread, threadExpanded: true, threadChild: true, takenLabel: takenLabelOf(m) });
         }
       } else {
-        out.push({ email, threadCount: threadEmails.length || 1, threadUnread, threadExpanded: false, threadChild: false });
+        out.push({ email, threadCount: threadEmails.length || 1, threadUnread, threadExpanded: false, threadChild: false, takenLabel });
       }
     }
     return out;
-  }, [flatIds, expanded, args.grouped]);
+  }, [flatIds, expanded, args.grouped, takenLabelOf]);
 
   const unreadCount = useMemo(() => {
     const mb = mailboxes?.find((m) => m.id === mailboxId);
@@ -253,7 +304,7 @@ function MailApp() {
     }
     return [selected.id];
   }, [selected, selectedThread, args.grouped]);
-  const stackFull = useEmailsFull(stackIds);
+  const stackFull = useEmailsFull(stackIds, sharedCtx?.id);
 
   // WEB-05: термы подсветки F3 — из активного поиска (текст без уточнений); письмо открыто
   // не из результатов (пустой поиск) — подсветки нет. iframe тела регистрируется страницей.
@@ -372,12 +423,16 @@ function MailApp() {
 
   // ---------- Действия ----------
 
-  const applyUpdate = async (updates: Record<string, Record<string, unknown>>, label: string) => {
+  const applyUpdate = async (
+    updates: Record<string, Record<string, unknown>>,
+    label: string,
+    accountId?: string,
+  ) => {
     try {
-      const snapshot = (await updateMut.mutateAsync(updates)) as UndoEntry[];
+      const snapshot = (await updateMut.mutateAsync({ updates, accountId })) as UndoEntry[];
       const undo = () => {
         void updateMut
-          .mutateAsync(undoEntries(snapshot))
+          .mutateAsync({ updates: undoEntries(snapshot), accountId })
           .then(() => toast.show("Возвращено как было"));
       };
       toast.show(label, undo);
@@ -434,7 +489,7 @@ function MailApp() {
           for (const entry of snapshot as UndoEntry[]) {
             if (entry.mailboxIds) reverse[entry.emailId] = { mailboxIds: entry.mailboxIds };
           }
-          void updateMut.mutateAsync(reverse).then(() => toast.show("Возвращено из корзины"));
+          void updateMut.mutateAsync({ updates: reverse }).then(() => toast.show("Возвращено из корзины"));
         };
         toast.show(emails.length > 1 ? `Удалено писем: ${emails.length}` : "Письмо удалено", undo);
         if (selectedId && emails.some((e) => e.id === selectedId)) setSelectedId(null);
@@ -442,10 +497,64 @@ function MailApp() {
       .catch((e: unknown) => toast.show(e instanceof Error ? e.message : "Удалить не удалось."));
   };
 
+  // ---------- «Взять в работу» (WEB-15, mail.take Postman): слова pm.taken… ----------
+
+  /** Полоса чтения и кнопка действия по письму общего ящика; вне общего ящика — null (Postman:
+   * «взять» — только там). */
+  const takeStrip: TakeStrip | null = useMemo(() => {
+    if (!selected || !sharedCtx) return null;
+    const t = takenOf(selected.keywords);
+    return {
+      act: takeActOf(selected.keywords, env.selfAddress),
+      who: t && !takenBy(t, env.selfAddress) ? nameOf(t.who) : null,
+      at: t ? t.at.toISOString() : null,
+      busy: updateMut.isPending,
+    };
+  }, [selected, sharedCtx, env.selfAddress, nameOf, updateMut.isPending]);
+
+  /** Действие «взять/забрать/вернуть» по письму общего ящика (строка списка или выделенное). */
+  const takeEmail = useCallback(
+    (email: EmailSummary) => {
+      const act = takeActOf(email.keywords, env.selfAddress);
+      if (!sharedCtx) {
+        toast.show("«Взять в работу» — для писем общих ящиков.");
+        return;
+      }
+      const patch = takePatchOf(email, env.selfAddress, new Date());
+      if (!patch) {
+        toast.show("Адрес учётной записи не годится для пометки — взять не удалось.");
+        return;
+      }
+      void updateMut
+        .mutateAsync({ updates: { [email.id]: patch }, accountId: sharedCtx.id })
+        .then(() => {
+          const was = takenOf(email.keywords);
+          toast.show(
+            act === "release"
+              ? "Письмо вернулось в очередь"
+              : act === "steal" && was
+                ? `Письмо забрано себе (было у: ${nameOf(was.who)}). Коллеги видят «Назначено: вы»`
+                : "Письмо в работе у вас. Коллеги видят «Назначено: вы»",
+          );
+        })
+        .catch((e: unknown) =>
+          toast.show(e instanceof Error ? e.message : "Взять в работу не удалось."),
+        );
+    },
+    [sharedCtx, env.selfAddress, updateMut, toast, nameOf],
+  );
+
+  const takeSelected = useCallback(() => {
+    if (selected) takeEmail(selected);
+  }, [selected, takeEmail]);
+
   // Композер — вкладка /compose (WEB-04): новое письмо, ответы и пересылка, черновик.
+  // Ответ письму общего ящика (WEB-15): источник — по accountId владельца («От» — общий адрес).
   const openCompose = (query: string = "") => navigate(`/compose${query}`);
   const replyTo = (email: EmailSummary, kind: "reply" | "reply-all" | "forward") =>
-    navigate(`/compose?kind=${kind}&email=${encodeURIComponent(email.id)}`);
+    navigate(
+      `/compose?kind=${kind}&email=${encodeURIComponent(email.id)}${sharedCtx ? `&account=${encodeURIComponent(sharedCtx.id)}` : ""}`,
+    );
 
   // ---------- Контекстные меню (без модалок) ----------
 
@@ -460,6 +569,10 @@ function MailApp() {
         ? [{ label: "Изменить черновик", onSelect: () => openCompose(`?draft=${encodeURIComponent(email.id)}`) }]
         : []),
       { label: "", separator: true },
+      // «Взять в работу» (WEB-15) — письмо общего ящика: действие по состоянию слов pm.taken.
+      ...(sharedCtx
+        ? [{ label: TAKE_LABELS[takeActOf(email.keywords, env.selfAddress)], onSelect: () => takeEmail(email) }]
+        : []),
       email.keywords.$seen
         ? { label: "Отметить непрочитанным", onSelect: () => setSeen([email], false) }
         : { label: "Отметить прочитанным", onSelect: () => setSeen([email], true) },
@@ -653,8 +766,9 @@ function MailApp() {
       openPalette: () => setPaletteOpen(true),
       findNext: () => sendHlCommand(bodyFrameRef.current, "hl-next"),
       findPrev: () => sendHlCommand(bodyFrameRef.current, "hl-prev"),
+      takeSelected,
     }),
-    [rows, selectedId, selected, archiveId, expanded],
+    [rows, selectedId, selected, archiveId, expanded, takeSelected],
   );
   const actionsRef = useRef<MailHotkeyActions>(actions);
   useEffect(() => {
@@ -674,6 +788,7 @@ function MailApp() {
     { id: "reply", label: "Ответить", hint: "Ctrl+R", icon: "reply", run: () => selected && replyTo(selected, "reply") },
     { id: "reply-all", label: "Ответить всем", hint: "Ctrl+Shift+R", icon: "reply", run: () => selected && replyTo(selected, "reply-all") },
     { id: "forward", label: "Переслать", hint: "Ctrl+F", icon: "fwd", run: () => selected && replyTo(selected, "forward") },
+    { id: "take", label: selected ? TAKE_LABELS[takeActOf(selected.keywords, env.selfAddress)] : TAKE_LABELS.take, hint: "Ctrl+J", icon: "person", run: () => takeSelected() },
     { id: "read", label: "Отметить прочитанным", hint: "Ctrl+Q", icon: "check", run: () => selected && setSeen([selected], true) },
     { id: "unread", label: "Отметить непрочитанным", hint: "Ctrl+U", icon: "mail", run: () => selected && setSeen([selected], false) },
     { id: "flag", label: selected?.keywords.$flagged ? "Снять флаг" : "Поставить флаг", icon: "flag", run: () => selected && setFlagged([selected], !selected.keywords.$flagged) },
@@ -693,11 +808,15 @@ function MailApp() {
     { id: "threads", label: threadView === "grouped" ? "Потоки: как в Outlook" : "Потоки: группировка", icon: "thread", run: () => { const next = threadView === "grouped" ? "outlook" : "grouped"; setThreadViewState(next); saveThreadView(next); } },
     { id: "folders", label: "К дереву папок", hint: "Ctrl+Y", icon: "folder", run: () => { focusIndex.current = 0; treeRef.current?.focus(); } },
     { id: "panels", label: "Между панелями", hint: "F6", icon: "list", run: () => { focusIndex.current = (focusIndex.current + 1) % focusOrder.length; focusOrder[focusIndex.current]?.current?.focus(); } },
-  ], [selected, archiveId, density, threadView, searchText]);
+  ], [selected, archiveId, density, threadView, searchText, env.selfAddress, takeSelected]);
 
   // ---------- Рендер ----------
 
-  const folderTitle = flagged ? "Отмеченные" : (mailboxes?.find((m) => m.id === folder)?.name ?? "Почта");
+  const folderTitle = sharedCtx
+    ? sharedCtx.name
+    : flagged
+      ? "Отмеченные"
+      : (mailboxes?.find((m) => m.id === folder)?.name ?? "Почта");
   const pushLabel = hub
     ? hub.pushStatus === "live"
       ? "Живая синхронизация"
@@ -830,6 +949,8 @@ function MailApp() {
           mailboxes={mailboxes ?? []}
           flaggedUnread={flaggedCount ?? 0}
           selected={folder}
+          shared={sharedAccounts}
+          sharedUnread={sharedUnread}
           onSelect={(id) => {
             setFolder(id);
             setSelectedId(null);
@@ -942,6 +1063,8 @@ function MailApp() {
               setSelectedId(id);
               setCollapsedReading(true);
             }}
+            take={takeStrip}
+            onTake={takeSelected}
           />
         </div>
       </div>

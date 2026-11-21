@@ -38,6 +38,7 @@ import { useMailboxes } from "./queries";
 import { Icon } from "./icons";
 import { initials } from "./message-list";
 import { useToast } from "./toast";
+import { TAKE_LABELS, type TakeAct } from "./shared";
 
 /** Панель параметров чтения письма: разрешение картинок на это письмо/домен. */
 export interface ReadToggles {
@@ -53,6 +54,17 @@ export interface ReadToggles {
 export interface MatchState {
   count: number;
   index: number;
+}
+
+/** Полоса «Взять в работу» (WEB-15): кто взял письмо общего ящика и что сделает кнопка. */
+export interface TakeStrip {
+  act: TakeAct;
+  /** Имя взявшего (справочник) или адрес; null — «никто не взял». */
+  who: string | null;
+  /** Когда взял (метка времени ISO) — в полосе рядом с именем. */
+  at: string | null;
+  /** Запрос «взять/вернуть» идёт — кнопка ждёт. */
+  busy: boolean;
 }
 
 interface ReadingPaneProps {
@@ -75,6 +87,39 @@ interface ReadingPaneProps {
   /** Уточнения кликом (только в режиме поиска): отправитель и период. */
   onRefineSender(email: EmailSummary): void;
   onRefinePeriod(email: EmailSummary): void;
+  // --- WEB-15: «Взять в работу» ---
+  /** Полоса «Взято» письма общего ящика; null — письмо не из общего ящика, полосы нет. */
+  take: TakeStrip | null;
+  onTake(): void;
+}
+
+/** Полоса над письмом: никто не взял — «Взять в работу»; взял коллега — «Взято в работу: имя ·
+ * время» и «Забрать себе»; взял я — «Вы взяли в работу · время» и «Вернуть в очередь» (как в
+ * Postman, S5-28). */
+function TakeBar({ take, onTake }: { take: TakeStrip; onTake(): void }) {
+  const me = take.act === "release";
+  return (
+    <div className="strip taken" role="status">
+      <Icon name="person" size={16} />
+      {take.who && !me ? (
+        <span>
+          <b>Взято в работу:</b> {take.who}
+          {take.at && <> · {new Date(take.at).toLocaleString("ru", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</>}
+        </span>
+      ) : me ? (
+        <span>
+          <b>Вы взяли в работу</b>
+          {take.at && <> · {new Date(take.at).toLocaleString("ru", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</>}
+        </span>
+      ) : (
+        <span>Никто не взял в работу</span>
+      )}
+      <span className="sp" />
+      <button type="button" className="lk" disabled={take.busy} onClick={onTake}>
+        {TAKE_LABELS[take.act]}
+      </button>
+    </div>
+  );
 }
 
 /** Тип письма для вкладки/строки: конверт синий (макет). */
@@ -433,6 +478,8 @@ export function ReadingPane({
   onBodyFrame,
   onRefineSender,
   onRefinePeriod,
+  take,
+  onTake,
 }: ReadingPaneProps) {
   const env = useJmap();
   const refinable = highlightTerms.length > 0; // уточнения кликом — только в режиме поиска (WEB-05)
@@ -458,6 +505,7 @@ export function ReadingPane({
           </span>
         )}
       </h3>
+      {take && <TakeBar take={take} onTake={onTake} />}
       {stack.length > 1 && (
         <div className="tbar">
           Беседа: {stack.length} писем · {participants.size} участник(ов)

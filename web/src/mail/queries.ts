@@ -36,7 +36,9 @@ import type { JmapEnv } from "./types";
 
 /** Аргументы окна списка: папка, быстрые фильтры, сортировка, вид потоков. */
 export interface WindowArgs {
-  /** Папка; null — все папки (виртуальная «Отмеченные» и фильтры по словам). */
+  /** Учётная запись окна: своя или общий ящик (WEB-15, JMAP-49 — accountId владельца). */
+  accountId: string;
+  /** Папка; null — все папки (виртуальная «Отмеченные», общий ящик и фильтры по словам). */
   mailboxId: string | null;
   /** Быстрый фильтр (Угрозы/Срок/Ждём/Мне/Истекают) или null. */
   quick: QuickFilterKind | null;
@@ -135,21 +137,26 @@ function cacheThreads(threads: Thread[]): void {
 /** Email/get кусками — идентификаторов бывает больше лимита объектов одного запроса. */
 async function fetchChunked<T extends EmailSummary>(
   env: JmapEnv,
+  accountId: string,
   ids: string[],
   properties: readonly string[],
 ): Promise<T[]> {
   const out: T[] = [];
   for (let i = 0; i < ids.length; i += CHUNK) {
     out.push(
-      ...(await emailGet<T>(env.apiUrl, env.authorization, env.accountId, ids.slice(i, i + CHUNK), properties)),
+      ...(await emailGet<T>(env.apiUrl, env.authorization, accountId, ids.slice(i, i + CHUNK), properties)),
     );
   }
   return out;
 }
 
-/** Окно списка с дозагрузкой: первая страница — по открытии папки, дальше — fetchNextPage. */
+/** Окно списка с дозагрузкой: первая страница — по открытии папки, дальше — fetchNextPage.
+ * Общий ящик (WEB-15): запросы идут с accountId владельца; Thread/get и SearchSnippet/get делегату
+ * сервер не отдаёт (только Email/query/get), поэтому сниппеты — в fallback, потоки — без Thread/get
+ * (письма плоским списком: threadId есть, участников не собрать). */
 export function useMailWindow(args: WindowArgs) {
   const env = useJmap();
+  const ownAccount = args.accountId === env.accountId;
   return useInfiniteQuery<WindowPage, Error>({
     queryKey: keys.window(args),
     queryFn: async ({ pageParam }) => {
@@ -157,23 +164,23 @@ export function useMailWindow(args: WindowArgs) {
       const query = await emailQuery(
         env.apiUrl,
         env.authorization,
-        env.accountId,
+        args.accountId,
         filterFor(args),
         sortFor(args.sort),
         { position, limit: PAGE, collapseThreads: args.grouped, total: position === 0 },
       );
-      const summaries = await fetchChunked<EmailSummary>(env, query.ids, SUMMARY_PROPERTIES);
+      const summaries = await fetchChunked<EmailSummary>(env, args.accountId, query.ids, SUMMARY_PROPERTIES);
       cacheEmails(summaries);
       // Сниппеты совпадений (WEB-05): SearchSnippet/get с тем же фильтром — на каждую страницу
       // окна. Сервер без сниппетов или без совпадений в тексте — превью как было (fallback UI).
       const snippets: Record<string, SearchSnippet> = {};
-      if (args.search) {
+      if (args.search && ownAccount) {
         try {
           for (let i = 0; i < query.ids.length; i += CHUNK) {
             const list = await searchSnippetsGet(
               env.apiUrl,
               env.authorization,
-              env.accountId,
+              args.accountId,
               filterFor(args),
               query.ids.slice(i, i + CHUNK),
             );
@@ -183,17 +190,17 @@ export function useMailWindow(args: WindowArgs) {
           // Сниппеты — усиление, не требование: без них список показывает обычное превью.
         }
       }
-      if (args.grouped) {
+      if (args.grouped && ownAccount) {
         // Потоки: счётчик «N писем» и участники — по Thread/get; письма потока тоже в кэше
         // (разворот потока не ходит в сеть, если его письма уже загружены).
         const tids = [...new Set(summaries.map((s) => s.threadId))];
-        const threads = await threadGet(env.apiUrl, env.authorization, env.accountId, tids);
+        const threads = await threadGet(env.apiUrl, env.authorization, args.accountId, tids);
         const threadEmails = [...new Set(threads.flatMap((t) => t.emailIds))];
         const missing = threadEmails.filter(
           (id) => !summaries.some((s) => s.id === id) && !queryClient.getQueryData(keys.email(id)),
         );
         if (missing.length > 0) {
-          cacheEmails(await fetchChunked<EmailSummary>(env, missing, SUMMARY_PROPERTIES));
+          cacheEmails(await fetchChunked<EmailSummary>(env, args.accountId, missing, SUMMARY_PROPERTIES));
         }
         cacheThreads(threads);
       }
@@ -211,14 +218,15 @@ export function useMailWindow(args: WindowArgs) {
   });
 }
 
-/** Полные письма беседы (стопка чтения): один запрос на все письма стека. */
-export function useEmailsFull(ids: string[]): Record<string, EmailFull> {
+/** Полные письма беседы (стопка чтения): один запрос на все письма стека; общий ящик — по его
+ * accountId (WEB-15). */
+export function useEmailsFull(ids: string[], accountId?: string): Record<string, EmailFull> {
   const env = useJmap();
   const stableKey = [...ids].sort().join(",");
   const query = useQuery<Record<string, EmailFull>>({
-    queryKey: ["full-batch", stableKey],
+    queryKey: ["full-batch", accountId ?? env.accountId, stableKey],
     queryFn: async () => {
-      const list = await fetchChunked<EmailFull>(env, ids, FULL_PROPERTIES);
+      const list = await fetchChunked<EmailFull>(env, accountId ?? env.accountId, ids, FULL_PROPERTIES);
       return Object.fromEntries(list.map((e) => [e.id, e]));
     },
     enabled: ids.length > 0,
@@ -259,6 +267,39 @@ export function useFlaggedCount(): number | undefined {
     staleTime: 30_000,
   });
   return query.data;
+}
+
+/** Счётчики непрочитанных общих ящиков (WEB-15) — Email/query с total по accountId каждого; один
+ * запрос на ящик. Ошибка ящика (нет права чтения) — счётчик 0, без показа. */
+export function useSharedUnreads(accountIds: string[]): Record<string, number> {
+  const env = useJmap();
+  const stableKey = accountIds.join(",");
+  const query = useQuery<Record<string, number>>({
+    queryKey: ["count", "shared", stableKey],
+    queryFn: async () => {
+      const out: Record<string, number> = {};
+      for (const accountId of stableKey.split(",")) {
+        try {
+          const q = await emailQuery(
+            env.apiUrl,
+            env.authorization,
+            accountId,
+            { notKeyword: "$seen" },
+            [{ property: "receivedAt", isAscending: false }],
+            { limit: 0, total: true },
+          );
+          out[accountId] = q.total ?? 0;
+        } catch {
+          out[accountId] = 0;
+        }
+      }
+      return out;
+    },
+    enabled: stableKey.length > 0,
+    retry: false,
+    staleTime: 30_000,
+  });
+  return query.data ?? {};
 }
 
 // ---------- Мутации (Email/set): оптимистичный кэш, Undo — обратный патч ----------
@@ -309,17 +350,25 @@ function invalidateAfterChange(): void {
   void queryClient.invalidateQueries({ queryKey: ["count"] });
 }
 
-/** Мутация Email/set update: патчи keywords/mailboxIds по письмам; снимок — для Undo. */
+/** Аргумент мутации обновления: патчи и учётная запись (общий ящик — accountId владельца, WEB-15). */
+export interface UpdateArgs {
+  updates: Record<string, Record<string, unknown>>;
+  /** null/undefined — своя учётная запись. */
+  accountId?: string;
+}
+
+/** Мутация Email/set update: патчи keywords/mailboxIds по письмам; снимок — для Undo.
+ * Общий ящик (WEB-15): изменения письма идут с accountId владельца. */
 export function useEmailUpdateMutation() {
   const env = useJmap();
   return useMutation({
-    mutationFn: async (updates: Record<string, Record<string, unknown>>) => {
-      const snapshot = applyOptimistic(updates);
-      await emailSetUpdate(env.apiUrl, env.authorization, env.accountId, updates);
+    mutationFn: async (args: UpdateArgs) => {
+      const snapshot = applyOptimistic(args.updates);
+      await emailSetUpdate(env.apiUrl, env.authorization, args.accountId ?? env.accountId, args.updates);
       return snapshot;
     },
     onSettled: () => invalidateAfterChange(),
-    onError: (_error, _updates, snapshot) => {
+    onError: (_error, _args, snapshot) => {
       if (Array.isArray(snapshot)) undoEntries(snapshot as UndoEntry[]);
     },
   });

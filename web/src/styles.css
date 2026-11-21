@@ -510,6 +510,21 @@ body {
   padding-left: 22px;
 }
 
+/* Секция «Общие» (WEB-15): тихий заголовок группы; строки ящиков — как папки. */
+.tree .tgroup {
+  margin-top: 6px;
+  color: var(--m-muted, var(--m-text));
+  cursor: default;
+}
+
+.tree .tgroup:hover {
+  background: none;
+}
+
+.tree .fold.shared .name {
+  color: var(--m-text);
+}
+
 /* Список — карточка; быстрый фильтр — закладками поверх нижнего края. */
 .list {
   width: 430px;
@@ -605,6 +620,17 @@ body {
   color: var(--m-muted);
   font-size: 12px;
   flex: none;
+}
+
+/* Метка «Назначено: …» строки письма общего ящика (WEB-15) — нейтральная, рядом с «Ждём ответа». */
+.msg .st.taken {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .msg.sel {
@@ -1215,6 +1241,12 @@ body {
 
 .strip .dom {
   color: var(--m-muted);
+}
+
+/* Полоса «Взято в работу» (WEB-15): нейтральная подложка, как у картинок. */
+.strip.taken {
+  background: var(--m-fill);
+  color: var(--m-text);
 }
 
 .strip.threat .dom {

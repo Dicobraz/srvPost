@@ -1,9 +1,13 @@
 /*
   Модель письма (WEB-04): снимок композера — общий для черновиков, отправки и undo. Вложение —
   только загруженное (blobId из `uploadUrl`); незагруженные в черновик и письмо не попадают.
+  WEB-15: выбор «От» — свои identity плюс адреса общих ящиков сессии (JMAP-49); отправка всегда
+  идёт от своей identity (identityId), общий адрес — только заголовок From (право проверяет сервер,
+  SendAs/SendOnBehalf).
 */
 
-import type { EmailBodyPart, Identity } from "../api/jmap";
+import type { EmailBodyPart, Identity, JmapSession } from "../api/jmap";
+import { sharedMailAccounts } from "../mail/shared";
 import type { Recipient } from "./recipients";
 
 /** Вложение письма: после загрузки — blobId; в состав Email/set идёт как EmailBodyPart. */
@@ -48,6 +52,32 @@ export function emptySnapshot(identity: Identity | null): ComposeSnapshot {
     bodyHtml: "",
     attachments: [],
   };
+}
+
+/** Вариант «От» композера: свой адрес (identity) или общий ящик (WEB-15). */
+export interface FromChoice {
+  email: string;
+  name: string;
+  /** Общий ящик: From письма — его адрес, отправка — от своей identity (право проверяет сервер). */
+  shared: boolean;
+}
+
+/** Варианты «От»: свои identity (Send As), затем адреса общих ящиков сессии; дубликаты своего
+ * адреса — прочь. */
+export function fromOptions(identity: Identity, identities: Identity[], session: JmapSession): FromChoice[] {
+  const out: FromChoice[] = identities.map((i) => ({
+    email: i.email,
+    name: i.name || i.email,
+    shared: false,
+  }));
+  if (!out.some((c) => c.email === identity.email)) {
+    out.unshift({ email: identity.email, name: identity.name || identity.email, shared: false });
+  }
+  for (const a of sharedMailAccounts(session)) {
+    if (out.some((c) => c.email === a.name)) continue;
+    out.push({ email: a.name, name: a.name, shared: true });
+  }
+  return out;
 }
 
 /** Вложения снимка → части Email/set (RFC 8621 §4.1.4): только загруженные (blobId). */
