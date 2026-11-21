@@ -30,4 +30,11 @@ export const keys = {
   busy: (principalId: string, after: string, before: string) =>
     ["busy", principalId, after, before] as const,
   selfPrincipal: () => ["self-principal"] as const,
+  // --- WEB-07: контакты ---
+  addressBooks: () => ["address-books"] as const,
+  /** Снимок карточек для подсказок (запрос без фильтра — аргументы не различаются). */
+  contactSnapshot: () => ["contact-snapshot"] as const,
+  /** Поиск карточек сервером: аргументы запроса (фильтр с раскладкой OR) — в ключе. */
+  contactSearch: (args: unknown) => ["contact-search", args] as const,
+  contactCard: (id: string) => ["contact-card", id] as const,
 };

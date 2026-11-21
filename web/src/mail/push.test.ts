@@ -126,11 +126,20 @@ test("лидер вкладок открывает WebSocket RFC 8887 один �
   expect(ws.url).toContain("access_token=acc-1");
   expect(ws.protocol).toBe("jmap");
   ws.open();
-  // Включение push — WebSocketPushEnable с типами почты и календаря (RFC 8887 §2; WEB-06:
-  // сервер без календарей состояния этих типов не присылает, лишние типы безопасны).
+  // Включение push — WebSocketPushEnable с типами почты, календаря (WEB-06) и контактов
+  // (WEB-07; RFC 8887 §2: сервер без этих типов состояния не присылает, лишние безопасны).
   expect(JSON.parse(ws.sent[0])).toEqual({
     "@type": "WebSocketPushEnable",
-    dataTypes: ["Email", "Thread", "Mailbox", "Calendar", "CalendarEvent", "CalendarEventNotification"],
+    dataTypes: [
+      "Email",
+      "Thread",
+      "Mailbox",
+      "Calendar",
+      "CalendarEvent",
+      "CalendarEventNotification",
+      "AddressBook",
+      "ContactCard",
+    ],
   });
   expect(hub.pushStatus).toBe("live");
   hub.stop();

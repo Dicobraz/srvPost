@@ -74,4 +74,12 @@ describe("автодополнение", () => {
     const dup = [...CANDIDATES, CANDIDATES[0]];
     expect(suggest(dup, "vektor", [])).toHaveLength(1);
   });
+
+  test("раскладка (WEB-07): запрос в EN-раскладке находит кириллицу вторым вариантом", () => {
+    // «ольга» набрано в EN-раскладке: j-k-m-u-f
+    expect(suggest(CANDIDATES, "jkmuf", []).map((s) => s.recipient.email)).toEqual([
+      "o.smirnova@vektor.example",
+      "o.smirnova@thepost.example",
+    ]);
+  });
 });

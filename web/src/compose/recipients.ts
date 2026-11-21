@@ -1,10 +1,12 @@
 /*
   Получатели (WEB-04): чипы Кому/Копия/Скрытая по макету 02 — модель, разбор ввода и
-  автодополнение. Источники подсказок (порядок как в макете «Справочник и контакты»):
-  адресная книга из JMAP ContactCard (капабилити contacts есть — JSContact, `tp-dav`) и
-  локальная история отправок (localStorage, до WEB-07 — GAL в вебе появится с контактами).
-  Подсказка честно подписана источником («Контакты» / «История»).
+  автодополнение. Источники подсказок (порядок как в Postman, WEB-07): личные адресные книги
+  из JMAP ContactCard (JSContact, RFC 9553/9610), «Часто пишу» (верх истории отправок), GAL
+  «Организация» («Справочник»), остальная история (localStorage) — слияние в
+  contacts/autocomplete.ts. Подсказка честно подписана источником («Контакты»/«Справочник»/
+  «Часто пишу»/«История»), поиск устойчив к раскладке (keyboard-map).
 */
+import { layoutVariant } from "../mail/keyboard-map";
 
 /** Участник письма: имя может отсутствовать (RFC 8621 §4.1.2.3 EmailAddress). */
 export interface Recipient {
@@ -43,7 +45,9 @@ export interface Suggestion {
   source: string;
 }
 
-/** Подсказки по запросу: по подстроке имени или почты, без регистра, уже выбранные не повторяются. */
+/** Подсказки по запросу: по подстроке имени или почты, без регистра, уже выбранные не повторяются.
+ * Запрос устойчив к раскладке (WEB-07, как поиск писем WEB-05): напечатанное в EN-раскладке
+ * пробуется вторым вариантом qwerty→йцукен — «rdfhnfk» находит «Квартал». */
 export function suggest(
   candidates: Suggestion[],
   query: string,
@@ -52,6 +56,7 @@ export function suggest(
 ): Suggestion[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
+  const variant = layoutVariant(q);
   const seen = new Set(chosen.map((r) => r.email.toLowerCase()));
   return candidates
     .filter((c) => {
@@ -59,7 +64,7 @@ export function suggest(
       if (seen.has(email)) return false; // выбранные и дубли кандидатов не повторяются
       seen.add(email);
       const name = (c.recipient.name ?? "").toLowerCase();
-      return email.includes(q) || name.includes(q);
+      return email.includes(q) || name.includes(q) || (variant !== null && (email.includes(variant) || name.includes(variant)));
     })
     .slice(0, limit);
 }

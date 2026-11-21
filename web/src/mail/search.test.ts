@@ -1,6 +1,6 @@
 // Поиск (WEB-05): парсер операторов, сборка фильтра Email/query (чипы области, уточнения,
 // транслитерация OR), термы подсветки и экранирование сниппетов.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import {
   EMPTY_SEARCH,
@@ -38,6 +38,10 @@ test("searchFilter: пустой запрос — null, одно условие 
   expect(searchFilter(ARGS)).toBeNull();
   const onlyText = searchFilter({ ...ARGS, text: "квартал" });
   expect(onlyText).toEqual({ text: "квартал" });
+  // Один момент времени для обеих сборок: иначе граница «30 дней» уехала бы на миллисекунду
+  // между двумя выборами часов (гонка, замеченная в WEB-07) — часы заморожены.
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-21T12:00:00Z"));
   const many = searchFilter({
     ...ARGS,
     text: "отчет",
@@ -57,6 +61,7 @@ test("searchFilter: пустой запрос — null, одно условие 
       { after: recent30After() },
     ],
   });
+  vi.useRealTimers();
 });
 
 test("searchFilter: быстрые фильтры и «Отмеченные» сочетаются с поиском (как в Postman)", () => {

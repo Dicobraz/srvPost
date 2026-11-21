@@ -213,7 +213,17 @@ export class PushHub {
       ws.send(
         JSON.stringify({
           "@type": "WebSocketPushEnable",
-          dataTypes: ["Email", "Thread", "Mailbox", "Calendar", "CalendarEvent", "CalendarEventNotification"],
+          dataTypes: [
+            "Email",
+            "Thread",
+            "Mailbox",
+            "Calendar",
+            "CalendarEvent",
+            "CalendarEventNotification",
+            // Контакты (WEB-07): карточки и книги — изменения GAL после sync-интервала видны живо.
+            "AddressBook",
+            "ContactCard",
+          ],
         }),
       );
       this.transport = null;
@@ -233,10 +243,13 @@ export class PushHub {
   }
 
   private openEventSource(eventSourceUrl: string, accessToken: string): void {
-    // Шаблон eventSourceUrl (RFC 8620 §7.3): типы почты и календаря (WEB-06), поток держим
-    // открытым, ping раз в 4 минуты.
+    // Шаблон eventSourceUrl (RFC 8620 §7.3): типы почты, календаря (WEB-06) и контактов (WEB-07),
+    // поток держим открытым, ping раз в 4 минуты.
     const url = eventSourceUrl
-      .replace("{types}", "Email,Thread,Mailbox,Calendar,CalendarEvent,CalendarEventNotification")
+      .replace(
+        "{types}",
+        "Email,Thread,Mailbox,Calendar,CalendarEvent,CalendarEventNotification,AddressBook,ContactCard",
+      )
       .replace("{closeafter}", "no")
       .replace("{ping}", "240");
     const full = `${url}${url.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(accessToken)}`;

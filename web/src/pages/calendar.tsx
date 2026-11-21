@@ -10,6 +10,7 @@
   чипы — цветом календаря события. Панели — inline (не модалки), как в DESIGN.md Postman.
 */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 
 import type { CalendarEventObject } from "../api/jmap";
 import {
@@ -98,6 +99,7 @@ function startOfDayMs(d: Date): number {
 export function CalendarPage() {
   const env = useJmap();
   const toast = useToast();
+  const [params, setParams] = useSearchParams();
   const [view, setView] = useState<CalendarViewKind>("workweek");
   const [anchor, setAnchor] = useState<Date>(() => new Date());
   const [panel, setPanel] = useState<Panel>(null);
@@ -106,6 +108,33 @@ export function CalendarPage() {
   // Участники и комната формы — состояние страницы (сохранение берёт отсюда).
   const [formAttendees, setFormAttendees] = useState<Recipient[]>([]);
   const [formRoom, setFormRoom] = useState<string>("");
+
+  // «Встреча с контактом» (WEB-07): карточка контакта передаёт участника параметрами маршрута
+  // (?attendee=…&attendeeName=…) — форма создания открывается сразу с этим участником;
+  // параметры снимаются, чтобы повторный заход не открывал форму снова.
+  const attendee = params.get("attendee");
+  const attendeeName = params.get("attendeeName");
+  const consumed = useRef(false);
+  useEffect(() => {
+    if (!attendee || consumed.current) return;
+    consumed.current = true;
+    const start = new Date();
+    start.setHours(9, 0, 0, 0);
+    setFormAttendees([{ name: attendeeName || null, email: attendee }]);
+    setFormRoom("");
+    setPanel({
+      kind: "form",
+      editingId: null,
+      draft: {
+        title: "",
+        date: dateInputValue(start),
+        start: timeInputValue(start),
+        end: timeInputValue(new Date(start.getTime() + 60 * 60_000)),
+        description: "",
+      },
+    });
+    setParams({}, { replace: true });
+  }, [attendee, attendeeName, setParams]);
 
   const calendars = useCalendars();
   const self = useSelfPrincipal();
